@@ -1,0 +1,89 @@
+name: Windows
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    # Native Windows runner with the MSYS2 UCRT64 toolchain.  We don't run
+    # build_cross.sh here on a Linux runner: that flow needs MXE's
+    # `make qt6-qtbase qt6-qtnetwork`, which builds Qt6 from source and
+    # takes ~45 minutes - too slow per push.  Building natively on Windows
+    # with the same MinGW toolchain produces an identical-looking .exe and
+    # finishes in minutes.
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MSYS2 + UCRT64 toolchain
+        # UCRT64 ships gcc-14, which is the matching version of the
+        # toolchain we use on the Linux test job - same C++26 + libstdc++
+        # behaviour, including std::print / std::expected.
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            zip
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-qt6-tools
+
+      - name: Configure
+        shell: msys2 {0}
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        shell: msys2 {0}
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Run unit tests
+        # Same -L unit filter as the Linux test job - the integration
+        # label hits api.nexusmods.com and KIO protocol files, neither of
+        # which exist on the runner.
+        shell: msys2 {0}
+        working-directory: build
+        run: ctest -L unit --output-on-failure -j"$(nproc)"
+
+      - name: Stage runtime files + bundle Qt
+        shell: msys2 {0}
+        run: |
+          mkdir -p stage
+          cp build/nerevarine_organizer.exe stage/
+          cp nerevarine_prefs.ini           stage/
+          cp -r translations                stage/
+          # windeployqt6 walks the .exe's imports and copies the Qt DLLs
+          # plus the platforms/, imageformats/, etc. plugin dirs next to it.
+          windeployqt6 --release --no-compiler-runtime \
+                       --no-translations \
+                       stage/nerevarine_organizer.exe
+
+      - name: Zip
+        shell: msys2 {0}
+        run: |
+          cd stage
+          zip -r ../NerevarineOrganizer-x86_64-windows.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NerevarineOrganizer-x86_64-windows
+          path: NerevarineOrganizer-x86_64-windows.zip
+          if-no-files-found: error
+
+      - name: Attach to release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: NerevarineOrganizer-x86_64-windows.zip

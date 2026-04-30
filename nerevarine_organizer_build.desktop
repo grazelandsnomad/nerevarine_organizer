@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Nerevarine Organizer (Build)
+Comment=Run the in-tree Release build of Nerevarine Organizer
+GenericName=Mod Manager
+Exec=@BUILD_EXEC@ %u
+Icon=nerevarine_organizer_build
+Type=Application
+Categories=Game;Utility;Development;
+MimeType=x-scheme-handler/nxm;x-scheme-handler/nxms;
+StartupNotify=true
+StartupWMClass=nerevarine_organizer
+Terminal=false

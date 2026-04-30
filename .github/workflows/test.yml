@@ -1,0 +1,65 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  ctest:
+    runs-on: ubuntu-22.04
+
+    # update-alternatives points /usr/bin/gcc → gcc-14 but cmake's
+    # auto-detection still looks at /usr/bin/c++ first on Ubuntu, which
+    # can resolve to g++-11 (the apt default).  CC/CXX win over both.
+    env:
+      CC: gcc-14
+      CXX: g++-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GCC 14 (for C++26)
+        run: |
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get update
+          sudo apt-get install -y gcc-14 g++-14
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
+          gcc --version
+          g++ --version
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get install -y cmake ninja-build
+
+      - name: Install Qt 6.7
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.3'
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          cache: true
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=gcc-14 \
+            -DCMAKE_CXX_COMPILER=g++-14
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Run ctest
+        # Only the "unit" label here.  The "integration" label (test_nxm
+        # full mode) needs ~/.local/share/kservices5/nxm.protocol files
+        # and reaches out to api.nexusmods.com - neither is available on
+        # a stock GitHub runner, so it always failed the job.  Local
+        # developers can still run `ctest` with no filter to exercise
+        # everything.
+        working-directory: build
+        run: ctest -L unit --output-on-failure -j"$(nproc)"
