@@ -47,6 +47,9 @@ public:
     static QString findSteamLauncherExe(const QString &gameId);
     static QString findGogGameExe(const QString &gameId, bool wantLauncher = false);
     static QString findHeroicGogAppId(const QString &installPathHint);
+    // Scans Lutris yml configs under ~/.config/lutris/games/ for an entry
+    // whose slug/name matches gameId; returns the absolute exe path if found.
+    static QString findLutrisGameExe(const QString &gameId);
 
 private:
     QList<GameProfile> m_games;

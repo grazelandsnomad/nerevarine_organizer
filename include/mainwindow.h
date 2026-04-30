@@ -137,6 +137,10 @@ private slots:
     void scanMissingDependencies(); // in-memory DependsOn → warning-icon sweep
     void switchToGame(int idx);
     void onAddGame();
+    // Detects an external (non-OpenMW) game in Steam/Heroic/Lutris,
+    // prompts for the exe if not found, then creates a profile and
+    // switches to it. Used by the pinned-game dropdown entries.
+    void addAndDetectGame(const QString &gameId, const QString &displayName);
     void onCurrentModChanged(QListWidgetItem *current, QListWidgetItem *previous);
 
     bool eventFilter(QObject *obj, QEvent *event) override;

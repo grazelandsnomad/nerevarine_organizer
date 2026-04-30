@@ -5520,8 +5520,30 @@ static QString locateOpenMWBinary(const QString &profileHint)
         "/var/lib/flatpak/exports/bin/org.openmw.OpenMW",
         QDir::homePath() + "/.local/share/flatpak/exports/bin/org.openmw.OpenMW",
         "/snap/bin/openmw",
+        // Lutris ships its own OpenMW runner; if the user installed it via the
+        // Lutris runner manager the binary lives under runners/openmw/<ver>/.
+        QDir::homePath() + "/.local/share/lutris/runners/openmw/openmw",
+        QDir::homePath() + "/.var/app/net.lutris.Lutris/data/lutris/runners/openmw/openmw",
     };
     for (const QString &p : nix) if (QFileInfo::exists(p)) return p;
+
+    // Lutris runner-manager installs versioned subdirs (e.g. openmw/0.49.0/openmw).
+    for (const QString &runnersRoot : {
+            QDir::homePath() + "/.local/share/lutris/runners/openmw",
+            QDir::homePath() + "/.var/app/net.lutris.Lutris/data/lutris/runners/openmw"}) {
+        QDir d(runnersRoot);
+        if (!d.exists()) continue;
+        const QStringList versions = d.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name | QDir::Reversed);
+        for (const QString &v : versions) {
+            const QString cand = runnersRoot + "/" + v + "/openmw";
+            if (QFileInfo::exists(cand)) return cand;
+        }
+    }
+    // Last resort: any Lutris yml with runner: openmw points at an install with a usable binary.
+    {
+        QString lut = GameProfileRegistry::findLutrisGameExe("openmw");
+        if (!lut.isEmpty() && QFileInfo::exists(lut)) return lut;
+    }
 #endif
 
     return QString();
@@ -8799,6 +8821,7 @@ void MainWindow::updateGameButton()
     // If a game hasn't been added as a profile yet it is shown greyed out.
     static const QList<QPair<QString,QString>> kPinned = {
         {"morrowind",            "OpenMW (Morrowind)"},
+        {"falloutnewvegas",      "Fallout: New Vegas"},
     };
 
     QSet<int> pinnedIdx;
@@ -8814,10 +8837,18 @@ void MainWindow::updateGameButton()
             act->setChecked(found == m_profiles->currentIndex());
             connect(act, &QAction::triggered, this, [this, found]() { switchToGame(found); });
             pinnedIdx.insert(found);
-        } else {
-            // Not yet configured - greyed out placeholder
+        } else if (pid == "morrowind") {
+            // OpenMW must always be configured (created on first run); if it
+            // somehow isn't, fall back to a disabled placeholder.
             auto *act = menu->addAction(fallbackName);
             act->setEnabled(false);
+        } else {
+            // Click to detect + add this game on first use.
+            const QString idCopy = pid;
+            const QString nameCopy = fallbackName;
+            auto *act = menu->addAction(fallbackName);
+            connect(act, &QAction::triggered, this,
+                    [this, idCopy, nameCopy]() { addAndDetectGame(idCopy, nameCopy); });
         }
     }
 
@@ -8889,6 +8920,61 @@ void MainWindow::onAddGame()
     // Disable adding other games in this release - OpenMW only
     QMessageBox::information(this, T("add_game_title"),
         "Only OpenMW (Morrowind) is supported in this release.");
+}
+
+void MainWindow::addAndDetectGame(const QString &gameId, const QString &displayName)
+{
+    // Already configured? Just switch.
+    for (int i = 0; i < m_profiles->size(); ++i) {
+        if (m_profiles->games()[i].id == gameId) {
+            switchToGame(i);
+            return;
+        }
+    }
+
+    // Detect: Heroic/GOG → Steam → Lutris.
+    QString exe = GameProfileRegistry::findGogGameExe(gameId, /*wantLauncher=*/false);
+    if (exe.isEmpty() || !QFile::exists(exe))
+        exe = GameProfileRegistry::findSteamGameExe(gameId);
+    if (exe.isEmpty() || !QFile::exists(exe))
+        exe = GameProfileRegistry::findLutrisGameExe(gameId);
+
+    if (exe.isEmpty() || !QFile::exists(exe)) {
+        // Ask the user.
+        QMessageBox::information(this,
+            QString("Locate %1").arg(displayName),
+            QString("%1 was not found in Steam, Heroic, or Lutris.\n"
+                    "Please point to the game's executable.").arg(displayName));
+        const QString picked = QFileDialog::getOpenFileName(this,
+            QString("Locate %1 executable").arg(displayName),
+            QDir::homePath(),
+            "Executables (*.exe);;All files (*)");
+        if (picked.isEmpty()) return;
+        exe = picked;
+    }
+
+    // Confirm to the user where it was found.
+    QMessageBox::information(this, displayName,
+        QString("%1 detected at:\n%2").arg(displayName, QDir::toNativeSeparators(exe)));
+
+    // Per-game mods directory: each profile gets its own root so users can
+    // park heavy installs (FNV, Skyrim, etc) on a different mount than OpenMW.
+    const QString defaultModsDir = QDir::homePath() + "/Games/" + gameId + "_mods";
+    QString modsDir = QFileDialog::getExistingDirectory(this,
+        QString("Choose mods directory for %1").arg(displayName),
+        defaultModsDir,
+        QFileDialog::ShowDirsOnly | QFileDialog::DontConfirmOverwrite);
+    if (modsDir.isEmpty()) modsDir = defaultModsDir;
+    QDir().mkpath(modsDir);
+
+    // Create the profile and switch.
+    GameProfile gp;
+    gp.id          = gameId;
+    gp.displayName = displayName;
+    gp.modsDir     = modsDir;
+    m_profiles->games().append(gp);
+    m_profiles->save();
+    switchToGame(m_profiles->size() - 1);
 }
 
 // Conflict detection

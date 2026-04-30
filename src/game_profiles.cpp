@@ -52,10 +52,6 @@ void GameProfileRegistry::load()
         save();
     } else {
         for (const QString &id : ids) {
-            if (id != "morrowind") {
-                // Profiles from other games are ignored in this release.
-                continue;
-            }
             GameProfile gp;
             gp.id          = id;
             gp.displayName = s.value("games/" + id + "/name", id).toString();
@@ -372,6 +368,81 @@ QString GameProfileRegistry::findGogGameExe(const QString &gameId, bool wantLaun
                 const QString path = root + "/" + folder + "/" + wantedExe;
                 if (QFile::exists(path)) return path;
             }
+        }
+    }
+    return {};
+}
+
+QString GameProfileRegistry::findLutrisGameExe(const QString &gameId)
+{
+    static const QHash<QString, QStringList> tokens = {
+        {"openmw",               {"openmw"}},
+        {"morrowind",            {"morrowind"}},
+        {"skyrimspecialedition", {"skyrim", "special"}},
+        {"skyrim",               {"skyrim"}},
+        {"starfield",            {"starfield"}},
+        {"fallout3",             {"fallout", "3"}},
+        {"fallout4",             {"fallout", "4"}},
+        {"falloutnewvegas",      {"fallout", "new", "vegas"}},
+        {"falloutlondon",        {"fallout", "london"}},
+        {"oblivion",             {"oblivion"}},
+        {"cyberpunk2077",        {"cyberpunk"}},
+        {"witcher",              {"witcher"}},
+        {"witcher2",             {"witcher", "2"}},
+        {"witcher3",             {"witcher", "3"}},
+    };
+    if (!tokens.contains(gameId)) return {};
+    const QStringList &needed = tokens[gameId];
+
+    const QString home = QDir::homePath();
+    const QStringList lutrisDirs = {
+        home + "/.config/lutris/games",
+        home + "/.var/app/net.lutris.Lutris/config/lutris/games",
+    };
+
+    for (const QString &dir : lutrisDirs) {
+        QDir d(dir);
+        if (!d.exists()) continue;
+        const QStringList ymls = d.entryList(QStringList() << "*.yml" << "*.yaml", QDir::Files);
+        for (const QString &name : ymls) {
+            const QString lc = name.toLower();
+            bool match = true;
+            for (const QString &t : needed) {
+                if (!lc.contains(t)) { match = false; break; }
+            }
+            if (!match) continue;
+
+            QFile f(d.absoluteFilePath(name));
+            if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) continue;
+            const QStringList lines = QString::fromUtf8(f.readAll()).split('\n');
+            // Walk lines; capture exe: under a "game:" section, fallback to any "exe:".
+            QString exePath;
+            QString fallbackExe;
+            bool inGame = false;
+            for (const QString &raw : lines) {
+                const QString line = raw;
+                const QString trimmed = line.trimmed();
+                if (trimmed.startsWith('#') || trimmed.isEmpty()) continue;
+
+                // Top-level key (no leading whitespace) ends the previous section.
+                if (!line.startsWith(' ') && !line.startsWith('\t')) {
+                    inGame = trimmed.startsWith("game:");
+                    continue;
+                }
+                if (trimmed.startsWith("exe:")) {
+                    QString val = trimmed.mid(4).trimmed();
+                    if ((val.startsWith('"') && val.endsWith('"')) ||
+                        (val.startsWith('\'') && val.endsWith('\''))) {
+                        val = val.mid(1, val.size() - 2);
+                    }
+                    if (val.isEmpty()) continue;
+                    if (inGame) { exePath = val; break; }
+                    if (fallbackExe.isEmpty()) fallbackExe = val;
+                }
+            }
+            if (exePath.isEmpty()) exePath = fallbackExe;
+            if (!exePath.isEmpty() && QFile::exists(exePath))
+                return exePath;
         }
     }
     return {};
