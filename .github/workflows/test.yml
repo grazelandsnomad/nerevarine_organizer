@@ -11,33 +11,29 @@ jobs:
   ctest:
     runs-on: ubuntu-22.04
 
-    # update-alternatives points /usr/bin/gcc → gcc-14 but cmake's
+    # update-alternatives points /usr/bin/gcc → gcc-13 but cmake's
     # auto-detection still looks at /usr/bin/c++ first on Ubuntu, which
     # can resolve to g++-11 (the apt default).  CC/CXX win over both.
     env:
-      CC: gcc-14
-      CXX: g++-14
+      CC: gcc-13
+      CXX: g++-13
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install GCC 14 (for C++23 std::println, std::expected)
-        # ubuntu-22.04 default is gcc-11; gcc-14 lives in the toolchain-test
-        # PPA. add-apt-repository hits launchpad.net to look up the PPA, which
-        # has timed out in CI before - retry a few times before giving up so a
-        # transient launchpad blip doesn't fail the whole job.
+      - name: Install GCC 13 (for C++23 std::expected)
+        # ubuntu-22.04 default is gcc-11; gcc-13 lives in jammy-updates/universe
+        # and installs without a PPA.  We previously pulled gcc-14 from
+        # ubuntu-toolchain-r/test for std::println, but that PPA reaches
+        # launchpad.net during add-apt-repository - which has been timing
+        # out from the Azure-hosted GitHub runners and stalling the whole
+        # job.  std::println was a one-liner in src/logging.cpp; replaced
+        # with std::fprintf so we can stay in the regular repos.
         run: |
-          for attempt in 1 2 3 4 5; do
-            if sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test; then
-              break
-            fi
-            echo "::warning::add-apt-repository attempt $attempt failed (launchpad.net), retrying after 15s"
-            sleep 15
-          done
           sudo apt-get update
-          sudo apt-get install -y gcc-14 g++-14
-          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
-          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
+          sudo apt-get install -y gcc-13 g++-13
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100
           gcc --version
           g++ --version
 
@@ -58,8 +54,8 @@ jobs:
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=gcc-14 \
-            -DCMAKE_CXX_COMPILER=g++-14
+            -DCMAKE_C_COMPILER=gcc-13 \
+            -DCMAKE_CXX_COMPILER=g++-13
 
       - name: Build
         run: cmake --build build -j"$(nproc)"

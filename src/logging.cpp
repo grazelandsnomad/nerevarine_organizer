@@ -12,9 +12,9 @@
 #include <QTextStream>
 
 #include <csignal>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <print>
 
 #ifdef Q_OS_UNIX
 #  include <execinfo.h>
@@ -91,7 +91,13 @@ void qtMessageHandler(QtMsgType type, const QMessageLogContext &ctx,
     if (ctx.file && *ctx.file)
         line += QString(" (%1:%2)").arg(ctx.file).arg(ctx.line);
     writeLogLine(line);
-    std::println(stderr, "{}", line.toStdString());
+    // std::fprintf rather than std::println: dropping <print> lets the
+    // build target GCC 13 (Ubuntu 22.04's regular repos) instead of GCC 14
+    // (only in the ubuntu-toolchain-r/test PPA, which has been timing out
+    // from Azure-hosted GitHub runners).  The line is already a complete
+    // formatted string at this point - no formatting features are lost.
+    const QByteArray utf8 = line.toUtf8();
+    std::fprintf(stderr, "%s\n", utf8.constData());
     if (type == QtFatalMsg) std::abort();
 }
 

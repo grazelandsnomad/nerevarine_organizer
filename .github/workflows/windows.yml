@@ -22,9 +22,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install MSYS2 + UCRT64 toolchain
-        # UCRT64 ships gcc-14, which is the matching version of the
-        # toolchain we use on the Linux test job - same C++23 + libstdc++
-        # behaviour, including std::println / std::expected.
+        # UCRT64 ships gcc with a recent libstdc++, matching the C++23
+        # behaviour the Linux jobs target on gcc-13 (std::expected).
         uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
