@@ -597,7 +597,7 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
             vf.setPointSize(qMax(vf.pointSize() + 2, 13));
             painter->setFont(vf);
             painter->drawText(videoReviewIconRect(option, videoX, videoW),
-                              Qt::AlignCenter, QStringLiteral("\U0001F4FA"));
+                              Qt::AlignCenter, QStringLiteral("▶"));
             painter->restore();
         }
     }

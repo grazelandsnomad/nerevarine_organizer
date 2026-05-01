@@ -970,7 +970,7 @@ void MainWindow::setupToolbar()
     // user-marked "good" modlist checkpoints; the menu is rebuilt on each
     // show so additions/deletions reflect immediately.
     auto *goodStatesBtn = new QToolButton(tb);
-    goodStatesBtn->setText(QString("\U0001F4CC ") + T("toolbar_good_states"));
+    goodStatesBtn->setText(QString("◆ ") + T("toolbar_good_states"));
     goodStatesBtn->setPopupMode(QToolButton::InstantPopup);
     goodStatesBtn->setToolButtonStyle(Qt::ToolButtonTextOnly);
     goodStatesBtn->setStyleSheet("QToolButton { color: #1a8a1a; font-weight: bold; padding: 3px 8px; }");
@@ -983,7 +983,7 @@ void MainWindow::setupToolbar()
     goodStatesBtn->setMenu(goodStatesMenu);
     auto *actGoodStates = tb->addWidget(goodStatesBtn);
 
-    auto *actForbidden = tb->addAction(QString("\U0001F6AB ") + T("menu_forbidden_mods"),
+    auto *actForbidden = tb->addAction(QString("⊘ ") + T("menu_forbidden_mods"),
                                        this, [this]{ m_forbidden->showManageDialog(this); });
     if (auto *btn = qobject_cast<QToolButton *>(tb->widgetForAction(actForbidden)))
         btn->setStyleSheet("color: #c0392b; font-weight: bold;");
@@ -2758,7 +2758,7 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
                 ef.setPixelSize(sz * 3 / 4);
                 QPainter p(&pm);
                 p.setFont(ef);
-                p.drawText(pm.rect(), Qt::AlignCenter, QStringLiteral("\U0001F33F"));
+                p.drawText(pm.rect(), Qt::AlignCenter, QStringLiteral("☘"));
                 p.end();
                 box.setIconPixmap(pm);
             }

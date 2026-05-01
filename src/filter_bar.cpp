@@ -34,7 +34,7 @@ FilterBar::FilterBar(QListWidget *list, QObject *parent)
         p.setRenderHint(QPainter::Antialiasing, true);
         p.setFont(QFont(p.font().family(), 11));
         p.setPen(QColor(140, 140, 140));
-        p.drawText(pm.rect(), Qt::AlignCenter, QStringLiteral("\U0001F50D"));
+        p.drawText(pm.rect(), Qt::AlignCenter, QStringLiteral("⌕"));
         searchIcon = QIcon(pm);
     }
     m_edit->addAction(searchIcon, QLineEdit::LeadingPosition);

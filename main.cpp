@@ -83,8 +83,8 @@ int main(int argc, char *argv[])
     app.setDesktopFileName("nerevarine_organizer");
 
     // Register a bundled emoji font when present so AppImage builds
-    // render colour glyphs (forbidden ⛔, good-state 🗑, etc.) even on
-    // hosts without NotoColorEmoji installed.
+    // render any remaining colour glyphs even on hosts without NotoColorEmoji.
+    // Toolbar symbols (◆ ⊘ ☘ etc.) are BMP characters and need no emoji font.
     {
         const QString appDir = QCoreApplication::applicationDirPath();
         for (const QString &rel : {QStringLiteral("/../share/fonts/NotoColorEmoji.ttf"),
