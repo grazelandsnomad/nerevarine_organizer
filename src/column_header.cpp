@@ -214,12 +214,19 @@ int ColumnHeader::separatorAt(int x) const
 {
     const int hitZone = 5;
     int rm  = m_bar->layout()->contentsMargins().right();
+    // Bar layout (left → right): name | status | date | relTime | annot | size | video.
+    // Walk leftward from the right edge of the layout content area, peeling off
+    // every column to its right before hit-testing each separator.  Video sits
+    // RIGHT of size, so it has to be peeled first - skipping it left every
+    // separator offset by wVideoReview pixels (very visible when the window is
+    // wide enough that the offset isn't masked by cramped widths).
     int pos = m_bar->width() - rm;
-    if (m_colVis.size)    { pos -= m_colVis.wSize; }
-    if (m_colVis.annot)   { pos -= m_colVis.wAnnot;   if (qAbs(x - pos) <= hitZone) return 3; }
-    if (m_colVis.relTime) { pos -= m_colVis.wRelTime; if (qAbs(x - pos) <= hitZone) return 2; }
-    if (m_colVis.date)    { pos -= m_colVis.wDate;    if (qAbs(x - pos) <= hitZone) return 1; }
-    if (m_colVis.status)  { pos -= m_colVis.wStatus;  if (qAbs(x - pos) <= hitZone) return 0; }
+    if (m_colVis.videoReview) { pos -= m_colVis.wVideoReview; }
+    if (m_colVis.size)        { pos -= m_colVis.wSize; }
+    if (m_colVis.annot)       { pos -= m_colVis.wAnnot;   if (qAbs(x - pos) <= hitZone) return 3; }
+    if (m_colVis.relTime)     { pos -= m_colVis.wRelTime; if (qAbs(x - pos) <= hitZone) return 2; }
+    if (m_colVis.date)        { pos -= m_colVis.wDate;    if (qAbs(x - pos) <= hitZone) return 1; }
+    if (m_colVis.status)      { pos -= m_colVis.wStatus;  if (qAbs(x - pos) <= hitZone) return 0; }
     return -1;
 }
 
@@ -258,10 +265,11 @@ bool ColumnHeader::eventFilter(QObject *obj, QEvent *event)
                 case 0: {
                     auto *lay = m_bar->layout();
                     int margins = lay->contentsMargins().left() + lay->contentsMargins().right();
-                    int rightCols = (m_colVis.date    ? m_colVis.wDate    : 0)
-                                  + (m_colVis.relTime ? m_colVis.wRelTime : 0)
-                                  + (m_colVis.annot   ? m_colVis.wAnnot   : 0)
-                                  + (m_colVis.size    ? m_colVis.wSize    : 0);
+                    int rightCols = (m_colVis.date        ? m_colVis.wDate        : 0)
+                                  + (m_colVis.relTime     ? m_colVis.wRelTime     : 0)
+                                  + (m_colVis.annot       ? m_colVis.wAnnot       : 0)
+                                  + (m_colVis.size        ? m_colVis.wSize        : 0)
+                                  + (m_colVis.videoReview ? m_colVis.wVideoReview : 0);
                     int maxStatus = m_bar->width() - margins - ColWidth::NameMin - rightCols;
                     m_colVis.wStatus = qMin(newW, qMax(ColWidth::Min, maxStatus));
                     break;

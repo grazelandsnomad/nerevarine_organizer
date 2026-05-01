@@ -64,6 +64,18 @@ target_link_libraries(test_fomod_copy PRIVATE
     Qt6::Core
 )
 
+add_executable(test_fomod_scripts
+    test_fomod_scripts.cpp
+    ${CMAKE_SOURCE_DIR}/src/fomod_scripts.cpp
+    ${CMAKE_SOURCE_DIR}/src/fomod_path.cpp
+)
+target_include_directories(test_fomod_scripts PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(test_fomod_scripts PRIVATE
+    Qt6::Core
+)
+
 add_executable(test_install_layout
     test_install_layout.cpp
     ${CMAKE_SOURCE_DIR}/src/install_layout.cpp
@@ -280,6 +292,7 @@ set(UNIT_TESTS
     test_fomod_copy
     test_fomod_install
     test_fomod_path
+    test_fomod_scripts
     test_install_layout
     test_fs_utils
     test_launcher_cfg_writer

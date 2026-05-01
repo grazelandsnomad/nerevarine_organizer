@@ -1,6 +1,7 @@
 #include "fomodwizard.h"
 #include "fomod_copy.h"
 #include "fomod_path.h"
+#include "fomod_scripts.h"
 #include "translator.h"
 
 #include <QAbstractButton>
@@ -864,6 +865,20 @@ QString FomodWizard::applySelections()
                 : installDir + "/" + normalizedDest;
             QDir().mkpath(QFileInfo(dst).absolutePath());
             if (!QFile::copy(src, dst)) failed << f.source;
+
+            // Patch-hub rescue: an .omwscripts manifest declares lua
+            // bodies that the FOMOD often does NOT reference as separate
+            // <file>/<folder> entries (Completionist Patch Hub - Nexus 58523
+            // - is the canonical case; plugins ship "00 AJ/Completionist -
+            // AJ.omwscripts" + "00 AJ/scripts/.../*.lua" but list only the
+            // manifest in their <files>).  Pulling the lua across from the
+            // manifest's parent dir keeps the install consistent with what
+            // OpenMW will try to load.
+            if (src.endsWith(QLatin1String(".omwscripts"),
+                             Qt::CaseInsensitive)) {
+                fomod_scripts::installDeclaredScripts(
+                    src, m_archiveRoot, installDir);
+            }
         }
     };
 
