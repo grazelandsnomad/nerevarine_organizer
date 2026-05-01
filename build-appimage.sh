@@ -18,7 +18,7 @@ set -euo pipefail
 
 # Stamped into the AppImage filename. Bump in lockstep with the release;
 # CI consumes the file via a version-agnostic glob.
-APPIMAGE_VERSION="0.3"
+APPIMAGE_VERSION="0.3.1"
 
 REPO_ROOT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 BUILD_DIR="$REPO_ROOT/build-appimage"
