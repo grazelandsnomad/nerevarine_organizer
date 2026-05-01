@@ -186,6 +186,20 @@ export LD_PRELOAD="${HERE}/usr/lib/libglibc_compat.so${LD_PRELOAD:+:${LD_PRELOAD
 # load. Only set when the env doesn't already pick a platform.
 : "${QT_QPA_PLATFORM:=wayland;xcb}"
 export QT_QPA_PLATFORM
+# Write a per-launch fontconfig config that adds our bundled font dir
+# (NotoColorEmoji.ttf) and then includes the system config.  Qt's emoji
+# fallback goes through fontconfig, not QFontDatabase, so addApplicationFont
+# alone is not enough to make colour glyphs render in toolbar buttons.
+_FC_CONF="${XDG_RUNTIME_DIR:-/tmp}/nerev-fc-$$.conf"
+cat > "$_FC_CONF" << FCEOF
+<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+  <dir>${HERE}/usr/share/fonts</dir>
+  <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
+</fontconfig>
+FCEOF
+export FONTCONFIG_FILE="$_FC_CONF"
 exec "${HERE}/AppRun.orig" "$@"
 APPRUN
 chmod +x "$APPDIR/AppRun"
