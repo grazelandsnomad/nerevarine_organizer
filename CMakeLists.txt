@@ -1,7 +1,12 @@
 cmake_minimum_required(VERSION 3.16)
 project(NerevarineOrganizer VERSION 0.3.1 LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 26)
+# C++23 covers everything actually used here (std::expected, std::println).
+# C++26 was tripping Qt's q26numeric.h polyfill on the MSYS2 UCRT64 CI toolchain
+# (`'saturate_cast' has not been declared in 'std'`) - the libstdc++ shipped
+# with the Windows runner doesn't expose `std::saturate_cast` even with
+# `-std=gnu++26`, and Qt's header imports it unconditionally in C++26 mode.
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 enable_testing()

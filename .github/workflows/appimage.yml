@@ -22,9 +22,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install GCC 14 (for C++26)
+      - name: Install GCC 14 (for C++23 std::println, std::expected)
+        # ubuntu-22.04 default is gcc-11; gcc-14 lives in the toolchain-test
+        # PPA. add-apt-repository hits launchpad.net to look up the PPA, which
+        # has timed out in CI before - retry a few times before giving up so a
+        # transient launchpad blip doesn't fail the whole release build.
         run: |
-          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          for attempt in 1 2 3 4 5; do
+            if sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test; then
+              break
+            fi
+            echo "::warning::add-apt-repository attempt $attempt failed (launchpad.net), retrying after 15s"
+            sleep 15
+          done
           sudo apt-get update
           sudo apt-get install -y gcc-14 g++-14
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
