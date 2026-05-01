@@ -53,6 +53,17 @@ target_link_libraries(test_fomod_install PRIVATE
     Qt6::Core
 )
 
+add_executable(test_fomod_copy
+    test_fomod_copy.cpp
+    ${CMAKE_SOURCE_DIR}/src/fomod_copy.cpp
+)
+target_include_directories(test_fomod_copy PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(test_fomod_copy PRIVATE
+    Qt6::Core
+)
+
 add_executable(test_install_layout
     test_install_layout.cpp
     ${CMAKE_SOURCE_DIR}/src/install_layout.cpp
@@ -266,6 +277,7 @@ set(UNIT_TESTS
     test_asset_collisions
     test_bsa_reader
     test_deps_resolver
+    test_fomod_copy
     test_fomod_install
     test_fomod_path
     test_install_layout

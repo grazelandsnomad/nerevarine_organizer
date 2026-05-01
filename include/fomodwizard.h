@@ -113,11 +113,6 @@ private:
     // Returns path to ModuleConfig.xml, or empty string if not found.
     static QString findModuleConfig(const QString &archiveRoot);
 
-    // Copy every entry inside srcDir into dstDir (not the dir itself, only its contents).
-    static void copyContents(const QString &srcDir, const QString &dstDir);
-    // Copy srcDir as a named subdirectory under dstDir.
-    static void copyDir(const QString &srcDir, const QString &dstDir);
-
     QString              m_archiveRoot;
     QString              m_modName;
     QString              m_priorChoices;      // serialized prior choices, set before buildUi()

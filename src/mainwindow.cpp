@@ -1530,8 +1530,13 @@ void MainWindow::handleNxmUrl(const QString &url)
         return;
     }
 
-    // Already-installed guard: warn the user before starting a second copy.
-    if (!confirmReinstallIfInstalled(game, modId)) return;
+    // Already-installed guard: route Replace through the existing row-reuse
+    // path (which deletes the prior folder via PrevModPath after install),
+    // and force a fresh placeholder for Separate so the new download lands
+    // in its own folder beside the existing entry.
+    const auto reinstallChoice = confirmReinstallIfInstalled(game, modId);
+    if (reinstallChoice == ReinstallChoice::Cancel) return;
+    const bool forceSeparate = (reinstallChoice == ReinstallChoice::Separate);
 
     if (m_apiKey.isEmpty()) {
         QMessageBox::information(this, T("nxm_api_key_required_title"),
@@ -1547,10 +1552,12 @@ void MainWindow::handleNxmUrl(const QString &url)
 
     // Reuse an existing row for this mod if one is already in the list, so we
     // don't create a duplicate.  Match by game + modId parsed from the stored
-    // NexusUrl.  Both not-installed placeholders (e.g. MO2 import) and
-    // already-installed rows (re-install / update) qualify - confirmReinstall
-    // has already cleared the prompt.  Prefer not-installed matches; fall back
-    // to the installed row.
+    // NexusUrl.  Pending placeholders (status=0, e.g. MO2 import or a prior
+    // download that didn't complete) always qualify - they're the same in-
+    // flight slot, just being filled in.  Already-installed rows (status=1)
+    // qualify ONLY when the user picked Replace in the dispatch prompt;
+    // Separate forces a fresh placeholder so the new download lands beside
+    // the existing entry rather than on top of it.
     QString nexusPageUrl = QString("https://www.nexusmods.com/%1/mods/%2").arg(game).arg(modId);
     QListWidgetItem *placeholder = nullptr;
     QListWidgetItem *installedMatch = nullptr;
@@ -1569,7 +1576,7 @@ void MainWindow::handleNxmUrl(const QString &url)
         if (status == 0) { placeholder = it; break; }
         if (!installedMatch) installedMatch = it;
     }
-    if (!placeholder) placeholder = installedMatch;
+    if (!placeholder && !forceSeparate) placeholder = installedMatch;
 
     if (placeholder) {
         // For an installed match, stash the current folder so addModFromPath
@@ -1963,7 +1970,11 @@ void MainWindow::onInstallFromNexus(QListWidgetItem *item)
     }
 
     // Already-installed guard - warn (and let user cancel) before re-installing.
-    if (!confirmReinstallIfInstalled(game, modId, item)) return;
+    // The Search-on-Nexus flow installs into `item` itself rather than reusing
+    // the existing match, so Replace and Separate are functionally identical
+    // here - both proceed with `item` as the target.  Only Cancel aborts.
+    const auto choice = confirmReinstallIfInstalled(game, modId, item);
+    if (choice == ReinstallChoice::Cancel) return;
 
     checkModDependencies(game, modId, item);
 }
@@ -2040,8 +2051,9 @@ void MainWindow::onTitleFetched(QListWidgetItem *item, const QString &name)
         purgeDuplicatePlaceholders(item);
 }
 
-bool MainWindow::confirmReinstallIfInstalled(const QString &game, int modId,
-                                              QListWidgetItem *except)
+MainWindow::ReinstallChoice
+MainWindow::confirmReinstallIfInstalled(const QString &game, int modId,
+                                         QListWidgetItem *except)
 {
     QString gameLc = game.toLower();
     for (int i = 0; i < m_modList->count(); ++i) {
@@ -2061,15 +2073,31 @@ bool MainWindow::confirmReinstallIfInstalled(const QString &game, int modId,
         QString existingName = it->data(ModRole::CustomName).toString();
         if (existingName.isEmpty()) existingName = it->text();
 
+        // Three-way disambiguation: a single Nexus mod page can ship
+        // multiple distinct optional files (Wretched + Sage's Backgrounds on
+        // mod 58704), but the same modId also identifies "the new version of
+        // <mod>" in Nexus's update flow.  The bare OK/Cancel prompt that
+        // used to live here interpreted every match as Replace, which
+        // silently overwrote the prior install when the user actually
+        // wanted a sibling file.  Default the focus to Separate - it's the
+        // non-destructive choice and the more common case for mod pages
+        // that bundle complementary content.
         QMessageBox box(this);
         box.setWindowTitle(T("reinstall_warn_title"));
-        box.setIcon(QMessageBox::Warning);
+        box.setIcon(QMessageBox::Question);
         box.setText(T("reinstall_warn_body").arg(existingName));
-        box.setStandardButtons(QMessageBox::Ok | QMessageBox::Cancel);
-        box.setDefaultButton(QMessageBox::Cancel);
-        return box.exec() == QMessageBox::Ok;
+        auto *replaceBtn  = box.addButton(T("reinstall_choice_replace"),
+                                          QMessageBox::AcceptRole);
+        auto *separateBtn = box.addButton(T("reinstall_choice_separate"),
+                                          QMessageBox::ActionRole);
+        box.addButton(QMessageBox::Cancel);
+        box.setDefaultButton(separateBtn);
+        box.exec();
+        if (box.clickedButton() == replaceBtn)  return ReinstallChoice::Replace;
+        if (box.clickedButton() == separateBtn) return ReinstallChoice::Separate;
+        return ReinstallChoice::Cancel;
     }
-    return true;
+    return ReinstallChoice::NotInstalled;
 }
 
 void MainWindow::checkModDependencies(const QString &game, int modId, QListWidgetItem *item)
@@ -8821,7 +8849,9 @@ void MainWindow::updateGameButton()
     // If a game hasn't been added as a profile yet it is shown greyed out.
     static const QList<QPair<QString,QString>> kPinned = {
         {"morrowind",            "OpenMW (Morrowind)"},
-        {"falloutnewvegas",      "Fallout: New Vegas"},
+        // Disabled in v0.3 - FNV support is in progress, not ready to ship.
+        // Re-enable by uncommenting once detection + per-game install paths are tested.
+        // {"falloutnewvegas",      "Fallout: New Vegas"},
     };
 
     QSet<int> pinnedIdx;

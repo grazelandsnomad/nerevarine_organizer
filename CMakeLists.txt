@@ -41,6 +41,7 @@ set(SOURCES
     src/modlistdelegate.cpp
     src/translator.cpp
     src/fomodwizard.cpp
+    src/fomod_copy.cpp
     src/fomod_install.cpp
     src/fomod_path.cpp
     src/load_order_merge.cpp

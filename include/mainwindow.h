@@ -241,11 +241,32 @@ private:
     // the display text (used when the installed folder has a generic name like "scripts").
     void fetchNexusTitle(const QString &game, int modId, QListWidgetItem *item,
                          bool setAsCustomName = false);
-    // Returns true if we should proceed (mod isn't installed, OR user confirmed
-    // re-install). `except` is an item to skip during the lookup (the placeholder
-    // currently being installed).
-    bool confirmReinstallIfInstalled(const QString &game, int modId,
-                                      QListWidgetItem *except = nullptr);
+    // Outcome of the "this mod page is already installed" prompt that fires
+    // before a new download starts.  Three branches because two distinct user
+    // intents share the same trigger (modId already installed):
+    //   · Replace    - the new download is an update of the existing mod;
+    //                  the old folder will be removed once the new one lands
+    //                  (Nexus "Update" flow).
+    //   · Separate   - the new download is a different file from the same
+    //                  mod page (e.g. complementary optional file like
+    //                  Sage's Backgrounds vs The Wretched And The Weird,
+    //                  Nexus mod 58704); install in its own folder, leave
+    //                  the existing entry alone.
+    //   · Cancel     - abort the install.
+    //   · NotInstalled - no existing match found; caller should just continue.
+    enum class ReinstallChoice {
+        NotInstalled,
+        Replace,
+        Separate,
+        Cancel,
+    };
+    // Looks up an installed mod with the same (game, modId).  When one
+    // exists, prompts the user to pick Replace / Separate / Cancel.  Returns
+    // NotInstalled when there's nothing to disambiguate.  `except` is an
+    // item to skip during the lookup (the placeholder currently being
+    // installed).
+    ReinstallChoice confirmReinstallIfInstalled(const QString &game, int modId,
+                                                 QListWidgetItem *except = nullptr);
     void checkModDependencies(const QString &game, int modId, QListWidgetItem *item);
     // Fetches the Nexus file list for (game, modId). With autoPickMain=true,
     // the per-mod picker is skipped and the first MAIN/UPDATE file is taken;

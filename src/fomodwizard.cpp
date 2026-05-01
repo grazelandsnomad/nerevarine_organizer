@@ -1,4 +1,5 @@
 #include "fomodwizard.h"
+#include "fomod_copy.h"
 #include "fomod_path.h"
 #include "translator.h"
 
@@ -20,34 +21,6 @@
 #include <QSet>
 #include <QStackedWidget>
 #include <QXmlStreamReader>
-
-// File system helpers
-
-void FomodWizard::copyContents(const QString &srcDir, const QString &dstDir)
-{
-    QDir src(srcDir);
-    if (!src.exists()) return;
-    QDir().mkpath(dstDir);
-    for (const QFileInfo &fi : src.entryInfoList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot)) {
-        if (fi.isDir())
-            copyDir(fi.absoluteFilePath(), dstDir + "/" + fi.fileName());
-        else
-            QFile::copy(fi.absoluteFilePath(), dstDir + "/" + fi.fileName());
-    }
-}
-
-void FomodWizard::copyDir(const QString &srcDir, const QString &dstDir)
-{
-    QDir src(srcDir);
-    if (!src.exists()) return;
-    QDir().mkpath(dstDir);
-    for (const QFileInfo &fi : src.entryInfoList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot)) {
-        if (fi.isDir())
-            copyDir(fi.absoluteFilePath(), dstDir + "/" + fi.fileName());
-        else
-            QFile::copy(fi.absoluteFilePath(), dstDir + "/" + fi.fileName());
-    }
-}
 
 // FOMOD detection
 
@@ -693,6 +666,56 @@ void FomodWizard::buildUi()
                 }
             }
         }
+
+        // ---
+        // Pass D: Patch-hub auto-tick.
+        //   For SelectAny groups where every plugin's <files> include an
+        //   .omwscripts entry, tick all plugins by default.  This catches
+        //   "patch hub" mods (Completionist Patch Hub and similar) whose
+        //   plugins are named after target landmass mods the user is unlikely
+        //   to have all of - Pass C would otherwise leave the group empty
+        //   and the user would end up with only required content (the
+        //   .omwscripts files at root) plus an empty `scripts/` placeholder,
+        //   then OpenMW would fail to load the orphan script declarations.
+        //   .omwscripts files are tiny and harmless when their target mod
+        //   isn't loaded, so the over-install is the safer default.
+        //   Skipped when prior choices already cover the group, so a user's
+        //   explicit untick survives a re-run.
+        for (int si = 0; si < m_steps.size(); ++si) {
+            const FomodStep &step = m_steps[si];
+            for (int gi = 0; gi < step.groups.size(); ++gi) {
+                const FomodGroup &group = step.groups[gi];
+                if (group.type != QLatin1String("SelectAny")) continue;
+                if (group.plugins.size() < 2)                continue;
+                const quint64 groupKey = (quint64(si) << 16) | quint64(gi);
+                if (priorGroups.contains(groupKey))          continue;
+
+                bool patchHub = true;
+                for (const FomodPlugin &plugin : group.plugins) {
+                    bool hasOmw = false;
+                    for (const FomodFile &f : plugin.files) {
+                        if (f.source.endsWith(QLatin1String(".omwscripts"),
+                                              Qt::CaseInsensitive)) {
+                            hasOmw = true;
+                            break;
+                        }
+                    }
+                    if (!hasOmw) { patchHub = false; break; }
+                }
+                if (!patchHub) continue;
+
+                for (int pi = 0; pi < group.plugins.size() &&
+                                 pi < m_buttons[si][gi].size(); ++pi) {
+                    QAbstractButton *btn = m_buttons[si][gi][pi];
+                    if (!btn || !btn->isEnabled()) continue;
+                    if (btn->isChecked()) continue;  // already on (Pass C)
+                    btn->setChecked(true);
+                    btn->setText(btn->text() +
+                        QStringLiteral(" \u2705 Patch hub - default ON. "
+                                       "Untick if you don't want this patch."));
+                }
+            }
+        }
     }
 
     // Apply prior choices on top of the defaults set above.
@@ -834,7 +857,7 @@ QString FomodWizard::applySelections()
             QString dst = normalizedDest.isEmpty()
                 ? installDir
                 : installDir + "/" + normalizedDest;
-            copyContents(src, dst);
+            fomod_copy::copyContents(src, dst);
         } else {
             QString dst = normalizedDest.isEmpty()
                 ? installDir + "/" + QFileInfo(src).fileName()
