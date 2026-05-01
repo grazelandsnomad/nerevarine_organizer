@@ -11,18 +11,18 @@ jobs:
   ctest:
     runs-on: ubuntu-22.04
 
-    # update-alternatives points /usr/bin/gcc → gcc-13 but cmake's
+    # update-alternatives points /usr/bin/gcc → gcc-12 but cmake's
     # auto-detection still looks at /usr/bin/c++ first on Ubuntu, which
     # can resolve to g++-11 (the apt default).  CC/CXX win over both.
     env:
-      CC: gcc-13
-      CXX: g++-13
+      CC: gcc-12
+      CXX: g++-12
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install GCC 13 (for C++23 std::expected)
-        # ubuntu-22.04 default is gcc-11; gcc-13 lives in jammy-updates/universe
+      - name: Install GCC 12 (for C++23 std::expected)
+        # ubuntu-22.04 default is gcc-11; gcc-12 lives in jammy-updates/universe
         # and installs without a PPA.  We previously pulled gcc-14 from
         # ubuntu-toolchain-r/test for std::println, but that PPA reaches
         # launchpad.net during add-apt-repository - which has been timing
@@ -31,9 +31,9 @@ jobs:
         # with std::fprintf so we can stay in the regular repos.
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-13 g++-13
-          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
-          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100
+          sudo apt-get install -y gcc-12 g++-12
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100
           gcc --version
           g++ --version
 
@@ -54,8 +54,8 @@ jobs:
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=gcc-13 \
-            -DCMAKE_CXX_COMPILER=g++-13
+            -DCMAKE_C_COMPILER=gcc-12 \
+            -DCMAKE_CXX_COMPILER=g++-12
 
       - name: Build
         run: cmake --build build -j"$(nproc)"

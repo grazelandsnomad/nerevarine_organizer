@@ -23,7 +23,7 @@ jobs:
 
       - name: Install MSYS2 + UCRT64 toolchain
         # UCRT64 ships gcc with a recent libstdc++, matching the C++23
-        # behaviour the Linux jobs target on gcc-13 (std::expected).
+        # behaviour the Linux jobs target on gcc-12 (std::expected).
         uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
