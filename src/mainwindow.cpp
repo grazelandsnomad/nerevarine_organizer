@@ -7175,6 +7175,29 @@ void MainWindow::syncOpenMWConfig()
             if (!modPath.isEmpty())
                 managedModPaths.insert(QDir::cleanPath(modPath));
             cm.pluginDirs = collectDataFolders(modPath, contentExts);
+
+            // Scan for BSA archives shipped by this mod and register them
+            // as fallback-archive= entries.  Without this, BSA-only mods
+            // (e.g. Authentic Signs IT - canonical bug report) load their
+            // .esp references but render with [None] textures because the
+            // archive is invisible to OpenMW's resource resolver.
+            // Recursive walk: BSAs sometimes sit in subfolders alongside
+            // their .esp (e.g. Tamriel Data layout).  Dedup by basename so
+            // a mod that ships the same BSA in two roots only registers
+            // once - OpenMW expects unique fallback-archive= names anyway.
+            if (!modPath.isEmpty()) {
+                QSet<QString> seenBsa;
+                QDirIterator it(modPath,
+                    {QStringLiteral("*.bsa"), QStringLiteral("*.BSA")},
+                    QDir::Files, QDirIterator::Subdirectories);
+                while (it.hasNext()) {
+                    it.next();
+                    const QString name = it.fileName();
+                    if (seenBsa.contains(name)) continue;
+                    seenBsa.insert(name);
+                    cm.bsaFiles << name;
+                }
+            }
             // Drop patch subfolders whose target mod isn't present in the list,
             // and those the user explicitly declined when prompted at mod-add
             // time.  If the target mod is later installed, addModFromPath

@@ -52,6 +52,15 @@ QString renderOpenMWConfig(const QList<ConfigMod> &mods,
     QSet<QString> groundcoverSeen;
     QSet<QString> allManagedGroundcover;
     QSet<QString> allSuppressed;
+    // Mod BSAs in modlist order, deduped.  Emitted inside the managed
+    // section as `fallback-archive=<basename>` so OpenMW can resolve the
+    // archive's contents when looking up meshes/textures referenced by
+    // the mod's plugins.  allManagedArchives carries every BSA name we'll
+    // emit so Pass 2 can drop pre-existing `fallback-archive=` lines that
+    // duplicate them (a renamed/uninstalled mod no longer registers).
+    QStringList   archiveOrdered;
+    QSet<QString> archiveSeen;
+    QSet<QString> allManagedArchives;
 
     for (const ConfigMod &m : mods) {
         if (!m.installed) continue;
@@ -95,6 +104,17 @@ QString renderOpenMWConfig(const QList<ConfigMod> &mods,
             // folder that holds textures/, meshes/, splash/ and so on.
             for (const QString &r : m.resourceRoots)
                 dataLines << "data=\"" + r + "\"";
+        }
+
+        // BSA archives.  Recorded for every installed mod (so Pass 2 can
+        // drop stale managed entries even from disabled mods), but only
+        // EMITTED for enabled mods - same pattern as content= above.
+        for (const QString &b : m.bsaFiles) {
+            allManagedArchives.insert(b);
+            if (!m.enabled) continue;
+            if (archiveSeen.contains(b)) continue;
+            archiveSeen.insert(b);
+            archiveOrdered << b;
         }
     }
 
@@ -153,10 +173,24 @@ QString renderOpenMWConfig(const QList<ConfigMod> &mods,
                 }
             } else if (!inManaged && line.startsWith(QStringLiteral("data="))) {
                 externalDataLines << line;
+            } else if (!inManaged
+                    && line.startsWith(QStringLiteral("fallback-archive="))) {
+                // Drop any preamble fallback-archive= whose basename is now
+                // emitted by Pass 4 - prevents a duplicate entry surviving
+                // when an installed mod's BSA used to live in the preamble
+                // (manually added by the user before Nerevarine managed it,
+                // or migrated from a previous run).  Vanilla BSAs
+                // (Morrowind/Tribunal/Bloodmoon) are NEVER in
+                // allManagedArchives because no managed mod ships them, so
+                // they survive untouched.
+                const QString name = line.mid(QStringLiteral("fallback-archive=").size());
+                if (!allManagedArchives.contains(name))
+                    preamble << line;
             } else if (!inManaged) {
                 preamble << line;
             }
-            // Inside managed section: data= is discarded (rebuilt above).
+            // Inside managed section: data= and fallback-archive= are
+            // discarded (rebuilt above).
         }
     }
 
@@ -214,6 +248,12 @@ QString renderOpenMWConfig(const QList<ConfigMod> &mods,
     for (const QString &line : externalDataLines) out += line + "\n";
     out += BEGIN + "\n";
     for (const QString &dl  : dataLines)          out += dl   + "\n";
+    // fallback-archive= goes BEFORE content= so the archive is registered
+    // by the time OpenMW starts resolving plugin references.  Mod BSAs
+    // come AFTER the vanilla ones in the preamble, so loose mod files in
+    // data= dirs still win over BSA-packed copies (loose-file priority is
+    // OpenMW's documented behaviour and what users expect).
+    for (const QString &b   : archiveOrdered)     out += "fallback-archive=" + b + "\n";
     for (const QString &cf  : contentOrder)       out += "content=" + cf + "\n";
     for (const QString &cf  : groundcoverOrdered) out += "groundcover=" + cf + "\n";
     out += END + "\n";

@@ -47,6 +47,15 @@ struct ConfigMod {
     // them as content= produces untextured geometry, and as groundcover=
     // causes a fatal crash.
     QSet<QString> suppressedPlugins;
+
+    // BSA basenames found anywhere under this mod's data roots.  Each one
+    // becomes a `fallback-archive=<name>` line in the managed section so
+    // OpenMW can resolve textures/meshes packed inside.  Without this,
+    // BSA-only mods (Authentic Signs IT was the canonical bug report)
+    // load their .esp references but render with [None] texture binds
+    // because the fallback-archive lookup never sees the file.  Only
+    // consulted when the mod is enabled+installed.
+    QStringList bsaFiles;
 };
 
 // Render the new openmw.cfg contents.

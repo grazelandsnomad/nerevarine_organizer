@@ -671,6 +671,122 @@ static void testExternalGroundcoverPreservedWhenNotManaged()
           out.contains("groundcover=Different.esp"));
 }
 
+// -- BSA → fallback-archive= emission ---
+//
+// Authentic Signs IT (Nexus 52508) was the canonical bug report: the mod's
+// .esp + .bsa loaded but every sign rendered with [None] textures because
+// `fallback-archive=Authentic Signs IT.bsa` was never written into
+// openmw.cfg.  The writer now harvests `ConfigMod::bsaFiles` and emits
+// each as a fallback-archive= line inside the managed section.
+static void testBsaEmitsFallbackArchive()
+{
+    std::cout << "testBsaEmitsFallbackArchive\n";
+
+    ConfigMod m = plugin("/mods/AuthenticSigns",
+                          {"Authentic Signs IT 1.1.esp"});
+    m.bsaFiles = {"Authentic Signs IT.bsa"};
+
+    const QString out = renderOpenMWConfig({m}, {"Authentic Signs IT 1.1.esp"}, {});
+
+    check("fallback-archive= line is in the managed block",
+          out.contains("fallback-archive=Authentic Signs IT.bsa"));
+    check("fallback-archive= sits AFTER the BEGIN marker",
+          out.indexOf("fallback-archive=Authentic Signs IT.bsa")
+            > out.indexOf("# --- Nerevarine Organizer BEGIN ---"));
+    check("fallback-archive= sits BEFORE the matching content=",
+          out.indexOf("fallback-archive=Authentic Signs IT.bsa")
+            < out.indexOf("content=Authentic Signs IT 1.1.esp"));
+}
+
+// A disabled installed mod's BSAs must NOT be registered (mirrors how
+// content= is gated on enabled).  But the writer still has to know about
+// them so a stale preamble fallback-archive= for the same name gets
+// dropped when re-running on an existing cfg.
+static void testDisabledModBsaNotEmitted()
+{
+    std::cout << "testDisabledModBsaNotEmitted\n";
+
+    ConfigMod m = plugin("/mods/AuthSigns", {"AuthSigns.esp"}, /*enabled=*/false);
+    m.bsaFiles = {"AuthSigns.bsa"};
+
+    const QString out = renderOpenMWConfig({m}, {}, {});
+    check("disabled mod's BSA is NOT registered",
+          !out.contains("fallback-archive=AuthSigns.bsa"));
+}
+
+// Vanilla BSAs in the preamble (Morrowind/Tribunal/Bloodmoon) MUST NOT
+// be touched - they're not in any managed mod's bsaFiles, so the dedup
+// rule leaves them alone.  This is the test that makes sure the preamble
+// scrub is conservative.
+static void testVanillaFallbackArchivePreserved()
+{
+    std::cout << "testVanillaFallbackArchivePreserved\n";
+
+    const QString existing =
+        "fallback-archive=Morrowind.bsa\n"
+        "fallback-archive=Tribunal.bsa\n"
+        "fallback-archive=Bloodmoon.bsa\n";
+
+    ConfigMod m = plugin("/mods/Foo", {"Foo.esp"});
+    m.bsaFiles = {"Foo.bsa"};   // no overlap with vanilla names
+
+    const QString out = renderOpenMWConfig({m}, {"Foo.esp"}, existing);
+
+    check("Morrowind.bsa preserved",
+          out.contains("fallback-archive=Morrowind.bsa"));
+    check("Tribunal.bsa preserved",
+          out.contains("fallback-archive=Tribunal.bsa"));
+    check("Bloodmoon.bsa preserved",
+          out.contains("fallback-archive=Bloodmoon.bsa"));
+    check("New mod BSA also added",
+          out.contains("fallback-archive=Foo.bsa"));
+}
+
+// Pre-existing preamble fallback-archive= for a name we now manage must
+// be DROPPED so the mod's BSA isn't registered twice.  Two sites of
+// "Authentic Signs IT.bsa" was the actual on-disk bug a user could hit
+// after manually editing openmw.cfg before the writer learned about
+// BSAs.
+static void testPreambleBsaDuplicateDropped()
+{
+    std::cout << "testPreambleBsaDuplicateDropped\n";
+
+    const QString existing =
+        "fallback-archive=Morrowind.bsa\n"
+        "fallback-archive=Authentic Signs IT.bsa\n";
+
+    ConfigMod m = plugin("/mods/AS", {"AS.esp"});
+    m.bsaFiles = {"Authentic Signs IT.bsa"};
+
+    const QString out = renderOpenMWConfig({m}, {"AS.esp"}, existing);
+
+    // Exactly ONE occurrence of the BSA line in the output - the preamble
+    // copy was scrubbed so the managed-section emission isn't a dup.
+    int count = 0, from = 0;
+    while ((from = out.indexOf("fallback-archive=Authentic Signs IT.bsa",
+                                from)) >= 0) {
+        ++count;
+        ++from;
+    }
+    check("BSA registered exactly once (preamble dup scrubbed)",
+          count == 1);
+}
+
+// Idempotence: re-rendering the writer's own previous output should
+// produce identical bytes.  Locks in the round-trip property for the
+// new fallback-archive= section.
+static void testBsaIdempotent()
+{
+    std::cout << "testBsaIdempotent\n";
+
+    ConfigMod m = plugin("/mods/Auth", {"Auth.esp"});
+    m.bsaFiles = {"Auth.bsa"};
+
+    const QString first  = renderOpenMWConfig({m}, {"Auth.esp"}, {});
+    const QString second = renderOpenMWConfig({m}, {"Auth.esp"}, first);
+    check("re-render is byte-identical", first == second, second, first);
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -697,6 +813,11 @@ int main(int argc, char **argv)
     testSuppressedPluginsNotResurrectedAsExternal();
     testDuplicatePreambleGroundcoverDropped();
     testExternalGroundcoverPreservedWhenNotManaged();
+    testBsaEmitsFallbackArchive();
+    testDisabledModBsaNotEmitted();
+    testVanillaFallbackArchivePreserved();
+    testPreambleBsaDuplicateDropped();
+    testBsaIdempotent();
 
     std::cout << "\n"
               << s_passed << " passed, "
