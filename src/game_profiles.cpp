@@ -9,11 +9,141 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QRegularExpression>
 #include <QSet>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QString>
 #include <QStringList>
 #include <Qt>
+
+// -- ModlistProfile / GameProfile helpers ---
+
+namespace {
+
+// Bare-filename scheme for new modlist/load-order files.  Migration keeps
+// the legacy `modlist_<gameId>.txt` instead so existing users don't get
+// their state files moved on first run under the new code.
+QString modlistFilenameFor(const QString &gameId, const QString &profileName)
+{
+    QString sanitized = profileName;
+    static const QRegularExpression invalid(QStringLiteral("[^A-Za-z0-9_-]+"));
+    sanitized.replace(invalid, QStringLiteral("_"));
+    if (sanitized.isEmpty()) sanitized = QStringLiteral("profile");
+    return QStringLiteral("modlist_%1__%2.txt").arg(gameId, sanitized);
+}
+
+QString loadOrderFilenameFor(const QString &gameId, const QString &profileName)
+{
+    QString sanitized = profileName;
+    static const QRegularExpression invalid(QStringLiteral("[^A-Za-z0-9_-]+"));
+    sanitized.replace(invalid, QStringLiteral("_"));
+    if (sanitized.isEmpty()) sanitized = QStringLiteral("profile");
+    return QStringLiteral("loadorder_%1__%2.txt").arg(gameId, sanitized);
+}
+
+// Discover every Steam library root configured for this user, not just the
+// hardcoded handful.  Steam keeps the authoritative list in
+// `steamapps/libraryfolders.vdf` — both the modern shape
+//   "0" { "path" "/mnt/nvme_2TB/SteamLibrary" ... }
+// and the legacy flat shape
+//   "1"  "/mnt/nvme_2TB/SteamLibrary"
+// occur in the wild, so the parser accepts both via two regexes.
+//
+// Without this, games installed on a non-default Steam library (custom
+// SSD mount, second drive, etc.) silently fail detection and the user has
+// to point at the .exe manually.
+QStringList steamCommonRoots()
+{
+    QStringList roots;
+    auto pushIfNew = [&](const QString &p) {
+        if (!p.isEmpty() && !roots.contains(p) && QFileInfo::exists(p))
+            roots.append(p);
+    };
+
+    const QString home = QDir::homePath();
+
+    // Hardcoded fallbacks - kept so detection works even when no vdf is
+    // findable (e.g. a flatpak Steam that points elsewhere).
+    pushIfNew(home + "/.steam/steam/steamapps/common");
+    pushIfNew(home + "/.local/share/Steam/steamapps/common");
+    pushIfNew("/mnt/games/Steam/steamapps/common");
+
+    // libraryfolders.vdf candidates - parse each one we can read.
+    const QStringList vdfCandidates = {
+        home + "/.steam/steam/steamapps/libraryfolders.vdf",
+        home + "/.local/share/Steam/steamapps/libraryfolders.vdf",
+        home + "/.steam/root/steamapps/libraryfolders.vdf",
+        home + "/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/libraryfolders.vdf",
+    };
+
+    static const QRegularExpression rxPath(
+        QStringLiteral("\"path\"\\s+\"([^\"]+)\""),
+        QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression rxLegacy(
+        QStringLiteral("^\\s*\"\\d+\"\\s+\"(/[^\"]+)\"\\s*$"),
+        QRegularExpression::MultilineOption);
+
+    for (const QString &vdf : vdfCandidates) {
+        QFile f(vdf);
+        if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) continue;
+        const QString contents = QString::fromUtf8(f.readAll());
+        f.close();
+
+        auto it = rxPath.globalMatch(contents);
+        while (it.hasNext()) {
+            const QString libRoot = it.next().captured(1);
+            pushIfNew(libRoot + "/steamapps/common");
+        }
+        auto it2 = rxLegacy.globalMatch(contents);
+        while (it2.hasNext()) {
+            const QString libRoot = it2.next().captured(1);
+            pushIfNew(libRoot + "/steamapps/common");
+        }
+    }
+
+    return roots;
+}
+
+QString resolveStateFile(const QString &filename)
+{
+    // Mirror of MainWindow::resolveUserStatePath - duplicated here so the
+    // game-profile registry doesn't pull QtWidgets / MainWindow into its
+    // dependency graph.  Both implementations land on the same path.
+    const bool inAppImage = !qEnvironmentVariableIsEmpty("APPIMAGE");
+    const QString data = QStandardPaths::writableLocation(
+                             QStandardPaths::AppDataLocation) + "/" + filename;
+    if (inAppImage) {
+        QDir().mkpath(QFileInfo(data).absolutePath());
+        return QFileInfo(data).absoluteFilePath();
+    }
+    const QString next = QCoreApplication::applicationDirPath() + "/" + filename;
+    QFileInfo binDir(QCoreApplication::applicationDirPath());
+    for (const QString &p : {next, data})
+        if (QFile::exists(p)) return QFileInfo(p).absoluteFilePath();
+    if (binDir.isWritable())
+        return QFileInfo(next).absoluteFilePath();
+    QDir().mkpath(QFileInfo(data).absolutePath());
+    return QFileInfo(data).absoluteFilePath();
+}
+
+} // namespace
+
+ModlistProfile& GameProfile::activeModlist()
+{
+    static ModlistProfile empty;
+    if (activeModlistIdx < 0 || activeModlistIdx >= modlistProfiles.size())
+        return empty;
+    return modlistProfiles[activeModlistIdx];
+}
+
+const ModlistProfile& GameProfile::activeModlist() const
+{
+    static const ModlistProfile empty;
+    if (activeModlistIdx < 0 || activeModlistIdx >= modlistProfiles.size())
+        return empty;
+    return modlistProfiles[activeModlistIdx];
+}
 
 GameProfileRegistry::GameProfileRegistry(QObject *parent)
     : QObject(parent)
@@ -77,7 +207,60 @@ void GameProfileRegistry::load()
             if (m_games[i].id == currentId) { m_currentIdx = i; break; }
     }
 
-    QDir().mkpath(m_games[m_currentIdx].modsDir);
+    // Modlist-profile load + first-run migration.  For every game we either
+    // (a) read an existing `games/<id>/profiles` list - the v0.4+ shape; or
+    // (b) auto-create a "Default" profile that adopts the legacy
+    //     modlist_<gameId>.txt + loadorder_<gameId>.txt + per-game modsDir.
+    // The legacy filenames are KEPT for the migrated Default so users don't
+    // see file renames mid-upgrade; new profiles use the canonical
+    // `modlist_<gameId>__<name>.txt` scheme.
+    for (GameProfile &gp : m_games) {
+        const QString base = "games/" + gp.id;
+        QStringList profileNames = s.value(base + "/profiles").toStringList();
+        profileNames.removeAll(QString());
+
+        if (profileNames.isEmpty()) {
+            // Migration path - first launch under new code.
+            ModlistProfile def;
+            def.name              = QStringLiteral("Default");
+            def.modsDir           = gp.modsDir;
+            def.modlistFilename   = QStringLiteral("modlist_")   + gp.id + QStringLiteral(".txt");
+            def.loadOrderFilename = QStringLiteral("loadorder_") + gp.id + QStringLiteral(".txt");
+            gp.modlistProfiles.append(def);
+            gp.activeModlistIdx = 0;
+        } else {
+            for (const QString &pn : profileNames) {
+                const QString pkey = base + "/profile/" + pn;
+                ModlistProfile mp;
+                mp.name              = pn;
+                mp.modsDir           = s.value(pkey + "/mods_dir").toString();
+                mp.modlistFilename   = s.value(pkey + "/modlist_filename",
+                                          modlistFilenameFor(gp.id, pn)).toString();
+                mp.loadOrderFilename = s.value(pkey + "/loadorder_filename",
+                                          loadOrderFilenameFor(gp.id, pn)).toString();
+                gp.modlistProfiles.append(mp);
+            }
+            const QString activeName = s.value(base + "/active_profile",
+                                               gp.modlistProfiles.first().name).toString();
+            gp.activeModlistIdx = 0;
+            for (int i = 0; i < gp.modlistProfiles.size(); ++i) {
+                if (gp.modlistProfiles[i].name == activeName) {
+                    gp.activeModlistIdx = i;
+                    break;
+                }
+            }
+        }
+
+        // Mirror the active profile's modsDir onto gp.modsDir so existing
+        // call sites that read the field keep observing the right dir.
+        gp.modsDir = gp.activeModlist().modsDir;
+    }
+
+    // Persist any migration changes (Default profile entry, etc).
+    save();
+
+    if (!m_games[m_currentIdx].modsDir.isEmpty())
+        QDir().mkpath(m_games[m_currentIdx].modsDir);
 }
 
 void GameProfileRegistry::save()
@@ -90,6 +273,21 @@ void GameProfileRegistry::save()
         s.setValue("games/" + gp.id + "/mods_dir",             gp.modsDir);
         s.setValue("games/" + gp.id + "/openmw_path",          gp.openmwPath);
         s.setValue("games/" + gp.id + "/openmw_launcher_path", gp.openmwLauncherPath);
+
+        // Modlist profiles for this game.
+        QStringList profileNames;
+        for (const ModlistProfile &mp : gp.modlistProfiles) {
+            profileNames << mp.name;
+            const QString pkey = "games/" + gp.id + "/profile/" + mp.name;
+            s.setValue(pkey + "/mods_dir",           mp.modsDir);
+            s.setValue(pkey + "/modlist_filename",   mp.modlistFilename);
+            s.setValue(pkey + "/loadorder_filename", mp.loadOrderFilename);
+        }
+        s.setValue("games/" + gp.id + "/profiles",       profileNames);
+        s.setValue("games/" + gp.id + "/active_profile",
+                   gp.modlistProfiles.isEmpty()
+                       ? QString()
+                       : gp.modlistProfiles[gp.activeModlistIdx].name);
     }
     s.setValue("games/list",    ids);
     s.setValue("games/current", m_games.isEmpty() ? "" : m_games[m_currentIdx].id);
@@ -100,6 +298,163 @@ void GameProfileRegistry::setCurrentIndex(int idx)
     if (idx < 0 || idx >= m_games.size() || idx == m_currentIdx) return;
     m_currentIdx = idx;
     QSettings().setValue("games/current", m_games[idx].id);
+}
+
+void GameProfileRegistry::setActiveModlistIndex(int idx)
+{
+    if (m_games.isEmpty()) return;
+    GameProfile &gp = m_games[m_currentIdx];
+    if (idx < 0 || idx >= gp.modlistProfiles.size() || idx == gp.activeModlistIdx) return;
+    gp.activeModlistIdx = idx;
+    gp.modsDir          = gp.activeModlist().modsDir;
+    save();
+}
+
+void GameProfileRegistry::setActiveModsDir(const QString &dir)
+{
+    if (m_games.isEmpty()) return;
+    GameProfile &gp = m_games[m_currentIdx];
+    gp.modsDir = dir;
+    if (gp.activeModlistIdx >= 0 && gp.activeModlistIdx < gp.modlistProfiles.size())
+        gp.modlistProfiles[gp.activeModlistIdx].modsDir = dir;
+    save();
+}
+
+int GameProfileRegistry::addModlistProfile(const QString &name)
+{
+    if (name.trimmed().isEmpty() || m_games.isEmpty()) return -1;
+    GameProfile &gp = m_games[m_currentIdx];
+    for (const ModlistProfile &mp : gp.modlistProfiles) {
+        if (mp.name.compare(name, Qt::CaseInsensitive) == 0) return -1;
+    }
+
+    ModlistProfile mp;
+    mp.name              = name.trimmed();
+    mp.modsDir           = QString();   // empty → first install will prompt
+    mp.modlistFilename   = modlistFilenameFor(gp.id, mp.name);
+    mp.loadOrderFilename = loadOrderFilenameFor(gp.id, mp.name);
+    gp.modlistProfiles.append(mp);
+    save();
+    return gp.modlistProfiles.size() - 1;
+}
+
+int GameProfileRegistry::cloneModlistProfile(int srcIdx, const QString &newName)
+{
+    if (m_games.isEmpty()) return -1;
+    GameProfile &gp = m_games[m_currentIdx];
+    if (srcIdx < 0 || srcIdx >= gp.modlistProfiles.size())  return -1;
+    if (newName.trimmed().isEmpty())                         return -1;
+    for (const ModlistProfile &mp : gp.modlistProfiles) {
+        if (mp.name.compare(newName, Qt::CaseInsensitive) == 0) return -1;
+    }
+
+    const ModlistProfile &src = gp.modlistProfiles[srcIdx];
+
+    ModlistProfile dst;
+    dst.name              = newName.trimmed();
+    dst.modsDir           = QString();   // clone-empty: NEW modsDir, unset
+    dst.modlistFilename   = modlistFilenameFor(gp.id, dst.name);
+    dst.loadOrderFilename = loadOrderFilenameFor(gp.id, dst.name);
+
+    // Duplicate the source's state files on disk before we register the
+    // profile so a failure mid-copy doesn't leave a profile pointing at
+    // nothing.  Source absent is fine - the new profile just starts empty.
+    auto duplicate = [](const QString &srcFile, const QString &dstFile) {
+        if (srcFile.isEmpty() || dstFile.isEmpty()) return;
+        const QString srcAbs = resolveStateFile(srcFile);
+        const QString dstAbs = resolveStateFile(dstFile);
+        if (!QFile::exists(srcAbs)) return;
+        QFile::remove(dstAbs);                // overwrite a stale copy
+        QFile::copy(srcAbs, dstAbs);
+    };
+    duplicate(src.modlistFilename,   dst.modlistFilename);
+    duplicate(src.loadOrderFilename, dst.loadOrderFilename);
+
+    gp.modlistProfiles.append(dst);
+    save();
+    return gp.modlistProfiles.size() - 1;
+}
+
+bool GameProfileRegistry::removeModlistProfile(int idx, bool deleteStateFiles)
+{
+    if (m_games.isEmpty()) return false;
+    GameProfile &gp = m_games[m_currentIdx];
+    if (idx < 0 || idx >= gp.modlistProfiles.size()) return false;
+    if (gp.modlistProfiles.size() <= 1)              return false;
+
+    if (deleteStateFiles) {
+        const ModlistProfile &mp = gp.modlistProfiles[idx];
+        if (!mp.modlistFilename.isEmpty())
+            QFile::remove(resolveStateFile(mp.modlistFilename));
+        if (!mp.loadOrderFilename.isEmpty())
+            QFile::remove(resolveStateFile(mp.loadOrderFilename));
+    }
+
+    // Drop the QSettings group so a recreated profile of the same name
+    // doesn't accidentally inherit the old modsDir.
+    QSettings().remove("games/" + gp.id + "/profile/" +
+                       gp.modlistProfiles[idx].name);
+
+    gp.modlistProfiles.removeAt(idx);
+    if (gp.activeModlistIdx >= gp.modlistProfiles.size())
+        gp.activeModlistIdx = gp.modlistProfiles.size() - 1;
+    if (gp.activeModlistIdx < 0)
+        gp.activeModlistIdx = 0;
+    gp.modsDir = gp.activeModlist().modsDir;
+    save();
+    return true;
+}
+
+bool GameProfileRegistry::renameModlistProfile(int idx, const QString &newName)
+{
+    if (m_games.isEmpty()) return false;
+    GameProfile &gp = m_games[m_currentIdx];
+    if (idx < 0 || idx >= gp.modlistProfiles.size()) return false;
+    const QString trimmed = newName.trimmed();
+    if (trimmed.isEmpty()) return false;
+    for (int i = 0; i < gp.modlistProfiles.size(); ++i) {
+        if (i != idx &&
+            gp.modlistProfiles[i].name.compare(trimmed, Qt::CaseInsensitive) == 0)
+            return false;
+    }
+
+    ModlistProfile &mp = gp.modlistProfiles[idx];
+    const QString oldName     = mp.name;
+    const QString legacyMlist = QStringLiteral("modlist_")   + gp.id + QStringLiteral(".txt");
+    const QString legacyLOrd  = QStringLiteral("loadorder_") + gp.id + QStringLiteral(".txt");
+    const bool    isLegacy    = (mp.modlistFilename == legacyMlist ||
+                                 mp.loadOrderFilename == legacyLOrd);
+
+    QString newMlist = mp.modlistFilename;
+    QString newLOrd  = mp.loadOrderFilename;
+    if (!isLegacy) {
+        newMlist = modlistFilenameFor(gp.id, trimmed);
+        newLOrd  = loadOrderFilenameFor(gp.id, trimmed);
+        // Best-effort rename on disk.  If the source file isn't there
+        // (e.g. profile never had any installs), the rename is a no-op
+        // and the new filename is just registered for next time.
+        auto renameFile = [](const QString &fromFile, const QString &toFile) {
+            if (fromFile == toFile || fromFile.isEmpty() || toFile.isEmpty()) return;
+            const QString fromAbs = resolveStateFile(fromFile);
+            const QString toAbs   = resolveStateFile(toFile);
+            if (QFile::exists(fromAbs)) {
+                QFile::remove(toAbs);
+                QFile::rename(fromAbs, toAbs);
+            }
+        };
+        renameFile(mp.modlistFilename,   newMlist);
+        renameFile(mp.loadOrderFilename, newLOrd);
+    }
+
+    // Drop the old QSettings group before assigning the new name so the
+    // next save() doesn't leave an orphan entry behind.
+    QSettings().remove("games/" + gp.id + "/profile/" + oldName);
+
+    mp.name              = trimmed;
+    mp.modlistFilename   = newMlist;
+    mp.loadOrderFilename = newLOrd;
+    save();
+    return true;
 }
 
 QString GameProfileRegistry::steamAppId(const QString &gameId)
@@ -186,13 +541,7 @@ QString GameProfileRegistry::findSteamGameExe(const QString &gameId)
     if (!info.contains(gameId)) return {};
 
     const auto &ei = info[gameId];
-
-    const QString home = QDir::homePath();
-    const QStringList roots = {
-        home + "/.steam/steam/steamapps/common",
-        home + "/.local/share/Steam/steamapps/common",
-        "/mnt/games/Steam/steamapps/common",
-    };
+    const QStringList roots = steamCommonRoots();
 
     for (const QString &root : roots) {
         QString path = root + "/" + ei.folder + "/" + ei.exe;
@@ -226,13 +575,7 @@ QString GameProfileRegistry::findSteamLauncherExe(const QString &gameId)
     if (!info.contains(gameId)) return {};
 
     const auto &ei = info[gameId];
-
-    const QString home = QDir::homePath();
-    const QStringList roots = {
-        home + "/.steam/steam/steamapps/common",
-        home + "/.local/share/Steam/steamapps/common",
-        "/mnt/games/Steam/steamapps/common",
-    };
+    const QStringList roots = steamCommonRoots();
 
     for (const QString &root : roots) {
         QString path = root + "/" + ei.folder + "/" + ei.exe;

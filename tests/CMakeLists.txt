@@ -53,6 +53,22 @@ target_link_libraries(test_fomod_install PRIVATE
     Qt6::Core
 )
 
+add_executable(test_modlist_profiles
+    test_modlist_profiles.cpp
+    ${CMAKE_SOURCE_DIR}/src/game_profiles.cpp
+    ${CMAKE_SOURCE_DIR}/include/game_profiles.h
+)
+# GameProfileRegistry is a Q_OBJECT - needs AUTOMOC for the vtable.
+# Listing the header in the source list makes AUTOMOC pick it up reliably,
+# even when the target's working dir is tests/ rather than the header's dir.
+set_target_properties(test_modlist_profiles PROPERTIES AUTOMOC ON)
+target_include_directories(test_modlist_profiles PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(test_modlist_profiles PRIVATE
+    Qt6::Core
+)
+
 add_executable(test_fomod_copy
     test_fomod_copy.cpp
     ${CMAKE_SOURCE_DIR}/src/fomod_copy.cpp
@@ -300,6 +316,7 @@ set(UNIT_TESTS
     test_log_triage
     test_master_satisfaction
     test_modentry
+    test_modlist_profiles
     test_modlist_serialization
     test_modlist_sync_guard
     test_nexus_client

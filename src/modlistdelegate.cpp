@@ -112,11 +112,28 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
                 countStr = QString("(%1/%2)").arg(active).arg(total);
         }
 
-        // Title starts after the +/- button.
-        QRect textRect = option.rect.adjusted(btn.right() - option.rect.left() + 8, 0,
-                                              -12, 0);
-        painter->drawText(textRect, Qt::AlignVCenter | Qt::AlignLeft,
-                          index.data(Qt::DisplayRole).toString());
+        // Reserve horizontal space for the count BEFORE drawing the title so
+        // long separator names ("La Calle de Cozumel" was the report) don't
+        // bleed into the count text on the right.  Pre-measure with the same
+        // font the count will be painted with so the elision math is right.
+        int countReserve = 0;
+        if (!countStr.isEmpty()) {
+            QFont cf = painter->font();
+            cf.setBold(false);
+            cf.setPointSize(qMax(cf.pointSize() - 1, 7));
+            countReserve = QFontMetrics(cf).horizontalAdvance(countStr) + 16;
+        }
+
+        // Title starts after the +/- button and stops before the count zone.
+        QRect textRect = option.rect.adjusted(
+            btn.right() - option.rect.left() + 8, 0,
+            -12 - countReserve, 0);
+        // Elide overflow rather than letting Qt clip mid-glyph - the user
+        // still sees the full name in the row's tooltip.
+        const QString rawTitle = index.data(Qt::DisplayRole).toString();
+        const QString elided   = painter->fontMetrics().elidedText(
+            rawTitle, Qt::ElideRight, textRect.width());
+        painter->drawText(textRect, Qt::AlignVCenter | Qt::AlignLeft, elided);
 
         if (!countStr.isEmpty()) {
             QFont cf = painter->font();

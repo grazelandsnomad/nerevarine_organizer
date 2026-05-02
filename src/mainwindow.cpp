@@ -709,8 +709,9 @@ void MainWindow::maybeShowFirstRunWizard()
         QDir().mkpath(r.modsDir);
         m_modsDir = r.modsDir;
         if (m_downloadQueue) m_downloadQueue->setModsDir(m_modsDir);
-        currentProfile().modsDir = r.modsDir;
-        QSettings().setValue("games/" + currentProfile().id + "/mods_dir", r.modsDir);
+        // Routes through the active modlist profile so the per-profile
+        // modsDir stays in sync with the GameProfile mirror.
+        m_profiles->setActiveModsDir(r.modsDir);
         saveModList();
     }
 
@@ -886,6 +887,41 @@ void MainWindow::setupToolbar()
         "QToolButton:pressed{ background: #1e2c3a; }"
         "QToolButton::menu-indicator { image: none; }");
     tb->addWidget(m_gameBtn);
+
+    // "Profile:" label - sits between the game button and the profile
+    // dropdown so the profile picker reads as a sub-selector of the
+    // current game rather than a peer toolbar control.
+    auto *profileLbl = new QLabel(T("toolbar_profile_label"), tb);
+    profileLbl->setStyleSheet(
+        "QLabel {"
+        "  color: #000000;"
+        "  padding: 0 6px 0 8px;"
+        "  font-size: 9pt;"
+        "  font-weight: bold;"
+        "}");
+    tb->addWidget(profileLbl);
+
+    // Modlist profile picker.  Toned-down chrome - no filled background,
+    // just a thin border + transparent fill so the profile looks like a
+    // nested sub-control of the game button rather than competing with
+    // it for visual weight.  Same hover/pressed semantics as the game
+    // button so the click affordance is consistent.
+    m_profileBtn = new QToolButton(tb);
+    m_profileBtn->setPopupMode(QToolButton::InstantPopup);
+    m_profileBtn->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    m_profileBtn->setStyleSheet(
+        "QToolButton {"
+        "  font-weight: bold;"
+        "  padding: 3px 10px 3px 8px;"
+        "  border: 1px solid #555;"
+        "  border-radius: 4px;"
+        "  background: transparent;"
+        "  color: #000000;"
+        "}"
+        "QToolButton:hover  { background: rgba(255,255,255,0.08); }"
+        "QToolButton:pressed{ background: rgba(0,0,0,0.22); }"
+        "QToolButton::menu-indicator { image: none; }");
+    tb->addWidget(m_profileBtn);
     tb->addSeparator();
 
     // Generic launch buttons for non-Morrowind Steam games
@@ -1049,6 +1085,7 @@ void MainWindow::setupToolbar()
 
     // Must be called last so all toolbar members are initialised
     updateGameButton(); // sets game button text/menu + shows correct launch button(s)
+    updateProfileButton();
     m_tbCustom->applyAll();
 }
 
@@ -1777,11 +1814,17 @@ MainWindow::extractAndAdd(const QString &archivePath, QListWidgetItem *placehold
         return std::unexpected(QStringLiteral("archive-missing"));
     }
     if (m_modsDir.isEmpty()) {
-        qCWarning(logging::lcInstall)
-            << "extractAndAdd: m_modsDir is empty - first-run setup incomplete";
-        statusBar()->showMessage(
-            T("status_extraction_failed"), 4000);
-        return std::unexpected(QStringLiteral("mods-dir-unset"));
+        // Active modlist profile hasn't picked a mods dir yet (likely a
+        // brand-new profile created via the toolbar or the WJ test flow).
+        // Prompt before bailing - this is the "clean modlist - where do
+        // you want to store mods?" hand-off.
+        if (!ensureModsDirForActiveProfile()) {
+            qCWarning(logging::lcInstall)
+                << "extractAndAdd: user cancelled the mods-dir prompt";
+            statusBar()->showMessage(
+                T("status_extraction_failed"), 4000);
+            return std::unexpected(QStringLiteral("mods-dir-unset"));
+        }
     }
 
     // The QProcess + extension-dispatch lives in InstallController; the
@@ -4374,8 +4417,7 @@ void MainWindow::onSetModsDir()
     if (!dir.isEmpty()) {
         m_modsDir = dir;
         if (m_downloadQueue) m_downloadQueue->setModsDir(m_modsDir);
-        currentProfile().modsDir = dir;
-        QSettings().setValue("games/" + currentProfile().id + "/mods_dir", dir);
+        m_profiles->setActiveModsDir(dir);
         statusBar()->showMessage(T("status_mods_dir_set").arg(m_modsDir), 3000);
     }
 }
@@ -4432,8 +4474,18 @@ static QString resolveUserStatePath(const QString &filename)
 
 QString MainWindow::modlistPath() const
 {
+    // Per-modlist-profile filename so testing a Wabbajack in a separate
+    // profile doesn't clobber the user's default modlist.  Falls back to
+    // the legacy `modlist_<gameId>.txt` when no profile data is loaded
+    // (first run before GameProfileRegistry::load() finishes its
+    // migration, or the registry is somehow empty).
+    if (m_profiles && !m_profiles->isEmpty()) {
+        const QString fn = m_profiles->current().activeModlist().modlistFilename;
+        if (!fn.isEmpty()) return resolveUserStatePath(fn);
+    }
     return resolveUserStatePath("modlist_" +
-        (m_profiles->isEmpty() ? QString("morrowind") : m_profiles->current().id) + ".txt");
+        (m_profiles && !m_profiles->isEmpty() ? m_profiles->current().id
+                                              : QString("morrowind")) + ".txt");
 }
 
 QString MainWindow::forbiddenModsPath() const
@@ -4443,8 +4495,13 @@ QString MainWindow::forbiddenModsPath() const
 
 QString MainWindow::loadOrderPath() const
 {
+    if (m_profiles && !m_profiles->isEmpty()) {
+        const QString fn = m_profiles->current().activeModlist().loadOrderFilename;
+        if (!fn.isEmpty()) return resolveUserStatePath(fn);
+    }
     return resolveUserStatePath("loadorder_" +
-        (m_profiles->isEmpty() ? QString("morrowind") : m_profiles->current().id) + ".txt");
+        (m_profiles && !m_profiles->isEmpty() ? m_profiles->current().id
+                                              : QString("morrowind")) + ".txt");
 }
 
 void MainWindow::loadLoadOrder()
@@ -5686,6 +5743,38 @@ void MainWindow::onModlistSummary()
     moveBtn->setStyleSheet("color: #8a4a1a; font-weight: bold;");
     moveBtn->setToolTip(T("summary_move_mods_tooltip"));
     btns->addButton(moveBtn, QDialogButtonBox::ActionRole);
+
+    // Consolidate button: only meaningful when at least one mod lives
+    // outside the active profile's modsDir.  Quick scan of the modlist
+    // to decide visibility - the actual count + folder list is reported
+    // by onConsolidateModsIntoActiveProfile() so the user sees concrete
+    // numbers in the confirmation dialog.
+    int outsideCount = 0;
+    if (!m_modsDir.isEmpty()) {
+        const QString modsRoot = QFileInfo(m_modsDir).absoluteFilePath();
+        for (int i = 0; i < m_modList->count(); ++i) {
+            auto *it = m_modList->item(i);
+            if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+            if (it->data(ModRole::InstallStatus).toInt() != 1)           continue;
+            const QString p = it->data(ModRole::ModPath).toString();
+            if (p.isEmpty() || !QFileInfo(p).isDir())                    continue;
+            const QString abs = QFileInfo(p).absoluteFilePath();
+            if (abs != modsRoot && !abs.startsWith(modsRoot + "/"))
+                ++outsideCount;
+        }
+    }
+    if (outsideCount > 0) {
+        auto *consolidateBtn = new QPushButton(
+            T("summary_consolidate_btn").arg(outsideCount), &dlg);
+        consolidateBtn->setStyleSheet("color: #6a1b9a; font-weight: bold;");
+        consolidateBtn->setToolTip(T("summary_consolidate_tooltip"));
+        btns->addButton(consolidateBtn, QDialogButtonBox::ActionRole);
+        connect(consolidateBtn, &QPushButton::clicked, &dlg, [this, &dlg]{
+            dlg.accept();
+            onConsolidateModsIntoActiveProfile();
+        });
+    }
+
     vlay->addWidget(btns);
     connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
     connect(moveBtn, &QPushButton::clicked, &dlg, [this, &dlg]{
@@ -5917,8 +6006,7 @@ void MainWindow::onMoveModsDir()
     if (movedOk > 0) {
         m_modsDir = dest;
         if (m_downloadQueue) m_downloadQueue->setModsDir(m_modsDir);
-        currentProfile().modsDir = dest;
-        QSettings().setValue("games/" + currentProfile().id + "/mods_dir", dest);
+        m_profiles->setActiveModsDir(dest);
         saveModList();
         syncGameConfig();
         scanMissingMasters();
@@ -5931,6 +6019,215 @@ void MainWindow::onMoveModsDir()
     // -- Report ---
     QMessageBox summary(this);
     summary.setWindowTitle(T("move_mods_title"));
+    summary.setIcon(failures.isEmpty() ? QMessageBox::Information
+                                        : QMessageBox::Warning);
+    QString body = T("move_mods_done_ok").arg(movedOk);
+    if (!failures.isEmpty()) {
+        QString flist = failures.mid(0, 15).join("\n  • ");
+        if (failures.size() > 15)
+            flist += "\n  … (+" + QString::number(failures.size() - 15) + ")";
+        body += "\n\n" + T("move_mods_done_failures")
+                            .arg(failures.size()) + "\n  • " + flist;
+    }
+    summary.setText(body);
+    summary.exec();
+}
+
+// Consolidate any mods physically living OUTSIDE the active profile's
+// modsDir into it.  Runs after a clone (the cloned profile inherits the
+// source's mod paths, so its mods sit in the SOURCE profile's modsDir
+// until consolidated).  The destination is forced to m_modsDir so two
+// profiles can never end up sharing the same physical mod folder; the
+// user already chose this dir via ensureModsDirForActiveProfile().
+//
+// Mirror of onMoveModsDir's flow with one inverted filter (outside-of
+// instead of inside-of) and the destination picker skipped.  Free-space,
+// collision, and confirm gates are kept identical so the user gets the
+// same safety guarantees on both paths.
+void MainWindow::onConsolidateModsIntoActiveProfile()
+{
+    if (!m_downloadQueue->isEmpty()) {
+        QMessageBox::warning(this, T("consolidate_mods_title"),
+            T("move_mods_err_downloads"));
+        return;
+    }
+
+    if (!ensureModsDirForActiveProfile()) return;
+    if (m_modsDir.isEmpty()) return;
+
+    m_scans->scheduleSizeScan();
+
+    struct Candidate {
+        QListWidgetItem *item;
+        QString oldPath;
+        QString folderName;
+        qint64  sizeBytes;
+    };
+    QList<Candidate> candidates;
+    qint64 totalBytes = 0;
+
+    const QString modsRoot = QFileInfo(m_modsDir).absoluteFilePath();
+
+    for (int i = 0; i < m_modList->count(); ++i) {
+        auto *it = m_modList->item(i);
+        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (it->data(ModRole::InstallStatus).toInt() != 1)           continue;
+        QString path = it->data(ModRole::ModPath).toString();
+        if (path.isEmpty() || !QFileInfo(path).isDir())              continue;
+
+        const QString abs = QFileInfo(path).absoluteFilePath();
+        // Skip mods that are already inside the active profile's modsDir
+        // (or AT modsRoot, though that's an unusual layout).
+        if (abs == modsRoot || abs.startsWith(modsRoot + "/"))       continue;
+
+        Candidate c;
+        c.item       = it;
+        c.oldPath    = abs;
+        c.folderName = QFileInfo(abs).fileName();
+        c.sizeBytes  = it->data(ModRole::ModSize).toLongLong();
+        if (c.sizeBytes < 0) c.sizeBytes = 0;
+        candidates.append(c);
+        totalBytes += c.sizeBytes;
+    }
+
+    if (candidates.isEmpty()) {
+        QMessageBox::information(this, T("consolidate_mods_title"),
+            T("consolidate_mods_nothing"));
+        return;
+    }
+
+    // Free-space check (× 1.10 safety margin).  Cross-FS moves stream
+    // through copy+delete, so we need temporary headroom for the copy.
+    QStorageInfo dstStorage(modsRoot);
+    qint64 required = qint64(double(totalBytes) * 1.10);
+    if (dstStorage.bytesAvailable() < required) {
+        auto fmt = [](qint64 b) {
+            const double GB = 1024.0 * 1024.0 * 1024.0;
+            return QString::number(b / GB, 'f', 2) + " GB";
+        };
+        QMessageBox::warning(this, T("consolidate_mods_title"),
+            T("move_mods_err_no_space")
+                .arg(fmt(dstStorage.bytesAvailable()))
+                .arg(fmt(required)));
+        return;
+    }
+
+    // Collision: a folder of the same name already living in m_modsDir
+    // (e.g. a different mod with a colliding folder name from a fresh
+    // install in the active profile).  Bail rather than pick a winner.
+    QStringList collisions;
+    for (const Candidate &c : candidates) {
+        if (QFileInfo::exists(QDir(modsRoot).filePath(c.folderName)))
+            collisions << c.folderName;
+    }
+    if (!collisions.isEmpty()) {
+        QString list = collisions.mid(0, 10).join("\n  • ");
+        if (collisions.size() > 10)
+            list += "\n  … (+" + QString::number(collisions.size() - 10) + ")";
+        QMessageBox::warning(this, T("consolidate_mods_title"),
+            T("move_mods_err_collision").arg(list));
+        return;
+    }
+
+    auto fmtBytes = [](qint64 b) {
+        const double MB = 1024.0 * 1024.0;
+        const double GB = MB * 1024.0;
+        if (b >= GB) return QString::number(b / GB, 'f', 2) + " GB";
+        return QString::number(b / MB, 'f', 1) + " MB";
+    };
+
+    // Confirmation: list the source roots so the user sees WHICH external
+    // dirs are about to be drained.  Showing the source tells them what
+    // "the other profile's modsDir will keep working" looks like.
+    QSet<QString> sourceRoots;
+    for (const Candidate &c : candidates)
+        sourceRoots.insert(QFileInfo(c.oldPath).absolutePath());
+    QStringList rootsList(sourceRoots.begin(), sourceRoots.end());
+    rootsList.sort();
+    const QString rootsText = rootsList.mid(0, 5).join("\n  • ")
+        + (rootsList.size() > 5
+              ? QStringLiteral("\n  … (+%1)").arg(rootsList.size() - 5)
+              : QString());
+
+    QMessageBox confirm(this);
+    confirm.setWindowTitle(T("consolidate_mods_title"));
+    confirm.setIcon(QMessageBox::Warning);
+    confirm.setText(T("consolidate_mods_confirm_text")
+                        .arg(candidates.size())
+                        .arg(fmtBytes(totalBytes))
+                        .arg(QDir::toNativeSeparators(modsRoot)));
+    confirm.setInformativeText(T("consolidate_mods_confirm_info").arg(rootsText));
+    auto *yes = confirm.addButton(T("move_mods_confirm_yes"),
+                                   QMessageBox::DestructiveRole);
+    confirm.addButton(QMessageBox::Cancel);
+    confirm.setDefaultButton(QMessageBox::Cancel);
+    confirm.exec();
+    if (confirm.clickedButton() != yes) return;
+
+    QProgressDialog progress(T("move_mods_progress").arg(candidates.size()),
+                              T("move_mods_cancel"), 0, candidates.size(), this);
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+    progress.setValue(0);
+
+    int movedOk = 0;
+    QStringList failures;
+
+    for (int i = 0; i < candidates.size(); ++i) {
+        if (progress.wasCanceled()) break;
+        const Candidate &c = candidates[i];
+
+        progress.setLabelText(T("move_mods_progress_detail")
+                                .arg(i + 1)
+                                .arg(candidates.size())
+                                .arg(c.folderName));
+        QCoreApplication::processEvents();
+
+        const QString newPath = QDir(modsRoot).filePath(c.folderName);
+
+        // Same-FS atomic rename when possible; fall back to streaming
+        // copy+verify+rmtree on cross-FS.  Identical to onMoveModsDir's
+        // inner loop - any change here should be mirrored there.
+        bool ok = QDir().rename(c.oldPath, newPath);
+        QString err;
+        if (!ok) {
+            auto res = safefs::copyTreeVerified(c.oldPath, newPath,
+                    [&]{ return progress.wasCanceled(); });
+            if (res) {
+                if (QDir(c.oldPath).removeRecursively()) {
+                    ok = true;
+                } else {
+                    QDir(newPath).removeRecursively();
+                    err = QStringLiteral("copied ok, but could not remove original");
+                }
+            } else {
+                err = res.error();
+            }
+        }
+
+        if (!ok) {
+            failures.append(c.folderName
+                            + (err.isEmpty() ? QString() : QStringLiteral(" - ") + err));
+        } else {
+            ++movedOk;
+            c.item->setData(ModRole::ModPath, newPath);
+            c.item->setToolTip(newPath);
+            saveModList();
+        }
+        progress.setValue(i + 1);
+    }
+    progress.setValue(candidates.size());
+
+    if (movedOk > 0) {
+        saveModList();
+        syncGameConfig();
+        scanMissingMasters();
+        m_scans->scheduleSizeScan();
+        m_undoStack->clear();
+    }
+
+    QMessageBox summary(this);
+    summary.setWindowTitle(T("consolidate_mods_title"));
     summary.setIcon(failures.isEmpty() ? QMessageBox::Information
                                         : QMessageBox::Warning);
     QString body = T("move_mods_done_ok").arg(movedOk);
@@ -7691,31 +7988,36 @@ void MainWindow::onLaunchSteamLauncher()
         return;
     }
 
-    // -- 2. Steam launcher exe (SkyrimSELauncher.exe, Fallout4Launcher.exe…) --
+    // -- 2. Steam URL when we know the game is on Steam ---
+    // Always prefer routing through `steam://launch/<appId>` over directly
+    // exec'ing the launcher .exe.  Linux can't run a Windows binary
+    // standalone (the user reported a Wine error doing exactly this with
+    // FalloutNVLauncher.exe); Steam invokes Proton/Wine with the right
+    // environment + prefix and then runs the game's configured default
+    // launch option, which is the launcher for Bethesda titles.
+    // findSteamLauncherExe / findSteamGameExe are still consulted as a
+    // "is the game actually installed?" probe so we don't pop a Steam URL
+    // for a game the user hasn't bought yet.
     const QString launcherPath = GameProfileRegistry::findSteamLauncherExe(id);
-    if (!launcherPath.isEmpty() && QFile::exists(launcherPath)) {
-        if (!QProcess::startDetached(launcherPath, {}))
-            QMessageBox::warning(this, T("launch_error_title"),
-                                 T("launch_error_body").arg(launcherPath));
-        return;
-    }
-
-    // -- 3. Steam URL (launcher exe not in known paths) ---
-    const QString steamExe = GameProfileRegistry::findSteamGameExe(id);
-    if (!appId.isEmpty() && !steamExe.isEmpty() && QFile::exists(steamExe)) {
+    const QString steamExe     = GameProfileRegistry::findSteamGameExe(id);
+    const bool    steamPresent = (!launcherPath.isEmpty() && QFile::exists(launcherPath))
+                              || (!steamExe.isEmpty()     && QFile::exists(steamExe));
+    if (!appId.isEmpty() && steamPresent) {
         if (!QProcess::startDetached("xdg-open", {"steam://launch/" + appId}))
             QProcess::startDetached("steam",     {"steam://launch/" + appId});
         return;
     }
 
-    // -- 4. Steam URL last resort ---
+    // -- 3. Steam URL last resort - we have an AppID but couldn't confirm
+    //       a local install; the URL will surface a "buy/install" prompt
+    //       which is friendlier than silently failing.
     if (!appId.isEmpty()) {
         if (!QProcess::startDetached("xdg-open", {"steam://launch/" + appId}))
             QProcess::startDetached("steam",     {"steam://launch/" + appId});
         return;
     }
 
-    // -- 5. Ask user ---
+    // -- 4. Ask user ---
     QString path = QFileDialog::getOpenFileName(
         this, T("launch_locate_game").arg(currentProfile().displayName),
         QDir::homePath());
@@ -7966,7 +8268,42 @@ void MainWindow::onImportWabbajack()
 
 void MainWindow::doImportWabbajack(const QString &path)
 {
-    if (!confirmReplaceModList()) return;
+    // Wabbajack-specific entry: when the current profile already has mods,
+    // offer to install into a NEW profile instead of replacing the active
+    // one.  This is the test-without-wiping flow - the user can run the WJ,
+    // see if it works, and switch back to their daily-driver profile from
+    // the toolbar without losing anything.
+    if (m_modList->count() > 0 && !m_profiles->isEmpty()) {
+        QMessageBox box(this);
+        box.setWindowTitle(T("import_wabbajack_title"));
+        box.setIcon(QMessageBox::Question);
+        box.setText(T("import_wabbajack_route_body"));
+        auto *newBtn = box.addButton(T("import_wabbajack_btn_new_profile"),
+                                     QMessageBox::ActionRole);
+        auto *replaceBtn = box.addButton(T("import_wabbajack_btn_replace"),
+                                         QMessageBox::DestructiveRole);
+        box.addButton(QMessageBox::Cancel);
+        box.setDefaultButton(newBtn);
+        box.exec();
+        if (box.clickedButton() == newBtn) {
+            // Suggest a name based on the .wabbajack filename.
+            const QString suggest = QFileInfo(path).completeBaseName();
+            const int idx = createNewModlistProfile(suggest);
+            if (idx < 0) return;
+            switchToModlistProfile(idx);
+            // Fresh profile: m_modList is empty, no need to confirmReplace.
+        } else if (box.clickedButton() == replaceBtn) {
+            if (!confirmReplaceModList()) return;
+        } else {
+            return;
+        }
+    } else if (!confirmReplaceModList()) {
+        return;
+    }
+
+    // Brand-new profile (or first-ever install) - make sure we have a
+    // mods dir before the WJ import starts queueing downloads.
+    if (!ensureModsDirForActiveProfile()) return;
 
     // -- Background worker result ---
     struct WJRaw {
@@ -8847,11 +9184,13 @@ void MainWindow::updateGameButton()
 
     // These always appear at the top in this fixed order.
     // If a game hasn't been added as a profile yet it is shown greyed out.
+    // Other games (Skyrim, Oblivion, Fallout 4, Cyberpunk, Witcher 1-3,
+    // Stardew, Gothic 1-3, Dark Souls, Mortal Shell, Skyblivion, Skywind,
+    // Fallout London…) are commented out for the current release pending
+    // per-game testing of the install/launch paths.
     static const QList<QPair<QString,QString>> kPinned = {
         {"morrowind",            "OpenMW (Morrowind)"},
-        // Disabled in v0.3 - FNV support is in progress, not ready to ship.
-        // Re-enable by uncommenting once detection + per-game install paths are tested.
-        // {"falloutnewvegas",      "Fallout: New Vegas"},
+        {"falloutnewvegas",      "Fallout: New Vegas"},
     };
 
     QSet<int> pinnedIdx;
@@ -8882,7 +9221,11 @@ void MainWindow::updateGameButton()
         }
     }
 
-    // Remaining (non-pinned) games the user has added
+    // Remaining (non-pinned) games the user has added are HIDDEN for the
+    // current release - only OpenMW + FNV ship as supported games.  When
+    // the other games' install/launch paths are re-tested the loop below
+    // can be re-enabled to surface them in the dropdown again.
+    /* DISABLED until other games are re-tested
     bool needSep = true;
     for (int i = 0; i < m_profiles->size(); ++i) {
         if (pinnedIdx.contains(i)) continue;
@@ -8895,6 +9238,7 @@ void MainWindow::updateGameButton()
 
     menu->addSeparator();
     menu->addAction(T("toolbar_manage_games"), this, &MainWindow::onAddGame);
+    */
 
     // Replace the old menu (avoid memory leak)
     delete m_gameBtn->menu();
@@ -8928,21 +9272,409 @@ void MainWindow::updateGameButton()
     // in version control history.
 }
 
+QString MainWindow::currentProfileKey() const
+{
+    if (!m_profiles || m_profiles->isEmpty()) return {};
+    const GameProfile &gp = m_profiles->current();
+    return gp.id + QStringLiteral("__") + gp.activeModlist().name;
+}
+
+void MainWindow::strandInflightInstalls()
+{
+    if (!m_modList) return;
+    const QString key = currentProfileKey();
+    if (key.isEmpty()) return;
+
+    // Walk back-to-front so takeItem() index shifts don't break iteration.
+    // Items go into the parking lot in their original visual order (we
+    // prepend) so restoreStrandedInstalls can put them back at matching
+    // rows without sorting them later.
+    QList<QListWidgetItem*> stranded;
+    for (int i = m_modList->count() - 1; i >= 0; --i) {
+        QListWidgetItem *it = m_modList->item(i);
+        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (it->data(ModRole::InstallStatus).toInt() != 2)           continue;
+        stranded.prepend(m_modList->takeItem(i));
+    }
+    if (!stranded.isEmpty())
+        m_strandedInstalls[key] += stranded;
+}
+
+void MainWindow::restoreStrandedInstalls()
+{
+    const QString key = currentProfileKey();
+    if (key.isEmpty()) return;
+    const QList<QListWidgetItem*> stranded = m_strandedInstalls.take(key);
+    if (stranded.isEmpty()) return;
+
+    // The newly-loaded modlist usually has a status=2 row mirroring the
+    // stranded install (saveModList wrote it before the switch).  Match
+    // by NexusUrl when present (the most stable identifier across saves)
+    // and fall back to display text otherwise.  When we find a match, the
+    // loaded row gets dropped and the stranded one - which still holds
+    // the live state from the in-flight extraction - takes its place.
+    // No match means the stranded install pre-dated saveModList for some
+    // reason; just append it so the install isn't silently lost.
+    for (QListWidgetItem *si : stranded) {
+        const QString sUrl  = si->data(ModRole::NexusUrl).toString();
+        const QString sName = si->text();
+        int matchRow = -1;
+        for (int i = 0; i < m_modList->count(); ++i) {
+            QListWidgetItem *it = m_modList->item(i);
+            if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+            const QString iUrl = it->data(ModRole::NexusUrl).toString();
+            if (!sUrl.isEmpty() && !iUrl.isEmpty() && sUrl == iUrl) {
+                matchRow = i; break;
+            }
+            if (sUrl.isEmpty() && it->text() == sName) {
+                matchRow = i; break;
+            }
+        }
+        if (matchRow >= 0) {
+            delete m_modList->takeItem(matchRow);
+            m_modList->insertItem(matchRow, si);
+        } else {
+            m_modList->addItem(si);
+        }
+    }
+}
+
 void MainWindow::switchToGame(int idx)
 {
     if (idx < 0 || idx >= m_profiles->size() || idx == m_profiles->currentIndex()) return;
 
     saveModList(); // persist current game's list before switching
 
+    // Take in-flight install rows OUT of m_modList before the clear()
+    // below destroys them - they live on in m_strandedInstalls so the
+    // InstallController's pending signals still hit a valid pointer.
+    strandInflightInstalls();
+
     m_profiles->setCurrentIndex(idx);
     applyCurrentProfileToMirrors();
 
     m_modList->clear();
     loadModList();
+    // If the user has previously stranded items for THIS profile, splice
+    // them back in over the freshly-loaded rows.
+    restoreStrandedInstalls();
     updateGameButton();
+    updateProfileButton();
 
     statusBar()->showMessage(
         T("status_switched_game").arg(m_profiles->current().displayName), 3000);
+}
+
+void MainWindow::switchToModlistProfile(int idx)
+{
+    if (m_profiles->isEmpty()) return;
+    GameProfile &gp = m_profiles->current();
+    if (idx < 0 || idx >= gp.modlistProfiles.size() || idx == gp.activeModlistIdx) return;
+
+    // Persist current modlist + load order to the OLD profile's files
+    // BEFORE flipping the active index - paths are derived from the active
+    // profile, so the writes have to happen first.
+    saveModList();
+    saveLoadOrder();
+
+    // Same stranding dance as switchToGame: keep in-flight placeholders
+    // alive across the clear() so background extractions don't get
+    // silently aborted by a profile switch.
+    strandInflightInstalls();
+
+    m_profiles->setActiveModlistIndex(idx);
+    applyCurrentProfileToMirrors();
+
+    // Reload from the new profile's state files.
+    m_modList->clear();
+    loadModList();
+    restoreStrandedInstalls();
+    // openmw.cfg now needs to reflect a different mod set on disk; sync.
+    syncGameConfig();
+    updateProfileButton();
+
+    statusBar()->showMessage(
+        T("status_switched_profile").arg(gp.activeModlist().name), 3000);
+}
+
+bool MainWindow::ensureModsDirForActiveProfile()
+{
+    if (!m_modsDir.isEmpty()) return true;
+
+    // Suggested default lives under XDG_DATA_HOME so a fresh-profile drop
+    // doesn't write into the user's home root.  Each profile gets its own
+    // subdir so two profiles' mods can never share disk.
+    QString suggested;
+    if (!m_profiles->isEmpty()) {
+        const GameProfile &gp = m_profiles->current();
+        const QString stateRoot = QStandardPaths::writableLocation(
+                                      QStandardPaths::AppDataLocation);
+        suggested = stateRoot + "/" + gp.id + "/" +
+                    gp.activeModlist().name + "/mods";
+    } else {
+        suggested = QDir::homePath() + "/Games/nerevarine_mods";
+    }
+
+    const QString profileName = m_profiles->isEmpty()
+        ? QString()
+        : m_profiles->current().activeModlist().name;
+
+    QMessageBox box(this);
+    box.setWindowTitle(T("mods_dir_prompt_title"));
+    box.setIcon(QMessageBox::Question);
+    box.setText(T("mods_dir_prompt_body")
+                  .arg(profileName)
+                  .arg(QDir::toNativeSeparators(suggested)));
+    auto *useBtn  = box.addButton(T("mods_dir_prompt_btn_use_suggested"),
+                                  QMessageBox::AcceptRole);
+    auto *pickBtn = box.addButton(T("mods_dir_prompt_btn_pick"),
+                                  QMessageBox::ActionRole);
+    box.addButton(QMessageBox::Cancel);
+    box.setDefaultButton(useBtn);
+    box.exec();
+
+    QString picked;
+    if (box.clickedButton() == useBtn) {
+        picked = suggested;
+    } else if (box.clickedButton() == pickBtn) {
+        picked = QFileDialog::getExistingDirectory(
+            this, T("mods_dir_dialog_title"), suggested);
+    } else {
+        return false;
+    }
+    if (picked.isEmpty()) return false;
+
+    QDir().mkpath(picked);
+    m_modsDir = picked;
+    if (m_downloadQueue) m_downloadQueue->setModsDir(m_modsDir);
+    m_profiles->setActiveModsDir(picked);
+    statusBar()->showMessage(T("status_mods_dir_set").arg(m_modsDir), 3000);
+    return true;
+}
+
+int MainWindow::createNewModlistProfile(const QString &suggestedName)
+{
+    if (m_profiles->isEmpty()) return -1;
+    bool ok = false;
+    const QString name = QInputDialog::getText(
+        this,
+        T("profile_new_title"),
+        T("profile_new_prompt"),
+        QLineEdit::Normal,
+        suggestedName,
+        &ok).trimmed();
+    if (!ok || name.isEmpty()) return -1;
+
+    const int idx = m_profiles->addModlistProfile(name);
+    if (idx < 0) {
+        QMessageBox::warning(this, T("profile_new_title"),
+                             T("profile_new_collision").arg(name));
+        return -1;
+    }
+    return idx;
+}
+
+void MainWindow::onManageModlistProfiles()
+{
+    if (m_profiles->isEmpty()) return;
+    GameProfile &gp = m_profiles->current();
+
+    QDialog dlg(this);
+    dlg.setWindowTitle(T("profile_manage_title").arg(gp.displayName));
+    dlg.resize(440, 320);
+    auto *lay = new QVBoxLayout(&dlg);
+
+    auto *list = new QListWidget(&dlg);
+    auto refresh = [&]() {
+        list->clear();
+        for (int i = 0; i < gp.modlistProfiles.size(); ++i) {
+            const ModlistProfile &mp = gp.modlistProfiles[i];
+            QString label = mp.name;
+            if (i == gp.activeModlistIdx) label += T("profile_active_suffix");
+            if (mp.modsDir.isEmpty())     label += T("profile_no_mods_suffix");
+            list->addItem(label);
+        }
+        if (gp.activeModlistIdx >= 0 && gp.activeModlistIdx < gp.modlistProfiles.size())
+            list->setCurrentRow(gp.activeModlistIdx);
+    };
+    refresh();
+    lay->addWidget(list, 1);
+
+    auto *btnRow = new QHBoxLayout;
+    auto *newBtn    = new QPushButton(T("profile_btn_new"),    &dlg);
+    auto *cloneBtn  = new QPushButton(T("profile_btn_clone"),  &dlg);
+    auto *renameBtn = new QPushButton(T("profile_btn_rename"), &dlg);
+    auto *deleteBtn = new QPushButton(T("profile_btn_delete"), &dlg);
+    auto *activeBtn = new QPushButton(T("profile_btn_set_active"), &dlg);
+    btnRow->addWidget(newBtn);
+    btnRow->addWidget(cloneBtn);
+    btnRow->addWidget(renameBtn);
+    btnRow->addWidget(deleteBtn);
+    btnRow->addWidget(activeBtn);
+    lay->addLayout(btnRow);
+
+    auto *closeBtn = new QPushButton(T("close"), &dlg);
+    lay->addWidget(closeBtn);
+    connect(closeBtn, &QPushButton::clicked, &dlg, &QDialog::accept);
+
+    connect(newBtn, &QPushButton::clicked, &dlg, [&]() {
+        if (createNewModlistProfile() >= 0) refresh();
+    });
+    connect(cloneBtn, &QPushButton::clicked, &dlg, [&]() {
+        const int srcIdx = list->currentRow();
+        if (srcIdx < 0) return;
+        bool ok = false;
+        const QString suggest = gp.modlistProfiles[srcIdx].name +
+                                T("profile_clone_suffix");
+        const QString name = QInputDialog::getText(
+            &dlg, T("profile_clone_title"),
+            T("profile_clone_prompt").arg(gp.modlistProfiles[srcIdx].name),
+            QLineEdit::Normal, suggest, &ok).trimmed();
+        if (!ok || name.isEmpty()) return;
+        if (m_profiles->cloneModlistProfile(srcIdx, name) < 0) {
+            QMessageBox::warning(&dlg, T("profile_clone_title"),
+                                 T("profile_new_collision").arg(name));
+            return;
+        }
+        refresh();
+    });
+    connect(renameBtn, &QPushButton::clicked, &dlg, [&]() {
+        const int idx = list->currentRow();
+        if (idx < 0) return;
+        bool ok = false;
+        const QString name = QInputDialog::getText(
+            &dlg, T("profile_rename_title"), T("profile_rename_prompt"),
+            QLineEdit::Normal, gp.modlistProfiles[idx].name, &ok).trimmed();
+        if (!ok || name.isEmpty()) return;
+        if (!m_profiles->renameModlistProfile(idx, name)) {
+            QMessageBox::warning(&dlg, T("profile_rename_title"),
+                                 T("profile_new_collision").arg(name));
+            return;
+        }
+        refresh();
+        updateProfileButton();
+    });
+    connect(deleteBtn, &QPushButton::clicked, &dlg, [&]() {
+        const int idx = list->currentRow();
+        if (idx < 0) return;
+        if (gp.modlistProfiles.size() <= 1) {
+            QMessageBox::information(&dlg, T("profile_delete_title"),
+                                     T("profile_delete_last"));
+            return;
+        }
+        const QString name = gp.modlistProfiles[idx].name;
+        QMessageBox box(&dlg);
+        box.setWindowTitle(T("profile_delete_title"));
+        box.setText(T("profile_delete_body").arg(name));
+        auto *delFiles    = box.addButton(T("profile_delete_btn_state"),
+                                          QMessageBox::DestructiveRole);
+        auto *keepFiles   = box.addButton(T("profile_delete_btn_keep"),
+                                          QMessageBox::AcceptRole);
+        box.addButton(QMessageBox::Cancel);
+        box.exec();
+        const bool deleteFiles = (box.clickedButton() == delFiles);
+        if (box.clickedButton() != delFiles && box.clickedButton() != keepFiles)
+            return;
+        // If the user removes the currently-active profile, save its state
+        // first (the registry will fall back to another profile).
+        const bool wasActive = (idx == gp.activeModlistIdx);
+        if (wasActive) {
+            saveModList();
+            saveLoadOrder();
+        }
+        if (!m_profiles->removeModlistProfile(idx, deleteFiles)) {
+            QMessageBox::warning(&dlg, T("profile_delete_title"),
+                                 T("profile_delete_failed"));
+            return;
+        }
+        // After a remove that kicked the active profile, the registry
+        // already promoted a sibling; mirror its state into this window.
+        if (wasActive) {
+            applyCurrentProfileToMirrors();
+            m_modList->clear();
+            loadModList();
+            syncGameConfig();
+        }
+        refresh();
+        updateProfileButton();
+    });
+    connect(activeBtn, &QPushButton::clicked, &dlg, [&]() {
+        const int idx = list->currentRow();
+        if (idx < 0 || idx == gp.activeModlistIdx) return;
+        switchToModlistProfile(idx);
+        refresh();
+    });
+
+    dlg.exec();
+}
+
+void MainWindow::updateProfileButton()
+{
+    if (!m_profileBtn) return;
+
+    if (m_profiles->isEmpty()) {
+        m_profileBtn->setVisible(false);
+        return;
+    }
+
+    GameProfile &gp = m_profiles->current();
+    m_profileBtn->setVisible(true);
+    m_profileBtn->setText("  " + gp.activeModlist().name + "  ▾");
+    m_profileBtn->setToolTip(T("profile_btn_tooltip"));
+
+    auto *menu = new QMenu(m_profileBtn);
+    for (int i = 0; i < gp.modlistProfiles.size(); ++i) {
+        const ModlistProfile &mp = gp.modlistProfiles[i];
+        QString label = mp.name;
+        if (i == gp.activeModlistIdx) label += T("profile_active_suffix");
+        QAction *act = menu->addAction(label);
+        if (i == gp.activeModlistIdx) {
+            act->setCheckable(true);
+            act->setChecked(true);
+        } else {
+            connect(act, &QAction::triggered, this,
+                    [this, i]() { switchToModlistProfile(i); });
+        }
+    }
+    menu->addSeparator();
+    // Inline rename - one-click access to the most common profile edit so
+    // the user doesn't have to open the Manage dialog just to fix a typo.
+    // The active profile is the implicit target; the menu entry shows its
+    // name so there's no ambiguity about what's being renamed.
+    QAction *renameAct = menu->addAction(
+        T("profile_menu_rename").arg(gp.activeModlist().name));
+    connect(renameAct, &QAction::triggered, this, [this]() {
+        if (m_profiles->isEmpty()) return;
+        GameProfile &g = m_profiles->current();
+        const int idx = g.activeModlistIdx;
+        if (idx < 0 || idx >= g.modlistProfiles.size()) return;
+        bool ok = false;
+        const QString name = QInputDialog::getText(
+            this, T("profile_rename_title"), T("profile_rename_prompt"),
+            QLineEdit::Normal, g.modlistProfiles[idx].name, &ok).trimmed();
+        if (!ok || name.isEmpty()) return;
+        if (!m_profiles->renameModlistProfile(idx, name)) {
+            QMessageBox::warning(this, T("profile_rename_title"),
+                                 T("profile_new_collision").arg(name));
+            return;
+        }
+        updateProfileButton();
+    });
+    QAction *newAct = menu->addAction(T("profile_menu_new"));
+    connect(newAct, &QAction::triggered, this, [this]() {
+        const int idx = createNewModlistProfile();
+        if (idx >= 0) {
+            // Switch to the new (empty) profile so the user's next action
+            // - install or drop a Wabbajack - lands there.
+            switchToModlistProfile(idx);
+        }
+    });
+    QAction *manageAct = menu->addAction(T("profile_menu_manage"));
+    connect(manageAct, &QAction::triggered, this,
+            &MainWindow::onManageModlistProfiles);
+
+    delete m_profileBtn->menu();
+    m_profileBtn->setMenu(menu);
 }
 
 void MainWindow::onAddGame()
@@ -8997,11 +9729,20 @@ void MainWindow::addAndDetectGame(const QString &gameId, const QString &displayN
     if (modsDir.isEmpty()) modsDir = defaultModsDir;
     QDir().mkpath(modsDir);
 
-    // Create the profile and switch.
+    // Create the profile and switch.  Every new game starts with a
+    // "Default" modlist profile - the per-profile filenames use the
+    // canonical scheme since this game has no legacy state to migrate.
     GameProfile gp;
     gp.id          = gameId;
     gp.displayName = displayName;
     gp.modsDir     = modsDir;
+    ModlistProfile def;
+    def.name              = QStringLiteral("Default");
+    def.modsDir           = modsDir;
+    def.modlistFilename   = QStringLiteral("modlist_")   + gameId + QStringLiteral("__Default.txt");
+    def.loadOrderFilename = QStringLiteral("loadorder_") + gameId + QStringLiteral("__Default.txt");
+    gp.modlistProfiles.append(def);
+    gp.activeModlistIdx = 0;
     m_profiles->games().append(gp);
     m_profiles->save();
     switchToGame(m_profiles->size() - 1);

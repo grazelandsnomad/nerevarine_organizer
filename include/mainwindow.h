@@ -136,6 +136,49 @@ private slots:
     void scanMissingMasters();   // schedule a missing-master rescan
     void scanMissingDependencies(); // in-memory DependsOn → warning-icon sweep
     void switchToGame(int idx);
+    // Switch to a different modlist profile within the current game.
+    // Saves the current modlist + load order to the OLD profile's files,
+    // flips the registry's active index, mirrors the new profile's modsDir
+    // onto m_modsDir, and reloads the modlist + load order from the NEW
+    // profile's files.  Re-syncs openmw.cfg so the engine sees the right
+    // mod set on next launch.
+    void switchToModlistProfile(int idx);
+    // Pops the dialog that lets the user create / clone / rename / delete
+    // modlist profiles for the current game.  Wired to the profile picker
+    // button's "Manage profiles…" menu entry.
+    void onManageModlistProfiles();
+    // Quick "create a new empty profile and switch to it" path used by both
+    // the profile menu's "New profile…" entry and the Wabbajack-into-new-
+    // profile flow.  Returns the new profile's index, or -1 if the user
+    // cancelled / picked an invalid name.  Does NOT switch.
+    int  createNewModlistProfile(const QString &suggestedName = QString());
+    // Make sure the active modlist profile has a modsDir before the caller
+    // tries to install something into it.  Fires the "where do you want to
+    // store this profile's mods?" prompt when modsDir is empty.  Returns
+    // true if there's a mods dir to use after the call (either pre-existing
+    // or just picked); false if the user cancelled.  Safe to call repeatedly
+    // - no-op when m_modsDir is already set.
+    bool ensureModsDirForActiveProfile();
+    // Profile/game switches used to destroy in-flight install placeholders
+    // (the QListWidget items with status==2) along with the rest of the row
+    // set, leaving the InstallController's signal handlers with a dangling
+    // pointer and the user with an "aborted" mod.  These two helpers move
+    // the items into a per-profile parking lot before the clear, then
+    // restore them after loadModList() rebuilds the new profile's rows -
+    // so an FNV→Morrowind→FNV round-trip during an extraction now finds
+    // the install still running and the row still alive when the user
+    // comes back.  Token = "<gameId>__<profileName>".
+    QString currentProfileKey() const;
+    void    strandInflightInstalls();
+    void    restoreStrandedInstalls();
+    // Consolidate any of THIS profile's mods that physically live outside
+    // its modsDir into it.  The driver case is a cloned profile: after
+    // cloneModlistProfile, the modlist points at the source profile's
+    // mods on disk; this tool copies/moves them into the active profile's
+    // modsDir so the two profiles are fully decoupled.  No-op when every
+    // mod is already inside m_modsDir.  Refuses to run while downloads
+    // are active or m_modsDir is unset.
+    void onConsolidateModsIntoActiveProfile();
     void onAddGame();
     // Detects an external (non-OpenMW) game in Steam/Heroic/Lutris,
     // prompts for the exe if not found, then creates a profile and
@@ -338,6 +381,9 @@ private:
 
     // Game profile management
     void updateGameButton();
+    // Repaints m_profileBtn's text + menu from the registry.  Called after
+    // any switch, add, rename, or delete.
+    void updateProfileButton();
     QString modlistPath() const;
     QString forbiddenModsPath() const;
     GameProfile       &currentProfile();
@@ -396,9 +442,20 @@ private:
     // addModFromPath prompt sticks across sessions.
     QSet<QString>          m_declinedPatches;
 
+    // In-flight install placeholders that have been parked across a profile
+    // switch.  Key = "<gameId>__<profileName>"; value = items removed from
+    // m_modList in stable order (preserves their original row positions
+    // when restoreStrandedInstalls puts them back).  Items are owned here -
+    // when m_modList no longer holds them, this hash does, and clear()ing
+    // m_modList does NOT delete them.
+    QHash<QString, QList<QListWidgetItem*>> m_strandedInstalls;
+
     // Game profiles - owned by GameProfileRegistry.
     GameProfileRegistry   *m_profiles = nullptr;
     QToolButton           *m_gameBtn                = nullptr;
+    // Modlist profile picker.  Sits next to the game button; click pops a
+    // menu of "Switch to <name>", "New profile…", "Manage profiles…".
+    QToolButton           *m_profileBtn             = nullptr;
     QToolButton           *m_featuredModlistsBtn    = nullptr;
     QAction               *m_actLaunchOpenMW          = nullptr;
     QAction               *m_actLaunchLauncher        = nullptr;
