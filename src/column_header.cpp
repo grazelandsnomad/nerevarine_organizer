@@ -9,12 +9,12 @@
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QScrollBar>
-#include <QSettings>
 #include <QString>
 #include <QTimer>
 #include <QWidget>
 #include <Qt>
 
+#include "settings.h"
 #include "translator.h"
 
 ColumnHeader::ColumnHeader(QWidget *parent)
@@ -119,38 +119,35 @@ void ColumnHeader::setSizeSortButton(QPushButton *btn)
 
 void ColumnHeader::loadVisibilityFromSettings()
 {
-    QSettings s;
-    m_colVis.status      = s.value("ui/col_status",  true).toBool();
-    m_colVis.date        = s.value("ui/col_date",    true).toBool();
-    m_colVis.relTime     = s.value("ui/col_reltime", true).toBool();
-    m_colVis.annot       = s.value("ui/col_annot",   true).toBool();
-    m_colVis.size        = s.value("ui/col_size",    true).toBool();
-    m_colVis.videoReview = s.value("ui/col_video",   true).toBool();
+    m_colVis.status      = Settings::colVisible(QStringLiteral("status"),  true);
+    m_colVis.date        = Settings::colVisible(QStringLiteral("date"),    true);
+    m_colVis.relTime     = Settings::colVisible(QStringLiteral("reltime"), true);
+    m_colVis.annot       = Settings::colVisible(QStringLiteral("annot"),   true);
+    m_colVis.size        = Settings::colVisible(QStringLiteral("size"),    true);
+    m_colVis.videoReview = Settings::colVisible(QStringLiteral("video"),   true);
 }
 
 void ColumnHeader::saveWidthsForCurrentState()
 {
-    const QString sfx = m_maximized ? QStringLiteral("_max") : QStringLiteral("");
-    QSettings s;
-    s.setValue("ui/col_w_status"  + sfx, m_colVis.wStatus);
-    s.setValue("ui/col_w_date"    + sfx, m_colVis.wDate);
-    s.setValue("ui/col_w_reltime" + sfx, m_colVis.wRelTime);
-    s.setValue("ui/col_w_annot"   + sfx, m_colVis.wAnnot);
-    s.setValue("ui/col_w_size"    + sfx, m_colVis.wSize);
-    s.setValue("ui/col_w_video"   + sfx, m_colVis.wVideoReview);
+    const QString sfx = m_maximized ? QStringLiteral("_max") : QString();
+    Settings::setColWidth(QStringLiteral("status"),  sfx, m_colVis.wStatus);
+    Settings::setColWidth(QStringLiteral("date"),    sfx, m_colVis.wDate);
+    Settings::setColWidth(QStringLiteral("reltime"), sfx, m_colVis.wRelTime);
+    Settings::setColWidth(QStringLiteral("annot"),   sfx, m_colVis.wAnnot);
+    Settings::setColWidth(QStringLiteral("size"),    sfx, m_colVis.wSize);
+    Settings::setColWidth(QStringLiteral("video"),   sfx, m_colVis.wVideoReview);
 }
 
 void ColumnHeader::loadWidthsForCurrentState()
 {
-    const QString sfx = m_maximized ? QStringLiteral("_max") : QStringLiteral("");
-    QSettings s;
+    const QString sfx = m_maximized ? QStringLiteral("_max") : QString();
     auto clampW = [](int v, int def) { return qBound(ColWidth::Min, v > 0 ? v : def, 2000); };
-    m_colVis.wStatus      = clampW(s.value("ui/col_w_status"  + sfx, ColWidth::Status).toInt(),       ColWidth::Status);
-    m_colVis.wDate        = clampW(s.value("ui/col_w_date"    + sfx, ColWidth::DateAdded).toInt(),    ColWidth::DateAdded);
-    m_colVis.wRelTime     = clampW(s.value("ui/col_w_reltime" + sfx, ColWidth::RelativeTime).toInt(), ColWidth::RelativeTime);
-    m_colVis.wAnnot       = clampW(s.value("ui/col_w_annot"   + sfx, ColWidth::Annotation).toInt(),   ColWidth::Annotation);
-    m_colVis.wSize        = clampW(s.value("ui/col_w_size"    + sfx, ColWidth::Size).toInt(),         ColWidth::Size);
-    m_colVis.wVideoReview = clampW(s.value("ui/col_w_video"   + sfx, ColWidth::VideoReview).toInt(),  ColWidth::VideoReview);
+    m_colVis.wStatus      = clampW(Settings::colWidth(QStringLiteral("status"),  sfx, ColWidth::Status),       ColWidth::Status);
+    m_colVis.wDate        = clampW(Settings::colWidth(QStringLiteral("date"),    sfx, ColWidth::DateAdded),    ColWidth::DateAdded);
+    m_colVis.wRelTime     = clampW(Settings::colWidth(QStringLiteral("reltime"), sfx, ColWidth::RelativeTime), ColWidth::RelativeTime);
+    m_colVis.wAnnot       = clampW(Settings::colWidth(QStringLiteral("annot"),   sfx, ColWidth::Annotation),   ColWidth::Annotation);
+    m_colVis.wSize        = clampW(Settings::colWidth(QStringLiteral("size"),    sfx, ColWidth::Size),         ColWidth::Size);
+    m_colVis.wVideoReview = clampW(Settings::colWidth(QStringLiteral("video"),   sfx, ColWidth::VideoReview),  ColWidth::VideoReview);
 }
 
 void ColumnHeader::apply()
@@ -169,13 +166,12 @@ void ColumnHeader::apply()
     if (m_sizeBtn) m_sizeBtn->setVisible(m_colVis.size);
     if (m_videoReviewHeader) m_videoReviewHeader->setVisible(m_colVis.videoReview);
 
-    QSettings s;
-    s.setValue("ui/col_status",  m_colVis.status);
-    s.setValue("ui/col_date",    m_colVis.date);
-    s.setValue("ui/col_reltime", m_colVis.relTime);
-    s.setValue("ui/col_annot",   m_colVis.annot);
-    s.setValue("ui/col_size",    m_colVis.size);
-    s.setValue("ui/col_video",   m_colVis.videoReview);
+    Settings::setColVisible(QStringLiteral("status"),  m_colVis.status);
+    Settings::setColVisible(QStringLiteral("date"),    m_colVis.date);
+    Settings::setColVisible(QStringLiteral("reltime"), m_colVis.relTime);
+    Settings::setColVisible(QStringLiteral("annot"),   m_colVis.annot);
+    Settings::setColVisible(QStringLiteral("size"),    m_colVis.size);
+    Settings::setColVisible(QStringLiteral("video"),   m_colVis.videoReview);
     saveWidthsForCurrentState();
 
     emit visibilityChanged(m_colVis);

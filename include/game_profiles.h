@@ -55,11 +55,12 @@ class GameProfileRegistry : public QObject {
 public:
     explicit GameProfileRegistry(QObject *parent = nullptr);
 
-    // Reads QSettings("games/list"), populates the list, falls back to a
-    // default Morrowind profile + migrates legacy modlist.txt on first run.
+    // Reads the persisted game list via Settings::gameIds(), populates the
+    // list, falls back to a default Morrowind profile + migrates legacy
+    // modlist.txt on first run.
     void load();
 
-    // Persists all profiles + the current id under "games/...".
+    // Persists all profiles + the current id via the Settings:: accessors.
     void save();
 
     bool isEmpty() const { return m_games.isEmpty(); }
@@ -69,8 +70,8 @@ public:
     const GameProfile& current() const       { return m_games[m_currentIdx]; }
     int                currentIndex() const  { return m_currentIdx; }
 
-    // Sets the current index + persists "games/current". No-op for
-    // out-of-range indices and no-op if the index hasn't changed.
+    // Sets the current index + persists via Settings::setCurrentGameId.
+    // No-op for out-of-range indices and no-op if the index hasn't changed.
     void setCurrentIndex(int idx);
 
     QList<GameProfile>&       games()       { return m_games; }

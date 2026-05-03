@@ -10,7 +10,6 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
-#include <QSettings>
 #include <QStringList>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -18,6 +17,7 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
+#include "settings.h"
 #include "translator.h"
 
 ForbiddenModsRegistry::ForbiddenModsRegistry(const QString &filePath, QObject *parent)
@@ -49,25 +49,24 @@ void ForbiddenModsRegistry::load()
     }
 
     // File doesn't exist yet - migrate from QSettings (one-time).
-    QSettings s;
-    int n = s.value("forbidden/count", 0).toInt();
+    const int n = Settings::forbiddenCount();
     for (int i = 0; i < n; ++i) {
         ForbiddenMod fm;
-        fm.name       = s.value(QString("forbidden/%1/name").arg(i)).toString();
-        fm.url        = s.value(QString("forbidden/%1/url").arg(i)).toString();
-        fm.annotation = s.value(QString("forbidden/%1/annotation").arg(i)).toString();
+        fm.name       = Settings::forbiddenName(i);
+        fm.url        = Settings::forbiddenUrl(i);
+        fm.annotation = Settings::forbiddenAnnotation(i);
         m_list.append(fm);
     }
 
     // One-time seed of built-in forbidden entries on first run.
-    if (!s.value("forbidden/seeded_v1", false).toBool()) {
+    if (!Settings::forbiddenSeededV1()) {
         m_list.prepend({
             "The Wabbajack",
             "https://www.nexusmods.com/morrowind/mods/44653",
             "Very important -> THIS MOD REQUIRES MWSE 0.9.5-alpha.20151016 "
             "<- it is not yet openMW compatible!"
         });
-        s.setValue("forbidden/seeded_v1", true);
+        Settings::setForbiddenSeededV1(true);
     }
 
     save();

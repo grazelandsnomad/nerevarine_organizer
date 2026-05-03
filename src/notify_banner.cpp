@@ -4,12 +4,12 @@
 #include <QEvent>
 #include <QLabel>
 #include <QMouseEvent>
-#include <QSettings>
 #include <QTimer>
 #include <QUrl>
 #include <QVariant>
 #include <Qt>
 
+#include "settings.h"
 #include "translator.h"
 
 NotifyBanner::NotifyBanner(QWidget *parent)
@@ -53,7 +53,7 @@ bool NotifyBanner::eventFilter(QObject *obj, QEvent *event)
         QVariant urlVar  = m_label->property("nerev_banner_url");
         QVariant kindVar = m_label->property("nerev_banner_kind");
         if (me->button() == Qt::RightButton && kindVar.toString() == "loot_missing") {
-            QSettings().setValue("loot/banner_disabled", true);
+            Settings::setLootBannerDisabled(true);
             emit statusMessage(T("loot_banner_suppressed"), 4000);
         } else if (urlVar.isValid() && !urlVar.toString().isEmpty()) {
             QDesktopServices::openUrl(QUrl(urlVar.toString()));

@@ -12,6 +12,7 @@
 #include <QUrl>
 
 #include <expected>
+#include <functional>
 
 #include "downloadqueue.h"
 #include "installcontroller.h"   // for InstallController::VerifyFailKind in slot
@@ -223,7 +224,11 @@ private:
     bool confirmReplaceModList();
     void onViewChangelog(QListWidgetItem *item);
     void onNewModList();
-    void launchProgram(QString &storedPath, const QString &settingsKey,
+    // savePath is invoked whenever the resolved path changes (auto-detected
+    // via PATH or picked manually via the dialog) so the call site owns the
+    // persisted-key choice via the typed Settings:: accessor of its choice.
+    void launchProgram(QString &storedPath,
+                       std::function<void(const QString&)> savePath,
                        const QString &execName, const QString &locateTitle,
                        bool monitored = false);
     void checkNxmHandlerRegistration();

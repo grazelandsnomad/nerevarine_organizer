@@ -73,6 +73,7 @@ target_link_libraries(test_modlist_model PRIVATE
 add_executable(test_modlist_profiles
     test_modlist_profiles.cpp
     ${CMAKE_SOURCE_DIR}/src/game_profiles.cpp
+    ${CMAKE_SOURCE_DIR}/src/settings.cpp
     ${CMAKE_SOURCE_DIR}/include/game_profiles.h
 )
 # GameProfileRegistry is a Q_OBJECT - needs AUTOMOC for the vtable.

@@ -1,5 +1,7 @@
 #include "launch_warnings.h"
 
+#include "settings.h"
+
 #include <QAbstractButton>
 #include <QCheckBox>
 #include <QDialog>
@@ -16,7 +18,6 @@
 #include <QPixmap>
 #include <QPlainTextEdit>
 #include <QPushButton>
-#include <QSettings>
 #include <QSysInfo>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -181,7 +182,7 @@ bool refuseIfRebootPending(QWidget *parent)
     // Persistent escape hatch for users on NixOS / sandboxes / unusual module
     // layouts where the heuristic produces false positives. Once they pick
     // "Run anyway (don't ask again)" the gate stops firing for good.
-    if (QSettings().value("launch/skip_reboot_check", false).toBool())
+    if (Settings::skipRebootCheck())
         return false;
     if (!isRebootPending()) return false;
 
@@ -213,7 +214,7 @@ bool refuseIfRebootPending(QWidget *parent)
 
     QAbstractButton *clicked = box.clickedButton();
     if (clicked == runAlwaysBtn) {
-        QSettings().setValue("launch/skip_reboot_check", true);
+        Settings::setSkipRebootCheck(true);
         return false;
     }
     if (clicked == runOnceBtn) return false;

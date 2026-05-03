@@ -7,6 +7,7 @@
 #include "downloadqueue.h"
 #include "modroles.h"
 #include "nexusclient.h"
+#include "settings.h"
 #include "translator.h"
 
 #include <QAbstractButton>
@@ -31,7 +32,6 @@
 #include <QNetworkRequest>
 #include <QProcess>
 #include <QProgressBar>
-#include <QSettings>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -107,14 +107,14 @@ QAction *DownloadQueue::setup(QMainWindow *window)
     // Restore the dock's visibility from the previous session.  Default to
     // visible on first run so new users discover the queue the first time
     // they install a mod; afterwards, whatever they last set sticks.
-    bool wantVisible = QSettings().value("queue/visible", true).toBool();
+    bool wantVisible = Settings::queueVisible(/*defaultVisible=*/true);
     m_dock->setVisible(wantVisible);
 
     // Persist any visibility change across launches.  Connect *after* the
     // initial setVisible so the restore itself doesn't overwrite the stored
     // preference.
     connect(m_dock, &QDockWidget::visibilityChanged, this, [](bool v) {
-        QSettings().setValue("queue/visible", v);
+        Settings::setQueueVisible(v);
     });
 
     QAction *toggleAct = m_dock->toggleViewAction();

@@ -9,10 +9,10 @@
 #include <QListWidgetItem>
 #include <QMap>
 #include <QPushButton>
-#include <QSettings>
 #include <QVBoxLayout>
 #include <Qt>
 
+#include "settings.h"
 #include "translator.h"
 
 ToolbarCustomization::ToolbarCustomization(QObject *parent)
@@ -26,7 +26,7 @@ void ToolbarCustomization::registerAction(const QString &id, QAction *act,
     if (!act) return;
     if (!act->property("nerev_profile_visible").isValid())
         act->setProperty("nerev_profile_visible", true);
-    bool userVisible = QSettings().value("toolbar/" + id, defaultVisible).toBool();
+    bool userVisible = Settings::toolbarActionVisible(id, defaultVisible);
     act->setProperty("nerev_user_visible", userVisible);
     m_actions[id] = act;
     m_labels[id]  = label;
@@ -89,12 +89,11 @@ void ToolbarCustomization::showCustomizeDialog(QWidget *parent)
     dlg.resize(380, 500);
     if (dlg.exec() != QDialog::Accepted) return;
 
-    QSettings s;
     for (int i = 0; i < list->count(); ++i) {
         QListWidgetItem *it = list->item(i);
         QString id = it->data(Qt::UserRole).toString();
         bool checked = (it->checkState() == Qt::Checked);
-        s.setValue("toolbar/" + id, checked);
+        Settings::setToolbarActionVisible(id, checked);
         if (QAction *act = m_actions.value(id)) {
             act->setProperty("nerev_user_visible", checked);
             applyVisibility(act);

@@ -1,4 +1,5 @@
 #include "separatordialog.h"
+#include "settings.h"
 #include "translator.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -12,7 +13,6 @@
 #include <QColorDialog>
 #include <QAction>
 #include <QMenu>
-#include <QSettings>
 
 struct Preset { QString emoji, key; QColor bg, fg; };
 static const QList<Preset> PRESETS = {
@@ -152,8 +152,7 @@ void SeparatorDialog::populatePresets()
     // hidden keys rather than rewriting PRESETS so the user can re-enable a
     // preset later by clearing the setting.
     const QSet<QString> hidden = [] {
-        const QStringList stored =
-            QSettings().value("separators/hidden_presets").toStringList();
+        const QStringList stored = Settings::hiddenSeparatorPresets();
         return QSet<QString>(stored.begin(), stored.end());
     }();
 
@@ -231,11 +230,10 @@ void SeparatorDialog::onPresetContextMenu(const QPoint &pos)
     if (menu.exec(m_presetList->viewport()->mapToGlobal(pos)) != removeAct)
         return;
 
-    QSettings s;
-    QStringList hidden = s.value("separators/hidden_presets").toStringList();
+    QStringList hidden = Settings::hiddenSeparatorPresets();
     if (!hidden.contains(key)) {
         hidden << key;
-        s.setValue("separators/hidden_presets", hidden);
+        Settings::setHiddenSeparatorPresets(hidden);
     }
     populatePresets();
     onSearchChanged(m_searchEdit->text());

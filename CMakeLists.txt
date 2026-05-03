@@ -63,6 +63,7 @@ set(SOURCES
     src/plugin_collisions.cpp
     src/asset_collisions.cpp
     src/modlist_sync_guard.cpp
+    src/settings.cpp
     src/settings_migrations.cpp
     src/master_satisfaction.cpp
     src/bsareader.cpp
@@ -141,6 +142,7 @@ set(SOURCES
     include/bsareader.h
     include/safe_fs.h
     include/deps_resolver.h
+    include/settings.h
     resources.qrc
 )
 

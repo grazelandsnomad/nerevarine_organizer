@@ -13,6 +13,8 @@
 #include <QTextStream>
 #include <Qt>
 
+#include "settings.h"
+
 ZoomController::ZoomController(QListWidget *list, QObject *parent)
     : QObject(parent), m_list(list)
 {
@@ -70,8 +72,7 @@ void ZoomController::loadPrefs()
     m_step = qMax(1,  m_step);
     defPt  = qBound(m_min, defPt, m_max);
 
-    m_pt = qBound(m_min, m_max,
-                  QSettings().value("ui/zoom_pt", defPt).toInt());
+    m_pt = qBound(m_min, m_max, Settings::uiZoomPt(defPt));
     m_pt = qBound(m_min, m_pt, m_max);
 }
 
@@ -82,7 +83,7 @@ void ZoomController::applyZoom(int pt)
         if (m_list->font().pointSize() == pt) return;
     }
     m_pt = pt;
-    QSettings().setValue("ui/zoom_pt", m_pt);
+    Settings::setUiZoomPt(m_pt);
 
     QFont f = m_list->font();
     f.setPointSize(m_pt);

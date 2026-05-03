@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "settings.h"
 #include "annotation_codec.h"
 #include "load_order_merge.h"
 #include "separatordialog.h"
@@ -287,8 +288,7 @@ MainWindow::MainWindow(QWidget *parent)
     // array (most X11/Wayland compositors and Windows do); we also keep an
     // explicit "window/maximized" key as a fallback for first-run parity.
     {
-        QSettings s;
-        QByteArray geo = s.value("window/geometry").toByteArray();
+        QByteArray geo = Settings::windowGeometry();
         bool restored = !geo.isEmpty() && restoreGeometry(geo);
         if (!restored) {
             resize(950, 620);
@@ -298,12 +298,11 @@ MainWindow::MainWindow(QWidget *parent)
                      avail.center().y() - height() / 2);
             }
         }
-        if (s.value("window/maximized", false).toBool())
+        if (Settings::windowMaximized())
             QTimer::singleShot(0, this,
                 [this]{ setWindowState(windowState() | Qt::WindowMaximized); });
     }
 
-    QSettings settings;
     loadApiKey(); // populates m_apiKey (keychain where available, else settings)
 
     m_profiles = new GameProfileRegistry(this);
@@ -312,14 +311,14 @@ MainWindow::MainWindow(QWidget *parent)
 
     // Load groundcover-approved mod paths (user confirmed at install time).
     {
-        const QStringList gc = settings.value("groundcover/approved").toStringList();
+        const QStringList gc = Settings::groundcoverApproved();
         m_groundcoverApproved = QSet<QString>(gc.begin(), gc.end());
     }
 
     // Load declined-patch keys (user said "no" to enabling an auto-detected
     // patch for a newly-added mod).
     {
-        const QStringList dp = settings.value("patches/declined").toStringList();
+        const QStringList dp = Settings::declinedPatches();
         m_declinedPatches = QSet<QString>(dp.begin(), dp.end());
     }
 
@@ -639,7 +638,7 @@ void MainWindow::maybeShowLootMissingBanner()
     // Only nag on profiles where LOOT is actually useful.
     if (lootGameFor(currentProfile().id).isEmpty()) return;
     // Respect the user's "don't remind me" choice (right-click on the banner).
-    if (QSettings().value("loot/banner_disabled", false).toBool()) return;
+    if (Settings::lootBannerDisabled()) return;
     // Already installed? Nothing to show.
     if (!detectLootBinary().isEmpty()) return;
 
@@ -653,8 +652,7 @@ void MainWindow::maybeShowLootMissingBanner()
 void MainWindow::maybeShowFirstRunWizard()
 {
     // One-shot flag - if set, we've already onboarded this user.
-    QSettings s;
-    if (s.value("wizard/completed", false).toBool()) return;
+    if (Settings::wizardCompleted()) return;
 
     // Upgrade path: users who installed the app before the wizard existed
     // already have configured profiles, modlists, API keys, etc.  Surfacing
@@ -691,11 +689,11 @@ void MainWindow::maybeShowFirstRunWizard()
     // default mods-dir override saved for any profile.
     bool hasExistingSettings =
         !m_apiKey.isEmpty() ||
-        !s.value("nexus/apikey").toString().isEmpty() ||
-        !s.value("games/list").toStringList().isEmpty();
+        !Settings::nexusApiKey().isEmpty() ||
+        !Settings::gameIds().isEmpty();
 
     if (hasExistingModlist || hasExistingSettings) {
-        s.setValue("wizard/completed", true);
+        Settings::setWizardCompleted(true);
         return;
     }
 
@@ -735,7 +733,7 @@ void MainWindow::maybeShowFirstRunWizard()
     // logic inside handles the actual work.
     if (r.registerNxm) checkNxmHandlerRegistration();
 
-    s.setValue("wizard/completed", true);
+    Settings::setWizardCompleted(true);
     statusBar()->showMessage(T("wizard_done_status"), 5000);
 }
 
@@ -788,7 +786,7 @@ void MainWindow::setupMenuBar()
         if (!path.isEmpty()) {
             m_openmwPath = path;
             currentProfile().openmwPath = path;
-            QSettings().setValue("games/" + currentProfile().id + "/openmw_path", path);
+            Settings::setOpenmwPath(currentProfile().id, path);
         }
     });
     settingsMenu->addAction(T("menu_set_openmw_launcher_path"), this, [this]{
@@ -797,7 +795,7 @@ void MainWindow::setupMenuBar()
         if (!path.isEmpty()) {
             m_openmwLauncherPath = path;
             currentProfile().openmwLauncherPath = path;
-            QSettings().setValue("games/" + currentProfile().id + "/openmw_launcher_path", path);
+            Settings::setOpenmwLauncherPath(currentProfile().id, path);
         }
     });
     settingsMenu->addSeparator();
@@ -817,7 +815,7 @@ void MainWindow::setupMenuBar()
     auto *scaleGroup = new QActionGroup(scaleMenu);
     scaleGroup->setExclusive(true);
 
-    double currentScale = QSettings().value("ui/scale_factor", 1.0).toDouble();
+    double currentScale = Settings::uiScaleFactor();
     const QList<QPair<QString, double>> scaleOptions = {
         {"1×",    1.0},
         {"1.25×", 1.25},
@@ -833,7 +831,7 @@ void MainWindow::setupMenuBar()
         act->setChecked(qAbs(currentScale - factor) < 0.01);
         scaleGroup->addAction(act);
         connect(act, &QAction::triggered, this, [this, factor]() {
-            QSettings().setValue("ui/scale_factor", factor);
+            Settings::setUiScaleFactor(factor);
             QMessageBox::information(this,
                 T("ui_scale_restart_title"),
                 T("ui_scale_restart_body"));
@@ -1492,8 +1490,7 @@ void MainWindow::checkNxmHandlerRegistration()
 
 void MainWindow::checkDesktopShortcut()
 {
-    QSettings settings;
-    if (settings.value("shortcuts/skipDesktopCheck", false).toBool())
+    if (Settings::skipDesktopCheck())
         return;
 
     QString desktopDir = QStandardPaths::writableLocation(QStandardPaths::DesktopLocation);
@@ -1517,7 +1514,7 @@ void MainWindow::checkDesktopShortcut()
     int result = dlg.exec();
 
     if (dontAsk->isChecked())
-        settings.setValue("shortcuts/skipDesktopCheck", true);
+        Settings::setSkipDesktopCheck(true);
 
     if (result != QMessageBox::Yes)
         return;
@@ -2850,10 +2847,9 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
                 if (!nexusUrl.isEmpty())
                     m_groundcoverApproved.remove(nexusUrl);
             }
-            QSettings s;
-            s.setValue("groundcover/approved",
-                       QStringList(m_groundcoverApproved.begin(),
-                                   m_groundcoverApproved.end()));
+            Settings::setGroundcoverApproved(
+                QStringList(m_groundcoverApproved.begin(),
+                            m_groundcoverApproved.end()));
             saveModList();   // re-sync cfg with updated groundcover= lines
         }
     }
@@ -3040,7 +3036,7 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
                     }
                 }
                 if (changed) {
-                    QSettings().setValue("patches/declined",
+                    Settings::setDeclinedPatches(
                         QStringList(m_declinedPatches.begin(),
                                     m_declinedPatches.end()));
                     syncOpenMWConfig();
@@ -3198,10 +3194,9 @@ void MainWindow::onRemoveSelected()
                 gcChanged = true;
         }
         if (gcChanged) {
-            QSettings s;
-            s.setValue("groundcover/approved",
-                       QStringList(m_groundcoverApproved.begin(),
-                                   m_groundcoverApproved.end()));
+            Settings::setGroundcoverApproved(
+                QStringList(m_groundcoverApproved.begin(),
+                            m_groundcoverApproved.end()));
         }
     }
 
@@ -3353,7 +3348,7 @@ void MainWindow::onRemoveSelected()
                     }
                 }
                 if (changed) {
-                    QSettings().setValue("patches/declined",
+                    Settings::setDeclinedPatches(
                         QStringList(m_declinedPatches.begin(),
                                     m_declinedPatches.end()));
                     syncOpenMWConfig();
@@ -3882,8 +3877,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                     isUtil ? T("ctx_unmark_utility") : T("ctx_mark_utility"),
                     this, [this, utilTargets, isUtil]{
                     if (!isUtil) {
-                        QSettings s;
-                        if (!s.value("ui/utility_explainer_seen").toBool()) {
+                        if (!Settings::utilityExplainerSeen()) {
                             QMessageBox box(this);
                             box.setWindowTitle(T("utility_explainer_title"));
                             box.setIcon(QMessageBox::Information);
@@ -3895,7 +3889,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                             box.setDefaultButton(okBtn);
                             box.exec();
                             if (box.clickedButton() != okBtn) return;
-                            s.setValue("ui/utility_explainer_seen", true);
+                            Settings::setUtilityExplainerSeen(true);
                         }
                     }
                     m_undoStack->pushUndo();
@@ -4183,8 +4177,8 @@ void MainWindow::onItemDoubleClicked(QListWidgetItem *item)
 void MainWindow::onTuneSkyrimIni()
 {
     // -- Locate the Skyrim SE "My Games" directory ---
-    const QString settingsKey = "games/skyrimspecialedition/ini_dir";
-    QString iniDir = QSettings().value(settingsKey).toString();
+    constexpr auto kSkyrimSeId = "skyrimspecialedition";
+    QString iniDir = Settings::iniDir(kSkyrimSeId);
 
     auto hasIni = [](const QString &dir) {
         return !dir.isEmpty() &&
@@ -4216,7 +4210,7 @@ void MainWindow::onTuneSkyrimIni()
         }
         iniDir = picked;
     }
-    QSettings().setValue(settingsKey, iniDir);
+    Settings::setIniDir(kSkyrimSeId, iniDir);
 
     QString prefsPath = QDir(iniDir).filePath("SkyrimPrefs.ini");
 
@@ -4377,7 +4371,6 @@ void MainWindow::onSetApiKey()
 
 static constexpr const char *kKeychainService = "NerevarineOrganizer";
 static constexpr const char *kKeychainKey     = "nexus_api_key";
-static constexpr const char *kSettingsKey     = "nexus/apikey";
 
 void MainWindow::loadApiKey()
 {
@@ -4396,23 +4389,22 @@ void MainWindow::loadApiKey()
         m_apiKey = job->textData();
     } else if (job->error() == QKeychain::EntryNotFound) {
         // Migrate from old plain-text QSettings storage, if present.
-        QSettings s;
-        QString legacy = s.value(kSettingsKey).toString();
+        QString legacy = Settings::nexusApiKey();
         if (!legacy.isEmpty()) {
             m_apiKey = legacy;
-            saveApiKey(legacy);     // writes to keychain
-            s.remove(kSettingsKey); // then scrub plain-text copy
+            saveApiKey(legacy);          // writes to keychain
+            Settings::removeNexusApiKey(); // then scrub plain-text copy
         }
     } else {
         // Backend error (no available service, user denied access, …).
         // Fall back to QSettings so the app still works this session.
         qCWarning(logging::lcApp, "Keychain read failed: %s",
                   qUtf8Printable(job->errorString()));
-        m_apiKey = QSettings().value(kSettingsKey).toString();
+        m_apiKey = Settings::nexusApiKey();
     }
     job->deleteLater();
 #else
-    m_apiKey = QSettings().value(kSettingsKey).toString();
+    m_apiKey = Settings::nexusApiKey();
 #endif
 }
 
@@ -4428,15 +4420,15 @@ void MainWindow::saveApiKey(const QString &key)
         if (job->error() != QKeychain::NoError) {
             qCWarning(logging::lcApp, "Keychain write failed: %s",
                       qUtf8Printable(job->errorString()));
-            QSettings().setValue(kSettingsKey, key);
+            Settings::setNexusApiKey(key);
         }
         job->deleteLater();
     });
     job->start();
     // Scrub any stale plain-text copy from QSettings immediately.
-    QSettings().remove(kSettingsKey);
+    Settings::removeNexusApiKey();
 #else
-    QSettings().setValue(kSettingsKey, key);
+    Settings::setNexusApiKey(key);
 #endif
 }
 
@@ -4455,7 +4447,7 @@ void MainWindow::onSetModsDir()
 void MainWindow::onSetLanguage(const QString &language)
 {
     if (language == Translator::currentLanguage()) return;
-    QSettings().setValue("ui/language", language);
+    Settings::setUiLanguage(language);
     QMessageBox::information(this,
         T("language_change_title"),
         T("language_change_body"));
@@ -7798,15 +7790,16 @@ void MainWindow::loadModList(const QString &path,
 
 // Launch OpenMW
 
-void MainWindow::launchProgram(QString &storedPath, const QString &settingsKey,
+void MainWindow::launchProgram(QString &storedPath,
+                                std::function<void(const QString&)> savePath,
                                 const QString &execName, const QString &locateTitle,
                                 bool monitored)
 {
     // Auto-detect via PATH if not configured or binary moved
     if (storedPath.isEmpty() || !QFile::exists(storedPath)) {
         storedPath = QStandardPaths::findExecutable(execName);
-        if (!storedPath.isEmpty())
-            QSettings().setValue(settingsKey, storedPath);
+        if (!storedPath.isEmpty() && savePath)
+            savePath(storedPath);
     }
 
     // Still not found - ask user
@@ -7814,7 +7807,7 @@ void MainWindow::launchProgram(QString &storedPath, const QString &settingsKey,
         storedPath = QFileDialog::getOpenFileName(
             this, locateTitle, "/usr/bin");
         if (storedPath.isEmpty()) return;
-        QSettings().setValue(settingsKey, storedPath);
+        if (savePath) savePath(storedPath);
     }
 
     if (monitored) {
@@ -7871,8 +7864,9 @@ void MainWindow::onLaunchOpenMW()
 {
     if (refuseLaunchIfRebootPending()) return;
     if (!confirmLaunchIfWarnings()) return;
+    const QString id = currentProfile().id;
     launchProgram(m_openmwPath,
-                  "games/" + currentProfile().id + "/openmw_path",
+                  [id](const QString &p) { Settings::setOpenmwPath(id, p); },
                   "openmw", T("launch_locate_openmw"),
                   /*monitored=*/true);
     currentProfile().openmwPath = m_openmwPath;
@@ -7882,8 +7876,9 @@ void MainWindow::onLaunchOpenMWLauncher()
 {
     if (refuseLaunchIfRebootPending()) return;
     if (!confirmLaunchIfWarnings()) return;
+    const QString id = currentProfile().id;
     launchProgram(m_openmwLauncherPath,
-                  "games/" + currentProfile().id + "/openmw_launcher_path",
+                  [id](const QString &p) { Settings::setOpenmwLauncherPath(id, p); },
                   "openmw-launcher", T("launch_locate_launcher"));
     currentProfile().openmwLauncherPath = m_openmwLauncherPath;
 }
@@ -7993,7 +7988,7 @@ void MainWindow::onLaunchSteamLauncher()
         this, T("launch_locate_game").arg(currentProfile().displayName),
         QDir::homePath());
     if (path.isEmpty()) return;
-    QSettings().setValue("games/" + id + "/launcher_exe_path", path);
+    Settings::setLauncherExePath(id, path);
     if (!QProcess::startDetached(path, {}))
         QMessageBox::warning(this, T("launch_error_title"),
                              T("launch_error_body").arg(path));
@@ -8033,7 +8028,7 @@ void MainWindow::onLaunchGame()
         this, T("launch_locate_game").arg(currentProfile().displayName),
         QDir::homePath());
     if (exePath.isEmpty()) return;
-    QSettings().setValue("games/" + id + "/exe_path", exePath);
+    Settings::setGameExePath(id, exePath);
     if (!QProcess::startDetached(exePath, {}))
         QMessageBox::warning(this, T("launch_error_title"),
                              T("launch_error_body").arg(exePath));
@@ -9770,8 +9765,7 @@ void MainWindow::onConflictsScanned(const QHash<QString, QStringList> &res)
 void MainWindow::closeEvent(QCloseEvent *event)
 {
     saveModList();
-    QSettings s;
-    s.setValue("window/geometry",  saveGeometry());
-    s.setValue("window/maximized", isMaximized());
+    Settings::setWindowGeometry(saveGeometry());
+    Settings::setWindowMaximized(isMaximized());
     QMainWindow::closeEvent(event);
 }

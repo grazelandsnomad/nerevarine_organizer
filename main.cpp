@@ -12,6 +12,7 @@
 
 #include "logging.h"
 #include "mainwindow.h"
+#include "settings.h"
 #include "settings_migrations.h"
 #include "translator.h"
 
@@ -116,8 +117,7 @@ int main(int argc, char *argv[])
     }
 
     // Load language - saved preference, or auto-detect from system locale
-    QSettings settings;
-    QString lang = settings.value("ui/language").toString().trimmed().toLower();
+    QString lang = Settings::uiLanguage().trimmed().toLower();
     if (lang.isEmpty()) {
         lang = detectLanguage();
         // Don't save yet - let the user confirm/change it if they want

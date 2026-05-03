@@ -11,11 +11,12 @@
 #include <QJsonValue>
 #include <QRegularExpression>
 #include <QSet>
-#include <QSettings>
 #include <QStandardPaths>
 #include <QString>
 #include <QStringList>
 #include <Qt>
+
+#include "settings.h"
 
 // -- ModlistProfile / GameProfile helpers ---
 
@@ -152,19 +153,22 @@ GameProfileRegistry::GameProfileRegistry(QObject *parent)
 
 void GameProfileRegistry::load()
 {
-    QSettings s;
-    QStringList ids = s.value("games/list").toStringList();
+    QStringList ids = Settings::gameIds();
     ids.removeAll(QString());
 
     if (ids.isEmpty()) {
-        // First-run: create the default OpenMW profile.
+        // First-run: create the default OpenMW profile.  Promote legacy
+        // single-game keys (`mods/dir`, `launch/openmw*`) onto the new
+        // per-game shape so an upgrade keeps the user's setup intact.
         GameProfile morrowind;
         morrowind.id                 = "morrowind";
         morrowind.displayName        = "OpenMW (Morrowind)";
-        morrowind.modsDir            = s.value("mods/dir",
-            QDir::homePath() + "/Games/nerevarine_mods").toString();
-        morrowind.openmwPath         = s.value("launch/openmw").toString();
-        morrowind.openmwLauncherPath = s.value("launch/openmw_launcher").toString();
+        const QString legacyMods = Settings::legacyModsDir();
+        morrowind.modsDir            = legacyMods.isEmpty()
+            ? QDir::homePath() + "/Games/nerevarine_mods"
+            : legacyMods;
+        morrowind.openmwPath         = Settings::legacyOpenmwPath();
+        morrowind.openmwLauncherPath = Settings::legacyOpenmwLauncherPath();
         m_games.append(morrowind);
 
         // Migrate modlist.txt → modlist_morrowind.txt if it exists.
@@ -184,11 +188,13 @@ void GameProfileRegistry::load()
         for (const QString &id : ids) {
             GameProfile gp;
             gp.id          = id;
-            gp.displayName = s.value("games/" + id + "/name", id).toString();
-            gp.modsDir     = s.value("games/" + id + "/mods_dir",
-                QDir::homePath() + "/Games/" + id + "_mods").toString();
-            gp.openmwPath         = s.value("games/" + id + "/openmw_path").toString();
-            gp.openmwLauncherPath = s.value("games/" + id + "/openmw_launcher_path").toString();
+            gp.displayName = Settings::displayName(id);
+            const QString persistedModsDir = Settings::modsDirFor(id);
+            gp.modsDir     = persistedModsDir.isEmpty()
+                ? QDir::homePath() + "/Games/" + id + "_mods"
+                : persistedModsDir;
+            gp.openmwPath         = Settings::openmwPath(id);
+            gp.openmwLauncherPath = Settings::openmwLauncherPath(id);
             m_games.append(gp);
         }
         if (m_games.isEmpty()) {
@@ -196,12 +202,12 @@ void GameProfileRegistry::load()
             morrowind.id                 = "morrowind";
             morrowind.displayName        = "OpenMW (Morrowind)";
             morrowind.modsDir            = QDir::homePath() + "/Games/nerevarine_mods";
-            morrowind.openmwPath         = s.value("launch/openmw").toString();
-            morrowind.openmwLauncherPath = s.value("launch/openmw_launcher").toString();
+            morrowind.openmwPath         = Settings::legacyOpenmwPath();
+            morrowind.openmwLauncherPath = Settings::legacyOpenmwLauncherPath();
             m_games.append(morrowind);
             save();
         }
-        QString currentId = s.value("games/current", "morrowind").toString();
+        const QString currentId = Settings::currentGameId();
         m_currentIdx = 0;
         for (int i = 0; i < m_games.size(); ++i)
             if (m_games[i].id == currentId) { m_currentIdx = i; break; }
@@ -215,8 +221,7 @@ void GameProfileRegistry::load()
     // see file renames mid-upgrade; new profiles use the canonical
     // `modlist_<gameId>__<name>.txt` scheme.
     for (GameProfile &gp : m_games) {
-        const QString base = "games/" + gp.id;
-        QStringList profileNames = s.value(base + "/profiles").toStringList();
+        QStringList profileNames = Settings::modlistProfileNames(gp.id);
         profileNames.removeAll(QString());
 
         if (profileNames.isEmpty()) {
@@ -230,18 +235,20 @@ void GameProfileRegistry::load()
             gp.activeModlistIdx = 0;
         } else {
             for (const QString &pn : profileNames) {
-                const QString pkey = base + "/profile/" + pn;
                 ModlistProfile mp;
-                mp.name              = pn;
-                mp.modsDir           = s.value(pkey + "/mods_dir").toString();
-                mp.modlistFilename   = s.value(pkey + "/modlist_filename",
-                                          modlistFilenameFor(gp.id, pn)).toString();
-                mp.loadOrderFilename = s.value(pkey + "/loadorder_filename",
-                                          loadOrderFilenameFor(gp.id, pn)).toString();
+                mp.name = pn;
+                mp.modsDir           = Settings::modlistProfileModsDir(gp.id, pn);
+                QString mlist        = Settings::modlistFilename(gp.id, pn);
+                if (mlist.isEmpty())   mlist = modlistFilenameFor(gp.id, pn);
+                QString lord         = Settings::loadOrderFilename(gp.id, pn);
+                if (lord.isEmpty())    lord  = loadOrderFilenameFor(gp.id, pn);
+                mp.modlistFilename   = mlist;
+                mp.loadOrderFilename = lord;
                 gp.modlistProfiles.append(mp);
             }
-            const QString activeName = s.value(base + "/active_profile",
-                                               gp.modlistProfiles.first().name).toString();
+            QString activeName = Settings::activeModlistProfileName(gp.id);
+            if (activeName.isEmpty())
+                activeName = gp.modlistProfiles.first().name;
             gp.activeModlistIdx = 0;
             for (int i = 0; i < gp.modlistProfiles.size(); ++i) {
                 if (gp.modlistProfiles[i].name == activeName) {
@@ -265,39 +272,37 @@ void GameProfileRegistry::load()
 
 void GameProfileRegistry::save()
 {
-    QSettings s;
     QStringList ids;
     for (const auto &gp : m_games) {
         ids << gp.id;
-        s.setValue("games/" + gp.id + "/name",                 gp.displayName);
-        s.setValue("games/" + gp.id + "/mods_dir",             gp.modsDir);
-        s.setValue("games/" + gp.id + "/openmw_path",          gp.openmwPath);
-        s.setValue("games/" + gp.id + "/openmw_launcher_path", gp.openmwLauncherPath);
+        Settings::setDisplayName(gp.id,         gp.displayName);
+        Settings::setModsDirFor(gp.id,          gp.modsDir);
+        Settings::setOpenmwPath(gp.id,          gp.openmwPath);
+        Settings::setOpenmwLauncherPath(gp.id,  gp.openmwLauncherPath);
 
         // Modlist profiles for this game.
         QStringList profileNames;
         for (const ModlistProfile &mp : gp.modlistProfiles) {
             profileNames << mp.name;
-            const QString pkey = "games/" + gp.id + "/profile/" + mp.name;
-            s.setValue(pkey + "/mods_dir",           mp.modsDir);
-            s.setValue(pkey + "/modlist_filename",   mp.modlistFilename);
-            s.setValue(pkey + "/loadorder_filename", mp.loadOrderFilename);
+            Settings::setModlistProfileModsDir(gp.id, mp.name, mp.modsDir);
+            Settings::setModlistFilename(gp.id, mp.name, mp.modlistFilename);
+            Settings::setLoadOrderFilename(gp.id, mp.name, mp.loadOrderFilename);
         }
-        s.setValue("games/" + gp.id + "/profiles",       profileNames);
-        s.setValue("games/" + gp.id + "/active_profile",
-                   gp.modlistProfiles.isEmpty()
-                       ? QString()
-                       : gp.modlistProfiles[gp.activeModlistIdx].name);
+        Settings::setModlistProfileNames(gp.id, profileNames);
+        Settings::setActiveModlistProfileName(gp.id,
+            gp.modlistProfiles.isEmpty()
+                ? QString()
+                : gp.modlistProfiles[gp.activeModlistIdx].name);
     }
-    s.setValue("games/list",    ids);
-    s.setValue("games/current", m_games.isEmpty() ? "" : m_games[m_currentIdx].id);
+    Settings::setGameIds(ids);
+    Settings::setCurrentGameId(m_games.isEmpty() ? QString() : m_games[m_currentIdx].id);
 }
 
 void GameProfileRegistry::setCurrentIndex(int idx)
 {
     if (idx < 0 || idx >= m_games.size() || idx == m_currentIdx) return;
     m_currentIdx = idx;
-    QSettings().setValue("games/current", m_games[idx].id);
+    Settings::setCurrentGameId(m_games[idx].id);
 }
 
 void GameProfileRegistry::setActiveModlistIndex(int idx)
@@ -392,8 +397,7 @@ bool GameProfileRegistry::removeModlistProfile(int idx, bool deleteStateFiles)
 
     // Drop the QSettings group so a recreated profile of the same name
     // doesn't accidentally inherit the old modsDir.
-    QSettings().remove("games/" + gp.id + "/profile/" +
-                       gp.modlistProfiles[idx].name);
+    Settings::removeModlistProfileGroup(gp.id, gp.modlistProfiles[idx].name);
 
     gp.modlistProfiles.removeAt(idx);
     if (gp.activeModlistIdx >= gp.modlistProfiles.size())
@@ -448,7 +452,7 @@ bool GameProfileRegistry::renameModlistProfile(int idx, const QString &newName)
 
     // Drop the old QSettings group before assigning the new name so the
     // next save() doesn't leave an orphan entry behind.
-    QSettings().remove("games/" + gp.id + "/profile/" + oldName);
+    Settings::removeModlistProfileGroup(gp.id, oldName);
 
     mp.name              = trimmed;
     mp.modlistFilename   = newMlist;
