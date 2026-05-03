@@ -17,6 +17,28 @@ set(CMAKE_AUTOUIC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network Concurrent)
 
+# -- Generated translation-key enum -----------------------------------
+# Builds <build>/generated/translation_keys.h from translations/english.ini.
+# The generator script is idempotent (mtime-based no-op when output is
+# unchanged) so re-running CMake doesn't trigger spurious rebuilds.  The
+# header underpins translator.h's T(Tk::some_key) overload, which makes
+# misspelled translation keys a compile error.
+set(TRANSLATION_ENUM_HEADER ${CMAKE_BINARY_DIR}/generated/translation_keys.h)
+set(TRANSLATION_ENUM_SCRIPT ${CMAKE_SOURCE_DIR}/scripts/gen_translation_enum.sh)
+set(TRANSLATION_ENUM_INPUT  ${CMAKE_SOURCE_DIR}/translations/english.ini)
+add_custom_command(
+    OUTPUT  ${TRANSLATION_ENUM_HEADER}
+    COMMAND bash ${TRANSLATION_ENUM_SCRIPT}
+                 ${TRANSLATION_ENUM_INPUT}
+                 ${TRANSLATION_ENUM_HEADER}
+    DEPENDS ${TRANSLATION_ENUM_INPUT} ${TRANSLATION_ENUM_SCRIPT}
+    COMMENT "Generating translation_keys.h from english.ini"
+    VERBATIM
+)
+add_custom_target(translation_keys_header
+    DEPENDS ${TRANSLATION_ENUM_HEADER}
+)
+
 # Optional: qt6keychain for secure API-key storage (libsecret / KWallet /
 # DPAPI backend).  When present, the Nexus API key is stored there instead
 # of in plain-text QSettings.  When absent, the app falls back to QSettings
@@ -159,7 +181,11 @@ else()
     add_executable(nerevarine_organizer ${SOURCES})
 endif()
 
-target_include_directories(nerevarine_organizer PRIVATE include)
+target_include_directories(nerevarine_organizer PRIVATE
+    include
+    ${CMAKE_BINARY_DIR}/generated
+)
+add_dependencies(nerevarine_organizer translation_keys_header)
 
 target_link_libraries(nerevarine_organizer PRIVATE
     Qt6::Core

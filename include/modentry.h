@@ -11,6 +11,7 @@
 #include <QDateTime>
 #include <QString>
 #include <QStringList>
+#include <QUuid>
 
 class QListWidgetItem;
 
@@ -56,6 +57,11 @@ struct ModEntry {
     bool    updateAvailable  = false;
     QString expectedMd5;               // lower-case hex, cleared after verify
     qint64  expectedSize     = 0;      // bytes, cleared after verify
+    // Stable per-install identity (see ModRole::InstallToken).  Only
+    // meaningful while installStatus == 2; serialized for installing rows
+    // so an interrupted install can still be matched back up after a
+    // relaunch.  Null QUuid otherwise.
+    QUuid   installToken;
 
     // Dependencies.
     QStringList dependsOn;             // list of Nexus URLs

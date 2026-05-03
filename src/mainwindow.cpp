@@ -774,6 +774,7 @@ void MainWindow::setupMenuBar()
     modsMenu->addAction(T("menu_inspect_openmw"),  this, &MainWindow::onInspectOpenMWSetup);
     modsMenu->addAction(T("menu_conflict_inspector"), this, &MainWindow::onInspectConflicts);
     modsMenu->addAction(T("menu_log_triage"),      this, &MainWindow::onTriageOpenMWLog);
+    modsMenu->addAction(T("menu_diag_bundle"),     this, &MainWindow::onCreateDiagnosticBundle);
     modsMenu->addAction(T("menu_edit_load_order"), this, &MainWindow::onEditLoadOrder);
 
     auto *settingsMenu = menuBar()->addMenu(T("menu_settings"));
@@ -1039,6 +1040,11 @@ void MainWindow::setupToolbar()
     if (auto *btn = qobject_cast<QToolButton *>(tb->widgetForAction(actSummary)))
         btn->setStyleSheet("color: #1a6fa8; font-weight: bold;");
 
+    auto *actDiagBundle = tb->addAction(T("toolbar_diag_bundle"),
+                                         this, &MainWindow::onCreateDiagnosticBundle);
+    if (auto *btn = qobject_cast<QToolButton *>(tb->widgetForAction(actDiagBundle)))
+        btn->setStyleSheet("color: #6a1b9a; font-weight: bold;");
+
     // Utmost-right slot: Check Updates.  Last widget added to the toolbar
     // before the menu-extension chevron, so on narrow windows it stays
     // visible when other right-aligned buttons collapse into the overflow.
@@ -1089,6 +1095,7 @@ void MainWindow::setupToolbar()
         m_tbCustom->registerAction("featured_modlists", actFeatured,              T("toolbar_featured_modlists"),    /*defaultVisible=*/false);
     m_tbCustom->registerAction("add_mod",               actAddMod,                T("toolbar_add_mod"),              /*defaultVisible=*/false);
     m_tbCustom->registerAction("modlist_summary",       actSummary,               T("toolbar_modlist_summary"));
+    m_tbCustom->registerAction("diag_bundle",           actDiagBundle,            T("toolbar_diag_bundle"),          /*defaultVisible=*/false);
 
     // Must be called last so all toolbar members are initialised
     updateGameButton(); // sets game button text/menu + shows correct launch button(s)
@@ -1753,7 +1760,15 @@ MainWindow::verifyAndExtract(const QString &archivePath, QListWidgetItem *placeh
     const QString expectedMd5  = placeholder->data(ModRole::ExpectedMd5).toString()
                                       .trimmed().toLower();
     const qint64  expectedSize = placeholder->data(ModRole::ExpectedSize).toLongLong();
-    m_installCtl->verifyArchive(archivePath, placeholder, expectedMd5, expectedSize);
+    // Tokens are minted in prepareItemForInstall(); a path here without
+    // one is a placeholder created by an older code-path -- backfill so
+    // the InstallController signals can still match it back up.
+    QUuid token = placeholder->data(ModRole::InstallToken).toUuid();
+    if (token.isNull()) {
+        token = QUuid::createUuid();
+        placeholder->setData(ModRole::InstallToken, token);
+    }
+    m_installCtl->verifyArchive(archivePath, token, expectedMd5, expectedSize);
     return {};
 }
 
@@ -1763,11 +1778,14 @@ void MainWindow::onVerificationStarted(const QString &archivePath)
         T("status_verifying").arg(QFileInfo(archivePath).fileName()));
 }
 
-void MainWindow::onArchiveVerified(const QString &archivePath, QListWidgetItem *placeholder)
+void MainWindow::onArchiveVerified(const QString &archivePath, const QUuid &installToken)
 {
-    // The row may have been removed while the MD5 worker was running.  If
-    // so, the archive has nowhere to go - drop it and bail.
-    if (!m_modList->indexFromItem(placeholder).isValid()) {
+    // Look the placeholder up by token.  May be in m_modList (active
+    // profile), in m_strandedInstalls (parked across a profile switch),
+    // or absent entirely (row was removed mid-verify, app restart, etc.).
+    QString profileKey;
+    QListWidgetItem *placeholder = findPlaceholderByToken(installToken, &profileKey);
+    if (!placeholder) {
         QFile::remove(archivePath);
         return;
     }
@@ -1786,7 +1804,7 @@ void MainWindow::onArchiveVerified(const QString &archivePath, QListWidgetItem *
 }
 
 void MainWindow::onArchiveVerificationFailed(const QString &archivePath,
-                                             QListWidgetItem *placeholder,
+                                             const QUuid &installToken,
                                              InstallController::VerifyFailKind kind,
                                              const QString &actual,
                                              const QString &expected)
@@ -1794,13 +1812,16 @@ void MainWindow::onArchiveVerificationFailed(const QString &archivePath,
     // Archive is toast regardless of kind - remove it.
     QFile::remove(archivePath);
 
+    QString profileKey;
+    QListWidgetItem *placeholder = findPlaceholderByToken(installToken, &profileKey);
     // Reset the placeholder row back to "not installed" so the user can try
     // again.  If it was removed mid-verify, skip the row work.
-    if (m_modList->indexFromItem(placeholder).isValid()) {
+    if (placeholder) {
         placeholder->setData(ModRole::InstallStatus,    0);
         placeholder->setData(ModRole::DownloadProgress, QVariant());
         placeholder->setData(ModRole::ExpectedMd5,      QVariant());
         placeholder->setData(ModRole::ExpectedSize,     QVariant());
+        placeholder->setData(ModRole::InstallToken,     QVariant());
         placeholder->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
                               Qt::ItemIsDragEnabled | Qt::ItemIsUserCheckable);
         // Restore the display name, stripping the "⠋ installing…" prefix.
@@ -1810,7 +1831,13 @@ void MainWindow::onArchiveVerificationFailed(const QString &archivePath,
             if (name.isEmpty()) name = QFileInfo(archivePath).completeBaseName();
         }
         if (!name.isEmpty()) placeholder->setText(name);
-        saveModList();
+        if (profileKey.isEmpty()) {
+            saveModList();
+        } else {
+            // Stranded under another profile - persist the reset to that
+            // profile's modlist file without disturbing the active one.
+            saveModListFor(profileKey, placeholder);
+        }
     }
 
     const QString fileName = QFileInfo(archivePath).fileName();
@@ -1865,17 +1892,22 @@ MainWindow::extractAndAdd(const QString &archivePath, QListWidgetItem *placehold
     // Without it every install/reinstall would coin a fresh "_<ts>"
     // wrapper and the modlist path would drift.
     const QString reuseHint = placeholder->data(ModRole::ModPath).toString();
-    m_installCtl->extractArchive(archivePath, m_modsDir, placeholder, reuseHint);
+    QUuid token = placeholder->data(ModRole::InstallToken).toUuid();
+    if (token.isNull()) {
+        token = QUuid::createUuid();
+        placeholder->setData(ModRole::InstallToken, token);
+    }
+    m_installCtl->extractArchive(archivePath, m_modsDir, token, reuseHint);
     return {};
 }
 
 void MainWindow::onExtractionFailed(const QString &archivePath,
                                     const QString &extractDir,
-                                    QListWidgetItem *placeholder,
+                                    const QUuid &installToken,
                                     InstallController::ExtractFailKind kind,
                                     const QString &detail)
 {
-    Q_UNUSED(placeholder);
+    Q_UNUSED(installToken);
     const QFileInfo fi(archivePath);
     QString body;
     if (kind == InstallController::ExtractFailKind::ProgramMissing) {
@@ -1903,19 +1935,30 @@ void MainWindow::onExtractionFailed(const QString &archivePath,
 void MainWindow::onExtractionSucceeded(const QString &archivePath,
                                        const QString &extractDir,
                                        const QString &modPathIn,
-                                       QListWidgetItem *placeholder)
+                                       const QUuid &installToken)
 {
     const QFileInfo fi(archivePath);
     QString modPath = modPathIn;
+
+    QString profileKey;
+    QListWidgetItem *placeholder = findPlaceholderByToken(installToken, &profileKey);
+    if (!placeholder) {
+        // Row was removed mid-extract (or app was restarted and the
+        // placeholder didn't restore for some reason).  The extracted
+        // folder is now orphaned data -- nothing references it, so wipe
+        // it instead of leaking unreferenced GBs onto the user's disk.
+        // The archive goes too.
+        QDir(extractDir).removeRecursively();
+        QFile::remove(archivePath);
+        return;
+    }
 
     // FOMOD installer: if the archive ships a ModuleConfig.xml, open the
     // wizard as a non-modal window so the user can run multiple wizards in
     // parallel and click between them freely.  All post-wizard bookkeeping
     // runs inside the onDone callback; we return immediately after show().
     if (FomodWizard::hasFomod(modPath)) {
-        const QString priorChoices = placeholder
-            ? placeholder->data(ModRole::FomodChoices).toString()
-            : QString();
+        const QString priorChoices = placeholder->data(ModRole::FomodChoices).toString();
         QStringList installedModNames;
         for (int mi = 0; mi < m_modList->count(); ++mi) {
             auto *mitem = m_modList->item(mi);
@@ -1924,20 +1967,43 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
             if (!mname.isEmpty()) installedModNames.append(mname);
         }
         const QString archiveFileName = fi.fileName();
-        const QString title = placeholder
-            ? placeholder->data(ModRole::NexusTitle).toString().trimmed()
-            : QString();
+        const QString title = placeholder->data(ModRole::NexusTitle).toString().trimmed();
         const QString sanitizedTitle  = sanitizeFolderName(title);
 
+        // Capture the token, not the placeholder pointer -- the user may
+        // switch profiles while the wizard is open, in which case the
+        // placeholder lands in m_strandedInstalls and we need to re-look-up.
         FomodWizard::showAsync(modPath, priorChoices, this, installedModNames,
             [this, archivePath, extractDir, modPath,
-             placeholder, archiveFileName, sanitizedTitle]
+             installToken, archiveFileName, sanitizedTitle]
             (const QString &fomodPath, const QString &fomodChoices) {
 
+            QString fkey;
+            QListWidgetItem *fph = findPlaceholderByToken(installToken, &fkey);
             if (fomodPath.isEmpty()) {
                 QDir(extractDir).removeRecursively();
                 QFile::remove(archivePath);
-                resetPlaceholderAfterInstallCancel(placeholder, archivePath);
+                if (fph) {
+                    if (fkey.isEmpty()) {
+                        resetPlaceholderAfterInstallCancel(fph, archivePath);
+                    } else {
+                        // Stranded: clear the placeholder's installing state
+                        // and persist into the owning profile's modlist file.
+                        fph->setData(ModRole::InstallStatus,    0);
+                        fph->setData(ModRole::DownloadProgress, QVariant());
+                        fph->setData(ModRole::ModPath,          QVariant());
+                        fph->setData(ModRole::InstallToken,     QVariant());
+                        fph->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
+                                      Qt::ItemIsDragEnabled | Qt::ItemIsUserCheckable);
+                        QString name = fph->data(ModRole::CustomName).toString();
+                        if (name.isEmpty()) name = QFileInfo(archivePath).completeBaseName();
+                        if (!name.isEmpty()) {
+                            fph->setText(name);
+                            fph->setData(ModRole::CustomName, name);
+                        }
+                        saveModListFor(fkey, fph);
+                    }
+                }
                 statusBar()->showMessage(T("fomod_cancelled"), 3000);
                 return;
             }
@@ -1951,17 +2017,32 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
                     T("fomod_empty_body").arg(archiveFileName));
             } else {
                 finalPath = promote.finalModPath;
-                if (placeholder && !fomodChoices.isEmpty())
-                    placeholder->setData(ModRole::FomodChoices, fomodChoices);
+                if (fph && !fomodChoices.isEmpty())
+                    fph->setData(ModRole::FomodChoices, fomodChoices);
             }
 
-            addModFromPath(finalPath, placeholder);
+            if (fph) {
+                if (fkey.isEmpty()) {
+                    addModFromPath(finalPath, fph);
+                } else {
+                    applyInstalledStateToStrandedPlaceholder(fph, finalPath);
+                    saveModListFor(fkey, fph);
+                }
+            }
             QFile::remove(archivePath);
         });
         return; // wizard is now shown; callback drives the rest
     }
 
-    addModFromPath(modPath, placeholder);
+    if (profileKey.isEmpty()) {
+        addModFromPath(modPath, placeholder);
+    } else {
+        // Stranded: do the placeholder-only updates and persist to the
+        // owning profile's modlist file.  m_modList iteration / load-order
+        // / openmw.cfg sync are deferred until the user switches back.
+        applyInstalledStateToStrandedPlaceholder(placeholder, modPath);
+        saveModListFor(profileKey, placeholder);
+    }
     QFile::remove(archivePath);
 }
 
@@ -1997,7 +2078,35 @@ void MainWindow::prepareItemForInstall(QListWidgetItem *item)
     if (name.isEmpty()) name = item->text();
     item->setText(QString("⠋ %1 (%2)").arg(T("status_installing_label"), name));
     item->setData(ModRole::InstallStatus, 2);
+    // Mint a stable per-install identity so InstallController signals can
+    // route back to this row even after a profile switch parks it in
+    // m_strandedInstalls.  Reuse an existing token if one is already
+    // present (re-install of a row that still carries a pending token).
+    if (item->data(ModRole::InstallToken).toUuid().isNull())
+        item->setData(ModRole::InstallToken, QUuid::createUuid());
     item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+}
+
+void MainWindow::applyInstalledStateToStrandedPlaceholder(
+    QListWidgetItem *placeholder, const QString &modPath)
+{
+    if (!placeholder) return;
+    const bool wasUpdate = placeholder->data(ModRole::UpdateAvailable).toBool();
+    QString cn = placeholder->data(ModRole::CustomName).toString();
+    placeholder->setText(cn.isEmpty() ? QFileInfo(modPath).fileName() : cn);
+    placeholder->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
+                          Qt::ItemIsDragEnabled | Qt::ItemIsUserCheckable);
+    placeholder->setData(ModRole::ItemType,        ItemType::Mod);
+    placeholder->setData(ModRole::ModPath,         modPath);
+    placeholder->setData(ModRole::InstallStatus,   1);
+    placeholder->setData(ModRole::UpdateAvailable, false);
+    placeholder->setData(ModRole::IntendedModPath, QVariant());
+    placeholder->setData(ModRole::PrevModPath,     QVariant());
+    placeholder->setData(ModRole::InstallToken,    QVariant());
+    if (wasUpdate || !placeholder->data(ModRole::DateAdded).toDateTime().isValid())
+        placeholder->setData(ModRole::DateAdded, QDateTime::currentDateTime());
+    placeholder->setCheckState(Qt::Checked);
+    placeholder->setToolTip(modPath);
 }
 
 void MainWindow::onInstallFromNexus(QListWidgetItem *item)
@@ -5993,6 +6102,234 @@ void MainWindow::onMoveModsDir()
     summary.exec();
 }
 
+// Diagnostic bundle.  Zips the user's modlist + load-order files,
+// openmw.cfg, the tail of OpenMW.log, and a system-summary text file
+// into one nerev_diagnostics_<timestamp>.zip the user can attach to a
+// bug report.  Replaces the "run ori, paste log fragments, share
+// openmw.cfg by hand" round-trip; cuts ~20 minutes off most support
+// tickets.  Strictly local - no network, no upload.
+void MainWindow::onCreateDiagnosticBundle()
+{
+    // Pick the output zip path.  Default to ~/Desktop/<file> when the
+    // user has a Desktop dir, otherwise their home; QFileDialog falls
+    // back to the OS default if neither exists.
+    const QString stamp = QDateTime::currentDateTime().toString(
+        QStringLiteral("yyyyMMdd_HHmmss"));
+    const QString defaultName = QStringLiteral("nerev_diagnostics_") + stamp +
+                                QStringLiteral(".zip");
+    QString defaultDir = QStandardPaths::writableLocation(
+                             QStandardPaths::DesktopLocation);
+    if (defaultDir.isEmpty() || !QDir(defaultDir).exists())
+        defaultDir = QDir::homePath();
+
+    const QString outZip = QFileDialog::getSaveFileName(
+        this, T(Tk::diag_bundle_save_title),
+        defaultDir + QLatin1Char('/') + defaultName,
+        T(Tk::diag_bundle_filter));
+    if (outZip.isEmpty()) return;
+
+    // Stage everything in a temp dir so the final 7z run takes a single
+    // tree.  QTemporaryDir auto-cleans on scope exit, even on early return.
+    QTemporaryDir staging;
+    staging.setAutoRemove(true);
+    if (!staging.isValid()) {
+        QMessageBox::warning(this, T(Tk::diag_bundle_title),
+            T(Tk::diag_bundle_err_tmp).arg(staging.errorString()));
+        return;
+    }
+    const QDir stageDir(staging.path());
+    const QString reportRoot = stageDir.filePath(QStringLiteral("nerev_diagnostics"));
+    QDir().mkpath(reportRoot);
+
+    // -- Copy modlist + load-order files ---
+    auto copyIfExists = [&](const QString &src, const QString &destName) {
+        if (src.isEmpty() || !QFileInfo::exists(src)) return false;
+        return QFile::copy(src, QDir(reportRoot).filePath(destName));
+    };
+    const bool gotModlist  = copyIfExists(modlistPath(),
+                                          QFileInfo(modlistPath()).fileName());
+    const bool gotLoadOrd  = copyIfExists(loadOrderPath(),
+                                          QFileInfo(loadOrderPath()).fileName());
+
+    // -- Copy openmw.cfg ---
+#ifdef Q_OS_WIN
+    const QString openmwCfg = QDir::homePath() +
+        QStringLiteral("/Documents/My Games/OpenMW/openmw.cfg");
+#else
+    const QString openmwCfg = QDir::homePath() +
+        QStringLiteral("/.config/openmw/openmw.cfg");
+#endif
+    const bool gotCfg = copyIfExists(openmwCfg, QStringLiteral("openmw.cfg"));
+
+    // -- Tail OpenMW.log so the bundle stays manageable on multi-MB logs ---
+#ifdef Q_OS_WIN
+    const QString openmwLog = QDir::homePath() +
+        QStringLiteral("/Documents/My Games/OpenMW/openmw.log");
+#else
+    const QString openmwLog = QDir::homePath() +
+        QStringLiteral("/.config/openmw/openmw.log");
+#endif
+    bool gotLog = false;
+    if (QFileInfo::exists(openmwLog)) {
+        QFile in(openmwLog);
+        if (in.open(QIODevice::ReadOnly)) {
+            constexpr qint64 kTailBytes = 512 * 1024;  // last 512 KB
+            const qint64 sz = in.size();
+            const qint64 from = sz > kTailBytes ? sz - kTailBytes : 0;
+            in.seek(from);
+            const QByteArray tail = in.readAll();
+            QFile out(QDir(reportRoot).filePath(QStringLiteral("openmw.log.tail")));
+            if (out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                if (from > 0) {
+                    out.write("[truncated to last 512 KB of " +
+                              QByteArray::number(sz) + " bytes]\n");
+                }
+                out.write(tail);
+                gotLog = true;
+            }
+        }
+    }
+
+    // -- System summary ---
+    QString sysOut;
+    QTextStream s(&sysOut);
+    s << "Nerevarine Organizer - Diagnostic Bundle\n";
+    s << "Generated: " << QDateTime::currentDateTime().toString(Qt::ISODate) << "\n\n";
+    s << "App version       : " << QCoreApplication::applicationVersion() << "\n";
+    s << "Qt build          : " << QT_VERSION_STR << " (runtime " << qVersion() << ")\n";
+    s << "Compiler ABI      : " << QSysInfo::buildAbi() << "\n";
+    s << "CPU arch          : " << QSysInfo::currentCpuArchitecture() << "\n";
+    s << "Kernel            : " << QSysInfo::kernelType() << " "
+                                << QSysInfo::kernelVersion() << "\n";
+    s << "Product           : " << QSysInfo::prettyProductName() << "\n";
+    s << "Product type      : " << QSysInfo::productType()
+                                << " " << QSysInfo::productVersion() << "\n";
+    s << "Hostname          : " << QSysInfo::machineHostName() << "\n";
+#ifdef Q_OS_LINUX
+    // Distro: read /etc/os-release verbatim - small, always present on
+    // systemd distros, and includes PRETTY_NAME / VERSION_ID / ID etc.
+    {
+        QFile osrel(QStringLiteral("/etc/os-release"));
+        if (osrel.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            s << "\n[/etc/os-release]\n"
+              << QString::fromUtf8(osrel.readAll()).trimmed() << "\n";
+        }
+        // Live driver hints - lspci is usually present and surfaces both
+        // the GPU vendor and the kernel module name (nvidia / nouveau /
+        // amdgpu / i915).  Suppress stderr so a missing tool doesn't
+        // contaminate the bundle.
+        QProcess p;
+        p.start(QStringLiteral("lspci"), {QStringLiteral("-nnk")});
+        if (p.waitForFinished(2000)) {
+            const QString txt = QString::fromUtf8(p.readAllStandardOutput());
+            QStringList vga;
+            for (const QString &line : txt.split('\n')) {
+                if (line.contains(QStringLiteral("VGA"), Qt::CaseInsensitive) ||
+                    line.contains(QStringLiteral("3D"), Qt::CaseInsensitive)  ||
+                    line.contains(QStringLiteral("Display"), Qt::CaseInsensitive))
+                    vga << line;
+            }
+            if (!vga.isEmpty()) {
+                s << "\n[GPU (lspci)]\n" << vga.join('\n') << "\n";
+            }
+        }
+        // glxinfo if installed - "OpenGL renderer" / "OpenGL version" is
+        // exactly what most OpenMW troubleshooting needs.
+        QProcess g;
+        g.start(QStringLiteral("glxinfo"), {QStringLiteral("-B")});
+        if (g.waitForFinished(2500)) {
+            const QString txt = QString::fromUtf8(g.readAllStandardOutput());
+            QStringList rel;
+            for (const QString &line : txt.split('\n')) {
+                if (line.startsWith(QStringLiteral("OpenGL"))     ||
+                    line.startsWith(QStringLiteral("direct render"))||
+                    line.startsWith(QStringLiteral("Vendor"))     ||
+                    line.startsWith(QStringLiteral("Device")))
+                    rel << line.trimmed();
+            }
+            if (!rel.isEmpty()) {
+                s << "\n[glxinfo -B]\n" << rel.join('\n') << "\n";
+            }
+        }
+        QFile nv(QStringLiteral("/sys/module/nvidia/version"));
+        if (nv.exists() && nv.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            s << "\n[NVIDIA driver]\n"
+              << QString::fromUtf8(nv.readAll()).trimmed() << "\n";
+        }
+    }
+#endif
+    // -- App state summary --
+    s << "\n[Active profile]\n";
+    if (m_profiles && !m_profiles->isEmpty()) {
+        const GameProfile &gp = m_profiles->current();
+        s << "Game id           : " << gp.id << "\n";
+        s << "Display name      : " << gp.displayName << "\n";
+        s << "Modlist profile   : " << gp.activeModlist().name << "\n";
+        s << "Mods dir          : " << m_modsDir << "\n";
+        s << "OpenMW path       : " << m_openmwPath << "\n";
+        s << "Launcher path     : " << m_openmwLauncherPath << "\n";
+    } else {
+        s << "(no profile loaded)\n";
+    }
+    s << "\n[Modlist counters]\n";
+    int modCount = 0, sepCount = 0, enabled = 0, installing = 0;
+    for (int i = 0; i < m_modList->count(); ++i) {
+        auto *it = m_modList->item(i);
+        if (it->data(ModRole::ItemType).toString() == ItemType::Separator) {
+            ++sepCount;
+            continue;
+        }
+        ++modCount;
+        if (it->checkState() == Qt::Checked) ++enabled;
+        if (it->data(ModRole::InstallStatus).toInt() == 2) ++installing;
+    }
+    s << "Mods              : " << modCount << "\n";
+    s << "Enabled           : " << enabled << "\n";
+    s << "Separators        : " << sepCount << "\n";
+    s << "In-flight installs: " << installing << "\n";
+    s << "Load-order length : " << m_loadOrder.size() << "\n";
+
+    s << "\n[Files included]\n";
+    s << "modlist           : " << (gotModlist ? "yes" : "no") << "\n";
+    s << "load order        : " << (gotLoadOrd ? "yes" : "no") << "\n";
+    s << "openmw.cfg        : " << (gotCfg ? "yes" : "no") << "\n";
+    s << "openmw.log (tail) : " << (gotLog ? "yes" : "no") << "\n";
+
+    {
+        QFile sf(QDir(reportRoot).filePath(QStringLiteral("system_summary.txt")));
+        if (sf.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            sf.write(sysOut.toUtf8());
+    }
+
+    // -- Bundle into a zip via 7z (already a runtime dep for extraction) --
+    // Remove an existing target so 7z doesn't try to update-merge into it.
+    if (QFileInfo::exists(outZip)) QFile::remove(outZip);
+    QProcess zip;
+    zip.setWorkingDirectory(stageDir.absolutePath());
+    zip.start(QStringLiteral("7z"),
+              {QStringLiteral("a"), QStringLiteral("-tzip"),
+               outZip, QStringLiteral("nerev_diagnostics")});
+    if (!zip.waitForStarted(3000)) {
+        QMessageBox::warning(this, T(Tk::diag_bundle_title),
+            T(Tk::diag_bundle_err_no_7z));
+        return;
+    }
+    if (!zip.waitForFinished(60000) || zip.exitCode() != 0) {
+        const QString stderr_ = QString::fromUtf8(zip.readAllStandardError());
+        QMessageBox::warning(this, T(Tk::diag_bundle_title),
+            T(Tk::diag_bundle_err_7z_failed).arg(zip.exitCode()).arg(stderr_));
+        return;
+    }
+
+    statusBar()->showMessage(
+        T(Tk::diag_bundle_status_done).arg(QFileInfo(outZip).fileName()), 6000);
+
+    // Reveal in the file manager so the user can attach it without
+    // leaving the app. openUrl on a directory pops the file manager;
+    // openUrl on the file would open it in an archive viewer instead.
+    QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(outZip).absolutePath()));
+}
+
 // Consolidate any mods physically living OUTSIDE the active profile's
 // modsDir into it.  Runs after a clone (the cloned profile inherits the
 // source's mod paths, so its mods sit in the SOURCE profile's modsDir
@@ -9243,6 +9580,114 @@ QString MainWindow::currentProfileKey() const
     if (!m_profiles || m_profiles->isEmpty()) return {};
     const GameProfile &gp = m_profiles->current();
     return gp.id + QStringLiteral("__") + gp.activeModlist().name;
+}
+
+QString MainWindow::modlistPathFor(const QString &profileKey) const
+{
+    if (profileKey.isEmpty() || !m_profiles || m_profiles->isEmpty()) return {};
+    // Walk every game's modlist profiles looking for the matching key.
+    // Profiles outside the active game still have well-defined modlist
+    // filenames, so this works even when the user is on a different game.
+    for (const GameProfile &gp : m_profiles->games()) {
+        for (const ModlistProfile &mp : gp.modlistProfiles) {
+            const QString k = gp.id + QStringLiteral("__") + mp.name;
+            if (k != profileKey) continue;
+            if (!mp.modlistFilename.isEmpty())
+                return resolveUserStatePath(mp.modlistFilename);
+            return resolveUserStatePath(QStringLiteral("modlist_") + gp.id +
+                                        QStringLiteral(".txt"));
+        }
+    }
+    return {};
+}
+
+QListWidgetItem *MainWindow::findPlaceholderByToken(
+    const QUuid &installToken, QString *outProfileKey) const
+{
+    if (outProfileKey) outProfileKey->clear();
+    if (installToken.isNull() || !m_modList) return nullptr;
+    // Active list first - covers the common "user stayed on this profile
+    // through the install" case in O(N) over the visible rows.
+    for (int i = 0; i < m_modList->count(); ++i) {
+        QListWidgetItem *it = m_modList->item(i);
+        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (it->data(ModRole::InstallToken).toUuid() == installToken)
+            return it;
+    }
+    // Then the parking lot - rows here belong to other profiles whose
+    // modlist file is the persistence target for this completion.
+    for (auto it = m_strandedInstalls.constBegin();
+         it != m_strandedInstalls.constEnd(); ++it) {
+        for (QListWidgetItem *si : it.value()) {
+            if (si->data(ModRole::InstallToken).toUuid() == installToken) {
+                if (outProfileKey) *outProfileKey = it.key();
+                return si;
+            }
+        }
+    }
+    return nullptr;
+}
+
+void MainWindow::saveModListFor(const QString &profileKey,
+                                QListWidgetItem *placeholder)
+{
+    if (!placeholder) return;
+    const QUuid token = placeholder->data(ModRole::InstallToken).toUuid();
+    // The token is the ONLY identity we have for the row inside the
+    // foreign profile's file -- no token, no safe replace.  (This is by
+    // design: identifying by displayName / nexusUrl can collide when a
+    // user re-installs the same mod twice in the same session.)
+    const QString file = modlistPathFor(profileKey);
+    if (file.isEmpty()) return;
+
+    QList<ModEntry> entries;
+    {
+        QFile in(file);
+        if (in.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            entries = modlist_serializer::parseModlist(
+                          QString::fromUtf8(in.readAll()));
+        }
+        // Missing file is fine - we'll write a fresh one with this row.
+    }
+
+    const ModEntry updated = ModEntry::fromItem(placeholder);
+
+    bool replaced = false;
+    if (!token.isNull()) {
+        for (int i = 0; i < entries.size(); ++i) {
+            if (entries[i].installToken == token) {
+                entries[i] = updated;
+                replaced  = true;
+                break;
+            }
+        }
+    }
+    if (!replaced) {
+        // Fallback: match a status==2 row by nexusUrl (the row this
+        // install was originally minted from).  Covers the case where
+        // the file pre-dates the InstallToken field.
+        const QString url = updated.nexusUrl;
+        if (!url.isEmpty()) {
+            for (int i = 0; i < entries.size(); ++i) {
+                if (entries[i].installStatus == 2
+                    && entries[i].nexusUrl == url) {
+                    entries[i] = updated;
+                    replaced  = true;
+                    break;
+                }
+            }
+        }
+    }
+    if (!replaced) entries.append(updated);
+
+    QFile out(file);
+    if (!out.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+        qCWarning(logging::lcInstall)
+            << "saveModListFor: failed to open" << file << "for writing";
+        return;
+    }
+    QTextStream ts(&out);
+    ts << modlist_serializer::serializeModlist(entries);
 }
 
 void MainWindow::strandInflightInstalls()

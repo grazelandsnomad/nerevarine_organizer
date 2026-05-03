@@ -44,6 +44,7 @@ ModEntry ModEntry::fromItem(const QListWidgetItem *item)
     e.updateAvailable  = item->data(ModRole::UpdateAvailable).toBool();
     e.expectedMd5      = item->data(ModRole::ExpectedMd5).toString();
     e.expectedSize     = item->data(ModRole::ExpectedSize).toLongLong();
+    e.installToken     = item->data(ModRole::InstallToken).toUuid();
 
     e.dependsOn            = item->data(ModRole::DependsOn).toStringList();
     e.highlightRole        = item->data(ModRole::HighlightRole).toInt();
@@ -97,6 +98,8 @@ void ModEntry::applyToItem(QListWidgetItem *item) const
     item->setData(ModRole::UpdateAvailable,  updateAvailable);
     item->setData(ModRole::ExpectedMd5,      expectedMd5);
     item->setData(ModRole::ExpectedSize,     QVariant::fromValue(expectedSize));
+    item->setData(ModRole::InstallToken,
+                  installToken.isNull() ? QVariant() : QVariant(installToken));
 
     item->setData(ModRole::DependsOn,            dependsOn);
     item->setData(ModRole::HighlightRole,        highlightRole);

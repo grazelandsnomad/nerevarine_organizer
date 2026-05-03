@@ -73,6 +73,12 @@ QJsonObject modToJson(const ModEntry &e)
         if (!e.nexusUrl.isEmpty())  o.insert(QStringLiteral("url"),  e.nexusUrl);
         if (e.dateAdded.isValid())  o.insert(QStringLiteral("date"),
                                               e.dateAdded.toString(Qt::ISODate));
+        // Persist the per-install token so a relaunch can match the
+        // pending row back up with whatever signal arrives next.  Format
+        // is the canonical 8-4-4-4-12 hex form (no braces).
+        if (!e.installToken.isNull())
+            o.insert(QStringLiteral("token"),
+                     e.installToken.toString(QUuid::WithoutBraces));
         return o;
     }
 
@@ -156,6 +162,8 @@ ModEntry modFromJson(const QJsonObject &o)
         e.nexusUrl      = o.value(QStringLiteral("url")).toString();
         e.dateAdded     = QDateTime::fromString(
                               o.value(QStringLiteral("date")).toString(), Qt::ISODate);
+        const QString tok = o.value(QStringLiteral("token")).toString();
+        if (!tok.isEmpty()) e.installToken = QUuid(tok);
         return e;
     }
 

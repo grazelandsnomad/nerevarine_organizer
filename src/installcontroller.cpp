@@ -17,13 +17,13 @@ InstallController::InstallController(QObject *parent)
     : QObject(parent) {}
 
 void InstallController::verifyArchive(const QString &archivePath,
-                                      QListWidgetItem *placeholder,
+                                      const QUuid &installToken,
                                       const QString &expectedMd5Lower,
                                       qint64 expectedSize)
 {
     // No expectations → nothing to verify, proceed.
     if (expectedMd5Lower.isEmpty() && expectedSize <= 0) {
-        emit verified(archivePath, placeholder);
+        emit verified(archivePath, installToken);
         return;
     }
 
@@ -32,7 +32,7 @@ void InstallController::verifyArchive(const QString &archivePath,
     if (expectedSize > 0) {
         const qint64 actualSize = QFileInfo(archivePath).size();
         if (actualSize != expectedSize) {
-            emit verificationFailed(archivePath, placeholder,
+            emit verificationFailed(archivePath, installToken,
                                     VerifyFailKind::Size,
                                     QString::number(actualSize),
                                     QString::number(expectedSize));
@@ -42,7 +42,7 @@ void InstallController::verifyArchive(const QString &archivePath,
 
     // Size matched with no md5 to check → done.
     if (expectedMd5Lower.isEmpty()) {
-        emit verified(archivePath, placeholder);
+        emit verified(archivePath, installToken);
         return;
     }
 
@@ -52,7 +52,7 @@ void InstallController::verifyArchive(const QString &archivePath,
     emit verificationStarted(archivePath);
     QPointer<InstallController> safeSelf(this);
     (void)QtConcurrent::run(
-        [safeSelf, archivePath, placeholder, expectedMd5Lower]() {
+        [safeSelf, archivePath, installToken, expectedMd5Lower]() {
         QString actualMd5;
         {
             QFile f(archivePath);
@@ -74,11 +74,11 @@ void InstallController::verifyArchive(const QString &archivePath,
 
         if (!safeSelf) return;
         QMetaObject::invokeMethod(safeSelf.data(),
-            [safeSelf, archivePath, placeholder, actualMd5, expectedMd5Lower]() {
+            [safeSelf, archivePath, installToken, actualMd5, expectedMd5Lower]() {
             if (!safeSelf) return;
             if (actualMd5.compare(expectedMd5Lower, Qt::CaseInsensitive) != 0) {
                 emit safeSelf->verificationFailed(
-                    archivePath, placeholder,
+                    archivePath, installToken,
                     VerifyFailKind::Md5,
                     actualMd5.isEmpty()
                         ? QStringLiteral("(read error)")
@@ -86,7 +86,7 @@ void InstallController::verifyArchive(const QString &archivePath,
                     expectedMd5Lower);
                 return;
             }
-            emit safeSelf->verified(archivePath, placeholder);
+            emit safeSelf->verified(archivePath, installToken);
         }, Qt::QueuedConnection);
     });
 }
@@ -129,7 +129,7 @@ QString resolveReuseWrapper(const QString &hintPath,
 
 void InstallController::extractArchive(const QString &archivePath,
                                        const QString &modsDir,
-                                       QListWidgetItem *placeholder,
+                                       const QUuid &installToken,
                                        const QString &reuseHintPath)
 {
     const QFileInfo fi(archivePath);
@@ -153,7 +153,7 @@ void InstallController::extractArchive(const QString &archivePath,
     // After extraction, dive into a single-subdir archive so FOMOD
     // detection and addModFromPath see the real mod root.
     // install_layout::diveTarget owns the suppression rules.
-    auto emitSuccess = [this, archivePath, extractDir, placeholder]() {
+    auto emitSuccess = [this, archivePath, extractDir, installToken]() {
         const QDir dir(extractDir);
         const QStringList subdirs = dir.entryList(QDir::Dirs  | QDir::NoDotAndDotDot);
         const QStringList files   = dir.entryList(QDir::Files | QDir::NoDotAndDotDot);
@@ -161,7 +161,7 @@ void InstallController::extractArchive(const QString &archivePath,
         const QString modPath = diveInto.isEmpty()
             ? extractDir
             : dir.filePath(diveInto);
-        emit extractionSucceeded(archivePath, extractDir, modPath, placeholder);
+        emit extractionSucceeded(archivePath, extractDir, modPath, installToken);
     };
 
     // 7z handles most formats. For .rar, try unrar first (RAR5/solid),
@@ -179,11 +179,11 @@ void InstallController::extractArchive(const QString &archivePath,
     if (ext == QStringLiteral("zip")) {
         auto *proc = new QProcess(this);
         connect(proc, &QProcess::finished, this,
-                [this, proc, archivePath, extractDir, placeholder, emitSuccess]
+                [this, proc, archivePath, extractDir, installToken, emitSuccess]
                 (int code, QProcess::ExitStatus) {
             proc->deleteLater();
             if (code != 0) {
-                emit extractionFailed(archivePath, extractDir, placeholder,
+                emit extractionFailed(archivePath, extractDir, installToken,
                                       ExtractFailKind::NonzeroExit,
                                       QString::number(code));
                 return;
@@ -193,21 +193,21 @@ void InstallController::extractArchive(const QString &archivePath,
         if (!launch(proc, "unzip",
                     {"-o", archivePath, "-d", extractDir})) {
             proc->deleteLater();
-            emit extractionFailed(archivePath, extractDir, placeholder,
+            emit extractionFailed(archivePath, extractDir, installToken,
                                   ExtractFailKind::ProgramMissing, "unzip");
         }
 
     } else if (ext == QStringLiteral("rar")) {
         // Try unrar; on any failure fall back to 7z.
-        auto trySevenZ = [this, archivePath, extractDir, placeholder,
+        auto trySevenZ = [this, archivePath, extractDir, installToken,
                           emitSuccess]() {
             auto *p2 = new QProcess(this);
             connect(p2, &QProcess::finished, this,
-                    [this, p2, archivePath, extractDir, placeholder, emitSuccess]
+                    [this, p2, archivePath, extractDir, installToken, emitSuccess]
                     (int code2, QProcess::ExitStatus) {
                 p2->deleteLater();
                 if (code2 != 0) {
-                    emit extractionFailed(archivePath, extractDir, placeholder,
+                    emit extractionFailed(archivePath, extractDir, installToken,
                                           ExtractFailKind::NonzeroExit,
                                           QString::number(code2));
                     return;
@@ -219,7 +219,7 @@ void InstallController::extractArchive(const QString &archivePath,
             if (!p2->waitForStarted(3000)) {
                 p2->deleteLater();
                 // Neither unrar nor 7z could run.
-                emit extractionFailed(archivePath, extractDir, placeholder,
+                emit extractionFailed(archivePath, extractDir, installToken,
                                       ExtractFailKind::ProgramMissing,
                                       "unrar|7z");
             }
@@ -227,7 +227,7 @@ void InstallController::extractArchive(const QString &archivePath,
 
         auto *proc = new QProcess(this);
         connect(proc, &QProcess::finished, this,
-                [this, proc, archivePath, extractDir, placeholder,
+                [this, proc, archivePath, extractDir, installToken,
                  emitSuccess, trySevenZ]
                 (int code, QProcess::ExitStatus) {
             proc->deleteLater();
@@ -247,11 +247,11 @@ void InstallController::extractArchive(const QString &archivePath,
         // 7z handles everything else (7z, fomod, tar, gz, bz2, xz, iso, …)
         auto *proc = new QProcess(this);
         connect(proc, &QProcess::finished, this,
-                [this, proc, archivePath, extractDir, placeholder, emitSuccess]
+                [this, proc, archivePath, extractDir, installToken, emitSuccess]
                 (int code, QProcess::ExitStatus) {
             proc->deleteLater();
             if (code != 0) {
-                emit extractionFailed(archivePath, extractDir, placeholder,
+                emit extractionFailed(archivePath, extractDir, installToken,
                                       ExtractFailKind::NonzeroExit,
                                       QString::number(code));
                 return;
@@ -261,7 +261,7 @@ void InstallController::extractArchive(const QString &archivePath,
         if (!launch(proc, "7z",
                     {"x", archivePath, "-o" + extractDir, "-y"})) {
             proc->deleteLater();
-            emit extractionFailed(archivePath, extractDir, placeholder,
+            emit extractionFailed(archivePath, extractDir, installToken,
                                   ExtractFailKind::ProgramMissing, "7z");
         }
     }

@@ -28,6 +28,7 @@
 #include <QString>
 #include <QStringList>
 #include <QTemporaryDir>
+#include <QUuid>
 #include <iostream>
 
 static int s_passed = 0;
@@ -603,6 +604,50 @@ static void testLoadOrderV2RoundTrip()
     check("plugins round-trip in order", got == plugins);
 }
 
+// In-flight install placeholders carry a per-install QUuid token that
+// MUST round-trip through the serializer so a relaunch can reattach
+// pending InstallController signals to the right row.
+static void testV2InstallTokenRoundTrip()
+{
+    std::cout << "\n-- v2: installing-row token round-trips --\n";
+    ModEntry m;
+    m.itemType      = QStringLiteral("mod");
+    m.installStatus = 2;
+    m.customName    = QStringLiteral("Pending mod");
+    m.displayName   = m.customName;
+    m.nexusUrl      = QStringLiteral("https://www.nexusmods.com/morrowind/mods/4242");
+    m.installToken  = QUuid::createUuid();
+
+    const QString text = modlist_serializer::serializeModlist({m});
+    check("output mentions token field",
+          text.contains(QStringLiteral("\"token\"")));
+    check("output contains the token's hex form",
+          text.contains(m.installToken.toString(QUuid::WithoutBraces)));
+    const QList<ModEntry> got = modlist_serializer::parseModlist(text);
+    check("one placeholder parsed",        got.size() == 1);
+    if (got.isEmpty()) return;
+    check("token matches",                 got.first().installToken == m.installToken);
+    check("nexusUrl preserved",            got.first().nexusUrl     == m.nexusUrl);
+}
+
+// Installed (status==1) rows do NOT need a token in the file -- the
+// serializer should omit the field rather than write a null UUID.
+static void testV2InstalledRowSkipsToken()
+{
+    std::cout << "\n-- v2: installed-row token field omitted --\n";
+    ModEntry m;
+    m.itemType      = QStringLiteral("mod");
+    m.installStatus = 1;
+    m.checked       = true;
+    m.modPath       = QStringLiteral("/mods/Foo");
+    m.customName    = QStringLiteral("Foo");
+    m.installToken  = QUuid::createUuid();   // a stray token that shouldn't reach the file
+
+    const QString text = modlist_serializer::serializeModlist({m});
+    check("installed row never carries `token`",
+          !text.contains(QStringLiteral("\"token\"")));
+}
+
 // Pre-v2 load-order files (no header, just one filename per line,
 // optional `#`-comments) MUST still load.
 static void testLoadOrderV1StillLoads()
@@ -645,6 +690,8 @@ int main()
     testV2NewlineInCustomNameSurvives();
     testV2SeparatorRoundTrip();
     testV2InstallingPlaceholderRoundTrip();
+    testV2InstallTokenRoundTrip();
+    testV2InstalledRowSkipsToken();
     testV1LegacyFileStillLoads();
     testV1ToV2MigrationOnReSave();
     testV2ParserIgnoresUnknownFields();

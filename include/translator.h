@@ -44,4 +44,16 @@ private:
 // Short-hand free function - use T("key") anywhere after #include "translator.h"
 inline QString T(const QString &key) { return Translator::t(key); }
 
+// Compile-time-checked variant.  `translation_keys.h` is auto-generated
+// from translations/english.ini by scripts/gen_translation_enum.sh
+// (driven by a CMake custom_command on every configure/build) and
+// exposes one enum entry per key, so misspelled keys become compile
+// errors instead of runtime fall-through to the literal key string.
+// Prefer this form for newly-added call sites; the QString overload
+// above is kept for the long tail of existing T("key") sites and for
+// runtime-keyed lookups (e.g. log_triage's per-error-class strings,
+// where the key name is data, not a literal).
+#include "translation_keys.h"
+inline QString T(Tk key) { return Translator::t(QString::fromUtf8(tkName(key))); }
+
 #endif // TRANSLATOR_H

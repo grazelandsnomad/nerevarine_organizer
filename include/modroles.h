@@ -63,6 +63,16 @@ namespace ModRole {
     // lands (sibling-prefix dedup misses across version archives whose
     // folder names diverge). Cleared once consumed.
     constexpr int PrevModPath           = Qt::UserRole + 37; // QString
+    // Stable per-install identity assigned by prepareItemForInstall().
+    // Travels through InstallController's verify/extract signals so the
+    // GUI side can look the placeholder back up by token instead of
+    // dereferencing a raw QListWidgetItem* across queued connections (the
+    // contract was implicit -- correct only because m_strandedInstalls
+    // keeps items alive across profile switches; the token makes it
+    // explicit and lets a different-profile completion route through
+    // saveModListFor).  Persisted in the modlist file so an in-flight
+    // install survives a restart and can be matched back up after relaunch.
+    constexpr int InstallToken          = Qt::UserRole + 38; // QUuid
 }
 
 namespace ItemType {

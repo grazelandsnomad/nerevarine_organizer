@@ -2,23 +2,36 @@
 
 #include <QObject>
 #include <QString>
-
-class QListWidgetItem;
+#include <QUuid>
 
 // InstallController - local-filesystem side of the "finish installing a
 // downloaded archive" pipeline.  No network, no Qt Widgets dependencies.
 //
-// Step 2 of the mainwindow.cpp god-object breakup.  Currently owns only the
-// archive-verification stage (size + MD5 check); follow-up commits will
-// pull the QProcess-based extraction in as well.
+// Step 2 of the mainwindow.cpp god-object breakup.  Currently owns the
+// archive-verification stage (size + MD5 check) and the QProcess-based
+// extraction; future commits can pull in the FOMOD wizard kick-off too.
 //
 // Widget-facing side:
 //   · MainWindow owns the QListWidget row (the "placeholder") and drives the
 //     UI-policy decisions: displaying dialogs, resetting the row after a
 //     failure, calling into addModFromPath on success, etc.
-//   · The controller signals back via queued connections with the placeholder
-//     pointer as an opaque token - it does not dereference it.  If the row
-//     was removed mid-verify, MainWindow's slot does the cleanup.
+//   · The controller signals back via queued connections with a
+//     per-install QUuid token (ModRole::InstallToken) -- not the widget
+//     pointer.  MainWindow looks the placeholder back up by token, which
+//     covers the previously-implicit case of "extraction completes while
+//     the user is on a different profile" (the placeholder lives in
+//     m_strandedInstalls, not in the active m_modList).
+//
+// The token lifecycle:
+//   · MainWindow::prepareItemForInstall() generates a new QUuid via
+//     QUuid::createUuid() and stores it in ModRole::InstallToken on the
+//     placeholder row.
+//   · The same QUuid is passed to verifyArchive / extractArchive.
+//   · Every signal carries it back, so slots can findPlaceholderByToken()
+//     without dereferencing a QListWidgetItem* across queued connections.
+//   · Persisted in the modlist file so a relaunch can match the pending
+//     row back up if the InstallController's pending signals never landed
+//     (process crash, hard kill, etc.).
 
 class InstallController : public QObject
 {
@@ -40,9 +53,10 @@ public:
     // that path is emitted via a QueuedConnection back to this controller,
     // so the slot connected to it always runs on the GUI thread.
     //
-    // The placeholder is passed through as an opaque token - the controller
-    // never inspects ModRole values and never touches the widget.
-    void verifyArchive(const QString &archivePath, QListWidgetItem *placeholder,
+    // `installToken` is the placeholder's stable identity -- the controller
+    // never inspects ModRole values and never touches a widget; the token
+    // travels through unchanged so slots can look the row up.
+    void verifyArchive(const QString &archivePath, const QUuid &installToken,
                        const QString &expectedMd5Lower, qint64 expectedSize);
 
     // Spawn the archive extractor appropriate for `archivePath`'s extension
@@ -67,9 +81,9 @@ public:
     //     was missing (couldn't start within 3 s).  Kind distinguishes the
     //     two; slot still gets extractDir so it can clean up.
     //
-    // The placeholder is an opaque token -- the controller never touches it.
+    // The token is opaque to the controller -- it only echoes it back.
     void extractArchive(const QString &archivePath, const QString &modsDir,
-                        QListWidgetItem *placeholder,
+                        const QUuid &installToken,
                         const QString &reuseHintPath = {});
 
 signals:
@@ -80,7 +94,7 @@ signals:
 
     // Archive has been verified (or had nothing to verify).  MainWindow
     // normally hands the pair to extractAndAdd from here.
-    void verified(const QString &archivePath, QListWidgetItem *placeholder);
+    void verified(const QString &archivePath, const QUuid &installToken);
 
     // Size or MD5 mismatch.  `actual` and `expected` are formatted for the
     // caller's i18n strings:
@@ -88,7 +102,7 @@ signals:
     //   · Md5:  lowercase hex (or "(read error)" if the file couldn't be
     //           opened for hashing).
     void verificationFailed(const QString &archivePath,
-                            QListWidgetItem *placeholder,
+                            const QUuid &installToken,
                             VerifyFailKind kind,
                             const QString &actual,
                             const QString &expected);
@@ -96,13 +110,13 @@ signals:
     void extractionSucceeded(const QString &archivePath,
                              const QString &extractDir,
                              const QString &modPath,
-                             QListWidgetItem *placeholder);
+                             const QUuid &installToken);
     // `detail` is the exit-code-as-string for NonzeroExit, or the program
     // name ("7z" / "unzip" / "unrar") for ProgramMissing.  Slot formats
     // the i18n body based on kind.
     void extractionFailed(const QString &archivePath,
                           const QString &extractDir,
-                          QListWidgetItem *placeholder,
+                          const QUuid &installToken,
                           ExtractFailKind kind,
                           const QString &detail);
 };

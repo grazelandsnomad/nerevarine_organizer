@@ -10,6 +10,7 @@
 #include <QSet>
 #include <QString>
 #include <QUrl>
+#include <QUuid>
 
 #include <expected>
 #include <functional>
@@ -86,19 +87,19 @@ private slots:
     void onDependencyScanFailed(QListWidgetItem *item,
                                 const QString &game, int modId);
     void onVerificationStarted(const QString &archivePath);
-    void onArchiveVerified(const QString &archivePath, QListWidgetItem *placeholder);
+    void onArchiveVerified(const QString &archivePath, const QUuid &installToken);
     void onArchiveVerificationFailed(const QString &archivePath,
-                                     QListWidgetItem *placeholder,
+                                     const QUuid &installToken,
                                      InstallController::VerifyFailKind kind,
                                      const QString &actual,
                                      const QString &expected);
     void onExtractionSucceeded(const QString &archivePath,
                                const QString &extractDir,
                                const QString &modPathIn,
-                               QListWidgetItem *placeholder);
+                               const QUuid &installToken);
     void onExtractionFailed(const QString &archivePath,
                             const QString &extractDir,
-                            QListWidgetItem *placeholder,
+                            const QUuid &installToken,
                             InstallController::ExtractFailKind kind,
                             const QString &detail);
     void onReviewUpdates();
@@ -131,6 +132,13 @@ private slots:
     void onTriageOpenMWLog();
     void onModlistSummary();
     void onMoveModsDir();
+    // Bundle the user's modlist + load-order files, openmw.cfg, the tail
+    // of OpenMW.log, and a system-summary snapshot into a single
+    // `nerev_diagnostics_<timestamp>.zip` for bug reports.  Asks the
+    // user where to save the archive and reveals it in the file
+    // manager when done.  No network, no PII beyond what the user
+    // already chose to put in their modlist.
+    void onCreateDiagnosticBundle();
 
     // Async scan entry points - cheap to call; they just (re)start a short
     // debounce timer.  The real work runs on a worker thread via
@@ -206,6 +214,29 @@ private:
     void setupCentralWidget();
 
     void saveModList();
+    // Persist a single placeholder row's current state into a SPECIFIC
+    // profile's modlist file -- used when an InstallController signal
+    // lands while the user is on a different profile, so the install
+    // belongs to a profile other than the active one.  Reads + parses
+    // the target file, replaces (or appends) the entry whose installToken
+    // matches `placeholder`, and writes back.  Does NOT touch m_modList,
+    // load order, openmw.cfg, or any of the active-profile side effects
+    // saveModList() runs.  No-op when the token is null or the path
+    // can't be resolved.
+    void saveModListFor(const QString &profileKey, QListWidgetItem *placeholder);
+    // Resolve the absolute modlist file path for a given profile key
+    // (the same `<gameId>__<profileName>` form currentProfileKey()
+    // emits).  Returns empty when the key doesn't match any registered
+    // profile.
+    QString modlistPathFor(const QString &profileKey) const;
+    // Look up an in-flight placeholder row by its InstallToken.  Searches
+    // m_modList first, then m_strandedInstalls (parked across profile
+    // switches).  When found in a stranded bucket, `outProfileKey` (if
+    // non-null) gets the bucket's key so the caller can route the save
+    // through saveModListFor().  Returns nullptr when no row matches the
+    // token (placeholder removed, app restarted, or token mismatch).
+    QListWidgetItem *findPlaceholderByToken(const QUuid &installToken,
+                                            QString *outProfileKey = nullptr) const;
     void loadModList(const QString &path = QString(),
                      const QString &remapFrom = QString(),
                      const QString &remapTo   = QString());
@@ -329,6 +360,15 @@ private:
     // Tolerates a null/removed placeholder.
     void resetPlaceholderAfterInstallCancel(QListWidgetItem *placeholder,
                                             const QString &archivePath);
+    // Counterpart of addModFromPath() for the cross-profile completion
+    // case: applies the "install just completed" role updates directly to
+    // a stranded placeholder (one parked in m_strandedInstalls because
+    // the user switched profiles mid-extract) WITHOUT touching m_modList,
+    // load order, or openmw.cfg.  Those side effects belong to the
+    // active profile and would corrupt the wrong list if run here.  The
+    // caller is responsible for persistence via saveModListFor().
+    void applyInstalledStateToStrandedPlaceholder(QListWidgetItem *placeholder,
+                                                  const QString &modPath);
     // Same-modpage auto-link: when a new install shares a Nexus mod page with
     // an existing entry, point their DependsOn lists at each other so the
     // missing-dep warnings fire on "patch enabled, base disabled" etc.
