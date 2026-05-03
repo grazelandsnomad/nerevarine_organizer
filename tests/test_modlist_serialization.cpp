@@ -19,6 +19,8 @@
 //   cmake --build build && ./build/tests/test_modlist_serialization
 
 #include "annotation_codec.h"
+#include "modentry.h"
+#include "modlist_serializer.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -343,6 +345,283 @@ static void testFomodChoicesRoundTrip()
     check("empty fomodChoices stays empty",   gotEmpty.fomodChoices.isEmpty());
 }
 
+// -- v2 (JSONL) schema-versioned format ---
+
+static ModEntry makeMod(const QString &path = QStringLiteral("/mods/X"))
+{
+    ModEntry e;
+    e.itemType    = QStringLiteral("mod");
+    e.checked     = true;
+    e.modPath     = path;
+    e.displayName = QStringLiteral("X");
+    return e;
+}
+
+static ModEntry makeSep(const QString &name)
+{
+    ModEntry e;
+    e.itemType    = QStringLiteral("separator");
+    e.displayName = name;
+    e.bgColor     = QColor("#ff112233");
+    e.fgColor     = QColor("#ffeeeeee");
+    return e;
+}
+
+// Round-trip: write a mod with every persisted field set, parse it
+// back, every field that round-trips must match.  Locks in the v2
+// JSON key naming against silent renames.
+static void testV2ModRoundTrip()
+{
+    std::cout << "\n-- v2: mod row round-trips through JSONL --\n";
+
+    ModEntry m = makeMod("/games/mods/MyMod_v3");
+    m.customName    = QStringLiteral("My Mod (with custom name)");
+    m.annotation    = QStringLiteral("multi\nline\tannotation\\with\\backslashes");
+    m.nexusUrl      = QStringLiteral("https://www.nexusmods.com/morrowind/mods/12345");
+    m.dateAdded     = QDateTime::fromString("2026-04-15T10:00:00", Qt::ISODate);
+    m.dependsOn     = {QStringLiteral("https://example.com/a"),
+                       QStringLiteral("https://example.com/b")};
+    m.updateAvailable = true;
+    m.isUtility       = true;
+    m.isFavorite      = true;
+    m.fomodChoices    = QStringLiteral("0:0:1;0:1:0;1:0:2");
+    m.videoUrl        = QStringLiteral("https://www.youtube.com/watch?v=abc");
+    m.sourceUrl       = QStringLiteral("https://github.com/user/repo");
+
+    const QString text = modlist_serializer::serializeModlist({m});
+    check("output starts with v2 schema header",
+          text.startsWith(QStringLiteral("{\"format\":\"nerevarine_modlist\",\"version\":2}")));
+
+    const QList<ModEntry> got = modlist_serializer::parseModlist(text);
+    check("one row parsed back",        got.size() == 1, QString::number(got.size()));
+    if (got.isEmpty()) return;
+    const ModEntry &g = got.first();
+    check("modPath round-trips",        g.modPath          == m.modPath);
+    check("customName round-trips",     g.customName       == m.customName);
+    check("annotation round-trips",     g.annotation       == m.annotation, g.annotation);
+    check("nexusUrl round-trips",       g.nexusUrl         == m.nexusUrl);
+    check("dateAdded round-trips",      g.dateAdded        == m.dateAdded);
+    check("deps round-trip",            g.dependsOn        == m.dependsOn);
+    check("updateAvailable round-trips",g.updateAvailable  == m.updateAvailable);
+    check("isUtility round-trips",      g.isUtility        == m.isUtility);
+    check("isFavorite round-trips",     g.isFavorite       == m.isFavorite);
+    check("fomodChoices round-trips",   g.fomodChoices     == m.fomodChoices);
+    check("videoUrl round-trips",       g.videoUrl         == m.videoUrl);
+    check("sourceUrl round-trips",      g.sourceUrl        == m.sourceUrl);
+    check("checked round-trips",        g.checked          == m.checked);
+}
+
+// The whole point of moving off tab-separated text: a tab character
+// inside a custom name MUST survive serialize-parse without corruption.
+// In v1 this would have shredded the row into bogus columns.
+static void testV2TabInCustomNameSurvives()
+{
+    std::cout << "\n-- v2: tab in custom name no longer corrupts the row --\n";
+    ModEntry m = makeMod();
+    m.customName = QStringLiteral("Beth\tname\twith\ttabs");
+    m.nexusUrl   = QStringLiteral("https://example.com/x");
+
+    const QString text = modlist_serializer::serializeModlist({m});
+    const QList<ModEntry> got = modlist_serializer::parseModlist(text);
+    check("one row preserved", got.size() == 1);
+    if (got.isEmpty()) return;
+    check("tab characters survive", got.first().customName == m.customName,
+          got.first().customName);
+}
+
+// Newline in the custom name would have outright broken v1's line-
+// based parser.  v2 stores the value as a JSON string; the writer
+// escapes newlines.  Stays one line on disk.
+static void testV2NewlineInCustomNameSurvives()
+{
+    std::cout << "\n-- v2: newline in custom name encodes as one logical row --\n";
+    ModEntry m = makeMod();
+    m.customName = QStringLiteral("multi\nline\nname");
+    m.nexusUrl   = QStringLiteral("https://example.com/y");
+
+    const QString text = modlist_serializer::serializeModlist({m});
+    // Header + one record = exactly two trailing newlines, so three
+    // pieces after split('\n') (last is the trailing empty).  More
+    // means the serializer actually broke the record across lines.
+    const QStringList split = text.split('\n');
+    int nonEmpty = 0;
+    for (const QString &l : split) if (!l.isEmpty()) ++nonEmpty;
+    check("exactly 2 non-empty lines (header + record)",
+          nonEmpty == 2, QString::number(nonEmpty));
+
+    const QList<ModEntry> got = modlist_serializer::parseModlist(text);
+    check("newline round-trips intact", got.size() == 1
+          && got.first().customName == m.customName);
+}
+
+// A separator with collapsed=true and explicit colours must round-trip
+// identically.  Lock in the JSON key naming for separator records.
+static void testV2SeparatorRoundTrip()
+{
+    std::cout << "\n-- v2: separator (color+collapsed) round-trips --\n";
+    ModEntry s = makeSep("── Visual Overhauls ──");
+    s.collapsed = true;
+
+    const QString text = modlist_serializer::serializeModlist({s});
+    const QList<ModEntry> got = modlist_serializer::parseModlist(text);
+    check("one separator parsed",     got.size() == 1);
+    if (got.isEmpty()) return;
+    check("isSeparator true",          got.first().isSeparator());
+    check("displayName preserved",     got.first().displayName == s.displayName);
+    check("bgColor preserved",         got.first().bgColor.name(QColor::HexArgb)
+                                        == s.bgColor.name(QColor::HexArgb));
+    check("fgColor preserved",         got.first().fgColor.name(QColor::HexArgb)
+                                        == s.fgColor.name(QColor::HexArgb));
+    check("collapsed preserved",       got.first().collapsed == s.collapsed);
+}
+
+// Mid-install placeholder: v2 emits `installing: true` instead of the
+// v1 dance with leading-tab columns.  Round-trip must preserve
+// installStatus=2 and the URL/date/name carriers.
+static void testV2InstallingPlaceholderRoundTrip()
+{
+    std::cout << "\n-- v2: mid-install placeholder round-trips with installing=true --\n";
+    ModEntry m;
+    m.itemType      = QStringLiteral("mod");
+    m.checked       = false;
+    m.installStatus = 2;
+    m.customName    = QStringLiteral("Pending download");
+    m.displayName   = m.customName;
+    m.nexusUrl      = QStringLiteral("https://www.nexusmods.com/morrowind/mods/9999");
+    m.dateAdded     = QDateTime::fromString("2026-04-30T22:00:00", Qt::ISODate);
+
+    const QString text = modlist_serializer::serializeModlist({m});
+    check("output mentions installing flag",
+          text.contains(QStringLiteral("\"installing\":true")));
+    const QList<ModEntry> got = modlist_serializer::parseModlist(text);
+    check("one placeholder parsed",         got.size() == 1);
+    if (got.isEmpty()) return;
+    check("installStatus=2 round-trips",    got.first().installStatus == 2);
+    check("nexusUrl preserved",             got.first().nexusUrl == m.nexusUrl);
+    check("date preserved",                 got.first().dateAdded == m.dateAdded);
+}
+
+// A pre-v2 file (legacy tab format) MUST still load on first launch
+// under v2 code.  The header sniff treats anything that doesn't start
+// with the JSON header as v1 and dispatches to the legacy parser.
+static void testV1LegacyFileStillLoads()
+{
+    std::cout << "\n-- v1: legacy tab-format file still loads --\n";
+    // Mirror what the pre-v2 saver would emit for a typical user's
+    // file: one separator + two mods, one of them a placeholder.
+    const QString legacy =
+        "# Visuals <color>#ff1a237e</color><fgcolor>#ffffffff</fgcolor><collapsed>1</collapsed>\n"
+        "+ /mods/Foo\tFoo Custom Name\t\thttps://example.com/foo\t2026-01-01T00:00:00\t\t\t1\t0\t0\t0:0:1\thttps://yt/foo\thttps://gh/foo\n"
+        "- \tPending Mod\t\thttps://example.com/pending\t2026-01-02T00:00:00\n";
+
+    const QList<ModEntry> got = modlist_serializer::parseModlist(legacy);
+    check("3 entries parsed",                      got.size() == 3,
+          QString::number(got.size()));
+    if (got.size() < 3) return;
+
+    check("[0] is separator",                      got[0].isSeparator());
+    check("[0] separator name",                    got[0].displayName == "Visuals");
+    check("[0] separator collapsed",               got[0].collapsed);
+
+    check("[1] is mod",                            got[1].isMod());
+    check("[1] checked (was '+')",                 got[1].checked);
+    check("[1] modPath",                           got[1].modPath == "/mods/Foo");
+    check("[1] customName",                        got[1].customName == "Foo Custom Name");
+    check("[1] updateAvailable parsed",            got[1].updateAvailable);
+    check("[1] fomodChoices parsed",               got[1].fomodChoices == "0:0:1");
+    check("[1] videoUrl parsed",                   got[1].videoUrl == "https://yt/foo");
+    check("[1] sourceUrl parsed",                  got[1].sourceUrl == "https://gh/foo");
+
+    check("[2] is mod placeholder",                got[2].isMod());
+    check("[2] installStatus==2",                  got[2].installStatus == 2);
+    check("[2] placeholder url preserved",         got[2].nexusUrl == "https://example.com/pending");
+}
+
+// Migration: load a v1 file, immediately re-serialize.  Output is the
+// v2 header.  This is the silent in-place migration the user gets on
+// first save under the new code.
+static void testV1ToV2MigrationOnReSave()
+{
+    std::cout << "\n-- migration: v1 file → v2 file via parse + serialize --\n";
+    const QString legacy =
+        "+ /mods/A\tA\t\thttps://example.com/a\t2026-04-01T00:00:00\t\t\t0\t0\t1\n";
+    const QList<ModEntry> parsed = modlist_serializer::parseModlist(legacy);
+    check("parsed one row",          parsed.size() == 1);
+
+    const QString reserialised = modlist_serializer::serializeModlist(parsed);
+    check("re-saved file starts with v2 header",
+          reserialised.startsWith(QStringLiteral("{\"format\":\"nerevarine_modlist\",\"version\":2}")));
+    check("re-saved file contains the JSON record",
+          reserialised.contains(QStringLiteral("\"path\":\"/mods/A\"")));
+    check("favorite flag preserved through migration",
+          reserialised.contains(QStringLiteral("\"favorite\":true")));
+}
+
+// Forward-compat: a v2 reader must IGNORE unknown fields without
+// crashing.  Simulates what happens when a v2 tool reads a v3 file
+// that's added new keys.
+static void testV2ParserIgnoresUnknownFields()
+{
+    std::cout << "\n-- v2: unknown fields are silently ignored (forward-compat) --\n";
+    const QString futureFile =
+        "{\"format\":\"nerevarine_modlist\",\"version\":2}\n"
+        "{\"type\":\"mod\",\"enabled\":true,\"path\":\"/mods/Z\","
+        "\"name\":\"Future\",\"new_v3_field\":\"won't break me\","
+        "\"another_unknown\":[1,2,3]}\n";
+    const QList<ModEntry> got = modlist_serializer::parseModlist(futureFile);
+    check("v3-style record parsed without error",  got.size() == 1);
+    if (got.isEmpty()) return;
+    check("known fields still readable",           got.first().modPath == "/mods/Z");
+    check("known fields still readable (name)",    got.first().customName == "Future");
+}
+
+// Empty input → empty list, NOT a crash.
+static void testEmptyInputReturnsEmpty()
+{
+    std::cout << "\n-- empty input handled gracefully --\n";
+    check("empty string → empty list",
+          modlist_serializer::parseModlist(QString()).isEmpty());
+    check("whitespace-only → empty list",
+          modlist_serializer::parseModlist(QStringLiteral("   \n\n\n")).isEmpty());
+}
+
+// -- Load-order schema-versioned format ---
+
+static void testLoadOrderV2RoundTrip()
+{
+    std::cout << "\n-- load order: v2 round-trip --\n";
+    const QStringList plugins = {
+        QStringLiteral("Morrowind.esm"),
+        QStringLiteral("Tribunal.esm"),
+        QStringLiteral("Bloodmoon.esm"),
+        QStringLiteral("OAAB_Data.esm"),
+    };
+    const QString text = modlist_serializer::serializeLoadOrder(plugins);
+    check("output begins with v2 schema header",
+          text.startsWith(QStringLiteral("{\"format\":\"nerevarine_loadorder\",\"version\":2}")));
+    const QStringList got = modlist_serializer::parseLoadOrder(text);
+    check("plugins round-trip in order", got == plugins);
+}
+
+// Pre-v2 load-order files (no header, just one filename per line,
+// optional `#`-comments) MUST still load.
+static void testLoadOrderV1StillLoads()
+{
+    std::cout << "\n-- load order: legacy file (no header) still loads --\n";
+    const QString legacy =
+        "# Plugin load order for this game profile\n"
+        "Morrowind.esm\n"
+        "Tribunal.esm\n"
+        "Bloodmoon.esm\n";
+    const QStringList got = modlist_serializer::parseLoadOrder(legacy);
+    const QStringList want = {
+        QStringLiteral("Morrowind.esm"),
+        QStringLiteral("Tribunal.esm"),
+        QStringLiteral("Bloodmoon.esm"),
+    };
+    check("legacy load order parsed", got == want);
+}
+
 // -- Entry point ---
 
 int main()
@@ -359,6 +638,19 @@ int main()
     testSeparatorLine();
     testFomodChoicesRoundTrip();
     testInstallStatusEmptyDir();
+
+    // Schema-versioned (v2) tests.
+    testV2ModRoundTrip();
+    testV2TabInCustomNameSurvives();
+    testV2NewlineInCustomNameSurvives();
+    testV2SeparatorRoundTrip();
+    testV2InstallingPlaceholderRoundTrip();
+    testV1LegacyFileStillLoads();
+    testV1ToV2MigrationOnReSave();
+    testV2ParserIgnoresUnknownFields();
+    testEmptyInputReturnsEmpty();
+    testLoadOrderV2RoundTrip();
+    testLoadOrderV1StillLoads();
 
     std::cout << "\n" << s_passed << " passed, " << s_failed << " failed\n";
     return s_failed == 0 ? 0 : 1;

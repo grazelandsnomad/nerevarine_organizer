@@ -71,6 +71,19 @@ struct ModEntry {
     // Tab-delimited per plugin: "plugin.esp\tmaster1.esm\tmaster2.esm".
     QStringList missingMasters;
 
+    // External URLs.  videoUrl points at a YouTube review; sourceUrl is a
+    // non-Nexus download page (GitHub release, generic web hosting).  Both
+    // are user-set or auto-populated by Mods → Add video review / similar.
+    // Persisted in the modlist file so they survive across sessions.
+    QString videoUrl;
+    QString sourceUrl;
+    // Set only when handleNxmUrl reuses an existing INSTALLED row as the
+    // placeholder for a re-install or update; holds the previous ModPath
+    // so addModFromPath can remove the stale folder after the new install
+    // lands.  Cleared once consumed.  Not persisted (it's a transient
+    // mid-install hint).
+    QString prevModPath;
+
     [[nodiscard]] static ModEntry fromItem(const QListWidgetItem *item);
     void applyToItem(QListWidgetItem *item) const;
 

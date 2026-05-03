@@ -1,4 +1,4 @@
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Network)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Network Test)
 
 add_executable(test_nxm
     test_nxm.cpp
@@ -51,6 +51,23 @@ target_include_directories(test_fomod_install PRIVATE
 )
 target_link_libraries(test_fomod_install PRIVATE
     Qt6::Core
+)
+
+add_executable(test_modlist_model
+    test_modlist_model.cpp
+    ${CMAKE_SOURCE_DIR}/src/modlist_model.cpp
+    ${CMAKE_SOURCE_DIR}/src/modentry.cpp
+    ${CMAKE_SOURCE_DIR}/include/modlist_model.h
+)
+# ModlistModel is a Q_OBJECT - needs AUTOMOC for the vtable.
+set_target_properties(test_modlist_model PROPERTIES AUTOMOC ON)
+target_include_directories(test_modlist_model PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(test_modlist_model PRIVATE
+    Qt6::Core
+    Qt6::Gui     # ModEntry has QColor members → QtGui (header-only here)
+    Qt6::Test    # QSignalSpy
 )
 
 add_executable(test_modlist_profiles
@@ -267,12 +284,17 @@ target_link_libraries(test_nexus_client PRIVATE
     Qt6::Network
 )
 
-add_executable(test_modlist_serialization test_modlist_serialization.cpp)
+add_executable(test_modlist_serialization
+    test_modlist_serialization.cpp
+    ${CMAKE_SOURCE_DIR}/src/modlist_serializer.cpp
+    ${CMAKE_SOURCE_DIR}/src/modentry.cpp
+)
 target_include_directories(test_modlist_serialization PRIVATE
     ${CMAKE_SOURCE_DIR}/include
 )
 target_link_libraries(test_modlist_serialization PRIVATE
     Qt6::Core
+    Qt6::Gui    # ModEntry has QColor members → QtGui (header-only here)
 )
 
 # Pure value-type tests for ModEntry.  Links ONLY the QtCore half
@@ -316,6 +338,7 @@ set(UNIT_TESTS
     test_log_triage
     test_master_satisfaction
     test_modentry
+    test_modlist_model
     test_modlist_profiles
     test_modlist_serialization
     test_modlist_sync_guard

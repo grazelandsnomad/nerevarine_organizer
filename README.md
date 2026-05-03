@@ -2,6 +2,31 @@
 
 A native Linux mod manager for OpenMW.
 
+## What's new in 0.4
+
+- **Modlist profiles per game.** Test a Wabbajack in a sibling profile
+  without wiping your daily-driver setup. Each profile owns its own
+  mods directory on disk - never shared. Toolbar picker, manage dialog,
+  clean-modlist mods-dir prompt, consolidate-mods tool. In-flight
+  installs survive game/profile switches.
+- **BSA-shipped mods finally render.** The writer now emits
+  `fallback-archive=` for every `.bsa` found under each managed mod's
+  data directory. Authentic Signs IT, Tamriel Data BSA variants and
+  similar were silently rendering with `[None]` textures before.
+- **Steam library auto-discovery via `libraryfolders.vdf`** - games on
+  custom mounts (`/mnt/.../SteamLibrary`) are detected without manual
+  exe picking.
+- **FNV launch routes through `steam://`** so Proton handles the Wine
+  prefix instead of trying to exec the Windows .exe naked.
+- **Completionist Patch Hub redo.** Pass D auto-tick + empty-`scripts/`
+  skip from 0.3.1 wasn't enough - the FOMOD only listed `.omwscripts`
+  manifests, never the lua bodies. New manifest parser pulls the lua
+  across from the archive automatically.
+
+Full notes: [`docs/release-notes/0.4.md`](docs/release-notes/0.4.md)
+(prior: [0.3.1](docs/release-notes/0.3.1.md), [0.3](docs/release-notes/0.3.md),
+[0.2](docs/release-notes/0.2.md))
+
 # Tech Stack
 C++26 and Qt6.
 

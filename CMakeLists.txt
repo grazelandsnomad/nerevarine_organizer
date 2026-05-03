@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(NerevarineOrganizer VERSION 0.3.1 LANGUAGES CXX)
+project(NerevarineOrganizer VERSION 0.4 LANGUAGES CXX)
 
 # C++23 covers everything actually used here (std::expected, std::println).
 # C++26 was tripping Qt's q26numeric.h polyfill on the MSYS2 UCRT64 CI toolchain
@@ -53,6 +53,9 @@ set(SOURCES
     src/load_order_merge.cpp
     src/modentry.cpp
     src/modentry_item.cpp
+    src/modlist_model.cpp
+    src/modlist_model_widget_bridge.cpp
+    src/modlist_serializer.cpp
     src/pluginparser.cpp
     src/firstrunwizard.cpp
     src/openmwconfigwriter.cpp
@@ -127,6 +130,9 @@ set(SOURCES
     include/fomod_path.h
     include/fomod_scripts.h
     include/load_order_merge.h
+    include/modlist_model.h
+    include/modlist_model_widget_bridge.h
+    include/modlist_serializer.h
     include/pluginparser.h
     include/firstrunwizard.h
     include/fs_utils.h

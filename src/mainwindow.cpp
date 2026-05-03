@@ -8,6 +8,9 @@
 #include "fomod_install.h"
 #include "fomodwizard.h"
 #include "installcontroller.h"
+#include "modlist_model.h"
+#include "modlist_model_widget_bridge.h"
+#include "modlist_serializer.h"
 #include "loadordercontroller.h"
 #include "nexusclient.h"
 #include "nexuscontroller.h"
@@ -350,6 +353,12 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::onDependenciesScanned);
     connect(m_nexusCtl, &NexusController::dependencyScanFailed,
             this, &MainWindow::onDependencyScanFailed);
+
+    // Stage 1 of the QListWidget→model decoupling.  Allocated as a child
+    // QObject so its lifetime ends with this window.  Stays in sync with
+    // m_modList via modlist::refreshModelFromList; future stages migrate
+    // readers to consume the model and eventually flip mutation direction.
+    m_model = new ModlistModel(this);
 
     m_installCtl = new InstallController(this);
     connect(m_installCtl, &InstallController::verificationStarted,
@@ -1092,6 +1101,15 @@ void MainWindow::setupToolbar()
 void MainWindow::setupCentralWidget()
 {
     m_modList = new ModListWidget(this);
+
+    // Stage 2 of the model migration: subscribe m_model to m_modList's
+    // change signals so the typed model mirrors the widget in real time
+    // (checkbox toggles, drag-reorders, programmatic insert/remove).
+    // Has to happen AFTER m_modList exists; m_model itself is allocated
+    // in the constructor before setupCentralWidget runs.
+    if (m_model)
+        modlist::connectAutoSync(m_model, m_modList);
+
     m_zoom = new ZoomController(m_modList, this);
     m_zoom->loadPrefs();
     m_undoStack = new UndoStack(m_modList, this);
@@ -1297,6 +1315,18 @@ void MainWindow::resizeEvent(QResizeEvent *event)
 
 void MainWindow::updateModCount()
 {
+    // Stage 2 of the model migration: this is the first reader to consume
+    // m_model directly instead of walking m_modList.  m_model is kept in
+    // sync with m_modList via modlist::connectAutoSync, so the count is
+    // current the moment a checkbox toggles or a row is dragged.
+    // Defensive null-check guards the early-construction path: this slot
+    // can fire before m_model has been allocated (during very first
+    // setup) - fall back to the widget walk in that narrow window.
+    if (m_model) {
+        const auto c = m_model->modCounts();
+        m_modCountLabel->setText(T("status_mod_count").arg(c.active).arg(c.total));
+        return;
+    }
     int total = 0, active = 0;
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *it = m_modList->item(i);
@@ -4509,12 +4539,11 @@ void MainWindow::loadLoadOrder()
     m_loadOrder.clear();
     QFile f(loadOrderPath());
     if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return;
-    QTextStream in(&f);
-    while (!in.atEnd()) {
-        QString line = in.readLine().trimmed();
-        if (line.isEmpty() || line.startsWith('#')) continue;
-        m_loadOrder.append(line);
-    }
+    const QString contents = QString::fromUtf8(f.readAll());
+    f.close();
+    // parseLoadOrder transparently handles v1 (line-per-plugin, optional
+    // # comments) and v2 (schema header followed by line-per-plugin).
+    m_loadOrder = modlist_serializer::parseLoadOrder(contents);
 }
 
 void MainWindow::saveLoadOrder()
@@ -4523,11 +4552,7 @@ void MainWindow::saveLoadOrder()
     if (!f.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate))
         return;
     QTextStream out(&f);
-    out << "# Plugin load order for this game profile - one filename per line.\n"
-        << "# This is SEPARATE from the mod list in the main window; it's what\n"
-        << "# actually gets written as `content=` lines to openmw.cfg.\n"
-        << "# Edit via: Mods menu → Edit Load Order…\n";
-    for (const QString &cf : m_loadOrder) out << cf << "\n";
+    out << modlist_serializer::serializeLoadOrder(m_loadOrder);
 }
 
 // Reads the `content=` list from openmw.cfg in their current order.
@@ -5007,85 +5032,28 @@ void MainWindow::saveModList()
         return;
     }
 
-    QTextStream out(&f);
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *item = m_modList->item(i);
-        if (item->data(ModRole::ItemType).toString() == ItemType::Separator) {
-            QColor bg = item->data(ModRole::BgColor).value<QColor>();
-            QColor fg = item->data(ModRole::FgColor).value<QColor>();
-            out << "# " << item->text()
-                << " <color>" << bg.name(QColor::HexArgb) << "</color>"
-                << "<fgcolor>" << fg.name(QColor::HexArgb) << "</fgcolor>";
-            if (item->data(ModRole::Collapsed).toBool())
-                out << "<collapsed>1</collapsed>";
-            out << "\n";
-        } else {
-            QString url     = item->data(ModRole::NexusUrl).toString();
-            QString dateStr = item->data(ModRole::DateAdded).toDateTime().toString(Qt::ISODate);
-
-            // Mid-install placeholder: persist as not-installed so the URL
-            // survives a crash or cancelled download and can be retried later.
-            if (item->data(ModRole::InstallStatus).toInt() == 2) {
-                if (url.isEmpty()) continue; // nothing useful to save
-                QString name = item->data(ModRole::CustomName).toString();
-                if (name.isEmpty()) {
-                    name = item->text();
-                    if (name.startsWith("⠋ ")) name = name.mid(2);
-                }
-                out << "- \t" << name << "\t\t" << url << "\t" << dateStr << "\n";
-                continue;
-            }
-
-            QChar prefix     = (item->checkState() == Qt::Checked) ? '+' : '-';
-            // IntendedModPath, when set, is the missing-on-this-machine path
-            // that Strategy 3 of repairEmptyModPaths is papering over with a
-            // sibling (usually an older version of the same Nexus mod).
-            // Serialize THAT so the modlist file stays stable across
-            // machines - the machine that does have the folder still
-            // resolves it normally.  Without this, sync-pulls would cause
-            // each machine to rewrite the path to its own older sibling
-            // and produce a ping-pong of meaningless diffs.
-            QString intended = item->data(ModRole::IntendedModPath).toString();
-            QString modPath  = !intended.isEmpty()
-                ? intended
-                : item->data(ModRole::ModPath).toString();
-            QString custName = item->data(ModRole::CustomName).toString();
-            QString annot    = item->data(ModRole::Annotation).toString();
-            QString depsStr  = item->data(ModRole::DependsOn).toStringList().join(',');
-            // parts[7]: whether Mods → Check Updates saw a newer version on
-            // Nexus than the locally stamped DateAdded.  Persisted so the
-            // green triangle survives a restart - the next `onCheckUpdates`
-            // run refreshes it either way.
-            int updateFlag   = item->data(ModRole::UpdateAvailable).toBool() ? 1 : 0;
-            // parts[8]: user-set "utility mod" flag (framework / library
-            // like Skill Framework or OAAB_Data consumed by other mods).
-            // Drives the grey-background rendering; purely cosmetic today.
-            int utilityFlag   = item->data(ModRole::IsUtility).toBool()  ? 1 : 0;
-            // parts[9]: favourite flag - user marked this mod as personally special.
-            int favoriteFlag  = item->data(ModRole::IsFavorite).toBool() ? 1 : 0;
-            // parts[10]: serialized FOMOD install choices ("si:gi:pi;...").
-            // Empty for non-FOMOD mods or mods installed before this feature.
-            QString fomodChoices = item->data(ModRole::FomodChoices).toString();
-            // parts[11]: user-set video review URL (YouTube, etc.)
-            QString videoUrl  = item->data(ModRole::VideoUrl).toString();
-            // parts[12]: non-Nexus source URL (GitHub release, Nexus search fallback, etc.)
-            QString sourceUrl = item->data(ModRole::SourceUrl).toString();
-            out << prefix << " " << modPath
-                << "\t" << custName
-                << "\t" << encodeAnnot(annot)
-                << "\t" << url
-                << "\t" << dateStr
-                << "\t"        // parts[5]: reserved (was endorsement state)
-                << "\t" << depsStr
-                << "\t" << updateFlag
-                << "\t" << utilityFlag
-                << "\t" << favoriteFlag
-                << "\t" << fomodChoices
-                << "\t" << videoUrl
-                << "\t" << sourceUrl
-                << "\n";
+    // Snapshot the QListWidget into typed ModEntry rows, then run the
+    // schema-versioned JSONL serializer.  Mid-install placeholders that
+    // have nothing useful to persist (no NexusUrl) are dropped here so
+    // the v2 file doesn't carry garbage rows; matches v1 behaviour.
+    QList<ModEntry> entries = modlist::snapshotEntries(m_modList);
+    for (int i = entries.size() - 1; i >= 0; --i) {
+        const ModEntry &e = entries[i];
+        if (e.isMod() && e.installStatus == 2 && e.nexusUrl.isEmpty()) {
+            entries.removeAt(i);
+            continue;
+        }
+        // Strip the spinner prefix from a placeholder's display name
+        // ("⠋ Installing (...)") - the JSONL form stores the raw name.
+        if (e.isMod() && e.installStatus == 2
+            && e.customName.isEmpty()
+            && e.displayName.startsWith(QStringLiteral("⠋ "))) {
+            entries[i].displayName = e.displayName.mid(2);
         }
     }
+
+    QTextStream out(&f);
+    out << modlist_serializer::serializeModlist(entries);
 
     // Keep the separate plugin load-order file in sync with the modlist
     // (additions/removals only; order-within-the-list is edited explicitly
@@ -7699,126 +7667,97 @@ void MainWindow::loadModList(const QString &path,
 
     m_modList->clear();
 
-    // Each of these matches anywhere in the line - we pick the LAST
-    // occurrence per kind so that a previously-corrupted separator
-    // (earlier build's `</fgcolor>$` anchored regex missed `<collapsed>`
-    // and wrapped a second set of tags around the first on next save)
-    // self-heals to the user's most recent colours on load.
-    static const QRegularExpression colorRe(
-        R"(<color>(#[0-9a-fA-F]+)</color>)");
-    static const QRegularExpression fgColorRe(
-        R"(<fgcolor>(#[0-9a-fA-F]+)</fgcolor>)");
-    static const QRegularExpression stripTagsRe(
-        R"(<color>#[0-9a-fA-F]+</color>|<fgcolor>#[0-9a-fA-F]+</fgcolor>|<collapsed>\d+</collapsed>)");
+    // Schema-versioned read.  parseModlist sniffs the first non-empty
+    // line: if it's the v2 JSONL header, dispatch to the JSON parser;
+    // otherwise fall back to the v1 tab parser so legacy files still
+    // load on first launch under the new code.  Both paths produce a
+    // QList<ModEntry>; the loop below converts each entry into the
+    // QListWidgetItem the UI expects, plus the per-row install-status
+    // probe and the on-disk "is this dir actually populated?" check
+    // that the old loader did inline.
+    const QString contents = QString::fromUtf8(f.readAll());
+    f.close();
+    const QList<ModEntry> entries = modlist_serializer::parseModlist(contents);
 
-    QTextStream in(&f);
-    while (!in.atEnd()) {
-        QString line = in.readLine();
-        if (line.isEmpty()) continue;
+    for (ModEntry e : entries) {
+        if (e.isSeparator()) {
+            // Defaults that match the legacy loader for missing colours.
+            if (!e.bgColor.isValid()) e.bgColor = QColor(55, 55, 75);
+            if (!e.fgColor.isValid()) e.fgColor = QColor(Qt::white);
 
-        if (line.startsWith("# ")) {
-            QString rest = line.mid(2);
-            QColor bg(55, 55, 75);
-            QColor fg(Qt::white);
-
-            {
-                auto it = colorRe.globalMatch(rest);
-                QRegularExpressionMatch last;
-                while (it.hasNext()) last = it.next();
-                if (last.hasMatch()) bg = QColor(last.captured(1));
-            }
-            {
-                auto it = fgColorRe.globalMatch(rest);
-                QRegularExpressionMatch last;
-                while (it.hasNext()) last = it.next();
-                if (last.hasMatch()) fg = QColor(last.captured(1));
-            }
-            const bool collapsed = rest.contains(QStringLiteral("<collapsed>1</collapsed>"));
-
-            QString name = rest;
-            name.remove(stripTagsRe);
-            name = name.trimmed();
-
-            auto *item = new QListWidgetItem(name);
+            auto *item = new QListWidgetItem(e.displayName);
             item->setData(ModRole::ItemType,  ItemType::Separator);
-            item->setData(ModRole::BgColor,   bg);
-            item->setData(ModRole::FgColor,   fg);
-            item->setData(ModRole::Collapsed, collapsed);
+            item->setData(ModRole::BgColor,   e.bgColor);
+            item->setData(ModRole::FgColor,   e.fgColor);
+            item->setData(ModRole::Collapsed, e.collapsed);
             item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled);
             m_modList->addItem(item);
-
-        } else if (line.size() >= 2 && (line[0] == '+' || line[0] == '-') && line[1] == ' ') {
-            bool enabled = (line[0] == '+');
-            QStringList parts    = line.mid(2).split('\t');
-            QString modPath      = parts[0];
-            if (!remapFrom.isEmpty() && !remapTo.isEmpty()
-                && modPath.startsWith(remapFrom))
-                modPath = remapTo + modPath.mid(remapFrom.size());
-            QString custName     = parts.size() > 1 ? parts[1] : QString();
-            QString annot        = parts.size() > 2 ? decodeAnnot(parts[2]) : QString();
-            QString url          = parts.size() > 3 ? parts[3] : QString();
-            QDateTime dateAdded  = parts.size() > 4
-                                   ? QDateTime::fromString(parts[4], Qt::ISODate)
-                                   : QDateTime();
-            // parts[5] was once the endorsement state (0/+1/-1) - no longer tracked.
-            // parts[6] is the comma-separated list of Nexus URLs this mod depends on.
-            QStringList deps = parts.size() > 6
-                               ? parts[6].split(',', Qt::SkipEmptyParts)
-                               : QStringList();
-            // parts[7]: cached UpdateAvailable flag so the green update
-            // triangle survives app restart.  Missing (older files) → false.
-            bool updateAvailable = parts.size() > 7 && parts[7].toInt() == 1;
-            // parts[8]: user-set "utility mod" flag.  Missing → false.
-            bool isUtility  = parts.size() > 8 && parts[8].toInt() == 1;
-            // parts[9]: favourite flag.  Missing (older files) → false.
-            bool isFavorite = parts.size() > 9 && parts[9].toInt() == 1;
-            // parts[10]: serialized FOMOD install choices.  Missing → empty (not a FOMOD mod,
-            // or installed before this feature was added).
-            QString fomodChoices = parts.size() > 10 ? parts[10] : QString();
-            // parts[11]: user-set video review URL.  Missing → empty.
-            QString videoUrl = parts.size() > 11 ? parts[11] : QString();
-            // parts[12]: non-Nexus source URL (GitHub release, Nexus search, etc.).  Missing → empty.
-            QString sourceUrl = parts.size() > 12 ? parts[12] : QString();
-
-            QFileInfo fi(modPath);
-            QString displayName  = custName.isEmpty() ? fi.fileName() : custName;
-            auto *item = new QListWidgetItem(displayName);
-            item->setData(ModRole::ItemType,      ItemType::Mod);
-            item->setData(ModRole::ModPath,       modPath);
-            item->setData(ModRole::CustomName,    custName);
-            item->setData(ModRole::Annotation,    annot);
-            item->setData(ModRole::NexusUrl,      url);
-            item->setData(ModRole::DateAdded,     dateAdded);
-            if (!deps.isEmpty())
-                item->setData(ModRole::DependsOn, deps);
-            if (updateAvailable)
-                item->setData(ModRole::UpdateAvailable, true);
-            if (isUtility)
-                item->setData(ModRole::IsUtility, true);
-            if (isFavorite)
-                item->setData(ModRole::IsFavorite, true);
-            if (!fomodChoices.isEmpty())
-                item->setData(ModRole::FomodChoices, fomodChoices);
-            if (!videoUrl.isEmpty())
-                item->setData(ModRole::VideoUrl, videoUrl);
-            if (!sourceUrl.isEmpty())
-                item->setData(ModRole::SourceUrl, sourceUrl);
-            // An empty directory isn't a working install: collectDataFolders
-            // will find nothing in it, so masters it's supposed to provide
-            // will never be seen by the missing-master scan.  Treat it the
-            // same as a missing path so the UI shows "not installed" and the
-            // reinstall option is offered rather than silently lying.
-            {
-                QDir d(modPath);
-                bool installed = !modPath.isEmpty()
-                                 && d.exists()
-                                 && !d.isEmpty();
-                item->setData(ModRole::InstallStatus, installed ? 1 : 0);
-            }
-            item->setCheckState(enabled ? Qt::Checked : Qt::Unchecked);
-            item->setToolTip(annot.isEmpty() ? modPath : modPath + "\n\n" + annot);
-            m_modList->addItem(item);
+            continue;
         }
+
+        // Mid-install placeholder (`installing: true`): rebuild as
+        // status==2 with the spinner-prefixed text the delegate expects.
+        // The InstallController has no live extraction for this row;
+        // the user has to retry or click Install on the Nexus URL.
+        if (e.installStatus == 2) {
+            auto *item = new QListWidgetItem(e.displayName);
+            item->setData(ModRole::ItemType,      ItemType::Mod);
+            item->setData(ModRole::CustomName,    e.customName);
+            item->setData(ModRole::NexusUrl,      e.nexusUrl);
+            item->setData(ModRole::DateAdded,     e.dateAdded);
+            item->setData(ModRole::InstallStatus, 0);   // not actually mid-install anymore
+            item->setCheckState(Qt::Unchecked);
+            m_modList->addItem(item);
+            continue;
+        }
+
+        // Cross-machine path remap.
+        QString modPath = e.modPath;
+        if (!remapFrom.isEmpty() && !remapTo.isEmpty()
+            && modPath.startsWith(remapFrom))
+            modPath = remapTo + modPath.mid(remapFrom.size());
+
+        const QString displayName = e.customName.isEmpty()
+            ? QFileInfo(modPath).fileName()
+            : e.customName;
+
+        auto *item = new QListWidgetItem(displayName);
+        item->setData(ModRole::ItemType,      ItemType::Mod);
+        item->setData(ModRole::ModPath,       modPath);
+        item->setData(ModRole::CustomName,    e.customName);
+        item->setData(ModRole::Annotation,    e.annotation);
+        item->setData(ModRole::NexusUrl,      e.nexusUrl);
+        item->setData(ModRole::DateAdded,     e.dateAdded);
+        if (!e.dependsOn.isEmpty())
+            item->setData(ModRole::DependsOn, e.dependsOn);
+        if (e.updateAvailable)
+            item->setData(ModRole::UpdateAvailable, true);
+        if (e.isUtility)
+            item->setData(ModRole::IsUtility,  true);
+        if (e.isFavorite)
+            item->setData(ModRole::IsFavorite, true);
+        if (!e.fomodChoices.isEmpty())
+            item->setData(ModRole::FomodChoices, e.fomodChoices);
+        if (!e.videoUrl.isEmpty())
+            item->setData(ModRole::VideoUrl,  e.videoUrl);
+        if (!e.sourceUrl.isEmpty())
+            item->setData(ModRole::SourceUrl, e.sourceUrl);
+
+        // Same install-status probe as before: an empty directory is
+        // treated as not-installed so the missing-master scan and the
+        // reinstall-prompt UI behave consistently.
+        {
+            QDir d(modPath);
+            const bool installed = !modPath.isEmpty()
+                                && d.exists()
+                                && !d.isEmpty();
+            item->setData(ModRole::InstallStatus, installed ? 1 : 0);
+        }
+        item->setCheckState(e.checked ? Qt::Checked : Qt::Unchecked);
+        item->setToolTip(e.annotation.isEmpty()
+                         ? modPath
+                         : modPath + "\n\n" + e.annotation);
+        m_modList->addItem(item);
     }
 
     // Apply any collapsed separators (hidden items must be set after all items exist)
@@ -7831,6 +7770,15 @@ void MainWindow::loadModList(const QString &path,
 
     updateModCount();
     m_modListLoaded = true;
+
+    // Mirror m_modList → m_model now that the widget is fully populated.
+    // Stage 1 of the QListWidget→model decoupling: subsequent reads can
+    // consult m_model instead of walking m_modList.  Until every reader
+    // is migrated, refresh after the widget changes (here + any other
+    // bulk-mutation site) so the model never goes stale by more than
+    // one operation.
+    if (m_model)
+        modlist::refreshModelFromList(m_model, m_modList);
 
     // Warm the data-folder cache for installed mods. Runs on a worker thread
     // so loadModList returns immediately; by the time the user tries to delete

@@ -27,6 +27,7 @@ class QListWidget;
 class QListWidgetItem;
 class QNetworkAccessManager;
 class QNetworkReply;
+class ModlistModel;
 class QPushButton;
 class QTimer;
 class QToolButton;
@@ -449,6 +450,14 @@ private:
     // when m_modList no longer holds them, this hash does, and clear()ing
     // m_modList does NOT delete them.
     QHash<QString, QList<QListWidgetItem*>> m_strandedInstalls;
+
+    // Stage 1 of the QListWidget→model decoupling.  Mirror of m_modList
+    // as typed ModEntry rows; refreshed via modlist::refreshModelFromList
+    // at strategic points (currently: after loadModList, before saveModList).
+    // Future stages migrate readers to consume the model and eventually
+    // flip mutation direction so this becomes the source of truth.  Owned
+    // by MainWindow as a child QObject; lifetime ends with the window.
+    ModlistModel         *m_model = nullptr;
 
     // Game profiles - owned by GameProfileRegistry.
     GameProfileRegistry   *m_profiles = nullptr;
