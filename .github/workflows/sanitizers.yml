@@ -1,0 +1,79 @@
+name: Sanitizers
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Linux-only sanitizer job: builds with -fsanitize=address,undefined
+# and runs the unit suite.  Catches use-after-free, null-deref, signed
+# overflow, stack-use-after-return at PR time -- the dangling-placeholder
+# bug fixed in the QUuid InstallToken work would have ASan-asserted on
+# the first switch-during-install if this gate had been running.
+#
+# Qt 6 is ASan-clean in the Core paths the unit tests exercise; if the
+# integration suite (test_nxm full mode) ever joins the gate, expect to
+# add LSan suppressions for libcurl / libssl statics.
+
+jobs:
+  sanitize:
+    runs-on: ubuntu-22.04
+
+    env:
+      CC: gcc-12
+      CXX: g++-12
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GCC 12 (for C++23 std::expected)
+        # Mirrors the Tests workflow: ubuntu-22.04 default is gcc-11;
+        # gcc-12 lives in jammy-updates/universe and installs without a
+        # PPA.  Sanitizer libraries (libasan / libubsan) come with the
+        # matching libgcc + libstdc++ packages.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-12 g++-12
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100
+
+      - name: Install build dependencies
+        run: sudo apt-get install -y cmake ninja-build
+
+      - name: Install Qt 6.7
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.3'
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          cache: true
+
+      - name: Configure (ASan + UBSan)
+        # -O1 is the usual sanitizer sweet spot: high enough that some
+        # UBSan checks fire at all, low enough to keep stack traces
+        # readable.  -fno-sanitize-recover=all turns UBSan diagnostics
+        # into hard aborts so a finding actually fails the job.
+        run: |
+          cmake -S . -B build-san -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER=gcc-12 \
+            -DCMAKE_CXX_COMPILER=g++-12 \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g -O1" \
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g -O1" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+
+      - name: Build
+        run: cmake --build build-san -j"$(nproc)"
+
+      - name: Run unit tests under sanitizers
+        # Same options the local scripts/sanitize.sh runs with.  Only the
+        # `unit` label here -- the `integration` label needs network +
+        # nxm.protocol files we don't provide on a stock runner.
+        env:
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:strict_string_checks=1:detect_stack_use_after_return=1:detect_leaks=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        working-directory: build-san
+        run: ctest -L unit --output-on-failure -j"$(nproc)"
