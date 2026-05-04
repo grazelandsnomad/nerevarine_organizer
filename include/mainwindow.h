@@ -246,8 +246,20 @@ private:
     void onImportMO2ModList();
     void onImportMO2Profile();
     void onImportWabbajack();
+    // Seed the modlist from an existing openmw.cfg.  Aimed at users who
+    // ran their game with plain openmw-launcher up to now and would
+    // otherwise have to re-add every mod by hand.  Reads `data=`,
+    // `content=`, and `groundcover=` lines, skips the vanilla
+    // Morrowind/Tribunal/Bloodmoon Data Files folder, builds one
+    // managed-mod row per remaining `data=` path, and seeds the load
+    // order from `content=` + `groundcover=` in encounter order.
+    void onImportFromOpenMWConfig();
     // Internal helpers called by menu slots and the drop handler
     void doImportMO2ModList(const QString &path);
+    // Implementation of onImportFromOpenMWConfig that takes the cfg
+    // file path -- factored out so future drag-drop / CLI entry points
+    // can reuse it without re-running the file picker.
+    void doImportOpenMWConfig(const QString &cfgPath);
     void doImportWabbajack(const QString &path);
     void finishWabbajackImport(const QJsonObject &root);
     void doImportNerevarineModList(const QString &path);

@@ -1,5 +1,7 @@
 #include "openmwconfigwriter.h"
 
+#include <QDir>
+#include <QFileInfo>
 #include <QSet>
 #include <QStringView>
 
@@ -449,6 +451,66 @@ QStringList readLauncherCfgDataPaths(const QString &in)
         out << p;
     }
     return out;
+}
+
+// -- Importer parser ----------------------------------------------------
+//
+// openmw.cfg is one entry per line, key=value, with `# `-prefix comments
+// and the launcher's habit of quoting data= paths that contain spaces.
+// We only care about three keys for import; everything else (`fallback=`,
+// `script-blacklist=`, `replace=`, `resolution=`, etc.) is dropped.
+
+ImportEntries parseConfigEntries(const QString &cfgText)
+{
+    ImportEntries out;
+    if (cfgText.isEmpty()) return out;
+
+    auto stripQuotes = [](QString v) {
+        v = v.trimmed();
+        if (v.size() >= 2 && v.startsWith('"') && v.endsWith('"'))
+            v = v.mid(1, v.size() - 2);
+        return v;
+    };
+
+    const QStringList lines = cfgText.split('\n');
+    for (const QString &raw : lines) {
+        QString line = raw;
+        // openmw.cfg is line-based; tolerate Windows endings + trailing
+        // whitespace from hand-edits.
+        if (line.endsWith('\r')) line.chop(1);
+        const QString trimmed = line.trimmed();
+        if (trimmed.isEmpty() || trimmed.startsWith('#')) continue;
+
+        // Use the trimmed form for prefix matches but keep the original
+        // value verbatim (apart from quote stripping) so we don't mangle
+        // legitimate trailing whitespace inside paths.
+        if (trimmed.startsWith(QStringLiteral("data="))) {
+            out.dataPaths << stripQuotes(trimmed.mid(5));
+        } else if (trimmed.startsWith(QStringLiteral("content="))) {
+            out.contentFiles << stripQuotes(trimmed.mid(8));
+        } else if (trimmed.startsWith(QStringLiteral("groundcover="))) {
+            out.groundcoverFiles << stripQuotes(trimmed.mid(12));
+        }
+    }
+    return out;
+}
+
+bool looksLikeVanillaDataFolder(const QString &dirPath)
+{
+    if (dirPath.isEmpty()) return false;
+    QDir d(dirPath);
+    if (!d.exists()) return false;
+    // Conservative test: the folder must contain Morrowind.esm AND at
+    // least one of the official expansions.  A user's modlist may well
+    // include Morrowind.esm in some standalone mod folder (an
+    // ESM-replacer, e.g.) but it won't ship Tribunal/Bloodmoon master
+    // files alongside it.  Without the AND-clause we'd risk skipping a
+    // mod the user actually wants in the modlist.
+    const bool hasMorrowind = QFileInfo(d.filePath("Morrowind.esm")).exists();
+    if (!hasMorrowind) return false;
+    const bool hasExpansion = QFileInfo(d.filePath("Tribunal.esm")).exists()
+                           || QFileInfo(d.filePath("Bloodmoon.esm")).exists();
+    return hasExpansion;
 }
 
 } // namespace openmw

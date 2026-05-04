@@ -119,6 +119,32 @@ QStringList readLauncherCfgContentOrder(const QString &existingLauncherCfg);
 // `currentprofile=` key, or that profile has no `<ts>/data=` lines.
 QStringList readLauncherCfgDataPaths(const QString &existingLauncherCfg);
 
+// Decoded contents of an openmw.cfg file in the bits we care about for
+// the "import existing OpenMW setup" flow.  Encounter order is preserved
+// for all three lists: openmw loads `data=` paths in declaration order
+// and walks `content=` / `groundcover=` in declaration order too, so the
+// importer needs to feed those lists straight into m_loadOrder.
+struct ImportEntries {
+    QStringList dataPaths;        // unquoted, encounter-ordered
+    QStringList contentFiles;     // plugin basenames as they appear
+    QStringList groundcoverFiles; // groundcover plugin basenames
+};
+
+// Parse the contents of an openmw.cfg file.  Strips wrapping double
+// quotes from data= paths (the launcher uses them on paths with
+// spaces).  Comments (`#`...) and blank lines are ignored; unrelated
+// keys are silently dropped.  Pure -- caller reads the file, this
+// parses; tests pass canned strings without any FS I/O.
+ImportEntries parseConfigEntries(const QString &cfgText);
+
+// Heuristic: returns true if `dirPath` looks like the vanilla Bethesda
+// game-data folder (the one containing Morrowind.esm and friends).
+// Used by the importer to skip emitting that path as a managed mod row
+// -- it isn't a mod, it's the base game install.  Conservative on
+// purpose: only fires when the canonical .esm files are present
+// directly inside the path, so user-renamed mod folders don't trip it.
+bool looksLikeVanillaDataFolder(const QString &dirPath);
+
 } // namespace openmw
 
 #endif // OPENMW_CONFIG_WRITER_H

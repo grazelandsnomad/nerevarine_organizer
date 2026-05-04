@@ -744,6 +744,8 @@ void MainWindow::setupMenuBar()
     fileMenu->addAction(T("menu_new_modlist"), this, &MainWindow::onNewModList);
     fileMenu->addAction(T("menu_export"), this, &MainWindow::exportModList);
     fileMenu->addAction(T("menu_import"), this, &MainWindow::onImportModList);
+    fileMenu->addAction(T("menu_import_openmw_cfg"), this,
+                        &MainWindow::onImportFromOpenMWConfig);
     fileMenu->addAction(T("menu_import_mo2_profile"), this, &MainWindow::onImportMO2Profile);
     fileMenu->addAction(T("menu_import_mo2"), this, &MainWindow::onImportMO2ModList);
     fileMenu->addAction(T("menu_import_wabbajack"), this, &MainWindow::onImportWabbajack);
@@ -9366,6 +9368,134 @@ void MainWindow::onImportModList()
     if (path.isEmpty()) return;
 
     doImportNerevarineModList(path);
+}
+
+void MainWindow::onImportFromOpenMWConfig()
+{
+    // Default location -- on Linux at least.  If absent, fall through
+    // to a file picker so Flatpak / snap / custom XDG_CONFIG_HOME users
+    // can point us at the right file.  Windows ships openmw.cfg under
+    // Documents/My Games/OpenMW/; the picker covers that path too.
+#ifdef Q_OS_WIN
+    const QString defaultCfg = QDir::homePath() +
+        QStringLiteral("/Documents/My Games/OpenMW/openmw.cfg");
+#else
+    const QString defaultCfg = QDir::homePath() +
+        QStringLiteral("/.config/openmw/openmw.cfg");
+#endif
+
+    QString cfgPath = defaultCfg;
+    if (!QFileInfo::exists(cfgPath)) {
+        QMessageBox::information(this, T("import_openmw_pick_title"),
+            T("import_openmw_default_missing").arg(defaultCfg));
+        cfgPath = QFileDialog::getOpenFileName(
+            this, T("import_openmw_pick_title"), QDir::homePath(),
+            T("import_openmw_pick_filter"));
+        if (cfgPath.isEmpty()) return;
+    }
+    doImportOpenMWConfig(cfgPath);
+}
+
+void MainWindow::doImportOpenMWConfig(const QString &cfgPath)
+{
+    // Read + parse.  Pure parser lives in openmwconfigwriter.cpp so a
+    // unit test can hit it without dragging the GUI in.
+    QFile cfg(cfgPath);
+    if (!cfg.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QMessageBox::warning(this, T("import_openmw_pick_title"),
+            T("import_openmw_default_missing").arg(cfgPath));
+        return;
+    }
+    const openmw::ImportEntries entries =
+        openmw::parseConfigEntries(QString::fromUtf8(cfg.readAll()));
+    cfg.close();
+
+    if (entries.dataPaths.isEmpty()) {
+        QMessageBox::information(this, T("import_openmw_empty_title"),
+            T("import_openmw_empty_body").arg(cfgPath));
+        return;
+    }
+
+    // Partition data= paths into "vanilla base game" (skip when creating
+    // mod rows; they're not mods) and "everything else" (real mod
+    // folders).  Vanilla detection is conservative -- folder must
+    // contain Morrowind.esm AND at least one expansion -- so a user
+    // mod that happens to ship a replacement Morrowind.esm doesn't get
+    // misclassified.
+    QStringList vanilla;
+    QStringList managed;
+    for (const QString &p : entries.dataPaths) {
+        if (openmw::looksLikeVanillaDataFolder(p)) vanilla << p;
+        else                                       managed << p;
+    }
+
+    // Confirm with the user before nuking the existing modlist.
+    const QString vanillaLabel = vanilla.isEmpty()
+        ? T("import_openmw_summary_no_vanilla")
+        : QDir::toNativeSeparators(vanilla.first());
+    const QString body = T("import_openmw_summary_body")
+        .arg(QDir::toNativeSeparators(cfgPath))
+        .arg(managed.size())
+        .arg(entries.contentFiles.size())
+        .arg(entries.groundcoverFiles.size())
+        .arg(vanillaLabel);
+    QMessageBox confirm(this);
+    confirm.setWindowTitle(T("import_openmw_summary_title"));
+    confirm.setTextFormat(Qt::RichText);
+    confirm.setText(body);
+    confirm.setStandardButtons(QMessageBox::Ok | QMessageBox::Cancel);
+    confirm.setDefaultButton(QMessageBox::Ok);
+    if (confirm.exec() != QMessageBox::Ok) return;
+
+    // -- Replace the modlist --------------------------------------------
+    //
+    // Wipe the in-memory list (the strand path used by switch-game isn't
+    // needed here -- this isn't a profile change, no InstallController
+    // signals are pending).  Then walk managed data= paths in encounter
+    // order and synthesise a row per folder via addModFromPath, which
+    // handles ModRole bookkeeping + addItem + scrollToItem for us.
+    m_modList->clear();
+    m_loadOrder.clear();
+
+    int imported = 0;
+    int skippedMissing = 0;
+    for (const QString &dataPath : managed) {
+        // Importer accepts non-existent paths only insofar as it warns
+        // about them in the status bar; openmw.cfg quite often points
+        // at user-renamed / moved folders.  Skip-but-count keeps the
+        // import deterministic without dropping silently.
+        if (!QFileInfo(dataPath).isDir()) {
+            ++skippedMissing;
+            continue;
+        }
+        addModFromPath(dataPath, /*placeholder=*/nullptr);
+        ++imported;
+    }
+
+    // Seed load order.  content= goes first (these are the regular
+    // plugins) then groundcover= (rendered as instanced grass).  The
+    // serializer keeps order, so the user sees plugins in the same
+    // slot OpenMW had them.  reconcileLoadOrder() (called from
+    // saveModList()) drops anything that doesn't actually live in an
+    // imported mod's plugin dir, so a stray content= line for a plugin
+    // whose folder we couldn't find won't pollute the load order.
+    m_loadOrder = entries.contentFiles + entries.groundcoverFiles;
+
+    saveModList();
+    updateModCount();
+    updateSectionCounts();
+    scheduleConflictScan();
+
+    if (skippedMissing > 0) {
+        statusBar()->showMessage(
+            T("import_openmw_status_skipped").arg(imported).arg(skippedMissing),
+            6000);
+    } else {
+        statusBar()->showMessage(
+            T("import_openmw_status_done").arg(imported)
+                .arg(QFileInfo(cfgPath).fileName()),
+            6000);
+    }
 }
 
 void MainWindow::onNewModList()
