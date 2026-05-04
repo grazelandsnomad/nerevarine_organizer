@@ -1,5 +1,7 @@
 #include "game_profiles.h"
 
+#include "game_adapter.h"
+
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
@@ -461,186 +463,73 @@ bool GameProfileRegistry::renameModlistProfile(int idx, const QString &newName)
     return true;
 }
 
+// Per-game knowledge (Steam app IDs, install layouts, Lutris match
+// tokens, …) lives in src/game_adapters.cpp now -- one class per game,
+// one source of truth.  These four static methods are thin wrappers
+// around GameAdapterRegistry::find() so existing call sites (mostly
+// MainWindow's launch dispatch) compile unchanged.
+
 QString GameProfileRegistry::steamAppId(const QString &gameId)
 {
-    static const QHash<QString, QString> ids = {
-        {"skyrimspecialedition", "489830"},
-        {"skyrim",               "72850"},
-        {"starfield",            "1716740"},
-        {"fallout3",             "22370"},
-        {"fallout4",             "377160"},
-        {"falloutnewvegas",      "22380"},
-        {"oblivion",             "22330"},
-        {"cyberpunk2077",        "1091500"},
-        {"witcher",              "20900"},
-        {"witcher2",             "20920"},
-        {"witcher3",             "292030"},
-        {"nomanssky",            "275850"},
-        {"stardewvalley",        "413150"},
-        // Total conversions - share the base game's App ID.
-        // falloutlondon intentionally omitted: canonical release is GOG, not
-        // Steam. Using Fallout 4's Steam ID would launch the wrong game.
-        {"skywind",              "489830"},
-        {"skyblivion",           "489830"},
-        // Open-source engines
-        {"arxfatalis",           "1700"},
-        {"openxcom",             "7760"},
-        {"openxcomex",           "7760"},
-        // Gothic saga
-        {"gothic1",              "65540"},
-        {"gothic2",              "39510"},
-        {"gothic3",              "39600"},
-        {"gothic3fg",            "39640"},
-        {"gothic1remake",        "1291550"},
-        // Arcania saga
-        {"arcania",              "40630"},
-        // Dark Souls saga
-        {"darksouls",            "211420"},
-        {"darksoulsremastered",  "570940"},
-        {"darksouls2",           "236430"},
-        {"darksouls2sotfs",      "335300"},
-        {"darksouls3",           "374320"},
-        // Mortal Shell
-        {"mortalshell",          "1110790"},
-    };
-    return ids.value(gameId);
+    if (const GameAdapter *a = GameAdapterRegistry::find(gameId))
+        return a->steamAppId();
+    return {};
 }
 
-QString GameProfileRegistry::findSteamGameExe(const QString &gameId)
+namespace {
+
+// Walk every steamapps/common root the user has and try to land the
+// declared layout.  Bethesda's "Fallout 3 goty" folder dropped its
+// trailing space-goty in some library snapshots; the .chop(5) fallback
+// matches the pre-adapter behaviour byte-for-byte.
+QString locateInSteam(const QString &folder, const QString &exe)
 {
-    struct GameExeInfo { QString folder; QString exe; };
-    static const QHash<QString, GameExeInfo> info = {
-        {"skyrimspecialedition", {"Skyrim Special Edition", "SkyrimSE.exe"}},
-        {"skyrim",               {"Skyrim",                 "TESV.exe"}},
-        {"starfield",            {"Starfield",              "Starfield.exe"}},
-        {"fallout3",             {"Fallout 3 goty",         "Fallout3.exe"}},
-        {"fallout4",             {"Fallout 4",              "Fallout4.exe"}},
-        {"falloutnewvegas",      {"Fallout New Vegas",      "FalloutNV.exe"}},
-        {"oblivion",             {"Oblivion",               "Oblivion.exe"}},
-        {"cyberpunk2077",        {"Cyberpunk 2077",         "bin/x64/Cyberpunk2077.exe"}},
-        {"witcher",              {"The Witcher Enhanced Edition",           "System/witcher.exe"}},
-        {"witcher2",             {"The Witcher 2",                          "bin/witcher2.exe"}},
-        {"witcher3",             {"The Witcher 3 Wild Hunt",                "bin/x64/witcher3.exe"}},
-        {"nomanssky",            {"No Man's Sky",           "Binaries/NMS.exe"}},
-        {"stardewvalley",        {"Stardew Valley",         "StardewValley.exe"}},
-        {"falloutlondon",        {"Fallout 4",              "Fallout4.exe"}},
-        {"skywind",              {"Skyrim Special Edition", "SkyrimSE.exe"}},
-        {"skyblivion",           {"Skyrim Special Edition", "SkyrimSE.exe"}},
-        {"arxfatalis",           {"Arx Fatalis",                               "ArxFatalis.exe"}},
-        {"openxcom",             {"UFO Defense",                               "XCOM.EXE"}},
-        {"openxcomex",           {"UFO Defense",                               "XCOM.EXE"}},
-        {"gothic1",              {"Gothic",                                    "Gothic.exe"}},
-        {"gothic2",              {"Gothic II",                                 "Gothic2.exe"}},
-        {"gothic3",              {"Gothic 3",                                  "Gothic3.exe"}},
-        {"gothic3fg",            {"Gothic 3 Forsaken Gods Enhanced Edition",   "Gothic3FG.exe"}},
-        {"gothic1remake",        {"Gothic 1 Remake",                           "Gothic_Remake.exe"}},
-        {"arcania",              {"ArcaniA",                                   "ArcaniA.exe"}},
-        {"darksouls",            {"Dark Souls Prepare to Die Edition",         "DARKSOULS.exe"}},
-        {"darksoulsremastered",  {"DARK SOULS REMASTERED",                     "DarkSoulsRemastered.exe"}},
-        {"darksouls2",           {"Dark Souls II",                             "Game/DarkSoulsII.exe"}},
-        {"darksouls2sotfs",      {"Dark Souls II Scholar of the First Sin",    "Game/DarkSoulsII.exe"}},
-        {"darksouls3",           {"DARK SOULS III",                            "Game/DarkSoulsIII.exe"}},
-        {"mortalshell",          {"Mortal Shell",                              "MortalShell/Binaries/Win64/MortalShell-Win64-Shipping.exe"}},
-    };
-    if (!info.contains(gameId)) return {};
-
-    const auto &ei = info[gameId];
+    if (folder.isEmpty() || exe.isEmpty()) return {};
     const QStringList roots = steamCommonRoots();
-
     for (const QString &root : roots) {
-        QString path = root + "/" + ei.folder + "/" + ei.exe;
+        QString path = root + "/" + folder + "/" + exe;
         if (QFile::exists(path))
             return path;
-        if (ei.folder.endsWith(" goty", Qt::CaseInsensitive)) {
-            QString altFolder = ei.folder;
+        if (folder.endsWith(" goty", Qt::CaseInsensitive)) {
+            QString altFolder = folder;
             altFolder.chop(5);
-            path = root + "/" + altFolder + "/" + ei.exe;
+            path = root + "/" + altFolder + "/" + exe;
             if (QFile::exists(path))
                 return path;
         }
     }
     return {};
+}
+
+} // namespace
+
+QString GameProfileRegistry::findSteamGameExe(const QString &gameId)
+{
+    const GameAdapter *a = GameAdapterRegistry::find(gameId);
+    if (!a) return {};
+    const auto layout = a->steamLayout();
+    return locateInSteam(layout.folder, layout.exe);
 }
 
 QString GameProfileRegistry::findSteamLauncherExe(const QString &gameId)
 {
-    struct GameExeInfo { QString folder; QString exe; };
-    static const QHash<QString, GameExeInfo> info = {
-        {"skyrimspecialedition", {"Skyrim Special Edition", "SkyrimSELauncher.exe"}},
-        {"skyrim",               {"Skyrim",                 "SkyrimLauncher.exe"}},
-        {"fallout4",             {"Fallout 4",              "Fallout4Launcher.exe"}},
-        {"falloutnewvegas",      {"Fallout New Vegas",      "FalloutNVLauncher.exe"}},
-        {"oblivion",             {"Oblivion",               "OblivionLauncher.exe"}},
-        {"fallout3",             {"Fallout 3 goty",         "Fallout3Launcher.exe"}},
-        {"falloutlondon",        {"Fallout 4",              "Fallout4Launcher.exe"}},
-        {"skywind",              {"Skyrim Special Edition", "SkyrimSELauncher.exe"}},
-        {"skyblivion",           {"Skyrim Special Edition", "SkyrimSELauncher.exe"}},
-    };
-    if (!info.contains(gameId)) return {};
-
-    const auto &ei = info[gameId];
-    const QStringList roots = steamCommonRoots();
-
-    for (const QString &root : roots) {
-        QString path = root + "/" + ei.folder + "/" + ei.exe;
-        if (QFile::exists(path))
-            return path;
-        if (ei.folder.endsWith(" goty", Qt::CaseInsensitive)) {
-            QString altFolder = ei.folder;
-            altFolder.chop(5);
-            path = root + "/" + altFolder + "/" + ei.exe;
-            if (QFile::exists(path))
-                return path;
-        }
-    }
-    return {};
+    const GameAdapter *a = GameAdapterRegistry::find(gameId);
+    if (!a) return {};
+    const auto layout = a->steamLayout();
+    return locateInSteam(layout.folder, layout.launcher);
 }
 
 QString GameProfileRegistry::findGogGameExe(const QString &gameId, bool wantLauncher)
 {
-    struct GogGameInfo { QString folder; QString exe; QString launcherExe; };
-    static const QHash<QString, QList<GogGameInfo>> gogInfo = {
-        {"morrowind",            {{"The Elder Scrolls III Morrowind GOTY",          "Morrowind.exe",         ""},
-                                  {"Morrowind",                                      "Morrowind.exe",         ""}}},
-        {"skyrimspecialedition", {{"The Elder Scrolls V Skyrim Special Edition",    "SkyrimSE.exe",          "SkyrimSELauncher.exe"},
-                                  {"Skyrim Special Edition",                         "SkyrimSE.exe",          "SkyrimSELauncher.exe"}}},
-        {"skyrim",               {{"The Elder Scrolls V Skyrim Legendary Edition",  "TESV.exe",              "SkyrimLauncher.exe"},
-                                  {"Skyrim Legendary Edition",                       "TESV.exe",              "SkyrimLauncher.exe"},
-                                  {"Skyrim",                                         "TESV.exe",              "SkyrimLauncher.exe"}}},
-        {"fallout3",             {{"Fallout 3 GOTY",                                "Fallout3.exe",          "Fallout3Launcher.exe"},
-                                  {"Fallout 3 Game of the Year Edition",            "Fallout3.exe",          "Fallout3Launcher.exe"},
-                                  {"Fallout 3",                                      "Fallout3.exe",          "Fallout3Launcher.exe"}}},
-        {"fallout4",             {{"Fallout 4",                                     "Fallout4.exe",          "Fallout4Launcher.exe"}}},
-        {"falloutnewvegas",      {{"Fallout New Vegas Ultimate Edition",             "FalloutNV.exe",         "FalloutNVLauncher.exe"},
-                                  {"Fallout New Vegas",                              "FalloutNV.exe",         "FalloutNVLauncher.exe"}}},
-        {"oblivion",             {{"The Elder Scrolls IV Oblivion GOTY Deluxe",     "Oblivion.exe",          "OblivionLauncher.exe"},
-                                  {"The Elder Scrolls IV Oblivion GOTY",            "Oblivion.exe",          "OblivionLauncher.exe"},
-                                  {"The Elder Scrolls IV Oblivion",                 "Oblivion.exe",          "OblivionLauncher.exe"},
-                                  {"Oblivion",                                       "Oblivion.exe",          "OblivionLauncher.exe"}}},
-        {"cyberpunk2077",        {{"Cyberpunk 2077",                                "bin/x64/Cyberpunk2077.exe", ""}}},
-        {"nomanssky",            {{"No Man's Sky",                                  "Binaries/NMS.exe",      ""},
-                                  {"No Mans Sky",                                   "Binaries/NMS.exe",      ""}}},
-        {"stardewvalley",        {{"Stardew Valley",                               "StardewValley.exe",     ""},
-                                  {"Stardew Valley",                               "StardewValley",         ""}}},
-        {"falloutlondon",        {{"Fallout London",                               "Fallout4.exe",          "Fallout4Launcher.exe"}}},
-        {"arxfatalis",           {{"Arx Fatalis",                                  "ArxFatalis.exe",        ""}}},
-        {"gothic1",              {{"Gothic",                                        "Gothic.exe",            ""},
-                                  {"Gothic Universe Edition",                       "Gothic.exe",            ""}}},
-        {"gothic2",              {{"Gothic II Gold Edition",                        "Gothic2.exe",           ""},
-                                  {"Gothic 2 Gold Edition",                         "Gothic2.exe",           ""},
-                                  {"Gothic II",                                      "Gothic2.exe",           ""}}},
-        {"gothic3",              {{"Gothic 3",                                      "Gothic3.exe",           ""}}},
-        {"gothic3fg",            {{"Gothic 3 - Forsaken Gods Enhanced Edition",     "Gothic3FG.exe",         ""}}},
-        {"gothic1remake",        {{"Gothic 1 Remake",                              "Gothic_Remake.exe",     ""},
-                                  {"Gothic Remake",                                 "Gothic_Remake.exe",     ""}}},
-        {"arcania",              {{"ArcaniA - Gothic 4",                           "ArcaniA.exe",           ""},
-                                  {"ArcaniA Complete Tale",                         "ArcaniA.exe",           ""},
-                                  {"ArcaniA",                                       "ArcaniA.exe",           ""}}},
-        {"mortalshell",          {{"Mortal Shell",    "MortalShell/Binaries/Win64/MortalShell-Win64-Shipping.exe", ""}}},
-    };
-    if (!gogInfo.contains(gameId)) return {};
+    // Per-game GOG layout candidates moved to src/game_adapters.cpp.
+    // Detection (Heroic-installed.json scan + directory walk fallback)
+    // stays here because it's data-agnostic and pulls in no per-game
+    // knowledge -- the candidates are just three strings each.
+    const GameAdapter *a = GameAdapterRegistry::find(gameId);
+    if (!a) return {};
+    const QList<GameAdapter::GogLayout> candidates = a->gogLayouts();
+    if (candidates.isEmpty()) return {};
 
-    const QList<GogGameInfo> &candidates = gogInfo[gameId];
     const QString home = QDir::homePath();
 
     // Primary: scan Heroic's installed.json - captures custom install paths.
@@ -664,13 +553,13 @@ QString GameProfileRegistry::findGogGameExe(const QString &gameId, bool wantLaun
             if (installPath.isEmpty()) continue;
             const QString folderName = QFileInfo(installPath).fileName();
 
-            for (const GogGameInfo &gi : candidates) {
+            for (const GameAdapter::GogLayout &gi : candidates) {
                 if (folderName.compare(gi.folder, Qt::CaseInsensitive) != 0 &&
                     folderName.compare(QString(gi.folder).replace(' ', '_'), Qt::CaseInsensitive) != 0)
                     continue;
 
-                const QString wantedExe = (wantLauncher && !gi.launcherExe.isEmpty())
-                                          ? gi.launcherExe : gi.exe;
+                const QString wantedExe = (wantLauncher && !gi.launcher.isEmpty())
+                                          ? gi.launcher : gi.exe;
 
                 if (!wantLauncher) {
                     const QString jsonExe = obj.value("executable").toString();
@@ -700,9 +589,9 @@ QString GameProfileRegistry::findGogGameExe(const QString &gameId, bool wantLaun
         "/mnt/games/GOG",
     };
 
-    for (const GogGameInfo &gi : candidates) {
-        const QString wantedExe = (wantLauncher && !gi.launcherExe.isEmpty())
-                                  ? gi.launcherExe : gi.exe;
+    for (const GameAdapter::GogLayout &gi : candidates) {
+        const QString wantedExe = (wantLauncher && !gi.launcher.isEmpty())
+                                  ? gi.launcher : gi.exe;
         const QStringList folderVariants = {
             gi.folder,
             gi.folder.toUpper(),
@@ -722,24 +611,11 @@ QString GameProfileRegistry::findGogGameExe(const QString &gameId, bool wantLaun
 
 QString GameProfileRegistry::findLutrisGameExe(const QString &gameId)
 {
-    static const QHash<QString, QStringList> tokens = {
-        {"openmw",               {"openmw"}},
-        {"morrowind",            {"morrowind"}},
-        {"skyrimspecialedition", {"skyrim", "special"}},
-        {"skyrim",               {"skyrim"}},
-        {"starfield",            {"starfield"}},
-        {"fallout3",             {"fallout", "3"}},
-        {"fallout4",             {"fallout", "4"}},
-        {"falloutnewvegas",      {"fallout", "new", "vegas"}},
-        {"falloutlondon",        {"fallout", "london"}},
-        {"oblivion",             {"oblivion"}},
-        {"cyberpunk2077",        {"cyberpunk"}},
-        {"witcher",              {"witcher"}},
-        {"witcher2",             {"witcher", "2"}},
-        {"witcher3",             {"witcher", "3"}},
-    };
-    if (!tokens.contains(gameId)) return {};
-    const QStringList &needed = tokens[gameId];
+    // Match tokens moved to src/game_adapters.cpp's per-game classes.
+    const GameAdapter *a = GameAdapterRegistry::find(gameId);
+    if (!a) return {};
+    const QStringList needed = a->lutrisTokens();
+    if (needed.isEmpty()) return {};
 
     const QString home = QDir::homePath();
     const QStringList lutrisDirs = {

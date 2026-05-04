@@ -105,6 +105,7 @@ set(SOURCES
     src/column_header.cpp
     src/forbidden_mods.cpp
     src/game_profiles.cpp
+    src/game_adapters.cpp
     src/ini_doc.cpp
     src/nexus_name.cpp
     src/conflict_scan.cpp
@@ -126,6 +127,7 @@ set(SOURCES
     include/column_header.h
     include/forbidden_mods.h
     include/game_profiles.h
+    include/game_adapter.h
     include/ini_doc.h
     include/nexus_name.h
     include/conflict_scan.h

@@ -24,6 +24,7 @@
 #include "column_header.h"
 #include "forbidden_mods.h"
 #include "game_profiles.h"
+#include "game_adapter.h"
 #include "ini_doc.h"
 #include "nexus_name.h"
 #include "conflict_scan.h"
@@ -4945,24 +4946,16 @@ static QProcessEnvironment childProcessEnvironment()
 }
 
 // Maps our per-profile ID to the game-folder name LOOT uses on its CLI
-// (`--game <name>`). Keep these in sync with LOOT's built-in game list.
-// Returns an empty string for profiles LOOT doesn't support - we then
-// politely refuse instead of making up a name and confusing LOOT.
+// (`--game <name>`).  The slug now lives on each game's GameAdapter
+// (src/game_adapters.cpp) so adding a new LOOT-supported game is a
+// one-line override on the adapter, not an edit here too.  Empty
+// string for profiles LOOT doesn't support keeps the politely-refuse
+// behaviour intact.
 static QString lootGameFor(const QString &profileId)
 {
-    // Morrowind *with OpenMW* has its own LOOT entry; classic Morrowind is
-    // a separate one ("Morrowind"). Our Morrowind profile is the OpenMW
-    // one, so we use "OpenMW".
-    if (profileId == "morrowind")              return "OpenMW";
-    if (profileId == "skyrim")                 return "Skyrim";
-    if (profileId == "skyrimspecialedition")   return "Skyrim Special Edition";
-    if (profileId == "oblivion")               return "Oblivion";
-    if (profileId == "oblivionremastered")     return "Oblivion Remastered";
-    if (profileId == "starfield")              return "Starfield";
-    if (profileId == "fallout3")               return "Fallout3";
-    if (profileId == "falloutnewvegas")        return "FalloutNV";
-    if (profileId == "fallout4")               return "Fallout4";
-    return QString();
+    if (const GameAdapter *a = GameAdapterRegistry::find(profileId))
+        return a->lootSlug();
+    return {};
 }
 
 void MainWindow::autoSortLoadOrder()
@@ -9445,21 +9438,17 @@ static const QList<FeaturedModlist> kFeaturedModlists = {
     // {"calazzo OpenMW modlist", "morrowind", ""},
 };
 
-struct BuiltinGameDef { QString id; QString name; QString defaultModsDirName; };
-static const BuiltinGameDef kBuiltinGames[] = {
-    // -- OpenMW (Morrowind) ---
-    {"morrowind",            "OpenMW (Morrowind)",                  "nerevarine_mods"},
-};
-
-// Adapter for firstrun::runWizard - defined down here so the BuiltinGameDef
-// type is complete.  Declaration of the forward stub is at the top of the
-// file alongside other forward helpers.
+// First-run wizard chooser data.  The set of "builtin" games -- those
+// the wizard offers on first launch -- is now derived from the
+// GameAdapter registry (each adapter sets builtin() = true for its
+// class), so the kBuiltinGames table has no separate existence.
 static QList<firstrun::GameChoice> builtinGameChoices()
 {
     QList<firstrun::GameChoice> out;
-    out.reserve(sizeof(kBuiltinGames) / sizeof(kBuiltinGames[0]));
-    for (const BuiltinGameDef &g : kBuiltinGames)
-        out.append({g.id, g.name, g.defaultModsDirName});
+    const auto adapters = GameAdapterRegistry::builtin();
+    out.reserve(adapters.size());
+    for (const GameAdapter *a : adapters)
+        out.append({a->id(), a->displayName(), a->defaultModsDirName()});
     return out;
 }
 
@@ -9485,19 +9474,18 @@ void MainWindow::updateGameButton()
 
     auto *menu = new QMenu(m_gameBtn);
 
-    // These always appear at the top in this fixed order.
-    // If a game hasn't been added as a profile yet it is shown greyed out.
-    // Other games (Skyrim, Oblivion, Fallout 4, Cyberpunk, Witcher 1-3,
-    // Stardew, Gothic 1-3, Dark Souls, Mortal Shell, Skyblivion, Skywind,
-    // Fallout London…) are commented out for the current release pending
-    // per-game testing of the install/launch paths.
-    static const QList<QPair<QString,QString>> kPinned = {
-        {"morrowind",            "OpenMW (Morrowind)"},
-        {"falloutnewvegas",      "Fallout: New Vegas"},
-    };
-
+    // The pinned-game list comes from the GameAdapter registry now --
+    // each adapter sets pinned()=true to surface its game at the top
+    // of the menu in registration order, even when the user hasn't
+    // created a profile for it yet.  Other games (Skyrim, Oblivion,
+    // Fallout 4, Cyberpunk, Witcher 1-3, Stardew, Gothic 1-3, Dark
+    // Souls, Mortal Shell, Skyblivion, Skywind, Fallout London…) are
+    // intentionally NOT pinned for the current release pending per-game
+    // testing of the install/launch paths.
     QSet<int> pinnedIdx;
-    for (const auto &[pid, fallbackName] : kPinned) {
+    for (const GameAdapter *a : GameAdapterRegistry::pinned()) {
+        const QString  pid          = a->id();
+        const QString  fallbackName = a->displayName();
         int found = -1;
         for (int i = 0; i < m_profiles->size(); ++i)
             if (m_profiles->games()[i].id == pid) { found = i; break; }
@@ -9509,18 +9497,16 @@ void MainWindow::updateGameButton()
             act->setChecked(found == m_profiles->currentIndex());
             connect(act, &QAction::triggered, this, [this, found]() { switchToGame(found); });
             pinnedIdx.insert(found);
-        } else if (pid == "morrowind") {
+        } else if (a->isMorrowind()) {
             // OpenMW must always be configured (created on first run); if it
             // somehow isn't, fall back to a disabled placeholder.
             auto *act = menu->addAction(fallbackName);
             act->setEnabled(false);
         } else {
             // Click to detect + add this game on first use.
-            const QString idCopy = pid;
-            const QString nameCopy = fallbackName;
             auto *act = menu->addAction(fallbackName);
             connect(act, &QAction::triggered, this,
-                    [this, idCopy, nameCopy]() { addAndDetectGame(idCopy, nameCopy); });
+                    [this, pid, fallbackName]() { addAndDetectGame(pid, fallbackName); });
         }
     }
 
@@ -9547,11 +9533,15 @@ void MainWindow::updateGameButton()
     delete m_gameBtn->menu();
     m_gameBtn->setMenu(menu);
 
-    // Show the right launch button(s) for the current game.
-    // setProfileVis() sets the profile-visibility gate; user-visibility
-    // (from the Customize Toolbar dialog) is ANDed separately.
-    bool isMorrowind    = (gp.id == "morrowind");
-    bool hasNoLauncher  = (gp.id == "falloutlondon");   // GOG total conversion - no separate launcher
+    // Show the right launch button(s) for the current game.  Per-game
+    // flags (isMorrowind, hasLauncher) live on the game's GameAdapter
+    // -- adding a new total conversion that hides the launcher button
+    // is now an override on its adapter class, not a fresh string
+    // compare here.  Falls back to "no adapter = treat as plain Steam
+    // game" so unknown profile ids stay launchable.
+    const GameAdapter *adapter = GameAdapterRegistry::find(gp.id);
+    const bool isMorrowind = adapter && adapter->isMorrowind();
+    const bool hasLauncher = !adapter || adapter->hasLauncher();
     auto setProfileVis = [this](QAction *a, bool v) {
         if (!a) return;
         a->setProperty("nerev_profile_visible", v);
@@ -9560,7 +9550,7 @@ void MainWindow::updateGameButton()
     setProfileVis(m_actLaunchOpenMW,        isMorrowind);
     setProfileVis(m_actLaunchLauncher,      isMorrowind);
     setProfileVis(m_actLaunchGame,          !isMorrowind);
-    setProfileVis(m_actLaunchSteamLauncher, !isMorrowind && !hasNoLauncher);
+    setProfileVis(m_actLaunchSteamLauncher, !isMorrowind && hasLauncher);
     setProfileVis(m_actTuneSkyrimIni,       gp.id == "skyrimspecialedition");
     setProfileVis(m_actSortLoot,            !lootGameFor(gp.id).isEmpty());
     // Mods-menu mirror of the toolbar LOOT action: unlike toolbar entries it
