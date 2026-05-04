@@ -1,0 +1,37 @@
+# Clang-tidy gate.  Enabled on every CI run via .github/workflows/clang-tidy.yml;
+# runnable locally via `scripts/clang-tidy.sh`.  WarningsAsErrors is set so
+# any new bugprone-/clang-analyzer- finding fails the PR -- the previous
+# state was warnings piling up unread in the IDE pane (QFile::open and
+# friends) until they masked real bugs.
+#
+# Enabled families: bugprone-* and clang-analyzer-*.
+# Disabled sub-checks below are either too noisy on Qt's int/qsizetype
+# boundary, are stylistic rather than correctness, or conflict with
+# common patterns that aren't bugs in this codebase.  Tighten over time
+# rather than disabling the gate when a noisy rule fires.
+Checks: >
+  -*,
+  bugprone-*,
+  clang-analyzer-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-narrowing-conversions,
+  -bugprone-switch-missing-default-case,
+  -bugprone-throwing-static-initialization,
+  -clang-analyzer-optin.performance.Padding,
+
+# Treat every enabled check as a hard fail.  The whole point is to fail
+# the build at PR time rather than letting findings rot.
+WarningsAsErrors: '*'
+
+# Limit header diagnostics to project headers (relative path matches our
+# include/ tree).  System and Qt headers carry their own bugprone hits
+# we have no control over.
+HeaderFilterRegex: 'include/.*\.h$'
+
+CheckOptions:
+  # Existing call sites use `(void)foo()` to mark "I deliberately ignore
+  # this best-effort result" (snapshot-before-write, fire-and-forget).
+  # That cast is the project's documented intent; keep it allowed.
+  - key: bugprone-unused-return-value.AllowCastToVoid
+    value: true

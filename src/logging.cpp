@@ -76,13 +76,14 @@ void writeLogLine(const QString &line)
 void qtMessageHandler(QtMsgType type, const QMessageLogContext &ctx,
                       const QString &msg)
 {
-    const char *lvl = "INFO ";
+    const char *lvl;
     switch (type) {
     case QtDebugMsg:    lvl = "DEBUG"; break;
     case QtInfoMsg:     lvl = "INFO "; break;
     case QtWarningMsg:  lvl = "WARN "; break;
     case QtCriticalMsg: lvl = "CRIT "; break;
     case QtFatalMsg:    lvl = "FATAL"; break;
+    default:            lvl = "INFO "; break; // QtSystemMsg / future kinds
     }
     QString line = QString("[%1] ").arg(lvl);
     if (ctx.category && *ctx.category && std::strcmp(ctx.category, "default") != 0)

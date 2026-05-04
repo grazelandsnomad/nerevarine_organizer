@@ -404,7 +404,9 @@ void FomodWizard::buildUi()
                 m_buttons[si][gi].append(btn);
             }
 
-            innerLay->addWidget(box);
+            // boxLay (line above) is owned by `box` via Qt's parent-child
+            // rule; analyzer doesn't model QObject ownership.
+            innerLay->addWidget(box); // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
         }
         innerLay->addStretch();
         scroll->setWidget(inner);

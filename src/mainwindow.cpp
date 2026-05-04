@@ -8686,7 +8686,9 @@ void MainWindow::doImportWabbajack(const QString &path)
         finishWabbajackImport(result.root);
     });
 
-    progress->show();
+    // `watcher` deletes itself via deleteLater() inside the finished
+    // lambda above; analyzer can't see the Qt-signal/slot lifetime.
+    progress->show(); // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
 }
 
 void MainWindow::finishWabbajackImport(const QJsonObject &root)
@@ -9375,11 +9377,9 @@ void MainWindow::onImportModList()
 
 void MainWindow::onNewModList()
 {
-    QString currentPath = modlistPath();
-    int count = m_modList->count();
-    QString msg = count > 0
-        ? T("menu_new_modlist_confirm_body").arg(QFileInfo(currentPath).fileName())
-        : T("menu_new_modlist_confirm_body").arg(QFileInfo(currentPath).fileName());
+    const QString currentPath = modlistPath();
+    const QString msg =
+        T("menu_new_modlist_confirm_body").arg(QFileInfo(currentPath).fileName());
 
     if (QMessageBox::question(this, T("menu_new_modlist_confirm_title"), msg)
             != QMessageBox::Yes)

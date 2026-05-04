@@ -1,0 +1,67 @@
+name: Clang-Tidy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  clang-tidy:
+    runs-on: ubuntu-22.04
+
+    # Use clang as the configure-time compiler so compile_commands.json
+    # carries clang-acceptable flags.  GCC's -mno-direct-extern-access on
+    # some distros, and other compiler-private flags propagated via Qt's
+    # mkspec, make a GCC-emitted JSON unusable by clang-tidy.
+    env:
+      CC: clang
+      CXX: clang++
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang + clang-tidy + Ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang clang-tidy ninja-build cmake
+          clang --version
+          clang-tidy --version
+
+      - name: Install Qt 6.7
+        # Same Qt as the regular Tests workflow so the include paths and
+        # macro definitions match what the real build sees.
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.3'
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          cache: true
+
+      - name: Configure (clang)
+        run: |
+          cmake -S . -B build-tidy -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      - name: Generate AUTOMOC + translation header
+        # clang-tidy needs these to exist before it parses TUs that
+        # include them; they're build-dir generated files, not in-tree.
+        run: |
+          cmake --build build-tidy --target translation_keys_header
+          cmake --build build-tidy --target nerevarine_organizer_autogen
+
+      - name: Run clang-tidy on src/
+        # `--warnings-as-errors='*'` makes every enabled check (see
+        # .clang-tidy at the repo root) a hard PR-blocking failure.
+        # xargs parallelism is bounded to nproc to keep the runner from
+        # OOM'ing on large TUs (mainwindow.cpp parses heavy with full
+        # Qt includes).
+        run: |
+          find src -name "*.cpp" -print0 \
+            | xargs -0 -P"$(nproc)" -I{} \
+                clang-tidy -p build-tidy --quiet --warnings-as-errors='*' {}
