@@ -313,6 +313,68 @@ static void testCopyCollidingFileFails()
           !QFileInfo::exists(dst));
 }
 
+// -- forceRemoveRecursively ---
+
+static void testForceRemoveMissingPath()
+{
+    std::cout << "testForceRemoveMissingPath\n";
+    QTemporaryDir dir;
+    const QString gone = dir.filePath("never-existed");
+    // No-op success: callers must be able to call this on already-removed
+    // paths without seeing a spurious failure.
+    check("missing path treated as removed",
+          safefs::forceRemoveRecursively(gone));
+}
+
+static void testForceRemovePlainTree()
+{
+    std::cout << "testForceRemovePlainTree\n";
+    QTemporaryDir dir;
+    const QString tree = dir.filePath("tree");
+    writeFile(tree + "/top.txt", "x");
+    writeFile(tree + "/sub/inner.txt", "y");
+
+    check("plain tree removed", safefs::forceRemoveRecursively(tree));
+    check("path no longer exists", !QFileInfo::exists(tree));
+}
+
+static void testForceRemoveReadOnlyDirs()
+{
+    std::cout << "testForceRemoveReadOnlyDirs\n";
+    // Reproduces the "Move Mod Library" data-loss scenario: source mod
+    // contains a directory missing the user-write bit (typical for trees
+    // extracted from zips that round-tripped through Windows ACLs - e.g.
+    // dr-xr-xr-x).  Plain QDir::removeRecursively cannot unlink children
+    // inside such a directory.
+    QTemporaryDir dir;
+    const QString tree = dir.filePath("readonly_tree");
+    writeFile(tree + "/Textures/inside_readonly.dds", "pixels");
+    writeFile(tree + "/sibling/normal.txt", "ok");
+
+    // Strip user-write from the inner dir AFTER seeding files, otherwise
+    // writeFile itself can't create them.
+    QFile::Permissions perms = QFile::permissions(tree + "/Textures");
+    QFile::setPermissions(tree + "/Textures",
+                          perms & ~QFile::WriteUser);
+
+    // The plain remove fails on this tree, by design.
+    check("plain QDir::removeRecursively trips on read-only dir",
+          !QDir(tree).removeRecursively() || !QFileInfo::exists(tree));
+
+    // Reseed in case the plain remove above succeeded on some odd FS.
+    if (!QFileInfo::exists(tree + "/Textures/inside_readonly.dds")) {
+        QFile::setPermissions(tree + "/Textures", perms | QFile::WriteUser);
+        writeFile(tree + "/Textures/inside_readonly.dds", "pixels");
+        writeFile(tree + "/sibling/normal.txt", "ok");
+        QFile::setPermissions(tree + "/Textures", perms & ~QFile::WriteUser);
+    }
+
+    check("forceRemoveRecursively succeeds on read-only-dir tree",
+          safefs::forceRemoveRecursively(tree));
+    check("entire tree gone after force remove",
+          !QFileInfo::exists(tree));
+}
+
 // -- Entry point ---
 
 int main(int argc, char **argv)
@@ -324,6 +386,10 @@ int main(int argc, char **argv)
     testSnapshotRotation();
     testSnapshotKeepZero();
     testSnapshotCollisionSameSecond();
+
+    testForceRemoveMissingPath();
+    testForceRemovePlainTree();
+    testForceRemoveReadOnlyDirs();
 
     testCopyHappyPath();
     testCopyEmptyTree();

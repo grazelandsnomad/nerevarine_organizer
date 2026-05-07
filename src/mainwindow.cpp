@@ -6036,14 +6036,14 @@ void MainWindow::onMoveModsDir()
             auto res = safefs::copyTreeVerified(c.oldPath, newPath,
                     [&]{ return progress.wasCanceled(); });
             if (res) {
-                if (QDir(c.oldPath).removeRecursively()) {
+                if (safefs::forceRemoveRecursively(c.oldPath)) {
                     ok = true;
                 } else {
                     // Destination is a verified copy, but the source dir
                     // can't be removed (locked file, permissions…).  Roll
                     // back the copy so we're never left with two live
                     // copies of the same mod; caller can retry manually.
-                    QDir(newPath).removeRecursively();
+                    safefs::forceRemoveRecursively(newPath);
                     err = QStringLiteral("copied ok, but could not remove original");
                 }
             } else {
@@ -6486,10 +6486,10 @@ void MainWindow::onConsolidateModsIntoActiveProfile()
             auto res = safefs::copyTreeVerified(c.oldPath, newPath,
                     [&]{ return progress.wasCanceled(); });
             if (res) {
-                if (QDir(c.oldPath).removeRecursively()) {
+                if (safefs::forceRemoveRecursively(c.oldPath)) {
                     ok = true;
                 } else {
-                    QDir(newPath).removeRecursively();
+                    safefs::forceRemoveRecursively(newPath);
                     err = QStringLiteral("copied ok, but could not remove original");
                 }
             } else {

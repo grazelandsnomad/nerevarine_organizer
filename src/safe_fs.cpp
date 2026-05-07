@@ -31,6 +31,37 @@ snapshotBackup(const QString &liveFile, int keep)
     return backup;
 }
 
+bool forceRemoveRecursively(const QString &path)
+{
+    QFileInfo rootFi(path);
+    if (!rootFi.exists())
+        return true;
+
+    auto ensureWritable = [](const QString &p) -> bool {
+        const QFile::Permissions perms = QFile::permissions(p);
+        if (perms == 0)
+            return true;
+        if (perms & QFile::WriteUser)
+            return true;
+        return QFile::setPermissions(p, perms | QFile::WriteUser);
+    };
+
+    if (!ensureWritable(path))
+        return false;
+
+    QDirIterator it(path,
+                    QDir::AllEntries | QDir::NoDotAndDotDot
+                        | QDir::Hidden | QDir::System,
+                    QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        it.next();
+        if (!ensureWritable(it.filePath()))
+            return false;
+    }
+
+    return QDir(path).removeRecursively();
+}
+
 std::expected<void, QString>
 copyTreeVerified(const QString &src, const QString &dst,
                  std::function<bool()> isCancelled)

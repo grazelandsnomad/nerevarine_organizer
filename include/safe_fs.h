@@ -63,6 +63,23 @@ std::expected<void, QString>
 copyTreeVerified(const QString &src, const QString &dst,
                  std::function<bool()> isCancelled = {});
 
+// QDir::removeRecursively cannot unlink children inside a directory whose
+// owner-write bit is unset - the kernel returns EACCES on every unlink.
+// Mod archives extracted from zips routinely carry such directories
+// (Windows-side ACLs round-trip into POSIX mode `dr-xr-xr-x`), and a
+// partial removeRecursively in the middle of a "Move Mod Library" pass
+// strips the writable parts of the source before failing on the
+// read-only ones - i.e. data loss.
+//
+// forceRemoveRecursively walks the tree first and grants `u+w` on every
+// entry (cheap chmod, no I/O on file contents), then calls the regular
+// removeRecursively.  Two-phase by design: if any chmod fails the
+// function returns false BEFORE touching the tree, so callers that
+// have a verified copy elsewhere can fall back to keeping it.
+//
+// Returns true iff `path` no longer exists when the call returns.
+bool forceRemoveRecursively(const QString &path);
+
 } // namespace safefs
 
 #endif // SAFE_FS_H
