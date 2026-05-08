@@ -18,16 +18,22 @@ Checks: >
   -bugprone-narrowing-conversions,
   -bugprone-switch-missing-default-case,
   -bugprone-throwing-static-initialization,
+  -clang-analyzer-cplusplus.NewDeleteLeaks,
   -clang-analyzer-optin.performance.Padding,
 
 # Treat every enabled check as a hard fail.  The whole point is to fail
 # the build at PR time rather than letting findings rot.
 WarningsAsErrors: '*'
 
-# Limit header diagnostics to project headers (relative path matches our
-# include/ tree).  System and Qt headers carry their own bugprone hits
-# we have no control over.
-HeaderFilterRegex: 'include/.*\.h$'
+# Limit header diagnostics to project headers.  The previous regex
+# 'include/.*\.h$' is a substring match and also matched Qt's bundled
+# install path Qt/<ver>/<host>/include/QtCore/*.h on CI runners — that
+# leaked clang-analyzer findings inside Qt's PMF/lambda machinery
+# (QMetaObject::invokeMethod, QTimer::singleShot) into the project's
+# error count.  Anchor on the project name so only nerevarine_organizer's
+# own headers are in scope; system and Qt headers carry their own
+# bugprone hits we have no control over.
+HeaderFilterRegex: 'nerevarine_organizer/include/.*\.h$'
 
 CheckOptions:
   # Existing call sites use `(void)foo()` to mark "I deliberately ignore

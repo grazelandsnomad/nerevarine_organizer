@@ -9,25 +9,36 @@ on:
 
 jobs:
   clang-tidy:
-    runs-on: ubuntu-22.04
+    # Pin to 24.04: ships libstdc++ 14 (which has <expected>) and matches
+    # what the std::expected-based parts of the codebase need to parse.
+    # ubuntu-22.04 ships libstdc++ 11 — even with a newer clang-tidy from
+    # LLVM apt, the system headers it parses against don't have <expected>.
+    runs-on: ubuntu-24.04
 
     # Use clang as the configure-time compiler so compile_commands.json
     # carries clang-acceptable flags.  GCC's -mno-direct-extern-access on
     # some distros, and other compiler-private flags propagated via Qt's
     # mkspec, make a GCC-emitted JSON unusable by clang-tidy.
     env:
-      CC: clang
-      CXX: clang++
+      CC: clang-19
+      CXX: clang++-19
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install clang + clang-tidy + Ninja
+      - name: Install clang-19 + clang-tidy-19 + Ninja
+        # Distro clang-tidy on 22.04 was clang-14, which reports
+        # __cpp_concepts = 201907L and fails libstdc++'s
+        # `__cplusplus > 202002L && __cpp_concepts >= 202002L` gate on
+        # <expected> *even with* -std=c++23.  clang-19 reports
+        # __cpp_concepts = 202002L so the gate opens.  Pulling from
+        # apt.llvm.org keeps the version explicit and reproducible across
+        # ubuntu-latest alias drift.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y clang clang-tidy ninja-build cmake
-          clang --version
-          clang-tidy --version
+          wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 19
+          sudo apt-get install -y clang-19 clang-tidy-19 ninja-build cmake
+          clang-19 --version
+          clang-tidy-19 --version
 
       - name: Install Qt 6.7
         # Same Qt as the regular Tests workflow so the include paths and
@@ -44,8 +55,8 @@ jobs:
         run: |
           cmake -S . -B build-tidy -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=clang \
-            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_C_COMPILER=clang-19 \
+            -DCMAKE_CXX_COMPILER=clang++-19 \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
       - name: Generate AUTOMOC + translation header
@@ -60,8 +71,11 @@ jobs:
         # .clang-tidy at the repo root) a hard PR-blocking failure.
         # xargs parallelism is bounded to nproc to keep the runner from
         # OOM'ing on large TUs (mainwindow.cpp parses heavy with full
-        # Qt includes).
+        # Qt includes).  `--extra-arg=-std=c++23` is belt-and-suspenders
+        # alongside the -std=c++23 already in compile_commands.json.
         run: |
           find src -name "*.cpp" -print0 \
             | xargs -0 -P"$(nproc)" -I{} \
-                clang-tidy -p build-tidy --quiet --warnings-as-errors='*' {}
+                clang-tidy-19 -p build-tidy --quiet \
+                    --warnings-as-errors='*' \
+                    --extra-arg=-std=c++23 {}
