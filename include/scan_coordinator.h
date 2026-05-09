@@ -46,6 +46,14 @@ public:
     // hits a warm cache instead of a cold filesystem scan.
     void warmDataFoldersCache(const QStringList &paths);
 
+    // Recursive BSA filename scan (deduped by basename) - UI-thread only.
+    // Caching matters because syncOpenMWConfig used to run a full
+    // QDirIterator-Subdirectories walk per installed mod on every save,
+    // and that landed inside the user-perceived UI freeze on add/edit.
+    // Invalidated through invalidateDataFoldersCache (single cache key
+    // for both data + BSA scans on the same path).
+    QStringList cachedBsaFiles(const QString &path);
+
 private:
     void runSizeScan();
     void applySizeResults(const QHash<QString, qint64> &bytesByPath);
@@ -63,6 +71,11 @@ private:
     // Written and read on the UI thread only; workers receive a value-copy
     // snapshot via dataFoldersSnapshot().
     QHash<QString, QList<QPair<QString, QStringList>>> m_dataFoldersCache;
+
+    // BSA basename cache: modPath → list of *.bsa filenames found anywhere
+    // under modPath.  UI-thread only.  Cleared in lockstep with
+    // m_dataFoldersCache via invalidateDataFoldersCache.
+    QHash<QString, QStringList> m_bsaCache;
 };
 
 #endif // SCAN_COORDINATOR_H

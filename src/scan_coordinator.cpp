@@ -83,29 +83,74 @@ QList<QPair<QString, QStringList>> ScanCoordinator::cachedDataFolders(
 void ScanCoordinator::invalidateDataFoldersCache(const QString &path)
 {
     m_dataFoldersCache.remove(path);
+    m_bsaCache.remove(path);
+}
+
+QStringList ScanCoordinator::cachedBsaFiles(const QString &path)
+{
+    if (path.isEmpty()) return {};
+    auto it = m_bsaCache.find(path);
+    if (it != m_bsaCache.end()) return it.value();
+
+    QStringList found;
+    QSet<QString> seen;
+    QDirIterator dit(path,
+                     {QStringLiteral("*.bsa"), QStringLiteral("*.BSA")},
+                     QDir::Files, QDirIterator::Subdirectories);
+    while (dit.hasNext()) {
+        dit.next();
+        const QString name = dit.fileName();
+        if (seen.contains(name)) continue;
+        seen.insert(name);
+        found << name;
+    }
+    m_bsaCache.insert(path, found);
+    return found;
 }
 
 void ScanCoordinator::warmDataFoldersCache(const QStringList &paths)
 {
     QStringList coldPaths;
     for (const QString &mp : paths) {
-        if (!mp.isEmpty() && !m_dataFoldersCache.contains(mp))
+        if (mp.isEmpty()) continue;
+        if (!m_dataFoldersCache.contains(mp) || !m_bsaCache.contains(mp))
             coldPaths << mp;
     }
     if (coldPaths.isEmpty()) return;
 
     QPointer<ScanCoordinator> safeSelf(this);
     (void)QtConcurrent::run([safeSelf, coldPaths]() {
-        using R = QPair<QString, QList<QPair<QString, QStringList>>>;
+        struct R {
+            QString path;
+            QList<QPair<QString, QStringList>> dataFolders;
+            QStringList bsaFiles;
+        };
         QList<R> results;
         results.reserve(coldPaths.size());
-        for (const QString &mp : coldPaths)
-            results.append({mp, plugins::collectDataFolders(
-                                    mp, plugins::contentExtensions())});
+        for (const QString &mp : coldPaths) {
+            R r;
+            r.path = mp;
+            r.dataFolders =
+                plugins::collectDataFolders(mp, plugins::contentExtensions());
+            QSet<QString> seen;
+            QDirIterator dit(mp,
+                {QStringLiteral("*.bsa"), QStringLiteral("*.BSA")},
+                QDir::Files, QDirIterator::Subdirectories);
+            while (dit.hasNext()) {
+                dit.next();
+                const QString name = dit.fileName();
+                if (seen.contains(name)) continue;
+                seen.insert(name);
+                r.bsaFiles << name;
+            }
+            results.append(std::move(r));
+        }
         QMetaObject::invokeMethod(safeSelf.data(), [safeSelf, results]() {
             if (!safeSelf) return;
-            for (const auto &r : results)
-                safeSelf->m_dataFoldersCache.insert(r.first, r.second);
+            for (const auto &r : results) {
+                safeSelf->m_dataFoldersCache.insert(r.path, r.dataFolders);
+                safeSelf->m_bsaCache.insert(r.path, r.bsaFiles);
+            }
         }, Qt::QueuedConnection);
     });
 }

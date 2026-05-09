@@ -85,6 +85,7 @@
 #include <QStorageInfo>
 #include <QProcess>
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QTimer>
 #include <QCheckBox>
 #include <QComboBox>
@@ -2598,6 +2599,9 @@ void MainWindow::onFileListFetched(QListWidgetItem *item,
 
 void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeholder)
 {
+    QElapsedTimer addTimer;
+    addTimer.start();
+
     QFileInfo fi(dirPath);
 
     QListWidgetItem *item;
@@ -3156,6 +3160,14 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
             }
         }
     }
+
+    // User-perceived "grey freeze" on Add/Update lands here - the modal
+    // prompts above (groundcover/splash/patches) are excluded only because
+    // QMessageBox::exec() blocks; everything else is wall-clock UI-thread
+    // time and feeds straight into log.txt for regression-bisect.
+    qCInfo(logging::lcModList).nospace()
+        << "addModFromPath ms=" << addTimer.elapsed()
+        << " name='" << QFileInfo(dirPath).fileName() << "'";
 }
 
 // Existing slots
@@ -4757,13 +4769,18 @@ void MainWindow::reconcileLoadOrder()
 
     // filename → absolute path for every installed plugin we see.  Used
     // both to decide presence and to feed readTes3Masters() below.
+    // Routed through the ScanCoordinator cache so a saveModList that fires
+    // on every checkbox toggle / rename / annotation edit doesn't pay for
+    // a full per-mod recursive directory walk every time.  Cache is
+    // invalidated explicitly in addModFromPath / onRemoveSelected for
+    // paths whose contents we just changed.
     QHash<QString, QString> pathByName;
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *item = m_modList->item(i);
         if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
         if (item->data(ModRole::InstallStatus).toInt() != 1) continue;
         QString modPath = item->data(ModRole::ModPath).toString();
-        for (const auto &p : collectDataFolders(modPath, contentExts))
+        for (const auto &p : m_scans->cachedDataFolders(modPath, contentExts))
             for (const QString &cf : p.second)
                 pathByName.insert(cf, p.first + "/" + cf);
     }
@@ -4783,7 +4800,7 @@ void MainWindow::reconcileLoadOrder()
         if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
         if (item->data(ModRole::InstallStatus).toInt() != 1) continue;
         QString modPath = item->data(ModRole::ModPath).toString();
-        for (const auto &p : collectDataFolders(modPath, contentExts)) {
+        for (const auto &p : m_scans->cachedDataFolders(modPath, contentExts)) {
             // .esm first within a mod folder, then .esp - a best-effort
             // first guess.  The topo pass below is what actually enforces
             // the master relationship for .omwaddon children whose parents
@@ -5110,6 +5127,11 @@ void MainWindow::saveModList()
             return;
     }
 
+    QElapsedTimer total;
+    total.start();
+    QElapsedTimer phase;
+    phase.start();
+
     // Pick up any reorder the user did in the OpenMW Launcher between
     // launches.  Without this, saving the modlist (triggered by any mod-list
     // mutation - checkbox toggle, drag-drop, install) would rewrite
@@ -5118,15 +5140,7 @@ void MainWindow::saveModList()
     // loadorder more recently than openmw.cfg, which correctly leaves our
     // own reorders (Edit Load Order dialog, LOOT sort) untouched.
     absorbExternalLoadOrder();
-
-    // README disclaims file corruption - snapshot first, write second.
-    (void)safefs::snapshotBackup(modlistPath());
-
-    QFile f(modlistPath());
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        statusBar()->showMessage(T("status_modlist_save_failed"), 3000);
-        return;
-    }
+    const qint64 ms_absorb = phase.restart();
 
     // Snapshot the QListWidget into typed ModEntry rows, then run the
     // schema-versioned JSONL serializer.  Mid-install placeholders that
@@ -5147,20 +5161,64 @@ void MainWindow::saveModList()
             entries[i].displayName = e.displayName.mid(2);
         }
     }
+    const QString modlistContent = modlist_serializer::serializeModlist(entries);
+    const QString modlistFile = modlistPath();
 
-    QTextStream out(&f);
-    out << modlist_serializer::serializeModlist(entries);
+    // Snapshot backup + modlist file write moved off the UI thread.  These
+    // are pure-IO and previously sat squarely inside the user-perceived
+    // grey-freeze on Add/Edit.  closeEvent() waits on m_lastSaveFuture
+    // before exiting so unsaved state still flushes before the process
+    // dies.  Earlier in-flight saves are awaited synchronously here so we
+    // don't have two writers racing on the same file (mtime ordering also
+    // matters - absorbExternalLoadOrder above checks loadorder vs
+    // openmw.cfg mtime).
+    if (m_lastSaveFuture.isRunning())
+        m_lastSaveFuture.waitForFinished();
+    m_lastSaveFuture = QtConcurrent::run([modlistFile, modlistContent]() {
+        (void)safefs::snapshotBackup(modlistFile);
+        QFile f(modlistFile);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            qCWarning(logging::lcModList)
+                << "saveModList: failed to open" << modlistFile
+                << "for writing:" << f.errorString();
+            return;
+        }
+        QTextStream ts(&f);
+        ts << modlistContent;
+    });
+    const qint64 ms_write = phase.restart();
 
     // Keep the separate plugin load-order file in sync with the modlist
     // (additions/removals only; order-within-the-list is edited explicitly
     // by the user via Mods → Edit Load Order… or by autoSortLoadOrder()).
     reconcileLoadOrder();
     saveLoadOrder();
+    const qint64 ms_loadorder = phase.restart();
 
     syncGameConfig();
+    const qint64 ms_syncCfg = phase.restart();
+
     scanMissingMasters();
+    const qint64 ms_masters = phase.restart();
+
     scanMissingDependencies();
+    const qint64 ms_deps = phase.restart();
+
     updateSectionCounts();
+    const qint64 ms_counts = phase.elapsed();
+
+    // Surfacing per-stage ms in log.txt makes UI-freeze regressions
+    // bisectable - any single number jumping is the smoking gun.
+    qCInfo(logging::lcModList).nospace()
+        << "saveModList ms total=" << total.elapsed()
+        << " absorb=" << ms_absorb
+        << " writeQueue=" << ms_write
+        << " loadorder=" << ms_loadorder
+        << " syncCfg=" << ms_syncCfg
+        << " masters=" << ms_masters
+        << " deps=" << ms_deps
+        << " counts=" << ms_counts
+        << " items=" << m_modList->count();
 }
 
 // Dispatcher for engine-specific config-file sync. Each supported game has its
@@ -7358,7 +7416,7 @@ void MainWindow::runMissingMastersScan()
         // masters for groundcover= plugins, so flagging them just produces
         // noise (e.g. TOTSP plugins the user doesn't need).
         if (m_groundcoverApproved.contains(e.modPath)) continue;
-        for (const auto &p : collectDataFolders(e.modPath, contentExts)) {
+        for (const auto &p : m_scans->cachedDataFolders(e.modPath, contentExts)) {
             for (const QString &file : p.second) {
                 availableLower.insert(file.toLower());
                 e.plugins.append({QDir(p.first).filePath(file), file});
@@ -7394,6 +7452,11 @@ void MainWindow::syncOpenMWConfig()
     // OpenMW config sync is only applicable to the Morrowind game profile
     if (m_profiles->isEmpty() || currentProfile().id != "morrowind")
         return;
+
+    QElapsedTimer syncTotal;
+    syncTotal.start();
+    QElapsedTimer syncPhase;
+    syncPhase.start();
 
     const QString cfgPath = QDir::homePath() + "/.config/openmw/openmw.cfg";
     const QStringList contentExts{".esp", ".esm", ".omwaddon", ".omwscripts"};
@@ -7466,7 +7529,7 @@ void MainWindow::syncOpenMWConfig()
             const QString modPath = item->data(ModRole::ModPath).toString();
             if (!modPath.isEmpty())
                 managedModPaths.insert(QDir::cleanPath(modPath));
-            cm.pluginDirs = collectDataFolders(modPath, contentExts);
+            cm.pluginDirs = m_scans->cachedDataFolders(modPath, contentExts);
 
             // Scan for BSA archives shipped by this mod and register them
             // as fallback-archive= entries.  Without this, BSA-only mods
@@ -7477,19 +7540,9 @@ void MainWindow::syncOpenMWConfig()
             // their .esp (e.g. Tamriel Data layout).  Dedup by basename so
             // a mod that ships the same BSA in two roots only registers
             // once - OpenMW expects unique fallback-archive= names anyway.
-            if (!modPath.isEmpty()) {
-                QSet<QString> seenBsa;
-                QDirIterator it(modPath,
-                    {QStringLiteral("*.bsa"), QStringLiteral("*.BSA")},
-                    QDir::Files, QDirIterator::Subdirectories);
-                while (it.hasNext()) {
-                    it.next();
-                    const QString name = it.fileName();
-                    if (seenBsa.contains(name)) continue;
-                    seenBsa.insert(name);
-                    cm.bsaFiles << name;
-                }
-            }
+            // Cached in ScanCoordinator: this same walk used to run
+            // synchronously per mod on every saveModList call.
+            cm.bsaFiles = m_scans->cachedBsaFiles(modPath);
             // Drop patch subfolders whose target mod isn't present in the list,
             // and those the user explicitly declined when prompted at mod-add
             // time.  If the target mod is later installed, addModFromPath
@@ -7565,6 +7618,7 @@ void MainWindow::syncOpenMWConfig()
         }
         mods << cm;
     }
+    const qint64 ms_scanMods = syncPhase.restart();
 
     // Read existing cfg (empty string if absent) - parsing lives in the writer.
     QString existing;
@@ -7573,6 +7627,7 @@ void MainWindow::syncOpenMWConfig()
         if (f.open(QIODevice::ReadOnly | QIODevice::Text))
             existing = QString::fromUtf8(f.readAll());
     }
+    const qint64 ms_readCfg = syncPhase.restart();
 
     // -- Orphan-managed rescue ---
     //
@@ -7843,6 +7898,7 @@ void MainWindow::syncOpenMWConfig()
             }
         }
     }
+    const qint64 ms_masters = syncPhase.restart();
 
     // Collect groundcover and suppressed filenames so we can exclude them
     // from the load order (otherwise absorbExternalLoadOrder hangs onto
@@ -7909,15 +7965,7 @@ void MainWindow::syncOpenMWConfig()
     const QString rendered =
         openmw::renderOpenMWConfig(mods, m_loadOrder, scrubbedExisting);
 
-    // README disclaims file corruption - snapshot first, write second.
-    (void)safefs::snapshotBackup(cfgPath);
-
-    QFile f(cfgPath);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) return;
-    f.write(rendered.toUtf8());
-    f.close();
-
-    // -- launcher.cfg sync ---
+    // -- launcher.cfg inputs (UI-thread, cheap) ---
     //
     // The OpenMW Launcher keeps its own per-profile cache of data= and
     // content= lines in ~/.config/openmw/launcher.cfg, and its Data Files
@@ -7926,59 +7974,81 @@ void MainWindow::syncOpenMWConfig()
     // still shows it, and the user can re-tick a plugin that has no
     // provider - instant "content file does not exist" crash.
     //
-    // Keep only the CURRENT profile's data=/content= in lockstep with the
-    // openmw.cfg we just wrote.  Other profiles are left untouched so the
-    // user can still switch between saved load-outs by hand.
-    {
-        const QString launcherPath =
-            QDir::homePath() + "/.config/openmw/launcher.cfg";
-
-        // Mtime gate: if launcher.cfg is newer than the openmw.cfg we
-        // just wrote, the user has made changes in the launcher's Data
-        // Files tab that haven't been absorbed into m_loadOrder yet.
-        // Writing here would clobber the reorder. absorbExternalLoadOrder
-        // picks the signal up on the next saveModList cycle.
-        const QFileInfo launcherInfo(launcherPath);
-        const QFileInfo newCfgInfo(cfgPath);
-        if (launcherInfo.exists() && newCfgInfo.exists()
-            && launcherInfo.lastModified() > newCfgInfo.lastModified()) {
-            return;
+    // Pre-extract the data= paths and content= filenames the launcher
+    // expects in load-priority / activation order, then hand them to the
+    // worker below. The actual launcher.cfg read+render+write runs on
+    // the worker so the user-facing UI doesn't see this file IO either.
+    const QString launcherPath =
+        QDir::homePath() + "/.config/openmw/launcher.cfg";
+    QStringList lDataPaths;
+    QStringList lContent;
+    for (const QString &raw : rendered.split('\n')) {
+        QString line = raw;
+        if (line.endsWith('\r')) line.chop(1);
+        if (line.startsWith(QStringLiteral("data="))) {
+            QString p = line.mid(5);
+            if (p.size() >= 2 && p.startsWith('"') && p.endsWith('"'))
+                p = p.mid(1, p.size() - 2);
+            lDataPaths << p;
+        } else if (line.startsWith(QStringLiteral("content="))) {
+            lContent << line.mid(8);
         }
+    }
+    const qint64 ms_render = syncPhase.restart();
 
-        QFile lf(launcherPath);
-        if (lf.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    // openmw.cfg + launcher.cfg writes moved off the UI thread.  Chained
+    // onto the same m_lastSaveFuture as the modlist file write so
+    // closeEvent only has to wait on one future, and sequenced behind
+    // any prior in-flight write so two saves can't race on the same
+    // file.  The launcher mtime gate runs in the worker so it sees the
+    // post-write mtime of openmw.cfg.
+    if (m_lastSaveFuture.isRunning())
+        m_lastSaveFuture.waitForFinished();
+    const QByteArray cfgBytes = rendered.toUtf8();
+    m_lastSaveFuture = QtConcurrent::run(
+        [cfgPath, cfgBytes, launcherPath, lDataPaths, lContent]() {
+            (void)safefs::snapshotBackup(cfgPath);
+            {
+                QFile f(cfgPath);
+                if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) return;
+                f.write(cfgBytes);
+            }
+
+            // Mtime gate: if launcher.cfg is newer than the openmw.cfg
+            // we just wrote, the user has touched the launcher between
+            // our render and now (e.g. opened openmw-launcher);
+            // absorbExternalLoadOrder picks the signal up on the next
+            // saveModList cycle, so skip clobbering it here.
+            const QFileInfo launcherInfo(launcherPath);
+            const QFileInfo newCfgInfo(cfgPath);
+            if (launcherInfo.exists() && newCfgInfo.exists()
+                && launcherInfo.lastModified() > newCfgInfo.lastModified())
+                return;
+
+            QFile lf(launcherPath);
+            if (!lf.open(QIODevice::ReadOnly | QIODevice::Text)) return;
             const QString before = QString::fromUtf8(lf.readAll());
             lf.close();
 
-            // Extract unquoted data= paths and content= filenames in the
-            // same order they appear in the rendered openmw.cfg - the
-            // launcher expects load-priority order for data= and activation
-            // order for content=, and that's what renderOpenMWConfig emits.
-            QStringList lDataPaths;
-            QStringList lContent;
-            for (const QString &raw : rendered.split('\n')) {
-                QString line = raw;
-                if (line.endsWith('\r')) line.chop(1);
-                if (line.startsWith(QStringLiteral("data="))) {
-                    QString p = line.mid(5);
-                    if (p.size() >= 2 && p.startsWith('"') && p.endsWith('"'))
-                        p = p.mid(1, p.size() - 2);
-                    lDataPaths << p;
-                } else if (line.startsWith(QStringLiteral("content="))) {
-                    lContent << line.mid(8);
-                }
-            }
-
             const QString after =
                 openmw::renderLauncherCfg(before, lDataPaths, lContent);
-            if (!after.isEmpty() && after != before) {
-                (void)safefs::snapshotBackup(launcherPath);
-                QFile wf(launcherPath);
-                if (wf.open(QIODevice::WriteOnly | QIODevice::Text))
-                    wf.write(after.toUtf8());
-            }
-        }
-    }
+            if (after.isEmpty() || after == before) return;
+
+            (void)safefs::snapshotBackup(launcherPath);
+            QFile wf(launcherPath);
+            if (wf.open(QIODevice::WriteOnly | QIODevice::Text))
+                wf.write(after.toUtf8());
+        });
+    const qint64 ms_writeQueue = syncPhase.elapsed();
+
+    qCInfo(logging::lcOpenMW).nospace()
+        << "syncOpenMWConfig ms total=" << syncTotal.elapsed()
+        << " scanMods=" << ms_scanMods
+        << " readCfg=" << ms_readCfg
+        << " masters=" << ms_masters
+        << " render=" << ms_render
+        << " writeQueue=" << ms_writeQueue
+        << " mods=" << mods.size();
 }
 
 void MainWindow::loadModList(const QString &path,
@@ -10329,8 +10399,33 @@ void MainWindow::onConflictsScanned(const QHash<QString, QStringList> &res)
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
+    QElapsedTimer closeTimer;
+    closeTimer.start();
+
+    // Stop any in-flight debounce timers so they don't fire after we've
+    // already started teardown (which would race the destructor and
+    // post Qt warnings about "QObject::startTimer: Timers cannot be
+    // started from another thread").
+    if (m_conflictTimer)     m_conflictTimer->stop();
+    if (m_mastersScanTimer)  m_mastersScanTimer->stop();
+
     saveModList();
+    const qint64 ms_saveSched = closeTimer.elapsed();
+
+    // saveModList moved its file writes onto a worker thread. The actual
+    // bytes have to land on disk before the process exits or Alt+F4
+    // would silently lose the user's edits.  Wait here.
+    if (m_lastSaveFuture.isRunning())
+        m_lastSaveFuture.waitForFinished();
+    const qint64 ms_flush = closeTimer.elapsed() - ms_saveSched;
+
     Settings::setWindowGeometry(saveGeometry());
     Settings::setWindowMaximized(isMaximized());
+
+    qCInfo(logging::lcApp).nospace()
+        << "closeEvent ms total=" << closeTimer.elapsed()
+        << " save=" << ms_saveSched
+        << " flush=" << ms_flush;
+
     QMainWindow::closeEvent(event);
 }

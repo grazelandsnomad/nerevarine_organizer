@@ -3,6 +3,7 @@
 
 #include <QColor>
 #include <QDateTime>
+#include <QFuture>
 #include <QJsonObject>
 #include <QList>
 #include <QMainWindow>
@@ -586,6 +587,13 @@ private:
     // After this flips true, an empty m_modList is a legitimate user delete
     // and gets persisted normally.
     bool m_modListLoaded = false;
+
+    // Tracks the most recent async save-side file write (snapshot backup
+    // copies + openmw.cfg/launcher.cfg/modlist writes that we offload off
+    // the UI thread to keep Add/Edit-mod from greying out).  closeEvent
+    // waits on this so the user's work has actually landed on disk before
+    // the process exits.  isFinished() is true between writes.
+    QFuture<void> m_lastSaveFuture;
     void runMissingMastersScan();  // slot wired to m_mastersScanTimer::timeout
     // Missing-master cache + in-flight tracking + actual scan live inside
     // LoadOrderController; this is just the UI-side sink that writes the
