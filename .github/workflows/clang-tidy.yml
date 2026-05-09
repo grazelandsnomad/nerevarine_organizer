@@ -67,15 +67,24 @@ jobs:
           cmake --build build-tidy --target nerevarine_organizer_autogen
 
       - name: Run clang-tidy on src/
-        # `--warnings-as-errors='*'` makes every enabled check (see
-        # .clang-tidy at the repo root) a hard PR-blocking failure.
-        # xargs parallelism is bounded to nproc to keep the runner from
-        # OOM'ing on large TUs (mainwindow.cpp parses heavy with full
-        # Qt includes).  `--extra-arg=-std=c++23` is belt-and-suspenders
+        # `--warnings-as-errors='*,-misc-include-cleaner'` makes every
+        # enabled check a hard PR-blocking failure EXCEPT
+        # misc-include-cleaner.  The negative entry is critical: the
+        # .clang-tidy file already lists misc-include-cleaner under
+        # WarningsAsErrors's exclusion, but `-warnings-as-errors` on
+        # the CLI APPENDS to (rather than overrides) that setting -
+        # so a bare '*' here re-enables include-cleaner promotion to
+        # error and re-introduces the failure.  Misc-include-cleaner
+        # warnings still print so new unused-include regressions are
+        # visible at PR review time; legacy include cleanup happens
+        # incrementally rather than all-at-once.  xargs parallelism
+        # is bounded to nproc to keep the runner from OOM'ing on
+        # large TUs (mainwindow.cpp parses heavy with full Qt
+        # includes).  `--extra-arg=-std=c++23` is belt-and-suspenders
         # alongside the -std=c++23 already in compile_commands.json.
         run: |
           find src -name "*.cpp" -print0 \
             | xargs -0 -P"$(nproc)" -I{} \
                 clang-tidy-19 -p build-tidy --quiet \
-                    --warnings-as-errors='*' \
+                    --warnings-as-errors='*,-misc-include-cleaner' \
                     --extra-arg=-std=c++23 {}

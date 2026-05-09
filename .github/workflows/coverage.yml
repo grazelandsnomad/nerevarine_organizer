@@ -26,13 +26,21 @@ jobs:
         # gcov is bundled with gcc; lcov turns gcov output into the
         # tracefile Codecov reads.  ubuntu-22.04 ships lcov 1.15 which
         # is fine for our needs (no branch-coverage shenanigans).
+        # gcov-12 is REQUIRED here, not just gcc-12 - the .gcno notes
+        # files emitted by gcc-12 carry version 'B23*' and the
+        # default ubuntu-22.04 gcov binary (gcov-11, 'B14*') refuses
+        # to read them with "GCOV failed".  Pass --gcov-tool gcov-12
+        # to lcov below so the right binary is used regardless of
+        # what /usr/bin/gcov resolves to.
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             gcc-12 g++-12 lcov ninja-build cmake
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100
           sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100
-          gcov --version
+          # gcov-12 ships in the gcc-12 package as /usr/bin/gcov-12;
+          # the default /usr/bin/gcov stays gcov-11 on ubuntu-22.04.
+          gcov-12 --version
           lcov --version
 
       - name: Install Qt 6.7
@@ -75,10 +83,15 @@ jobs:
         # the percentage reflects only the project's own source.
         # Keep the raw + cleaned files for inspection if Codecov
         # rejects upload.
+        # `--gcov-tool gcov-12` is mandatory: ubuntu-22.04's default
+        # /usr/bin/gcov is gcov-11 and rejects the gcov-12-emitted
+        # .gcno files with "GCOV failed ... version 'B23*', prefer
+        # 'B14*'".
         run: |
           lcov --capture --directory build-cov \
                --base-directory . \
                --no-external \
+               --gcov-tool gcov-12 \
                --output-file coverage.info \
                --rc lcov_branch_coverage=1
           lcov --remove coverage.info \
@@ -88,6 +101,7 @@ jobs:
                '*/moc_*' \
                '*/qrc_*' \
                '*/ui_*' \
+               --gcov-tool gcov-12 \
                --output-file coverage.info \
                --rc lcov_branch_coverage=1
           lcov --list coverage.info

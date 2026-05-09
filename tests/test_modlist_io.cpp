@@ -22,9 +22,6 @@
 
 #include <iostream>
 
-#include <sys/stat.h>
-#include <unistd.h>
-
 namespace {
 
 int s_passed = 0;
@@ -99,31 +96,28 @@ void testWriteModlistFile_overwriteCreatesBackup()
           QString::number(baks.size()) + " backup(s)");
 }
 
-void testWriteModlistFile_readOnlyDirReturnsError()
+void testWriteModlistFile_missingParentReturnsError()
 {
-    std::cout << "\n[writeModlistFile: read-only parent dir → error string returned]\n";
+    std::cout << "\n[writeModlistFile: missing parent dir → error string returned]\n";
     QTemporaryDir tmp;
     if (!tmp.isValid()) { std::cerr << "tmp setup failed\n"; std::exit(1); }
 
-    // chmod 0500 (r-x only) on the parent dir so QFile::open(WriteOnly)
-    // fails on a non-existent target.  POSIX-only - skip on Windows
-    // when we add it.
-    const QString roDir = tmp.path() + "/readonly";
-    QDir().mkpath(roDir);
-    if (::chmod(roDir.toLocal8Bit().constData(), 0500) != 0) {
-        std::cerr << "  (skipped: couldn't chmod the dir)\n";
-        return;
-    }
-
-    const QString path = roDir + "/modlist.txt";
+    // Cross-platform way to force QFile::open(WriteOnly) to fail:
+    // point at a target whose parent dir doesn't exist.  QFile does
+    // NOT auto-mkdir parents, so open() returns false on both Linux
+    // and Windows.  This replaces an earlier POSIX-chmod-0500 test
+    // that silently passed on Windows because NTFS doesn't honour
+    // POSIX permission bits through MinGW's chmod() syscall - the
+    // dir stayed writable and the write succeeded, breaking the
+    // assertion that an error string came back.
+    const QString path = tmp.path() + "/no_such_dir/sub/modlist.txt";
     auto err = modlist_io::writeModlistFile(path, "content");
-
-    // Restore writable so QTemporaryDir can clean up.
-    ::chmod(roDir.toLocal8Bit().constData(), 0700);
 
     check("returns an error string on open failure", err.has_value());
     check("error string is non-empty",
           err.has_value() && !err->isEmpty());
+    check("file was NOT created (no auto-mkdir)",
+          !QFile::exists(path));
 }
 
 void testWriteModlistFile_emptyPathReturnsError()
@@ -191,7 +185,7 @@ int main(int argc, char **argv)
 
     testWriteModlistFile_success();
     testWriteModlistFile_overwriteCreatesBackup();
-    testWriteModlistFile_readOnlyDirReturnsError();
+    testWriteModlistFile_missingParentReturnsError();
     testWriteModlistFile_emptyPathReturnsError();
     testWriteModlistFile_emptyContentSucceeds();
     testWriteModlistFile_serialOverwriteIsAtomicEnough();
