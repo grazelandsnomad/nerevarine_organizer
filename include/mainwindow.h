@@ -18,7 +18,6 @@
 
 #include "downloadqueue.h"
 #include "installcontroller.h"   // for InstallController::VerifyFailKind in slot
-#include "modroles.h"
 #include "nexusclient.h"
 #include "game_profiles.h"
 
@@ -215,6 +214,24 @@ private:
     void setupCentralWidget();
 
     void saveModList();
+    // Debounced save: 150ms single-shot QTimer.  Use for high-traffic
+    // mutation sites where the user might fire several actions in quick
+    // succession (drag-drop reorder, hold-to-repeat move up/down, rapid
+    // favorite/collapse toggles).  Multiple calls within the window
+    // collapse into one saveModList() call.  Synchronous saveModList()
+    // also stops this timer at entry so a sync caller (closeEvent,
+    // profile switch, undo apply) can't be raced by a stale schedule.
+    void scheduleSaveModList();
+    // Surface a worker-thread file-write failure on the UI.  The async
+    // save chain (saveModList + syncOpenMWConfig) does its disk hits on
+    // QtConcurrent so the user-facing "grey freeze" is gone, but a
+    // QFile::open failure on the worker (read-only mount, AppImage
+    // writing into the wrong dir, full disk) used to vanish into
+    // log.txt as a qCWarning - the user got no signal at all.  Workers
+    // QMetaObject::invokeMethod this slot via QPointer<MainWindow> so
+    // it always runs on the UI thread, then NotifyBanner flashes a
+    // 7-second red banner naming the file that failed.
+    void onAsyncWriteFailed(const QString &filePath, const QString &reason);
     // Persist a single placeholder row's current state into a SPECIFIC
     // profile's modlist file -- used when an InstallController signal
     // lands while the user is on a different profile, so the install
@@ -581,6 +598,7 @@ private:
     // scan is entangled with currentProfile() and m_groundcoverApproved.
     ScanCoordinator *m_scans = nullptr;
     QTimer *m_mastersScanTimer = nullptr;
+    QTimer *m_saveModListTimer = nullptr;  // debounce - see scheduleSaveModList()
     // True once loadModList has populated m_modList from disk.  Until then,
     // saveModList must NOT overwrite the on-disk file with an empty in-memory
     // list (loads-in-progress / load failures would otherwise wipe state).

@@ -13,6 +13,7 @@ Checks: >
   -*,
   bugprone-*,
   clang-analyzer-*,
+  misc-include-cleaner,
   -bugprone-easily-swappable-parameters,
   -bugprone-implicit-widening-of-multiplication-result,
   -bugprone-narrowing-conversions,
@@ -23,7 +24,16 @@ Checks: >
 
 # Treat every enabled check as a hard fail.  The whole point is to fail
 # the build at PR time rather than letting findings rot.
-WarningsAsErrors: '*'
+#
+# misc-include-cleaner is excluded from the error gate intentionally:
+# legacy includes across the codebase still trip it, and forcing them
+# to zero before this rule can be turned on as an error would block
+# unrelated work.  The check still RUNS and surfaces warnings in CI
+# output, so new unused-include regressions (the class the user hit
+# in the 0.4 readiness pass) are visible at PR review time.  Flip to
+# `WarningsAsErrors: '*'` once a tracking issue closes out the
+# legacy backlog.
+WarningsAsErrors: '*,-misc-include-cleaner'
 
 # Limit header diagnostics to project headers.  The previous regex
 # 'include/.*\.h$' is a substring match and also matched Qt's bundled

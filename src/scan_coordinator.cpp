@@ -84,6 +84,45 @@ void ScanCoordinator::invalidateDataFoldersCache(const QString &path)
 {
     m_dataFoldersCache.remove(path);
     m_bsaCache.remove(path);
+
+    // Master cache is keyed at the FILE level, so we have to walk and
+    // drop any plugin path that lives under this modPath.  No other
+    // signal tells us a mod was uninstalled / re-extracted, and stale
+    // entries would otherwise leak forever.  The mtime guard already
+    // protects against use-after-overwrite within a session, but
+    // explicit removal keeps the table from growing unbounded across
+    // a long session of installs/uninstalls.
+    if (path.isEmpty()) return;
+    const QString prefix = path.endsWith('/') ? path : (path + '/');
+    for (auto it = m_mastersCache.begin(); it != m_mastersCache.end(); ) {
+        if (it.key() == path || it.key().startsWith(prefix))
+            it = m_mastersCache.erase(it);
+        else
+            ++it;
+    }
+}
+
+QStringList ScanCoordinator::cachedTes3Masters(const QString &pluginPath)
+{
+    if (pluginPath.isEmpty()) return {};
+
+    // mtime gate: plugin overwrite (re-extract, manual replace) bumps
+    // the mtime so the cache misses and we re-read.  -1 mtime (file
+    // gone) drops the entry.
+    const QFileInfo fi(pluginPath);
+    if (!fi.exists()) {
+        m_mastersCache.remove(pluginPath);
+        return {};
+    }
+    const qint64 mtime = fi.lastModified().toMSecsSinceEpoch();
+
+    auto it = m_mastersCache.find(pluginPath);
+    if (it != m_mastersCache.end() && it.value().first == mtime)
+        return it.value().second;
+
+    QStringList masters = plugins::readTes3Masters(pluginPath);
+    m_mastersCache.insert(pluginPath, {mtime, masters});
+    return masters;
 }
 
 QStringList ScanCoordinator::cachedBsaFiles(const QString &path)

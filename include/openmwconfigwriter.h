@@ -119,6 +119,42 @@ QStringList readLauncherCfgContentOrder(const QString &existingLauncherCfg);
 // `currentprofile=` key, or that profile has no `<ts>/data=` lines.
 QStringList readLauncherCfgDataPaths(const QString &existingLauncherCfg);
 
+// Inputs for the pure orchestration layer that sits between
+// MainWindow's modlist snapshot and the final openmw.cfg / launcher.cfg
+// writes.  Carved out of MainWindow::syncOpenMWConfig so the
+// orphan-rescue + launcher-augment + master-satisfaction + scrub
+// logic - the highest-risk failure surface in 0.4 - is unit-testable.
+//
+// QtCore-only on purpose: FS access happens internally via QFileInfo/QDir,
+// no widget access, no QSettings, no MainWindow state.  Tests pin
+// behaviour against on-disk fixtures via QTemporaryDir.
+struct SyncPrepareInputs {
+    QString          existingCfg;        // current openmw.cfg text
+    QString          launcherCfgText;    // launcher.cfg text (empty = absent)
+    QList<ConfigMod> mods;               // built from modlist UI state
+    QSet<QString>    managedModPaths;    // canonical paths Nerevarine manages
+    QString          modsRoot;           // m_modsDir, QDir::cleanPath'd
+    QStringList      loadOrder;          // current managed load order
+};
+
+// Output of prepareForSync, ready to feed into renderOpenMWConfig + the
+// async file writers.  Caller mutates m_loadOrder ← effectiveLoadOrder
+// when changed, posts a status-bar message when droppedOrphans > 0.
+struct SyncPrepareResult {
+    QString          scrubbedExisting;     // input to renderOpenMWConfig
+    QList<ConfigMod> mods;                 // mutated copy (suppressedPlugins set)
+    QStringList      effectiveLoadOrder;   // groundcover + suppressed dropped
+    int              droppedOrphans = 0;   // count for status bar
+};
+
+// Run the orphan-managed rescue, the launcher-only-externals
+// augmentation, the orphan-plugin scrub, the master-satisfaction pass,
+// and the load-order filter.  Pure on top of FS reads.  See the
+// individual block comments inside the implementation for the bug
+// reports each step covers; the relevant translation in the older
+// MainWindow::syncOpenMWConfig is preserved verbatim.
+SyncPrepareResult prepareForSync(const SyncPrepareInputs &in);
+
 // Decoded contents of an openmw.cfg file in the bits we care about for
 // the "import existing OpenMW setup" flow.  Encounter order is preserved
 // for all three lists: openmw loads `data=` paths in declaration order

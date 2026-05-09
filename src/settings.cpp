@@ -31,6 +31,7 @@ constexpr auto kPatchesDeclined     = "patches/declined";
 constexpr auto kGroundcoverApproved = "groundcover/approved";
 constexpr auto kWizardCompleted     = "wizard/completed";
 constexpr auto kSkipDesktopCheck    = "shortcuts/skipDesktopCheck";
+constexpr auto kShowAllGames        = "ui/showAllGames";
 constexpr auto kNexusApiKey         = "nexus/apikey";
 
 // Legacy keys promoted out of QSettings on first launch under newer code.
@@ -416,6 +417,16 @@ void Settings::setWizardCompleted(bool completed)
 bool Settings::skipDesktopCheck()
 {
     return QSettings().value(kSkipDesktopCheck, false).toBool();
+}
+
+bool Settings::showAllGames()
+{
+    return QSettings().value(kShowAllGames, false).toBool();
+}
+
+void Settings::setShowAllGames(bool show)
+{
+    QSettings().setValue(kShowAllGames, show);
 }
 
 void Settings::setSkipDesktopCheck(bool skip)

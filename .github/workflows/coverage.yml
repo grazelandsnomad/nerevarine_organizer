@@ -1,0 +1,114 @@
+name: Coverage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  coverage:
+    # Mirror the test workflow so the coverage build sees the same
+    # environment as CI tests.  ubuntu-22.04 + GCC 12 also matches the
+    # AppImage builder, so coverage numbers reflect what users actually
+    # run.
+    runs-on: ubuntu-22.04
+
+    env:
+      CC: gcc-12
+      CXX: g++-12
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GCC 12 + lcov + Ninja + cmake
+        # gcov is bundled with gcc; lcov turns gcov output into the
+        # tracefile Codecov reads.  ubuntu-22.04 ships lcov 1.15 which
+        # is fine for our needs (no branch-coverage shenanigans).
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-12 g++-12 lcov ninja-build cmake
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100
+          gcov --version
+          lcov --version
+
+      - name: Install Qt 6.7
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.3'
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          cache: true
+
+      - name: Configure with --coverage
+        # -O0 + --coverage gives gcov the line-by-line counts.  Don't
+        # use Release here: the optimizer folds branches and the
+        # resulting tracefile is misleading.  Debug build is plenty
+        # fast for a 10k-line codebase.
+        run: |
+          cmake -S . -B build-cov -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER=gcc-12 \
+            -DCMAKE_CXX_COMPILER=g++-12 \
+            -DCMAKE_C_FLAGS="--coverage -O0" \
+            -DCMAKE_CXX_FLAGS="--coverage -O0" \
+            -DCMAKE_EXE_LINKER_FLAGS="--coverage" \
+            -DCMAKE_SHARED_LINKER_FLAGS="--coverage"
+
+      - name: Build
+        run: cmake --build build-cov -j"$(nproc)"
+
+      - name: Run unit tests
+        # "unit" only - the integration test (test_nxm full) needs
+        # external services (Nexus API, KIO protocol files) and would
+        # poison the coverage with skipped paths.
+        working-directory: build-cov
+        run: ctest -L unit --output-on-failure -j"$(nproc)"
+
+      - name: Capture coverage with lcov
+        # `--no-external` keeps system / Qt / build-dir generated
+        # files (autogen/, moc_*.cpp, ui_*.h) out of the report, so
+        # the percentage reflects only the project's own source.
+        # Keep the raw + cleaned files for inspection if Codecov
+        # rejects upload.
+        run: |
+          lcov --capture --directory build-cov \
+               --base-directory . \
+               --no-external \
+               --output-file coverage.info \
+               --rc lcov_branch_coverage=1
+          lcov --remove coverage.info \
+               '*/build-cov/*' \
+               '*/tests/*' \
+               '*_autogen/*' \
+               '*/moc_*' \
+               '*/qrc_*' \
+               '*/ui_*' \
+               --output-file coverage.info \
+               --rc lcov_branch_coverage=1
+          lcov --list coverage.info
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.info
+          fail_ci_if_error: false   # don't block PRs on Codecov outages
+          verbose: true
+        env:
+          # CODECOV_TOKEN is optional for public repos but recommended
+          # to avoid rate limits.  Set it in repo Settings → Secrets
+          # and Variables → Actions if uploads start getting throttled.
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload tracefile as artifact
+        # Backstop in case the Codecov upload fails - the developer
+        # can pull the tracefile down and view it locally with
+        # `genhtml coverage.info -o html-cov`.
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-tracefile
+          path: coverage.info

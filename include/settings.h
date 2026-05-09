@@ -148,6 +148,16 @@ struct Settings {
     static bool    skipDesktopCheck();
     static void    setSkipDesktopCheck(bool skip);
 
+    // -- Experimental "show all games" toggle ---
+    // The 0.4 dropdown defaults to OpenMW + FNV (the games whose
+    // install/launch paths are tested for this release).  Power users
+    // who want to revisit Skyrim / Oblivion / Fallout 4 / etc.
+    // unhide them via this preference; a toolbar checkbox sets it.
+    // Default false so a fresh install matches the "supported games"
+    // announcement in the 0.4 release notes.
+    static bool    showAllGames();
+    static void    setShowAllGames(bool show);
+
     // -- Nexus API key (plain-text fallback only) ---
     // The app prefers the system keychain when HAVE_QTKEYCHAIN is on;
     // these accessors are both the fallback storage AND the legacy

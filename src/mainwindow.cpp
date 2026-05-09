@@ -28,7 +28,6 @@
 #include "ini_doc.h"
 #include "nexus_name.h"
 #include "conflict_scan.h"
-#include "reboot_check.h"
 #include "toolbar_customization.h"
 #include "scan_coordinator.h"
 #include "backup_manager.h"
@@ -124,13 +123,13 @@
 #include "firstrunwizard.h"
 #include "fs_utils.h"
 #include "pluginparser.h"
-#include "master_satisfaction.h"
+#include "mod_naming.h"
+#include "modlist_io.h"
 #include "openmwconfigwriter.h"
 #include "log_triage.h"
 #include "plugin_collisions.h"
 #include "asset_collisions.h"
 #include "modlist_sync_guard.h"
-#include "bsareader.h"
 #include "safe_fs.h"
 #include "deps_resolver.h"
 #include <QFutureWatcher>
@@ -146,6 +145,7 @@ using plugins::readTes3Masters;
 // Forward decls for helpers that ARE still defined in this file.
 static QString     detectLootBinary();
 static QString     lootGameFor(const QString &profileId);
+static QString     resolveUserStatePath(const QString &filename);
 
 // Game-table accessor - definition lives alongside kBuiltinGames further
 // down the file.  Returned via value so the wizard can consume it without
@@ -429,6 +429,15 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_mastersScanTimer, &QTimer::timeout,
             this, &MainWindow::runMissingMastersScan);
 
+    // saveModList debounce (see scheduleSaveModList()).  Lifetime is
+    // tied to MainWindow via parent-child; closeEvent stops it as a
+    // belt-and-braces guard before the synchronous flush.
+    m_saveModListTimer = new QTimer(this);
+    m_saveModListTimer->setSingleShot(true);
+    m_saveModListTimer->setInterval(150);
+    connect(m_saveModListTimer, &QTimer::timeout,
+            this, [this]() { saveModList(); });
+
     QTimer::singleShot(0, m_scans, &ScanCoordinator::scheduleSizeScan);
 
     // Pre-warm Qt's dialog icon and style resources so the first user-triggered
@@ -670,15 +679,27 @@ void MainWindow::maybeShowFirstRunWizard()
         }
     }
     // Also probe the modlist file on disk for every configured game -
-    // the current profile might not be the one with mods on it.
+    // the current profile might not be the one with mods on it. Routed
+    // through resolveUserStatePath so an AppImage install hits
+    // AppDataLocation instead of the read-only squashfs mount, matching
+    // the path loadModList itself uses.
     if (!hasExistingModlist) {
         for (const GameProfile &gp : m_profiles->games()) {
-            QString filename = "modlist_" + gp.id + ".txt";
+            const QString filename = "modlist_" + gp.id + ".txt";
+            const QString resolved = resolveUserStatePath(filename);
+            QFileInfo fi(resolved);
+            if (fi.exists() && fi.size() > 0) {
+                hasExistingModlist = true;
+                break;
+            }
+            // Dev/release-build legacy fallbacks: state may sit
+            // alongside the binary if the user installed an older
+            // build before AppDataLocation became the primary path.
             for (const QString &dir : {QCoreApplication::applicationDirPath() + "/",
                                         QCoreApplication::applicationDirPath() + "/../"})
             {
-                QFileInfo fi(dir + filename);
-                if (fi.exists() && fi.size() > 0) {
+                QFileInfo fb(dir + filename);
+                if (fb.exists() && fb.size() > 0) {
                     hasExistingModlist = true;
                     break;
                 }
@@ -803,6 +824,23 @@ void MainWindow::setupMenuBar()
             Settings::setOpenmwLauncherPath(currentProfile().id, path);
         }
     });
+    settingsMenu->addSeparator();
+
+    // Experimental "show all games" toggle.  0.4 ships with OpenMW + FNV
+    // pinned in the game dropdown - the games whose install/launch
+    // paths are tested for this release.  Power users coming from
+    // Skyrim / Oblivion / Fallout 4 / etc. who hit a wall on first
+    // launch can flip this to surface the legacy game list while we
+    // re-test those paths.  Off by default.
+    {
+        auto *act = settingsMenu->addAction(T("menu_show_all_games"));
+        act->setCheckable(true);
+        act->setChecked(Settings::showAllGames());
+        connect(act, &QAction::toggled, this, [this](bool on) {
+            Settings::setShowAllGames(on);
+            updateGameButton();
+        });
+    }
     settingsMenu->addSeparator();
 
     // Columns submenu - actions live on m_columnHeader; we just attach them.
@@ -1157,7 +1195,7 @@ void MainWindow::setupCentralWidget()
         if (!sep) return;
         m_undoStack->pushUndo();
         collapseSection(sep, !sep->data(ModRole::Collapsed).toBool());
-        saveModList();
+        scheduleSaveModList();   // debounced - rapid collapse/expand coalesces
     });
 
     // Click on the green update-triangle: the user has already installed
@@ -1212,7 +1250,7 @@ void MainWindow::setupCentralWidget()
         bool isFav = item->data(ModRole::IsFavorite).toBool();
         item->setData(ModRole::IsFavorite, !isFav);
         m_modList->update(idx);
-        saveModList();
+        scheduleSaveModList();   // debounced - rapid star toggles coalesce
     });
 
     connect(m_delegate, &ModListDelegate::videoReviewClicked, this,
@@ -1230,7 +1268,14 @@ void MainWindow::setupCentralWidget()
     connect(m_modList->model(), &QAbstractItemModel::rowsAboutToBeMoved,
             this, [this]() { if (!m_undoStack->isApplyingState()) m_undoStack->pushUndo(); });
     connect(m_modList->model(), &QAbstractItemModel::rowsMoved,
-            this, [this]() { saveModList(); scheduleConflictScan(); });
+            this, [this]() {
+        // Debounced - drag-drop of multi-row selections fires N rowsMoved
+        // signals, all of which need a save to land.  Coalescing them
+        // avoids the N×waitForFinished serialization stall on the
+        // m_lastSaveFuture chain.
+        scheduleSaveModList();
+        scheduleConflictScan();
+    });
 
     m_modList->viewport()->installEventFilter(this);
     m_modList->installEventFilter(this);
@@ -2661,11 +2706,10 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
     // One folder per mod.  When a Nexus archive is re-downloaded, the default
     // path `<modsDir>/<baseName>` already exists and InstallController appends
     // "_<timestamp>" - left unchecked, reinstalls of the same mod pile up as
-    // "<prefix>", "<prefix>_<ts1>", "<prefix>_<ts2>" ….  Delete every sibling
-    // folder matching "<prefix>(_<digits>)?" so only the freshly-installed
-    // one survives.  Gated on the stripped prefix still looking like a Nexus
-    // "name-<id>-<ver>-…-<timestamp>" shape - user-named folders whose name
-    // just happens to end in "_1234" never trip the cleanup.
+    // "<prefix>", "<prefix>_<ts1>", "<prefix>_<ts2>" …. mod_naming::findStaleSiblings
+    // owns the "what counts as a sibling of THIS install" decision; this
+    // block just runs the side effects (purge stale rows, recursive
+    // remove, status bar).
     {
         const QFileInfo newInfo(dirPath);
         const QString parentDir = newInfo.absolutePath();
@@ -2674,42 +2718,31 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
         if (!cleanMods.isEmpty()
             && QDir::cleanPath(parentDir) == cleanMods)
         {
-            static const QRegularExpression trailSuffix(
-                QStringLiteral("_\\d+$"));
-            QString prefix = newInfo.fileName();
-            prefix.remove(trailSuffix);
-            static const QRegularExpression nexusShape(
-                QStringLiteral("^.+-\\d+$"));
-            if (nexusShape.match(prefix).hasMatch()) {
-                const QRegularExpression siblingPat(
-                    QLatin1String("^") + QRegularExpression::escape(prefix) +
-                    QLatin1String("(_\\d+)?$"));
-                QDir parent(parentDir);
-                const QStringList subs = parent.entryList(
-                    QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
-                int removed = 0;
-                for (const QString &sub : subs) {
-                    if (sub == newInfo.fileName()) continue;
-                    if (!siblingPat.match(sub).hasMatch()) continue;
-                    const QString oldPath = parent.absoluteFilePath(sub);
-                    // Purge any modlist rows still pointing at the old path;
-                    // leaving them behind would show up as "missing mod"
-                    // rows on the next scan.
-                    for (int r = m_modList->count() - 1; r >= 0; --r) {
-                        auto *row = m_modList->item(r);
-                        if (row == item) continue;
-                        if (row->data(ModRole::ItemType).toString() != ItemType::Mod)
-                            continue;
-                        const QString rmp = row->data(ModRole::ModPath).toString();
-                        if (QDir::cleanPath(rmp) == QDir::cleanPath(oldPath))
-                            delete m_modList->takeItem(r);
-                    }
-                    if (QDir(oldPath).removeRecursively()) ++removed;
+            QDir parent(parentDir);
+            const QStringList subs = parent.entryList(
+                QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+            const QStringList stale =
+                mod_naming::findStaleSiblings(newInfo.fileName(), subs);
+            int removed = 0;
+            for (const QString &sub : stale) {
+                const QString oldPath = parent.absoluteFilePath(sub);
+                // Purge any modlist rows still pointing at the old path;
+                // leaving them behind would show up as "missing mod"
+                // rows on the next scan.
+                for (int r = m_modList->count() - 1; r >= 0; --r) {
+                    auto *row = m_modList->item(r);
+                    if (row == item) continue;
+                    if (row->data(ModRole::ItemType).toString() != ItemType::Mod)
+                        continue;
+                    const QString rmp = row->data(ModRole::ModPath).toString();
+                    if (QDir::cleanPath(rmp) == QDir::cleanPath(oldPath))
+                        delete m_modList->takeItem(r);
                 }
-                if (removed > 0)
-                    statusBar()->showMessage(
-                        T("mod_cleaned_siblings").arg(removed), 5000);
+                if (QDir(oldPath).removeRecursively()) ++removed;
             }
+            if (removed > 0)
+                statusBar()->showMessage(
+                    T("mod_cleaned_siblings").arg(removed), 5000);
         }
     }
 
@@ -2737,75 +2770,10 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
 
     // If the installed folder has a generic name (e.g. "scripts"), try to replace
     // it with the actual Nexus mod title so the list entry is human-readable.
-    // Three classes of match:
-    //   · exact name in kGenericFolderNames (data / meshes / scripts / …)
-    //   · Nexus archive-folder shape like "main-54985-0-6-6-1775044149" or
-    //     "main-54985-0-6-6-1775044149_1776202250".  The literal "main"
-    //     prefix is what 7z writes when a Nexus archive is extracted
-    //     without an explicit output folder; the trailing "_<digits>" is
-    //     an upload-iteration marker the CDN sometimes appends, so both
-    //     hyphens and underscores must be accepted throughout.
-    //   · generic "<anything>-<id>-<v>-<v>-<v>-<timestamp>" shape matching
-    //     mods that were drag-dropped with their archive-derived folder
-    //     name intact (OAAB_Data-49042-2-5-1-1764958680 etc.) - four or
-    //     more numeric segments after the first is enough to tell a
-    //     user-named folder from a Nexus-slugged one.
-    static const QStringList kGenericFolderNames = {
-        "scripts", "data", "data files", "meshes", "textures", "sounds", "music",
-        "bookart", "icons", "splash", "video", "fonts", "main",
-        // "mygui" is a UI-layout directory (e.g. Interface Reimagined ships
-        // a `mygui/` root in the archive).  When users drag-drop the
-        // archive's inner folder directly, the mod ends up in the list as
-        // literally "mygui" - useless to scan for, so auto-rename it to
-        // the Nexus title whenever the URL is known.
-        "mygui",
-        // FOMOD installers frequently call their required module "00 Core"
-        // (OAAB_Data, Tamriel Rebuilt, and countless smaller mods).  If the
-        // user picks the inner folder instead of the archive root, the mod
-        // lands in the list as literally "00 Core" - give it the Nexus title
-        // instead, same as the other generic names above.
-        "00 core",
-        // Bare "complete pack" sometimes ends up as the folder name for mods
-        // whose archive root is literally "Complete pack" - same story as
-        // "main"/"mygui": no information left to scan, so fall back to the
-        // Nexus title when available.
-        "complete pack",
-        // Some mods ship an inner folder literally called "open_mw" or
-        // "sm_CV_mask" etc.  Rename to the Nexus title like the rest.
-        "open_mw",
-        "sm_cv_mask",
-        "sm_m_blade",
-        "hq",
-        "mq",
-        "animations",
-        "disenchanting",
-        "disenchant"
-    };
-    static const QRegularExpression kNexusArchiveShape(
-        // "main-<id>-<v>-<ts>" and "complete pack-<id>-<v>-<ts>" are the two
-        // common "archive-root-plus-version-chain" slugs that survive a
-        // drag-drop or an unnamed extraction.  Matching both here lets their
-        // trailing version chain be arbitrarily long (or short) without
-        // having to dial the generic kNexusVersionedArchive threshold down.
-        QStringLiteral(R"(^(main|complete pack)[-_]\d+([-_]\d+)*$)"),
-        QRegularExpression::CaseInsensitiveOption);
-    static const QRegularExpression kNexusVersionedArchive(
-        QStringLiteral(R"(^.+[-_]\d+([-_]\d+){3,}$)"),
-        QRegularExpression::CaseInsensitiveOption);
-    // Common inner-folder prefixes that are too generic to keep as a list
-    // entry: "sound", "audio", "mesh(es)", "fix(es)" - with or without
-    // appended suffixes (soundfx, SoundPack, audio01, meshes_replacer,
-    // fixes_pack, …).  Drag-dropped inner folders of replacer / patch
-    // archives land as literally these names, same story as "main" / "mygui"
-    // above.  Subsumes the bare "sounds" and "meshes" entries in the list.
-    static const QRegularExpression kGenericPrefixFolder(
-        QStringLiteral(R"(^(sound|audio|mesh|fix).*$)"),
-        QRegularExpression::CaseInsensitiveOption);
+    // The "what counts as generic" decision lives in mod_naming::folderNameLooksGeneric
+    // (curated list + Nexus-archive slug regexes + generic-prefix detection).
     const QString folderLc = fi.fileName().toLower();
-    const bool genericName = kGenericFolderNames.contains(folderLc)
-                          || kNexusArchiveShape.match(folderLc).hasMatch()
-                          || kNexusVersionedArchive.match(folderLc).hasMatch()
-                          || kGenericPrefixFolder.match(folderLc).hasMatch();
+    const bool genericName = mod_naming::folderNameLooksGeneric(fi.fileName());
     if (item->data(ModRole::CustomName).toString().isEmpty() && genericName)
     {
         QString cachedTitle = item->data(ModRole::NexusTitle).toString().trimmed();
@@ -2853,15 +2821,13 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
     }
 
     // Hard-coded renames for mods whose folder name is too terse or
-    // misleading to be useful as a display name.
-    static const QHash<QString, QString> kFolderRenames = {
-        { "restock", "(OpenMW 0.49) Restocking" },
-    };
+    // misleading to be useful as a display name.  Table lives in
+    // mod_naming::hardcodedRename.
     if (item->data(ModRole::CustomName).toString().isEmpty()) {
-        auto it = kFolderRenames.find(folderLc);
-        if (it != kFolderRenames.end()) {
-            item->setData(ModRole::CustomName, it.value());
-            item->setText(it.value());
+        const QString rename = mod_naming::hardcodedRename(fi.fileName());
+        if (!rename.isEmpty()) {
+            item->setData(ModRole::CustomName, rename);
+            item->setText(rename);
         }
     }
 
@@ -2869,16 +2835,10 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
     // (e.g. "Shishi - Redoran Outpost-57535-v1-1-1760726463"), strip the
     // trailing IDs/versions/timestamp and use the human-readable prefix.
     if (item->data(ModRole::CustomName).toString().isEmpty()) {
-        static const QRegularExpression kTrailingVersionChain(
-            QStringLiteral(R"([-_]\d+(?:[-_]v?\d+){2,}$)"),
-            QRegularExpression::CaseInsensitiveOption);
-        QRegularExpressionMatch m = kTrailingVersionChain.match(fi.fileName());
-        if (m.hasMatch()) {
-            QString cleanName = fi.fileName().left(m.capturedStart()).trimmed();
-            if (!cleanName.isEmpty()) {
-                item->setData(ModRole::CustomName, cleanName);
-                item->setText(cleanName);
-            }
+        const QString cleanName = mod_naming::stripTrailingVersionChain(fi.fileName());
+        if (!cleanName.isEmpty()) {
+            item->setData(ModRole::CustomName, cleanName);
+            item->setText(cleanName);
         }
     }
 
@@ -3527,7 +3487,7 @@ void MainWindow::onMoveUp()
     auto *item = m_modList->takeItem(row);
     m_modList->insertItem(row - 1, item);
     m_modList->setCurrentRow(row - 1);
-    saveModList();
+    scheduleSaveModList();   // debounced - hold Alt+↑ rapid-fires moves
 }
 
 void MainWindow::onMoveDown()
@@ -3538,7 +3498,7 @@ void MainWindow::onMoveDown()
     auto *item = m_modList->takeItem(row);
     m_modList->insertItem(row + 1, item);
     m_modList->setCurrentRow(row + 1);
-    saveModList();
+    scheduleSaveModList();   // debounced - hold Alt+↓ rapid-fires moves
 }
 
 void MainWindow::onCheckUpdates()
@@ -4822,18 +4782,23 @@ void MainWindow::reconcileLoadOrder()
         }
     }
 
-    // Topological pass: for each plugin, lift its declared masters above it.
-    // One readTes3Masters() call per plugin per reconcile - cheap (plugin
-    // headers are <1KB reads) and the sort is stable, so plugins with no
-    // dependency edge keep their positions.
-    QHash<QString, QStringList> mastersCache;
+    // Topological pass: for each plugin, lift its declared masters above
+    // it.  Routed through ScanCoordinator's (path, mtime) cache so a
+    // saveModList that fires on rename / annotation / favorite toggle
+    // doesn't re-read every plugin header on every call.  The
+    // per-reconcile QHash is still useful to dedup the same `name`
+    // looked up multiple times within a single topo sort - it's a
+    // hot-path memo on top of the cross-call mtime cache.
+    QHash<QString, QStringList> reconcileMemo;
     m_loadOrder = loadorder::topologicallySortByMasters(
         m_loadOrder,
-        [&pathByName, &mastersCache](const QString &name) -> QStringList {
-            auto it = mastersCache.constFind(name);
-            if (it != mastersCache.constEnd()) return it.value();
-            QStringList ms = readTes3Masters(pathByName.value(name));
-            mastersCache.insert(name, ms);
+        [this, &pathByName, &reconcileMemo](const QString &name) -> QStringList {
+            auto it = reconcileMemo.constFind(name);
+            if (it != reconcileMemo.constEnd()) return it.value();
+            QStringList ms = m_scans
+                ? m_scans->cachedTes3Masters(pathByName.value(name))
+                : readTes3Masters(pathByName.value(name));
+            reconcileMemo.insert(name, ms);
             return ms;
         });
 }
@@ -5114,8 +5079,37 @@ void MainWindow::autoSortLoadOrder()
     statusBar()->showMessage(T("loot_done"), 4000);
 }
 
+void MainWindow::scheduleSaveModList()
+{
+    // Restarts the 150ms single-shot.  Multiple rapid mutations within
+    // the window collapse into one saveModList() call when the timer
+    // fires.  Safe to call before m_saveModListTimer is constructed
+    // (very early in MainWindow ctor) - just no-ops.
+    if (m_saveModListTimer) m_saveModListTimer->start();
+}
+
+void MainWindow::onAsyncWriteFailed(const QString &filePath, const QString &reason)
+{
+    // Always lands on the UI thread (workers route through
+    // QMetaObject::invokeMethod with Qt::QueuedConnection).  Show a
+    // 7-second red banner so a silent disk-full / read-only-mount
+    // doesn't get lost in log.txt.  Status bar gets the same message
+    // as a fallback for users who dismissed the banner.
+    qCWarning(logging::lcModList).nospace()
+        << "async write failed: " << filePath << " (" << reason << ")";
+    const QString fileName = QFileInfo(filePath).fileName();
+    const QString msg = T("notify_write_failed").arg(fileName).arg(reason);
+    if (m_notify) m_notify->show(msg, QStringLiteral("#a13838"));
+    if (statusBar()) statusBar()->showMessage(msg, 8000);
+}
+
 void MainWindow::saveModList()
 {
+    // Coalesce: any pending debounce timer's fire is now redundant -
+    // a synchronous save is happening anyway.  Safe even when no
+    // debounce was pending (stop() is a no-op then).
+    if (m_saveModListTimer) m_saveModListTimer->stop();
+
     // Safety guard: never overwrite an existing non-empty modlist file with an
     // empty in-memory list BEFORE loadModList has populated it.  Once the
     // initial load has run, an empty list is a legitimate user delete and
@@ -5174,18 +5168,23 @@ void MainWindow::saveModList()
     // openmw.cfg mtime).
     if (m_lastSaveFuture.isRunning())
         m_lastSaveFuture.waitForFinished();
-    m_lastSaveFuture = QtConcurrent::run([modlistFile, modlistContent]() {
-        (void)safefs::snapshotBackup(modlistFile);
-        QFile f(modlistFile);
-        if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            qCWarning(logging::lcModList)
-                << "saveModList: failed to open" << modlistFile
-                << "for writing:" << f.errorString();
-            return;
-        }
-        QTextStream ts(&f);
-        ts << modlistContent;
-    });
+    QPointer<MainWindow> safeSelf(this);
+    m_lastSaveFuture = QtConcurrent::run(
+        [safeSelf, modlistFile, modlistContent]() {
+            // modlist_io::writeModlistFile is unit-tested in
+            // tests/test_modlist_io.cpp - the carve-out is what makes
+            // the failure path (read-only mount, full disk) exercisable
+            // without spinning up a MainWindow.
+            auto err = modlist_io::writeModlistFile(modlistFile, modlistContent);
+            if (err.has_value()) {
+                const QString reason = *err;
+                QMetaObject::invokeMethod(safeSelf.data(),
+                    [safeSelf, modlistFile, reason]() {
+                        if (!safeSelf) return;
+                        safeSelf->onAsyncWriteFailed(modlistFile, reason);
+                    }, Qt::QueuedConnection);
+            }
+        });
     const qint64 ms_write = phase.restart();
 
     // Keep the separate plugin load-order file in sync with the modlist
@@ -7620,350 +7619,56 @@ void MainWindow::syncOpenMWConfig()
     }
     const qint64 ms_scanMods = syncPhase.restart();
 
-    // Read existing cfg (empty string if absent) - parsing lives in the writer.
+    // Read existing cfg + launcher.cfg (empty strings if absent).  The
+    // pure orchestration helper below consumes both as inputs - keeps
+    // it FS-readonly aside from QFileInfo probes, which makes it
+    // unit-testable against QTemporaryDir fixtures.
     QString existing;
     {
         QFile f(cfgPath);
         if (f.open(QIODevice::ReadOnly | QIODevice::Text))
             existing = QString::fromUtf8(f.readAll());
     }
+    QString launcherCfgText;
+    {
+        QFile lf(QDir::homePath() + "/.config/openmw/launcher.cfg");
+        if (lf.open(QIODevice::ReadOnly | QIODevice::Text))
+            launcherCfgText = QString::fromUtf8(lf.readAll());
+    }
     const qint64 ms_readCfg = syncPhase.restart();
 
-    // -- Orphan-managed rescue ---
-    //
-    // When the modlist is replaced (Import) or a mod is removed without
-    // deleting its folder from disk, openmw.cfg can still carry data=
-    // lines inside the managed section that no current managed mod
-    // claims. The orphan scrub below would drop those lines and the
-    // content= scrub would drop the corresponding plugins, wiping the
-    // OpenMW Launcher's Content List of mods whose files are still
-    // physically present.
-    //
-    // Rescue any orphan-managed path whose folder still has plugins on
-    // disk by re-emitting it OUTSIDE the managed section. The writer
-    // discards data= inside BEGIN/END unconditionally (Pass 2), but
-    // preserves data= outside as externalDataLines, and the content=
-    // entries that those plugins back up survive Pass 3 because
-    // allManagedContent doesn't claim them. Folders that no longer
-    // exist (or contain no plugins) still drop normally.
-    const QString modsRootForRescue = m_modsDir.isEmpty()
-        ? QString() : QDir::cleanPath(m_modsDir);
-    QStringList rescuedDataLines;
-    QSet<QString> rescuedManagedPaths;
-    if (!modsRootForRescue.isEmpty()) {
-        static const QString kBegin = "# --- Nerevarine Organizer BEGIN ---";
-        static const QString kEnd   = "# --- Nerevarine Organizer END ---";
-        bool inManaged = false;
-        QStringList filters;
-        for (const QString &ext : contentExts) filters << "*" + ext;
-        for (const QString &raw : existing.split('\n')) {
-            QString line = raw;
-            if (line.endsWith('\r')) line.chop(1);
-            if (line == kBegin) { inManaged = true;  continue; }
-            if (line == kEnd)   { inManaged = false; continue; }
-            if (!inManaged) continue;
-            if (!line.startsWith(QStringLiteral("data="))) continue;
-            QString path = line.mid(5);
-            if (path.size() >= 2 && path.startsWith('"') && path.endsWith('"'))
-                path = path.mid(1, path.size() - 2);
-            const QString clean = QDir::cleanPath(path);
-            if (clean != modsRootForRescue
-                && !clean.startsWith(modsRootForRescue + "/")) continue;
-            bool claimed = false;
-            for (const QString &mp : managedModPaths) {
-                if (clean == mp || clean.startsWith(mp + "/")) {
-                    claimed = true;
-                    break;
-                }
-            }
-            if (claimed) continue;
-            QDir d(path);
-            if (!d.exists()) continue;
-            if (d.entryList(filters, QDir::Files).isEmpty()) continue;
-            rescuedDataLines << QStringLiteral("data=\"") + path
-                              + QStringLiteral("\"");
-            rescuedManagedPaths.insert(clean);
-        }
-    }
-    if (!rescuedDataLines.isEmpty())
-        existing = rescuedDataLines.join('\n') + '\n' + existing;
+    // -- Pure orchestration -- (orphan rescue + launcher-only
+    // augmentation + master satisfaction + scrub + effective load
+    // order).  See openmw::prepareForSync in
+    // src/openmwconfigwriter.cpp - the bug-report-history block
+    // comments live there now, and tests/test_openmw_sync_prep.cpp
+    // pins the behaviour against on-disk fixtures.
+    openmw::SyncPrepareInputs prep;
+    prep.existingCfg      = std::move(existing);
+    prep.launcherCfgText  = std::move(launcherCfgText);
+    prep.mods             = std::move(mods);
+    prep.managedModPaths  = std::move(managedModPaths);
+    prep.modsRoot         = m_modsDir.isEmpty() ? QString()
+                                                : QDir::cleanPath(m_modsDir);
+    prep.loadOrder        = m_loadOrder;
 
-    // -- Launcher-only externals augmentation ---
-    //
-    // OpenMW Launcher writes the user's selected data= paths and content=
-    // entries into BOTH openmw.cfg and launcher.cfg, but only when the user
-    // actually opens the launcher and clicks Save/Play.  A user who set up
-    // their game with `openmw-launcher` and then never re-opened it can
-    // legitimately end up with vanilla "data=<Morrowind Data Files>" plus
-    // "content=Morrowind.esm" present in launcher.cfg but absent from the
-    // local openmw.cfg (the global /etc/openmw/openmw.cfg covers OpenMW's
-    // own load path, but Nerevarine only reads the per-user file).
-    //
-    // Without this augmentation the orphan scrub a few lines down would see
-    // no data= dir providing Morrowind.esm, drop content=Morrowind.esm, and
-    // the launcher.cfg sync at the end of this function would propagate
-    // that "drop" back to launcher.cfg - wiping the user's vanilla Content
-    // List the next time the OpenMW Launcher is opened.
-    //
-    // Treat anything in launcher.cfg's current profile that ISN'T already
-    // in openmw.cfg AND isn't under our managed mods root as legitimate
-    // external state and synthesise it as if it had been written outside
-    // the BEGIN/END markers.
-    {
-        const QString launcherPath =
-            QDir::homePath() + "/.config/openmw/launcher.cfg";
-        QFile lf(launcherPath);
-        if (lf.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            const QString launcherText = QString::fromUtf8(lf.readAll());
-            lf.close();
-
-            const QStringList lcDataPaths   =
-                openmw::readLauncherCfgDataPaths(launcherText);
-            const QStringList lcContentFiles =
-                openmw::readLauncherCfgContentOrder(launcherText);
-
-            // Index what's already represented in openmw.cfg so we don't
-            // emit duplicates that would compound on every sync.
-            QSet<QString> existingDataPaths;
-            QSet<QString> existingContent;
-            for (const QString &raw : existing.split('\n')) {
-                QString l = raw;
-                if (l.endsWith('\r')) l.chop(1);
-                if (l.startsWith(QStringLiteral("data="))) {
-                    QString p = l.mid(5);
-                    if (p.size() >= 2 && p.startsWith('"') && p.endsWith('"'))
-                        p = p.mid(1, p.size() - 2);
-                    existingDataPaths.insert(QDir::cleanPath(p));
-                } else if (l.startsWith(QStringLiteral("content="))) {
-                    existingContent.insert(l.mid(8));
-                }
-            }
-
-            // Filenames any managed mod knows about (regardless of enabled
-            // state).  Disabled-mod plugins still belong to Nerevarine and
-            // must NOT be carried back as fake externals - that would make
-            // disabling a mod inside Nerevarine fail to remove its content=
-            // line from the launcher's Selected list.
-            QSet<QString> allManagedFilenames;
-            for (const auto &cm : mods)
-                for (const auto &p : cm.pluginDirs)
-                    for (const QString &cf : p.second)
-                        allManagedFilenames.insert(cf);
-
-            const QString cleanModsRoot = m_modsDir.isEmpty()
-                ? QString() : QDir::cleanPath(m_modsDir);
-
-            QStringList synth;
-            for (const QString &p : lcDataPaths) {
-                const QString clean = QDir::cleanPath(p);
-                if (existingDataPaths.contains(clean)) continue;
-                // Paths under our mods dir are Nerevarine-managed; the
-                // writer rebuilds them from the modlist.
-                if (!cleanModsRoot.isEmpty() &&
-                    (clean == cleanModsRoot ||
-                     clean.startsWith(cleanModsRoot + "/")))
-                    continue;
-                synth << QStringLiteral("data=\"") + p + QStringLiteral("\"");
-            }
-            for (const QString &cf : lcContentFiles) {
-                if (existingContent.contains(cf)) continue;
-                if (allManagedFilenames.contains(cf)) continue;
-                synth << QStringLiteral("content=") + cf;
-            }
-
-            if (!synth.isEmpty()) {
-                // Prepend so the synthetic lines land outside the managed
-                // section (they sit before any BEGIN/END markers parsed by
-                // the writer).  Trailing newline ensures the first existing
-                // line keeps its place.
-                existing = synth.join('\n') + '\n' + existing;
-            }
-        }
-    }
-
-    // -- Orphan-plugin scrub ---
-    //
-    // Before handing off to the writer, drop `content=` lines that point at
-    // plugins no data= directory provides.  The OpenMW Launcher lets users
-    // tick any plugin visible in its Data Files tab; if they tick one whose
-    // providing mod isn't in Nerevarine's modlist (common when a mod is
-    // downloaded but never added, or after an uninstall that left stragglers
-    // in the cfg), the resulting `content=X.esp` has no matching `data=`
-    // path.  OpenMW aborts at launch with:
-    //     Fatal error: Failed loading X.esp: the content file does not exist
-    //
-    // The writer can't filter these out on its own - Phase A treats any
-    // non-managed content= entry as an external base-game plugin and keeps
-    // it.  So we pre-scrub here, where filesystem scans are fair game, and
-    // also prune m_loadOrder of the same orphans so they don't come back on
-    // the next absorb cycle.
-    QSet<QString> providedPlugins;
-    for (const auto &cm : mods) {
-        for (const auto &p : cm.pluginDirs)
-            for (const QString &cf : p.second) providedPlugins.insert(cf);
-    }
-    // data= line refers to a path under m_modsDir that no longer belongs to any
-    // mod in the list.  Covers two compounding cases:
-    //   1. User removed a mod (e.g. Remiros Groundcover) - its data= line can
-    //      linger if the OpenMW Launcher rewrote openmw.cfg between the last
-    //      sync and the remove, promoting the data= line out of the managed
-    //      section where Pass 2 of the writer would otherwise discard it.
-    //   2. User upgraded a mod to a new timestamp-suffixed folder - the old
-    //      pre-upgrade path gets promoted into the preamble the same way and
-    //      no longer matches any mod's ModPath.
-    // Either way the right thing is to drop the line entirely so the writer
-    // can rebuild authoritative data= lines from the current modlist.
-    const QString modsRoot = modsRootForRescue;
-    auto isOrphanedManagedPath = [&](const QString &rawPath) -> bool {
-        if (modsRoot.isEmpty()) return false;
-        const QString p = QDir::cleanPath(rawPath);
-        if (p != modsRoot && !p.startsWith(modsRoot + "/")) return false;
-        // Rescued in the block above - keep so the launcher still sees the
-        // mod's content= entries instead of silently dropping them.
-        if (rescuedManagedPaths.contains(p)) return false;
-        for (const QString &mp : managedModPaths)
-            if (p == mp || p.startsWith(mp + "/")) return false;
-        return true;
-    };
-    // Scan each external data= path (base-game install, outside our managed
-    // section) for plugin files - those are legitimately external and must
-    // stay.  Everything else referenced as content= is an orphan.
-    {
-        static const QString kBegin = "# --- Nerevarine Organizer BEGIN ---";
-        static const QString kEnd   = "# --- Nerevarine Organizer END ---";
-        bool inManaged = false;
-        for (QString line : existing.split('\n')) {
-            if (line.endsWith('\r')) line.chop(1);
-            if (line == kBegin) { inManaged = true;  continue; }
-            if (line == kEnd)   { inManaged = false; continue; }
-            if (inManaged)        continue;
-            if (!line.startsWith(QStringLiteral("data="))) continue;
-            QString path = line.mid(5);
-            if (path.size() >= 2 && path.startsWith('"') && path.endsWith('"'))
-                path = path.mid(1, path.size() - 2);
-            if (isOrphanedManagedPath(path)) continue;
-            QDir d(path);
-            if (!d.exists()) continue;
-            QStringList filters;
-            for (const QString &ext : contentExts) filters << "*" + ext;
-            for (const QString &f : d.entryList(filters, QDir::Files))
-                providedPlugins.insert(f);
-        }
-    }
-
-    // Filter plugins whose TES3 masters aren't satisfied.
-    //
-    // content= plugins: OpenMW aborts at launch with "File X asks for parent
-    // file Y, but it is not available or has been loaded in the wrong order"
-    // - common trigger is a mod that ships optional patch ESPs for companion
-    // mods the user didn't install (e.g. Hlaalu Seyda Neen bundles
-    // HlaaluSeydaNeen_AFFresh_Patch.ESP which needs AFFresh.esm).
-    //
-    // groundcover= plugins: same crash, no graceful fallback at all.
-    //
-    // Detection logic lives in openmw::findUnsatisfiedMasters so it is pure
-    // and testable against real TES3 fixtures; this block just collects the
-    // candidate plugins, calls the helper, and routes the result back into
-    // each mod's suppressedPlugins.
-    {
-        static const QSet<QString> baseMasters = {
-            "morrowind.esm", "tribunal.esm", "bloodmoon.esm"
-        };
-        QList<openmw::PluginRef> candidates;
-        QSet<QString>            availableLower;
-        for (const QString &cf : providedPlugins) availableLower.insert(cf.toLower());
-        for (const QString &bm : baseMasters)     availableLower.insert(bm);
-
-        for (const auto &cm : mods) {
-            if (!cm.enabled || !cm.installed) continue;
-            for (const auto &p : cm.pluginDirs)
-                for (const QString &cf : p.second) {
-                    if (cm.suppressedPlugins.contains(cf)) continue;
-                    candidates.append({cf, QDir(p.first).filePath(cf)});
-                }
-        }
-
-        const QSet<QString> unsatisfied =
-            openmw::findUnsatisfiedMasters(candidates, availableLower);
-
-        if (!unsatisfied.isEmpty()) {
-            for (auto &cm : mods) {
-                QSet<QString> hits;
-                for (const auto &p : cm.pluginDirs)
-                    for (const QString &cf : p.second)
-                        if (unsatisfied.contains(cf)) hits.insert(cf);
-                if (hits.isEmpty()) continue;
-                cm.groundcoverFiles  -= hits;
-                cm.suppressedPlugins += hits;
-            }
-        }
-    }
+    openmw::SyncPrepareResult prepared = openmw::prepareForSync(prep);
+    mods = std::move(prepared.mods);
     const qint64 ms_masters = syncPhase.restart();
 
-    // Collect groundcover and suppressed filenames so we can exclude them
-    // from the load order (otherwise absorbExternalLoadOrder hangs onto
-    // stale entries, and the launcher re-displays the bad patch on every
-    // run) and scrub orphan groundcover= lines the same way we scrub content=.
-    QSet<QString> groundcoverPlugins;
-    QSet<QString> suppressedFromLoadOrder;
-    for (const auto &cm : mods) {
-        for (const QString &gf : cm.groundcoverFiles)
-            groundcoverPlugins.insert(gf);
-        for (const QString &sp : cm.suppressedPlugins)
-            suppressedFromLoadOrder.insert(sp);
-    }
-
-    QStringList scrubbedLines;
-    QStringList droppedOrphans;
-    for (QString line : existing.split('\n')) {
-        QString probe = line;
-        if (probe.endsWith('\r')) probe.chop(1);
-        if (probe.startsWith(QStringLiteral("data="))) {
-            QString path = probe.mid(5);
-            if (path.size() >= 2 && path.startsWith('"') && path.endsWith('"'))
-                path = path.mid(1, path.size() - 2);
-            if (isOrphanedManagedPath(path)) continue;
-        }
-        if (probe.startsWith(QStringLiteral("content="))) {
-            QString cf = probe.mid(8);
-            if (!providedPlugins.contains(cf)) {
-                droppedOrphans << cf;
-                continue;
-            }
-        }
-        if (probe.startsWith(QStringLiteral("groundcover="))) {
-            QString cf = probe.mid(12);
-            if (!providedPlugins.contains(cf)) continue;
-        }
-        scrubbedLines << line;
-    }
-    const QString scrubbedExisting = scrubbedLines.join('\n');
-
-    // Groundcover plugins must not appear in the load order - OpenMW loads
-    // them via the separate groundcover= mechanism.  Suppressed plugins
-    // (missing masters) are dropped too: keeping them here means the next
-    // absorb cycle resurrects them and the user keeps hitting the same
-    // "asks for parent file X" crash.
-    QStringList effectiveLoadOrder;
-    effectiveLoadOrder.reserve(m_loadOrder.size());
-    for (const QString &cf : m_loadOrder)
-        if (providedPlugins.contains(cf)
-         && !groundcoverPlugins.contains(cf)
-         && !suppressedFromLoadOrder.contains(cf))
-            effectiveLoadOrder << cf;
-    if (effectiveLoadOrder != m_loadOrder) {
-        m_loadOrder = effectiveLoadOrder;
+    if (prepared.effectiveLoadOrder != m_loadOrder) {
+        m_loadOrder = prepared.effectiveLoadOrder;
         saveLoadOrder();
     }
 
-    if (!droppedOrphans.isEmpty()) {
+    if (prepared.droppedOrphans > 0) {
         statusBar()->showMessage(
-            T("status_orphan_content_dropped").arg(droppedOrphans.size()),
+            T("status_orphan_content_dropped").arg(prepared.droppedOrphans),
             6000);
     }
 
     const QString rendered =
-        openmw::renderOpenMWConfig(mods, m_loadOrder, scrubbedExisting);
+        openmw::renderOpenMWConfig(mods, m_loadOrder, prepared.scrubbedExisting);
 
     // -- launcher.cfg inputs (UI-thread, cheap) ---
     //
@@ -8005,12 +7710,24 @@ void MainWindow::syncOpenMWConfig()
     if (m_lastSaveFuture.isRunning())
         m_lastSaveFuture.waitForFinished();
     const QByteArray cfgBytes = rendered.toUtf8();
+    QPointer<MainWindow> safeSelf(this);
     m_lastSaveFuture = QtConcurrent::run(
-        [cfgPath, cfgBytes, launcherPath, lDataPaths, lContent]() {
+        [safeSelf, cfgPath, cfgBytes, launcherPath, lDataPaths, lContent]() {
+            auto reportFail = [safeSelf](const QString &path, const QString &why) {
+                QMetaObject::invokeMethod(safeSelf.data(),
+                    [safeSelf, path, why]() {
+                        if (!safeSelf) return;
+                        safeSelf->onAsyncWriteFailed(path, why);
+                    }, Qt::QueuedConnection);
+            };
+
             (void)safefs::snapshotBackup(cfgPath);
             {
                 QFile f(cfgPath);
-                if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) return;
+                if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                    reportFail(cfgPath, f.errorString());
+                    return;
+                }
                 f.write(cfgBytes);
             }
 
@@ -8036,8 +7753,11 @@ void MainWindow::syncOpenMWConfig()
 
             (void)safefs::snapshotBackup(launcherPath);
             QFile wf(launcherPath);
-            if (wf.open(QIODevice::WriteOnly | QIODevice::Text))
-                wf.write(after.toUtf8());
+            if (!wf.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                reportFail(launcherPath, wf.errorString());
+                return;
+            }
+            wf.write(after.toUtf8());
         });
     const qint64 ms_writeQueue = syncPhase.elapsed();
 
@@ -9710,24 +9430,25 @@ void MainWindow::updateGameButton()
         }
     }
 
-    // Remaining (non-pinned) games the user has added are HIDDEN for the
-    // current release - only OpenMW + FNV ship as supported games.  When
-    // the other games' install/launch paths are re-tested the loop below
-    // can be re-enabled to surface them in the dropdown again.
-    /* DISABLED until other games are re-tested
-    bool needSep = true;
-    for (int i = 0; i < m_profiles->size(); ++i) {
-        if (pinnedIdx.contains(i)) continue;
-        if (needSep) { menu->addSeparator(); needSep = false; }
-        auto *act = menu->addAction(m_profiles->games()[i].displayName);
-        act->setCheckable(true);
-        act->setChecked(i == m_profiles->currentIndex());
-        connect(act, &QAction::triggered, this, [this, i]() { switchToGame(i); });
-    }
+    // Remaining (non-pinned) games the user has added are gated on the
+    // experimental "Show all games" preference (Settings menu).  0.4
+    // ships pinned to OpenMW + FNV whose install/launch paths are tested
+    // for the release; flipping the toggle surfaces the legacy game list
+    // for users who installed pre-0.4 with another game configured.
+    if (Settings::showAllGames()) {
+        bool needSep = true;
+        for (int i = 0; i < m_profiles->size(); ++i) {
+            if (pinnedIdx.contains(i)) continue;
+            if (needSep) { menu->addSeparator(); needSep = false; }
+            auto *act = menu->addAction(m_profiles->games()[i].displayName);
+            act->setCheckable(true);
+            act->setChecked(i == m_profiles->currentIndex());
+            connect(act, &QAction::triggered, this, [this, i]() { switchToGame(i); });
+        }
 
-    menu->addSeparator();
-    menu->addAction(T("toolbar_manage_games"), this, &MainWindow::onAddGame);
-    */
+        menu->addSeparator();
+        menu->addAction(T("toolbar_manage_games"), this, &MainWindow::onAddGame);
+    }
 
     // Replace the old menu (avoid memory leak)
     delete m_gameBtn->menu();
@@ -9872,8 +9593,14 @@ void MainWindow::saveModListFor(const QString &profileKey,
 
     QFile out(file);
     if (!out.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
-        qCWarning(logging::lcInstall)
-            << "saveModListFor: failed to open" << file << "for writing";
+        // Cross-profile saves are SYNCHRONOUS (no QtConcurrent worker
+        // here - this writes to a foreign profile's file while the
+        // user is on a different profile, so there's no UI freeze
+        // pressure to relieve), but a silent qCWarning is exactly the
+        // failure mode the async-write banner was added for.  Reuse
+        // the same UI sink so a read-only mount on a foreign profile
+        // surfaces the same way as the active profile.
+        onAsyncWriteFailed(file, out.errorString());
         return;
     }
     QTextStream ts(&out);
@@ -10405,9 +10132,12 @@ void MainWindow::closeEvent(QCloseEvent *event)
     // Stop any in-flight debounce timers so they don't fire after we've
     // already started teardown (which would race the destructor and
     // post Qt warnings about "QObject::startTimer: Timers cannot be
-    // started from another thread").
+    // started from another thread").  saveModList() below also stops
+    // m_saveModListTimer at entry; this is the belt-and-braces version
+    // for any extra timers added later.
     if (m_conflictTimer)     m_conflictTimer->stop();
     if (m_mastersScanTimer)  m_mastersScanTimer->stop();
+    if (m_saveModListTimer)  m_saveModListTimer->stop();
 
     saveModList();
     const qint64 ms_saveSched = closeTimer.elapsed();

@@ -1,5 +1,7 @@
 #include "openmwconfigwriter.h"
 
+#include "master_satisfaction.h"
+
 #include <QDir>
 #include <QFileInfo>
 #include <QSet>
@@ -8,6 +10,269 @@
 #include <algorithm>
 
 namespace openmw {
+
+SyncPrepareResult prepareForSync(const SyncPrepareInputs &in)
+{
+    static const QString kBegin = "# --- Nerevarine Organizer BEGIN ---";
+    static const QString kEnd   = "# --- Nerevarine Organizer END ---";
+    static const QStringList contentExts{".esp", ".esm", ".omwaddon", ".omwscripts"};
+
+    SyncPrepareResult out;
+    out.mods = in.mods;     // copy; we mutate suppressedPlugins / groundcoverFiles below
+
+    QString existing = in.existingCfg;
+    const QString modsRootForRescue = in.modsRoot.isEmpty()
+        ? QString() : QDir::cleanPath(in.modsRoot);
+
+    // -- Orphan-managed rescue ---
+    //
+    // When the modlist is replaced (Import) or a mod is removed without
+    // deleting its folder from disk, openmw.cfg can still carry data=
+    // lines inside the managed section that no current managed mod
+    // claims. The orphan scrub below would drop those lines and the
+    // content= scrub would drop the corresponding plugins, wiping the
+    // OpenMW Launcher's Content List of mods whose files are still
+    // physically present.
+    //
+    // Rescue any orphan-managed path whose folder still has plugins on
+    // disk by re-emitting it OUTSIDE the managed section.
+    QSet<QString> rescuedManagedPaths;
+    {
+        QStringList rescuedDataLines;
+        if (!modsRootForRescue.isEmpty()) {
+            bool inManaged = false;
+            QStringList filters;
+            for (const QString &ext : contentExts) filters << "*" + ext;
+            for (const QString &raw : existing.split('\n')) {
+                QString line = raw;
+                if (line.endsWith('\r')) line.chop(1);
+                if (line == kBegin) { inManaged = true;  continue; }
+                if (line == kEnd)   { inManaged = false; continue; }
+                if (!inManaged) continue;
+                if (!line.startsWith(QStringLiteral("data="))) continue;
+                QString path = line.mid(5);
+                if (path.size() >= 2 && path.startsWith('"') && path.endsWith('"'))
+                    path = path.mid(1, path.size() - 2);
+                const QString clean = QDir::cleanPath(path);
+                if (clean != modsRootForRescue
+                    && !clean.startsWith(modsRootForRescue + "/")) continue;
+                bool claimed = false;
+                for (const QString &mp : in.managedModPaths) {
+                    if (clean == mp || clean.startsWith(mp + "/")) {
+                        claimed = true;
+                        break;
+                    }
+                }
+                if (claimed) continue;
+                QDir d(path);
+                if (!d.exists()) continue;
+                if (d.entryList(filters, QDir::Files).isEmpty()) continue;
+                rescuedDataLines << QStringLiteral("data=\"") + path
+                                  + QStringLiteral("\"");
+                rescuedManagedPaths.insert(clean);
+            }
+        }
+        if (!rescuedDataLines.isEmpty())
+            existing = rescuedDataLines.join('\n') + '\n' + existing;
+    }
+
+    // -- Launcher-only externals augmentation ---
+    //
+    // OpenMW Launcher writes the user's selected data= paths and content=
+    // entries into BOTH openmw.cfg and launcher.cfg, but only when the user
+    // actually opens the launcher and clicks Save/Play.  A user who set up
+    // their game with `openmw-launcher` and then never re-opened it can
+    // legitimately end up with vanilla "data=<Morrowind Data Files>" plus
+    // "content=Morrowind.esm" present in launcher.cfg but absent from the
+    // local openmw.cfg.  Treat that as legitimate external state and
+    // synthesise it as if it had been written outside the BEGIN/END markers.
+    if (!in.launcherCfgText.isEmpty()) {
+        const QStringList lcDataPaths   = readLauncherCfgDataPaths(in.launcherCfgText);
+        const QStringList lcContentFiles = readLauncherCfgContentOrder(in.launcherCfgText);
+
+        QSet<QString> existingDataPaths;
+        QSet<QString> existingContent;
+        for (const QString &raw : existing.split('\n')) {
+            QString l = raw;
+            if (l.endsWith('\r')) l.chop(1);
+            if (l.startsWith(QStringLiteral("data="))) {
+                QString p = l.mid(5);
+                if (p.size() >= 2 && p.startsWith('"') && p.endsWith('"'))
+                    p = p.mid(1, p.size() - 2);
+                existingDataPaths.insert(QDir::cleanPath(p));
+            } else if (l.startsWith(QStringLiteral("content="))) {
+                existingContent.insert(l.mid(8));
+            }
+        }
+
+        // Filenames any managed mod knows about (regardless of enabled
+        // state).  Disabled-mod plugins still belong to Nerevarine and
+        // must NOT be carried back as fake externals - that would make
+        // disabling a mod inside Nerevarine fail to remove its content=
+        // line from the launcher's Selected list.
+        QSet<QString> allManagedFilenames;
+        for (const auto &cm : out.mods)
+            for (const auto &p : cm.pluginDirs)
+                for (const QString &cf : p.second)
+                    allManagedFilenames.insert(cf);
+
+        const QString cleanModsRoot = modsRootForRescue;
+
+        QStringList synth;
+        for (const QString &p : lcDataPaths) {
+            const QString clean = QDir::cleanPath(p);
+            if (existingDataPaths.contains(clean)) continue;
+            if (!cleanModsRoot.isEmpty() &&
+                (clean == cleanModsRoot ||
+                 clean.startsWith(cleanModsRoot + "/")))
+                continue;
+            synth << QStringLiteral("data=\"") + p + QStringLiteral("\"");
+        }
+        for (const QString &cf : lcContentFiles) {
+            if (existingContent.contains(cf)) continue;
+            if (allManagedFilenames.contains(cf)) continue;
+            synth << QStringLiteral("content=") + cf;
+        }
+
+        if (!synth.isEmpty())
+            existing = synth.join('\n') + '\n' + existing;
+    }
+
+    // -- Orphan-plugin scrub: build providedPlugins set ---
+    //
+    // Drop `content=` lines that point at plugins no data= directory
+    // provides.  OpenMW aborts at launch with:
+    //     Fatal error: Failed loading X.esp: the content file does not exist
+    QSet<QString> providedPlugins;
+    for (const auto &cm : out.mods) {
+        for (const auto &p : cm.pluginDirs)
+            for (const QString &cf : p.second) providedPlugins.insert(cf);
+    }
+    auto isOrphanedManagedPath = [&](const QString &rawPath) -> bool {
+        if (modsRootForRescue.isEmpty()) return false;
+        const QString p = QDir::cleanPath(rawPath);
+        if (p != modsRootForRescue
+            && !p.startsWith(modsRootForRescue + "/")) return false;
+        if (rescuedManagedPaths.contains(p)) return false;
+        for (const QString &mp : in.managedModPaths)
+            if (p == mp || p.startsWith(mp + "/")) return false;
+        return true;
+    };
+    {
+        bool inManaged = false;
+        for (QString line : existing.split('\n')) {
+            if (line.endsWith('\r')) line.chop(1);
+            if (line == kBegin) { inManaged = true;  continue; }
+            if (line == kEnd)   { inManaged = false; continue; }
+            if (inManaged)        continue;
+            if (!line.startsWith(QStringLiteral("data="))) continue;
+            QString path = line.mid(5);
+            if (path.size() >= 2 && path.startsWith('"') && path.endsWith('"'))
+                path = path.mid(1, path.size() - 2);
+            if (isOrphanedManagedPath(path)) continue;
+            QDir d(path);
+            if (!d.exists()) continue;
+            QStringList filters;
+            for (const QString &ext : contentExts) filters << "*" + ext;
+            for (const QString &f : d.entryList(filters, QDir::Files))
+                providedPlugins.insert(f);
+        }
+    }
+
+    // -- Master satisfaction ---
+    //
+    // content= plugins: OpenMW aborts at launch with "File X asks for
+    // parent file Y, but it is not available or has been loaded in the
+    // wrong order".  groundcover= plugins: same crash, no graceful
+    // fallback.  Detection lives in openmw::findUnsatisfiedMasters.
+    {
+        static const QSet<QString> baseMasters = {
+            "morrowind.esm", "tribunal.esm", "bloodmoon.esm"
+        };
+        QList<openmw::PluginRef> candidates;
+        QSet<QString>            availableLower;
+        for (const QString &cf : providedPlugins) availableLower.insert(cf.toLower());
+        for (const QString &bm : baseMasters)     availableLower.insert(bm);
+
+        for (const auto &cm : out.mods) {
+            if (!cm.enabled || !cm.installed) continue;
+            for (const auto &p : cm.pluginDirs)
+                for (const QString &cf : p.second) {
+                    if (cm.suppressedPlugins.contains(cf)) continue;
+                    candidates.append({cf, QDir(p.first).filePath(cf)});
+                }
+        }
+
+        const QSet<QString> unsatisfied =
+            openmw::findUnsatisfiedMasters(candidates, availableLower);
+
+        if (!unsatisfied.isEmpty()) {
+            for (auto &cm : out.mods) {
+                QSet<QString> hits;
+                for (const auto &p : cm.pluginDirs)
+                    for (const QString &cf : p.second)
+                        if (unsatisfied.contains(cf)) hits.insert(cf);
+                if (hits.isEmpty()) continue;
+                cm.groundcoverFiles  -= hits;
+                cm.suppressedPlugins += hits;
+            }
+        }
+    }
+
+    // -- Scrub: build scrubbedExisting + droppedOrphans count ---
+    //
+    // groundcover= lines for plugins not in providedPlugins drop too;
+    // groundcover plugins must not appear in the load order.
+    QSet<QString> groundcoverPlugins;
+    QSet<QString> suppressedFromLoadOrder;
+    for (const auto &cm : out.mods) {
+        for (const QString &gf : cm.groundcoverFiles)
+            groundcoverPlugins.insert(gf);
+        for (const QString &sp : cm.suppressedPlugins)
+            suppressedFromLoadOrder.insert(sp);
+    }
+
+    QStringList scrubbedLines;
+    for (QString line : existing.split('\n')) {
+        QString probe = line;
+        if (probe.endsWith('\r')) probe.chop(1);
+        if (probe.startsWith(QStringLiteral("data="))) {
+            QString path = probe.mid(5);
+            if (path.size() >= 2 && path.startsWith('"') && path.endsWith('"'))
+                path = path.mid(1, path.size() - 2);
+            if (isOrphanedManagedPath(path)) continue;
+        }
+        if (probe.startsWith(QStringLiteral("content="))) {
+            QString cf = probe.mid(8);
+            if (!providedPlugins.contains(cf)) {
+                ++out.droppedOrphans;
+                continue;
+            }
+        }
+        if (probe.startsWith(QStringLiteral("groundcover="))) {
+            QString cf = probe.mid(12);
+            if (!providedPlugins.contains(cf)) continue;
+        }
+        scrubbedLines << line;
+    }
+    out.scrubbedExisting = scrubbedLines.join('\n');
+
+    // -- Effective load order ---
+    //
+    // Filter out plugins not in providedPlugins, plugins in the
+    // groundcover= section (loaded via the separate mechanism), and
+    // suppressed plugins (missing masters).  Keeping any of these in
+    // the load order means the next absorb cycle resurrects them and
+    // the user keeps hitting the same crash.
+    out.effectiveLoadOrder.reserve(in.loadOrder.size());
+    for (const QString &cf : in.loadOrder)
+        if (providedPlugins.contains(cf)
+         && !groundcoverPlugins.contains(cf)
+         && !suppressedFromLoadOrder.contains(cf))
+            out.effectiveLoadOrder << cf;
+
+    return out;
+}
 
 namespace {
 

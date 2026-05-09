@@ -1,4 +1,4 @@
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Network Test)
+find_package(Qt6 REQUIRED COMPONENTS Core Concurrent Gui Network Test Widgets)
 
 add_executable(test_nxm
     test_nxm.cpp
@@ -157,6 +157,8 @@ target_link_libraries(test_fs_utils PRIVATE
 add_executable(test_openmw_config_writer
     test_openmw_config_writer.cpp
     ${CMAKE_SOURCE_DIR}/src/openmwconfigwriter.cpp
+    ${CMAKE_SOURCE_DIR}/src/master_satisfaction.cpp
+    ${CMAKE_SOURCE_DIR}/src/pluginparser.cpp
 )
 target_include_directories(test_openmw_config_writer PRIVATE
     ${CMAKE_SOURCE_DIR}/include
@@ -165,9 +167,47 @@ target_link_libraries(test_openmw_config_writer PRIVATE
     Qt6::Core
 )
 
+add_executable(test_mod_naming
+    test_mod_naming.cpp
+    ${CMAKE_SOURCE_DIR}/src/mod_naming.cpp
+)
+target_include_directories(test_mod_naming PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(test_mod_naming PRIVATE
+    Qt6::Core
+)
+
+add_executable(test_modlist_io
+    test_modlist_io.cpp
+    ${CMAKE_SOURCE_DIR}/src/modlist_io.cpp
+    ${CMAKE_SOURCE_DIR}/src/safe_fs.cpp
+)
+target_include_directories(test_modlist_io PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(test_modlist_io PRIVATE
+    Qt6::Core
+)
+
+add_executable(test_openmw_sync_prep
+    test_openmw_sync_prep.cpp
+    ${CMAKE_SOURCE_DIR}/src/openmwconfigwriter.cpp
+    ${CMAKE_SOURCE_DIR}/src/master_satisfaction.cpp
+    ${CMAKE_SOURCE_DIR}/src/pluginparser.cpp
+)
+target_include_directories(test_openmw_sync_prep PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(test_openmw_sync_prep PRIVATE
+    Qt6::Core
+)
+
 add_executable(test_openmw_config_writer_fuzz
     test_openmw_config_writer_fuzz.cpp
     ${CMAKE_SOURCE_DIR}/src/openmwconfigwriter.cpp
+    ${CMAKE_SOURCE_DIR}/src/master_satisfaction.cpp
+    ${CMAKE_SOURCE_DIR}/src/pluginparser.cpp
 )
 target_include_directories(test_openmw_config_writer_fuzz PRIVATE
     ${CMAKE_SOURCE_DIR}/include
@@ -179,6 +219,8 @@ target_link_libraries(test_openmw_config_writer_fuzz PRIVATE
 add_executable(test_launcher_cfg_writer
     test_launcher_cfg_writer.cpp
     ${CMAKE_SOURCE_DIR}/src/openmwconfigwriter.cpp
+    ${CMAKE_SOURCE_DIR}/src/master_satisfaction.cpp
+    ${CMAKE_SOURCE_DIR}/src/pluginparser.cpp
 )
 target_include_directories(test_launcher_cfg_writer PRIVATE
     ${CMAKE_SOURCE_DIR}/include
@@ -327,6 +369,28 @@ target_link_libraries(test_modentry PRIVATE
     Qt6::Gui       # QColor lives in QtGui (header-only use here)
 )
 
+# ScanCoordinator: data-folders + BSA caches + warm-on-load pre-warm.
+# Q_OBJECT (signals/slots not used here, but the moc'd metadata is part
+# of the public surface), so AUTOMOC is on.  Links Qt6::Widgets because
+# the constructor takes a QListWidget* even when the cache tests pass
+# nullptr.  Qt6::Concurrent for QtConcurrent::run inside warm.
+add_executable(test_scan_coordinator
+    test_scan_coordinator.cpp
+    ${CMAKE_SOURCE_DIR}/src/scan_coordinator.cpp
+    ${CMAKE_SOURCE_DIR}/src/pluginparser.cpp
+    ${CMAKE_SOURCE_DIR}/include/scan_coordinator.h
+)
+set_target_properties(test_scan_coordinator PROPERTIES AUTOMOC ON)
+target_include_directories(test_scan_coordinator PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(test_scan_coordinator PRIVATE
+    Qt6::Core
+    Qt6::Concurrent
+    Qt6::Gui
+    Qt6::Widgets
+)
+
 # -- CTest registration ---
 #
 # Two labels: "unit" (hermetic: pure functions + QTemporaryDir, no network, no
@@ -356,14 +420,18 @@ set(UNIT_TESTS
     test_modentry
     test_modlist_model
     test_modlist_profiles
+    test_mod_naming
+    test_modlist_io
     test_modlist_serialization
     test_modlist_sync_guard
     test_nexus_client
     test_openmw_config_writer
     test_openmw_config_writer_fuzz
+    test_openmw_sync_prep
     test_plugin_collisions
     test_plugin_parser
     test_safe_fs
+    test_scan_coordinator
     test_settings_migrations
 )
 

@@ -93,6 +93,8 @@ set(SOURCES
     src/deps_resolver.cpp
     src/installcontroller.cpp
     src/install_layout.cpp
+    src/mod_naming.cpp
+    src/modlist_io.cpp
     src/loadordercontroller.cpp
     src/nexusclient.cpp
     src/nexuscontroller.cpp

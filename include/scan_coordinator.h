@@ -54,6 +54,15 @@ public:
     // for both data + BSA scans on the same path).
     QStringList cachedBsaFiles(const QString &path);
 
+    // TES3 master record cache, keyed by (plugin path, mtime).  Each
+    // saveModList runs reconcileLoadOrder, which used to call
+    // plugins::readTes3Masters per plugin per call.  Cheap individually
+    // (~1 KB read), but on a 100-plugin order that's 100 file opens
+    // every save; this cache zeros it out for warm hits.  Stale entries
+    // for uninstalled mods are pruned when invalidateDataFoldersCache
+    // is called for a containing modPath.
+    QStringList cachedTes3Masters(const QString &pluginPath);
+
 private:
     void runSizeScan();
     void applySizeResults(const QHash<QString, qint64> &bytesByPath);
@@ -76,6 +85,12 @@ private:
     // under modPath.  UI-thread only.  Cleared in lockstep with
     // m_dataFoldersCache via invalidateDataFoldersCache.
     QHash<QString, QStringList> m_bsaCache;
+
+    // TES3 master cache: plugin file path → (mtime ms since epoch,
+    // list of MAST-declared parent filenames).  Keyed at the FILE
+    // level, not modPath, so mtime gating handles file-level edits
+    // even when the containing modPath cache is warm.  UI-thread only.
+    QHash<QString, QPair<qint64, QStringList>> m_mastersCache;
 };
 
 #endif // SCAN_COORDINATOR_H

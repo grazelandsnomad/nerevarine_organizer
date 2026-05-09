@@ -111,6 +111,68 @@ jobs:
             -exec readelf -V {} \; 2>/dev/null \
             | grep -oE 'GLIBC_[0-9.]+' | sort -V | uniq -c | tail -20
 
+      - name: AppImage smoke test
+        # Boot the AppImage offscreen to catch:
+        #   · runtime linker / squashfs mount failures
+        #   · the AppImage env-leak class (LOOT/openmw-launcher silent
+        #     exit) - main.cpp's "AppImage env probe" line in log.txt is
+        #     the canary
+        #   · version-string drift (CMakeLists vs. main.cpp diverging)
+        # The app is a GUI; we send it SIGTERM after a brief wait so the
+        # foreground initialization runs but we don't hang the runner.
+        # SIGTERM bypasses closeEvent, which is fine for this check -
+        # we only care that the app got far enough to write a session
+        # start line to log.txt.
+        run: |
+          APPIMAGE=$(ls NerevarineOrganizer-*-x86_64.AppImage | head -1)
+          if [ -z "$APPIMAGE" ]; then
+            echo "::error::No AppImage produced upstream"
+            exit 1
+          fi
+          chmod +x "$APPIMAGE"
+
+          export QT_QPA_PLATFORM=offscreen
+          export XDG_DATA_HOME="$RUNNER_TEMP/smoke-state"
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/smoke-config"
+          mkdir -p "$XDG_DATA_HOME" "$XDG_CONFIG_HOME"
+
+          # Run for a few seconds so the main window's startup logging
+          # (settings migrations, ScanCoordinator init, AppImage env
+          # probe) lands.  Then SIGTERM.
+          ( "./$APPIMAGE" & PID=$!
+            sleep 5
+            kill -TERM $PID 2>/dev/null || true
+            wait $PID 2>/dev/null || true
+          )
+
+          # log.txt lives under AppDataLocation under AppImage, which
+          # XDG_DATA_HOME redirects.
+          LOG="$XDG_DATA_HOME/nerevarine/Nerevarine Organizer/logs/log.txt"
+          if [ ! -f "$LOG" ]; then
+            echo "::error::No log.txt written - AppImage failed to initialize"
+            ls -laR "$XDG_DATA_HOME" || true
+            exit 1
+          fi
+
+          echo "-- log.txt --"
+          cat "$LOG"
+
+          # Required canaries.  Version string proves CMakeLists/main.cpp
+          # match.  Probe line proves childProcessEnvironment scrub list
+          # covers every actually-leaked env var on this runner.
+          grep -q "session start (v" "$LOG" \
+            || { echo "::error::no session start line"; exit 1; }
+          if grep -q "AppImage env probe:" "$LOG"; then
+            if grep -q "AppImage env probe: clean" "$LOG"; then
+              echo "::notice::AppImage env probe clean"
+            else
+              echo "::warning::AppImage env probe found leaks (see log above)"
+              # Don't fail the build on probe warnings - the scrub list
+              # in childProcessEnvironment() already handles them; this
+              # is just a heads-up for anyone reviewing CI output.
+            fi
+          fi
+
       - name: Upload AppImage artifact
         uses: actions/upload-artifact@v4
         with:

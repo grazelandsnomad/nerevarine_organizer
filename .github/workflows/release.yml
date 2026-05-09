@@ -1,0 +1,92 @@
+name: Release
+
+# Triggers when a tag matching v<digits> is pushed.  Creates a draft
+# GitHub release with the body sourced from
+# docs/release-notes/<version>.md so the publisher just reviews +
+# clicks "Publish" rather than copy-pasting changelog into the web UI.
+#
+# AppImage and Windows artifacts are produced by their own workflows
+# (appimage.yml, windows.yml) which already trigger on the same tag
+# pattern and call softprops/action-gh-release to attach to whatever
+# release exists at that tag.  As long as THIS workflow runs first
+# (or concurrently), the action picks up the draft and adds files to
+# it; if it runs second, it updates the existing release without
+# overwriting attached artifacts.
+#
+# To cut a release:
+#   1. Append the new version block to docs/release-notes/<version>.md
+#   2. git tag v<version> && git push --tags
+#   3. Watch this workflow + appimage.yml + windows.yml all complete
+#   4. Review the draft release in the UI, click Publish
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.4)"
+        required: true
+        type: string
+
+jobs:
+  draft:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write   # gh-release needs this to create the draft
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need full history so generated changelogs (if added later)
+          # can `git log` between tags.
+          fetch-depth: 0
+
+      - name: Resolve version + tag
+        id: ver
+        # Strips the leading 'v' off either the pushed tag or the
+        # workflow_dispatch input.  Output `version` (e.g. "0.4") drives
+        # the docs/release-notes/<version>.md lookup; `tag` (e.g.
+        # "v0.4") goes back to softprops/action-gh-release.
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag=$TAG version=$VERSION"
+
+      - name: Verify release notes exist
+        # Hard fail if the publisher tagged without writing notes - a
+        # release with an empty body is a documentation regression we
+        # absolutely want to catch at tag-push time, not after the
+        # AppImage is already attached.
+        run: |
+          NOTES="docs/release-notes/${{ steps.ver.outputs.version }}.md"
+          if [ ! -f "$NOTES" ]; then
+            echo "::error::No release notes found at $NOTES"
+            echo "Available release notes:"
+            ls -1 docs/release-notes/
+            exit 1
+          fi
+          echo "Will use $NOTES as the release body"
+          echo "-- first 20 lines --"
+          head -20 "$NOTES"
+
+      - name: Create / update draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name:   ${{ steps.ver.outputs.tag }}
+          name:       ${{ steps.ver.outputs.tag }}
+          body_path:  docs/release-notes/${{ steps.ver.outputs.version }}.md
+          draft:      true
+          # prerelease=true for any tag containing '-' (rc, beta, etc.).
+          # Plain v0.4 / v1.0 land as production releases.
+          prerelease: ${{ contains(steps.ver.outputs.tag, '-') }}
+          # Don't fail if the release already exists - the artifact
+          # workflows may have created it first; we just want to
+          # update the body in that case.
+          fail_on_unmatched_files: false

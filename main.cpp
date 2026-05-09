@@ -74,11 +74,77 @@ int main(int argc, char *argv[])
 
     QApplication app(argc, argv);
     app.setApplicationName("Nerevarine Organizer");
-    app.setApplicationVersion("0.1.0");
+    app.setApplicationVersion("0.4");
     app.setOrganizationName("nerevarine");
 
     // Install logging + crash handlers as early as possible after QApplication.
     logging::initialize(app.applicationVersion());
+
+    // -- AppImage env-leak health probe ---
+    //
+    // Memory log notes recurring "QIBusPlatformInputContext: invalid
+    // portal bus" failures when LOOT or openmw-launcher inherit our
+    // bundled Qt env (LD_LIBRARY_PATH / QT_PLUGIN_PATH pointing into
+    // our squashfs).  childProcessEnvironment() restores _ORIG values
+    // before launching foreign Qt apps, but if linuxdeploy didn't
+    // capture _ORIG (e.g. an env var that wasn't set on the host) the
+    // squashfs path leaks.  Probe at startup and warn so a regression
+    // here surfaces in log.txt of the very first session.
+    if (!qEnvironmentVariableIsEmpty("APPIMAGE")) {
+        const QString appDir = qEnvironmentVariable("APPDIR");
+        if (!appDir.isEmpty()) {
+            static const QStringList kProbeVars = {
+                "LD_LIBRARY_PATH", "QT_PLUGIN_PATH",
+                "QT_QPA_PLATFORM_PLUGIN_PATH",
+                "QML2_IMPORT_PATH", "QML_IMPORT_PATH",
+                "QTWEBENGINEPROCESS_PATH",
+                "PYTHONHOME", "PYTHONPATH", "PERLLIB",
+                "GTK_PATH", "GTK_DATA_PREFIX", "GTK_EXE_PREFIX",
+                "GTK_IM_MODULE_FILE",
+                "GDK_PIXBUF_MODULE_FILE", "GDK_PIXBUF_MODULEDIR",
+                "GST_PLUGIN_SYSTEM_PATH", "GST_PLUGIN_SYSTEM_PATH_1_0",
+                "FONTCONFIG_FILE", "FONTCONFIG_PATH",
+                "XDG_DATA_DIRS",
+            };
+            int leaks = 0;
+            for (const QString &v : kProbeVars) {
+                const QString live = qEnvironmentVariable(v.toLatin1().constData());
+                if (live.isEmpty()) continue;
+                if (!live.contains(appDir)) continue;
+                // Live value points into our squashfs and there's no
+                // _ORIG fallback - childProcessEnvironment() will
+                // remove this var entirely from any child env, but a
+                // future pinned variable would silently leak.  Warn
+                // once per offender.
+                const bool hasOrig = !qEnvironmentVariable(
+                    (v + "_ORIG").toLatin1().constData()).isEmpty();
+                qCWarning(logging::lcApp).nospace()
+                    << "AppImage env probe: " << v
+                    << " contains APPDIR (" << appDir << ")"
+                    << (hasOrig ? " — _ORIG fallback present"
+                                : " — NO _ORIG fallback (child Qt apps may break)");
+                ++leaks;
+            }
+            // LD_PRELOAD is special-cased below in childProcessEnvironment;
+            // mirror the same APPDIR probe here so a future
+            // build-appimage.sh that adds an unguarded preload entry
+            // surfaces in the log.
+            const QString preload = qEnvironmentVariable("LD_PRELOAD");
+            if (!preload.isEmpty()) {
+                for (const QString &p : preload.split(':', Qt::SkipEmptyParts)) {
+                    if (p.startsWith(appDir + '/')) {
+                        qCWarning(logging::lcApp).nospace()
+                            << "AppImage env probe: LD_PRELOAD has APPDIR entry "
+                            << p << " — children must scrub via childProcessEnvironment()";
+                        ++leaks;
+                        break;
+                    }
+                }
+            }
+            if (leaks == 0)
+                qCInfo(logging::lcApp, "AppImage env probe: clean");
+        }
+    }
 
     app.setWindowIcon(QIcon(":/assets/icons/cystal_full_0.png"));
     app.setDesktopFileName("nerevarine_organizer");

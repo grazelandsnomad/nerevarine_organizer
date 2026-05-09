@@ -69,3 +69,17 @@ jobs:
         # everything.
         working-directory: build
         run: ctest -L unit --output-on-failure -j"$(nproc)"
+
+      - name: Translation parity check
+        # Catches three regression classes the C++ test suite can't
+        # see at compile time:
+        #   · format breakage in english.ini (duplicate key, missing
+        #     '=', blank key)
+        #   · T("foo") in src/ where "foo" isn't in english.ini -
+        #     runtime returns the literal key to the user, silent
+        #     unless the typo is in a high-traffic UI string
+        #   · keys in english.ini that no T() call references - soft
+        #     warning only, since the build doesn't fail on them;
+        #     useful hygiene signal
+        # Hard failures fail the job; dead-key warnings just print.
+        run: python3 scripts/check_translation_parity.py
