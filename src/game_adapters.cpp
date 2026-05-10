@@ -82,6 +82,7 @@ public:
     }
     QStringList lutrisTokens() const override { return {"starfield"}; }
     QString lootSlug()         const override { return QStringLiteral("Starfield"); }
+    bool    pinned()           const override { return true; }
 };
 
 class OblivionAdapter : public GameAdapter {

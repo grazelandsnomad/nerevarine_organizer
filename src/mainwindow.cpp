@@ -826,12 +826,12 @@ void MainWindow::setupMenuBar()
     });
     settingsMenu->addSeparator();
 
-    // Experimental "show all games" toggle.  0.4 ships with OpenMW + FNV
-    // pinned in the game dropdown - the games whose install/launch
-    // paths are tested for this release.  Power users coming from
-    // Skyrim / Oblivion / Fallout 4 / etc. who hit a wall on first
-    // launch can flip this to surface the legacy game list while we
-    // re-test those paths.  Off by default.
+    // Experimental "show all games" toggle.  0.4 ships with OpenMW +
+    // FNV + Starfield pinned in the game dropdown - the games whose
+    // install/launch paths are tested for this release.  Power users
+    // coming from Skyrim / Oblivion / Fallout 4 / etc. who hit a wall on
+    // first launch can flip this to surface the legacy game list while
+    // we re-test those paths.  Off by default.
     {
         auto *act = settingsMenu->addAction(T("menu_show_all_games"));
         act->setCheckable(true);
