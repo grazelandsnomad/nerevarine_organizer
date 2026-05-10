@@ -18,7 +18,7 @@ step() { echo -e "${G}-- $* ${R}"; }
 
 # -- 1. Read version from CMakeLists.txt ---
 VERSION=$(grep -m1 'project(NerevarineOrganizer VERSION' "$REPO_ROOT/CMakeLists.txt" \
-          | grep -oP '\d+\.\d+\.\d+')
+          | grep -oP '\d+\.\d+(?:\.\d+)?')
 DIRNAME="Nerevarine_Organizer-${VERSION}-x86_64"
 TARBALL="$REPO_ROOT/${DIRNAME}.tar.gz"
 
