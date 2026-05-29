@@ -38,6 +38,7 @@
 #include "send_to_dialog.h"
 #include "logging.h"
 #include "prompts.h"
+#include "subprocess.h"
 #include <QPushButton>
 #include <QTimer>
 #include <algorithm>
@@ -1520,6 +1521,7 @@ void MainWindow::checkNxmHandlerRegistration()
 
     // -- Re-register the mime type association and refresh the caches ---
     QProcess reg;
+    subprocess::applyEnv(reg);
     reg.start("xdg-mime",
         {"default", "nerevarine_organizer.desktop", "x-scheme-handler/nxm"});
     reg.waitForFinished(3000);
@@ -1527,13 +1529,13 @@ void MainWindow::checkNxmHandlerRegistration()
         {"default", "nerevarine_organizer.desktop", "x-scheme-handler/nxms"});
     reg.waitForFinished(3000);
 
-    QProcess::execute("update-desktop-database", {appDir});
+    subprocess::execute("update-desktop-database", {appDir});
 
     // Rebuild BOTH sycoca versions we might be on (KF5 / KF6 coexist on some
     // distros mid-transition). Failures are silent - missing tool = that
     // version of KDE isn't installed here.
-    QProcess::execute("kbuildsycoca6", {"--noincremental"});
-    QProcess::execute("kbuildsycoca5", {"--noincremental"});
+    subprocess::execute("kbuildsycoca6", {"--noincremental"});
+    subprocess::execute("kbuildsycoca5", {"--noincremental"});
 
     statusBar()->showMessage(T("status_registered_nxm"), 4000);
 }
@@ -1575,7 +1577,7 @@ void MainWindow::checkDesktopShortcut()
     QString iconDest = iconDir + "/nerevarine_organizer.png";
     if (!QFile::exists(iconDest))
         QFile::copy(":/assets/icons/cystal_full_0.png", iconDest);
-    QProcess::execute("gtk-update-icon-cache",
+    subprocess::execute("gtk-update-icon-cache",
                       {"-f", "-t", QDir::homePath() + "/.local/share/icons/hicolor"});
 
     // Write .desktop file
@@ -3544,7 +3546,7 @@ void MainWindow::onCheckUpdatesFinished(int foundCount)
     if (foundCount == 0) {
         statusBar()->showMessage(T("check_updates_none"), 4000);
         m_notify->show(T("check_updates_none"), "#1a6fa8");
-        QProcess::startDetached("notify-send",
+        subprocess::startDetached("notify-send",
             {"-i", "dialog-information",
              "-t", "6000",
              T("window_title"),
@@ -3552,7 +3554,7 @@ void MainWindow::onCheckUpdatesFinished(int foundCount)
     } else {
         const QString msg = T("check_updates_found").arg(foundCount);
         statusBar()->showMessage(msg, 5000);
-        QProcess::startDetached("notify-send",
+        subprocess::startDetached("notify-send",
             {"-i", "software-update-available",
              "-t", "6000",
              T("window_title"),
@@ -3777,7 +3779,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
             if (installStatus == 1) {
                 menu.addAction(T("ctx_open_folder"), this, [item]{
                     QString path = item->data(ModRole::ModPath).toString();
-                    QProcess::startDetached("xdg-open", {path});
+                    subprocess::startDetached("xdg-open", {path});
                 });
 
                 // Reinstall: only meaningful when we know the Nexus source.
@@ -4853,58 +4855,9 @@ static QString detectLootBinary()
 // linuxdeploy stashes the pre-AppImage values with an "_ORIG" suffix
 // for exactly this purpose: restore them where present, otherwise
 // unset. No-op outside the AppImage runtime.
-static QProcessEnvironment childProcessEnvironment()
-{
-    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    if (qEnvironmentVariableIsEmpty("APPIMAGE")) return env;
-
-    static const QStringList kAppImageVars = {
-        "LD_LIBRARY_PATH",            "QT_PLUGIN_PATH",
-        "QT_QPA_PLATFORM_PLUGIN_PATH",
-        "QML2_IMPORT_PATH",           "QML_IMPORT_PATH",
-        "QTWEBENGINEPROCESS_PATH",
-        "PYTHONHOME",                 "PYTHONPATH",
-        "PERLLIB",
-        "GTK_PATH",                   "GTK_DATA_PREFIX",
-        "GTK_EXE_PREFIX",             "GTK_IM_MODULE_FILE",
-        "GDK_PIXBUF_MODULE_FILE",     "GDK_PIXBUF_MODULEDIR",
-        "GST_PLUGIN_SYSTEM_PATH",     "GST_PLUGIN_SYSTEM_PATH_1_0",
-        "FONTCONFIG_FILE",            "FONTCONFIG_PATH",
-        "XDG_DATA_DIRS",
-    };
-    for (const QString &v : kAppImageVars) {
-        const QString orig = env.value(v + "_ORIG");
-        if (!orig.isEmpty())
-            env.insert(v, orig);
-        else
-            env.remove(v);
-    }
-
-    // Our AppRun wrapper prepends an in-AppImage glibc-compat shim onto
-    // LD_PRELOAD (see build-appimage.sh step 6b). The shim is harmless for
-    // the parent process but, when inherited by a foreign Qt binary like
-    // LOOT, it dlopens an in-squashfs .so from the child's address space
-    // and the child silently exits during platform-plugin init - the user-
-    // visible signal is "QIBusPlatformInputContext: invalid portal bus"
-    // followed by no work being done. There's no _ORIG saved for
-    // LD_PRELOAD because the wrapper only ever prepends, so strip every
-    // entry that lives under APPDIR and keep any user-supplied entries.
-    if (env.contains("LD_PRELOAD")) {
-        const QString appDir = qEnvironmentVariable("APPDIR");
-        QStringList kept;
-        const QStringList parts =
-            env.value("LD_PRELOAD").split(':', Qt::SkipEmptyParts);
-        for (const QString &p : parts) {
-            if (!appDir.isEmpty() && p.startsWith(appDir + '/'))
-                continue;
-            kept << p;
-        }
-        if (kept.isEmpty()) env.remove("LD_PRELOAD");
-        else                env.insert("LD_PRELOAD", kept.join(':'));
-    }
-
-    return env;
-}
+// The AppImage Qt-environment scrub moved to subprocess::childEnvironment()
+// (include/subprocess.h) so every external-process launch shares it and the
+// scrub can't be forgotten at a new call site. See that file for the why.
 
 // Maps our per-profile ID to the game-folder name LOOT uses on its CLI
 // (`--game <name>`).  The slug now lives on each game's GameAdapter
@@ -4976,9 +4929,9 @@ void MainWindow::autoSortLoadOrder()
 
     auto *proc = new QProcess(&dlg);
     proc->setProcessChannelMode(QProcess::MergedChannels);
-    // Strip our AppImage's Qt/library env so LOOT (also Qt) loads its
-    // own plugins instead of ours. See childProcessEnvironment() above.
-    proc->setProcessEnvironment(childProcessEnvironment());
+    // Strip our AppImage's Qt/library env so LOOT (also Qt) loads its own
+    // plugins instead of ours. See subprocess::childEnvironment().
+    subprocess::applyEnv(*proc);
 
     // Track outcome on the dialog instance so the code after exec() knows
     // whether to splice the new load order back.  Default = "we didn't
@@ -6238,6 +6191,7 @@ void MainWindow::onCreateDiagnosticBundle()
         // amdgpu / i915).  Suppress stderr so a missing tool doesn't
         // contaminate the bundle.
         QProcess p;
+        subprocess::applyEnv(p);
         p.start(QStringLiteral("lspci"), {QStringLiteral("-nnk")});
         if (p.waitForFinished(2000)) {
             const QString txt = QString::fromUtf8(p.readAllStandardOutput());
@@ -6255,6 +6209,7 @@ void MainWindow::onCreateDiagnosticBundle()
         // glxinfo if installed - "OpenGL renderer" / "OpenGL version" is
         // exactly what most OpenMW troubleshooting needs.
         QProcess g;
+        subprocess::applyEnv(g);
         g.start(QStringLiteral("glxinfo"), {QStringLiteral("-B")});
         if (g.waitForFinished(2500)) {
             const QString txt = QString::fromUtf8(g.readAllStandardOutput());
@@ -6324,6 +6279,7 @@ void MainWindow::onCreateDiagnosticBundle()
     // Remove an existing target so 7z doesn't try to update-merge into it.
     if (QFileInfo::exists(outZip)) QFile::remove(outZip);
     QProcess zip;
+    subprocess::applyEnv(zip);
     zip.setWorkingDirectory(stageDir.absolutePath());
     zip.start(QStringLiteral("7z"),
               {QStringLiteral("a"), QStringLiteral("-tzip"),
@@ -7892,6 +7848,7 @@ void MainWindow::launchProgram(QString &storedPath,
 
     if (monitored) {
         auto *proc = new QProcess(this);
+        subprocess::applyEnv(*proc);  // scrub AppImage Qt env for the launched program
         connect(proc, &QProcess::finished, this,
                 [this, proc](int code, QProcess::ExitStatus) {
             proc->deleteLater();
@@ -7904,7 +7861,7 @@ void MainWindow::launchProgram(QString &storedPath,
             ui::warn(this, T("launch_error_title"), T("launch_error_body").arg(storedPath));
         }
     } else {
-        if (!QProcess::startDetached(storedPath, {}))
+        if (!subprocess::startDetached(storedPath, {}))
             ui::warn(this, T("launch_error_title"), T("launch_error_body").arg(storedPath));
     }
 }
@@ -8008,14 +7965,14 @@ static bool launchViaGog(const QString &gogExe)
     const QString appId = heroicGogAppId(gogExe);
     if (!appId.isEmpty()) {
         const QString url = "heroic://launch/gog/" + appId;
-        if (QProcess::startDetached("xdg-open",  {url}))              return true;
-        if (QProcess::startDetached("heroic",     {"launch", appId}))  return true;
-        if (QProcess::startDetached("flatpak",    {"run",
+        if (subprocess::startDetached("xdg-open",  {url}))              return true;
+        if (subprocess::startDetached("heroic",     {"launch", appId}))  return true;
+        if (subprocess::startDetached("flatpak",    {"run",
                 "com.heroicgameslauncher.hgl", "launch", appId}))      return true;
     }
     // Fallback: run the exe directly (works for native Linux builds and setups
     // where Wine/Proton is already in the environment - e.g. Lutris, Bottles)
-    return QProcess::startDetached(gogExe, {});
+    return subprocess::startDetached(gogExe, {});
 }
 
 void MainWindow::onLaunchSteamLauncher()
@@ -8046,8 +8003,8 @@ void MainWindow::onLaunchSteamLauncher()
     const bool    steamPresent = (!launcherPath.isEmpty() && QFile::exists(launcherPath))
                               || (!steamExe.isEmpty()     && QFile::exists(steamExe));
     if (!appId.isEmpty() && steamPresent) {
-        if (!QProcess::startDetached("xdg-open", {"steam://launch/" + appId}))
-            QProcess::startDetached("steam",     {"steam://launch/" + appId});
+        if (!subprocess::startDetached("xdg-open", {"steam://launch/" + appId}))
+            subprocess::startDetached("steam",     {"steam://launch/" + appId});
         return;
     }
 
@@ -8055,8 +8012,8 @@ void MainWindow::onLaunchSteamLauncher()
     //       a local install; the URL will surface a "buy/install" prompt
     //       which is friendlier than silently failing.
     if (!appId.isEmpty()) {
-        if (!QProcess::startDetached("xdg-open", {"steam://launch/" + appId}))
-            QProcess::startDetached("steam",     {"steam://launch/" + appId});
+        if (!subprocess::startDetached("xdg-open", {"steam://launch/" + appId}))
+            subprocess::startDetached("steam",     {"steam://launch/" + appId});
         return;
     }
 
@@ -8066,7 +8023,7 @@ void MainWindow::onLaunchSteamLauncher()
         QDir::homePath());
     if (path.isEmpty()) return;
     Settings::setLauncherExePath(id, path);
-    if (!QProcess::startDetached(path, {}))
+    if (!subprocess::startDetached(path, {}))
         ui::warn(this, T("launch_error_title"), T("launch_error_body").arg(path));
 }
 
@@ -8086,15 +8043,15 @@ void MainWindow::onLaunchGame()
     // -- 2. Steam - confirmed installed (exe found in Steam library) ---
     const QString steamExe = GameProfileRegistry::findSteamGameExe(id);
     if (!appId.isEmpty() && !steamExe.isEmpty() && QFile::exists(steamExe)) {
-        if (!QProcess::startDetached("xdg-open", {"steam://rungameid/" + appId}))
-            QProcess::startDetached("steam",     {"steam://rungameid/" + appId});
+        if (!subprocess::startDetached("xdg-open", {"steam://rungameid/" + appId}))
+            subprocess::startDetached("steam",     {"steam://rungameid/" + appId});
         return;
     }
 
     // -- 3. Steam URL last resort (non-standard library path) ---
     if (!appId.isEmpty()) {
-        if (!QProcess::startDetached("xdg-open", {"steam://rungameid/" + appId}))
-            QProcess::startDetached("steam",     {"steam://rungameid/" + appId});
+        if (!subprocess::startDetached("xdg-open", {"steam://rungameid/" + appId}))
+            subprocess::startDetached("steam",     {"steam://rungameid/" + appId});
         return;
     }
 
@@ -8104,7 +8061,7 @@ void MainWindow::onLaunchGame()
         QDir::homePath());
     if (exePath.isEmpty()) return;
     Settings::setGameExePath(id, exePath);
-    if (!QProcess::startDetached(exePath, {}))
+    if (!subprocess::startDetached(exePath, {}))
         ui::warn(this, T("launch_error_title"), T("launch_error_body").arg(exePath));
 }
 
@@ -8373,6 +8330,7 @@ void MainWindow::doImportWabbajack(const QString &path)
         // Extract 'modlist' JSON entry from the ZIP.
         auto tryExtract = [&](const QString &prog, const QStringList &args) {
             QProcess proc;
+            subprocess::applyEnv(proc);
             proc.start(prog, args);
             proc.waitForStarted(5000);
             proc.waitForFinished(120000);

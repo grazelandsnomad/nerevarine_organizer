@@ -64,6 +64,7 @@ endif()
 set(SOURCES
     main.cpp
     src/prompts.cpp
+    src/subprocess.cpp
     src/mainwindow.cpp
     src/separatordialog.cpp
     src/modlistdelegate.cpp
