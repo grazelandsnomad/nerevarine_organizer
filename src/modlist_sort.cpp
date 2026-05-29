@@ -20,6 +20,7 @@
 
 #include "modroles.h"
 #include "translator.h"
+#include "prompts.h"
 
 namespace modlist_sort {
 
@@ -112,7 +113,7 @@ QList<QListWidgetItem *> showReorderSeparatorsDialog(QWidget *parent,
     }
 
     if (sections.size() <= 1) {
-        QMessageBox::information(parent, T("sort_sep_title"), T("sort_sep_empty"));
+        ui::info(parent, T("sort_sep_title"), T("sort_sep_empty"));
         return {};
     }
 

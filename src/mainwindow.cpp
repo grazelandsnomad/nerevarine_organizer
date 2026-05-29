@@ -37,6 +37,7 @@
 #include "modlist_sort.h"
 #include "send_to_dialog.h"
 #include "logging.h"
+#include "prompts.h"
 #include <QPushButton>
 #include <QTimer>
 #include <algorithm>
@@ -875,9 +876,7 @@ void MainWindow::setupMenuBar()
         scaleGroup->addAction(act);
         connect(act, &QAction::triggered, this, [this, factor]() {
             Settings::setUiScaleFactor(factor);
-            QMessageBox::information(this,
-                T("ui_scale_restart_title"),
-                T("ui_scale_restart_body"));
+            ui::info(this, T("ui_scale_restart_title"), T("ui_scale_restart_body"));
         });
     }
     settingsMenu->addSeparator();
@@ -1034,8 +1033,7 @@ void MainWindow::setupToolbar()
         "  border-radius: 4px;"
         "}");
     connect(m_featuredModlistsBtn, &QToolButton::clicked, this, [this]{
-        QMessageBox::information(this, T("featured_wip_title"),
-            T("featured_wip_body"));
+        ui::info(this, T("featured_wip_title"), T("featured_wip_body"));
     });
     tb->addWidget(m_featuredModlistsBtn);
 
@@ -1210,8 +1208,7 @@ void MainWindow::setupCentralWidget()
         if (!item) return;
 
         if (m_apiKey.isEmpty()) {
-            QMessageBox::information(this, T("nxm_api_key_required_title"),
-                T("nxm_api_key_required_body"));
+            ui::info(this, T("nxm_api_key_required_title"), T("nxm_api_key_required_body"));
             onSetApiKey();
             if (m_apiKey.isEmpty()) return;
         }
@@ -1219,16 +1216,14 @@ void MainWindow::setupCentralWidget()
         const QString nexusUrl = item->data(ModRole::NexusUrl).toString();
         const QStringList parts = QUrl(nexusUrl).path().split('/', Qt::SkipEmptyParts);
         if (parts.size() < 3 || parts[1] != "mods") {
-            QMessageBox::warning(this, T("nexus_api_error_title"),
-                T("install_invalid_url"));
+            ui::warn(this, T("nexus_api_error_title"), T("install_invalid_url"));
             return;
         }
         const QString game = parts[0];
         bool ok;
         const int modId = parts[2].toInt(&ok);
         if (!ok) {
-            QMessageBox::warning(this, T("nexus_api_error_title"),
-                T("install_invalid_url"));
+            ui::warn(this, T("nexus_api_error_title"), T("install_invalid_url"));
             return;
         }
 
@@ -1514,8 +1509,7 @@ void MainWindow::checkNxmHandlerRegistration()
 
     if (readFile(desktopPath) != wantDesktop) {
         if (!writeFile(desktopPath, wantDesktop)) {
-            QMessageBox::warning(this, T("registration_failed_title"),
-                T("registration_failed_body").arg(desktopPath));
+            ui::warn(this, T("registration_failed_title"), T("registration_failed_body").arg(desktopPath));
             return;
         }
         changed = true;
@@ -1587,8 +1581,7 @@ void MainWindow::checkDesktopShortcut()
     // Write .desktop file
     QFile f(shortcutPath);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        QMessageBox::warning(this, T("desktop_shortcut_title"),
-                             T("desktop_shortcut_failed").arg(shortcutPath));
+        ui::warn(this, T("desktop_shortcut_title"), T("desktop_shortcut_failed").arg(shortcutPath));
         return;
     }
     QString shortcutExec = qEnvironmentVariable("APPIMAGE");
@@ -1626,7 +1619,7 @@ void MainWindow::handleNxmUrl(const QString &url)
         const QString body = (reason == QStringLiteral("invalid-ids"))
             ? T("nxm_invalid_ids_body").arg(url)
             : T("nxm_invalid_url_body").arg(url);
-        QMessageBox::warning(this, T("nxm_invalid_url_title"), body);
+        ui::warn(this, T("nxm_invalid_url_title"), body);
         return;
     }
     const QString  game    = parsed->game;
@@ -1659,8 +1652,7 @@ void MainWindow::handleNxmUrl(const QString &url)
     const bool forceSeparate = (reinstallChoice == ReinstallChoice::Separate);
 
     if (m_apiKey.isEmpty()) {
-        QMessageBox::information(this, T("nxm_api_key_required_title"),
-            T("nxm_api_key_required_body"));
+        ui::info(this, T("nxm_api_key_required_title"), T("nxm_api_key_required_body"));
         onSetApiKey();
         if (m_apiKey.isEmpty()) return;
     }
@@ -1893,7 +1885,7 @@ void MainWindow::onArchiveVerificationFailed(const QString &archivePath,
     const QString body = (kind == InstallController::VerifyFailKind::Size)
         ? T("verify_mismatch_size").arg(fileName).arg(actual.toLongLong()).arg(expected.toLongLong())
         : T("verify_mismatch_md5").arg(fileName, actual, expected);
-    QMessageBox::warning(this, T("verify_error_title"), body);
+    ui::warn(this, T("verify_error_title"), body);
     statusBar()->showMessage(T("verify_status_failed"), 6000);
 }
 
@@ -1975,7 +1967,7 @@ void MainWindow::onExtractionFailed(const QString &archivePath,
         if (body.isEmpty())
             body = T("extraction_error_failed").arg(fi.fileName()).arg(code);
     }
-    QMessageBox::warning(this, T("extraction_error_title"), body);
+    ui::warn(this, T("extraction_error_title"), body);
     statusBar()->showMessage(T("status_extraction_failed"), 4000);
     QDir(extractDir).removeRecursively();
     QFile::remove(archivePath); // auto-clean on failure too
@@ -2062,8 +2054,7 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
 
             QString finalPath = modPath;
             if (promote.outcome == fomod_install::PromoteOutcome::EmptyFallback) {
-                QMessageBox::warning(this, T("fomod_empty_title"),
-                    T("fomod_empty_body").arg(archiveFileName));
+                ui::warn(this, T("fomod_empty_title"), T("fomod_empty_body").arg(archiveFileName));
             } else {
                 finalPath = promote.finalModPath;
                 if (fph && !fomodChoices.isEmpty())
@@ -2161,8 +2152,7 @@ void MainWindow::applyInstalledStateToStrandedPlaceholder(
 void MainWindow::onInstallFromNexus(QListWidgetItem *item)
 {
     if (m_apiKey.isEmpty()) {
-        QMessageBox::information(this, T("nxm_api_key_required_title"),
-            T("nxm_api_key_required_body"));
+        ui::info(this, T("nxm_api_key_required_title"), T("nxm_api_key_required_body"));
         onSetApiKey();
         if (m_apiKey.isEmpty()) return;
     }
@@ -2171,14 +2161,14 @@ void MainWindow::onInstallFromNexus(QListWidgetItem *item)
     QStringList parts = QUrl(nexusUrl).path().split('/', Qt::SkipEmptyParts);
     // path: /{game}/mods/{modId}
     if (parts.size() < 3 || parts[1] != "mods") {
-        QMessageBox::warning(this, T("nexus_api_error_title"), T("install_invalid_url"));
+        ui::warn(this, T("nexus_api_error_title"), T("install_invalid_url"));
         return;
     }
     QString game = parts[0];
     bool ok;
     int modId = parts[2].toInt(&ok);
     if (!ok) {
-        QMessageBox::warning(this, T("nexus_api_error_title"), T("install_invalid_url"));
+        ui::warn(this, T("nexus_api_error_title"), T("install_invalid_url"));
         return;
     }
 
@@ -2527,7 +2517,7 @@ void MainWindow::onFileListFetchFailed(QListWidgetItem *item, const QString &rea
     const QString msg = (httpStatus == 403)
         ? T("nexus_api_error_link_403")
         : T("nexus_api_error_link").arg(reason);
-    QMessageBox::warning(this, T("nexus_api_error_title"), msg);
+    ui::warn(this, T("nexus_api_error_title"), msg);
     statusBar()->showMessage(T("status_download_failed"), 4000);
 }
 
@@ -2544,8 +2534,7 @@ void MainWindow::onFileListFetched(QListWidgetItem *item,
     if (files.isEmpty()) files = allFiles;
 
     if (files.isEmpty()) {
-        QMessageBox::information(this, T("install_pick_file_title"),
-            T("install_no_files"));
+        ui::info(this, T("install_pick_file_title"), T("install_no_files"));
         statusBar()->clearMessage();
         return;
     }
@@ -3504,8 +3493,7 @@ void MainWindow::onMoveDown()
 void MainWindow::onCheckUpdates()
 {
     if (m_apiKey.isEmpty()) {
-        QMessageBox::information(this, T("nxm_api_key_required_title"),
-            T("nxm_api_key_required_body"));
+        ui::info(this, T("nxm_api_key_required_title"), T("nxm_api_key_required_body"));
         onSetApiKey();
         if (m_apiKey.isEmpty()) return;
     }
@@ -3588,8 +3576,7 @@ void MainWindow::onCheckUpdatesFinished(int foundCount)
 void MainWindow::onReviewUpdates()
 {
     if (m_apiKey.isEmpty()) {
-        QMessageBox::information(this, T("nxm_api_key_required_title"),
-            T("nxm_api_key_required_body"));
+        ui::info(this, T("nxm_api_key_required_title"), T("nxm_api_key_required_body"));
         onSetApiKey();
         if (m_apiKey.isEmpty()) return;
     }
@@ -3613,8 +3600,7 @@ void MainWindow::onReviewUpdates()
     }
 
     if (candidates.isEmpty()) {
-        QMessageBox::information(this, T("review_updates_title"),
-            T("review_updates_nothing"));
+        ui::info(this, T("review_updates_title"), T("review_updates_nothing"));
         return;
     }
 
@@ -3840,8 +3826,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                     if (!path.isEmpty()) {
                         QDir dir(path);
                         if (dir.exists() && !dir.removeRecursively()) {
-                            QMessageBox::warning(this, T("uninstall_error_title"),
-                                T("uninstall_error_body").arg(path));
+                            ui::warn(this, T("uninstall_error_title"), T("uninstall_error_body").arg(path));
                             return;
                         }
                     }
@@ -4282,14 +4267,12 @@ void MainWindow::onTuneSkyrimIni()
     }
 
     if (!hasIni(iniDir)) {
-        QMessageBox::information(this, T("skyini_locate_title"),
-            T("skyini_locate_body"));
+        ui::info(this, T("skyini_locate_title"), T("skyini_locate_body"));
         QString picked = QFileDialog::getExistingDirectory(
             this, T("skyini_locate_dialog"), QDir::homePath());
         if (picked.isEmpty()) return;
         if (!hasIni(picked)) {
-            QMessageBox::warning(this, T("skyini_locate_title"),
-                T("skyini_locate_missing"));
+            ui::warn(this, T("skyini_locate_title"), T("skyini_locate_missing"));
             return;
         }
         iniDir = picked;
@@ -4300,8 +4283,7 @@ void MainWindow::onTuneSkyrimIni()
 
     IniDoc prefs;
     if (!prefs.load(prefsPath)) {
-        QMessageBox::warning(this, T("skyini_error_title"),
-            T("skyini_read_error").arg(prefsPath));
+        ui::warn(this, T("skyini_error_title"), T("skyini_read_error").arg(prefsPath));
         return;
     }
 
@@ -4422,8 +4404,7 @@ void MainWindow::onTuneSkyrimIni()
     QFile::remove(prefsPath + ".nerevarine.bak");
     QFile::copy(prefsPath, prefsPath + ".nerevarine.bak");
     if (!prefs.save(prefsPath)) {
-        QMessageBox::warning(this, T("skyini_error_title"),
-            T("skyini_write_error").arg(prefsPath));
+        ui::warn(this, T("skyini_error_title"), T("skyini_write_error").arg(prefsPath));
         return;
     }
 
@@ -4532,9 +4513,7 @@ void MainWindow::onSetLanguage(const QString &language)
 {
     if (language == Translator::currentLanguage()) return;
     Settings::setUiLanguage(language);
-    QMessageBox::information(this,
-        T("language_change_title"),
-        T("language_change_body"));
+    ui::info(this, T("language_change_title"), T("language_change_body"));
 }
 
 // Resolve a per-user state file (modlist / loadorder / forbidden) to either
@@ -5624,8 +5603,7 @@ void MainWindow::installLocalArchive(const QString &archivePath)
                     .arg(srcFi.suffix()));
         }
         if (!QFile::copy(srcFi.absoluteFilePath(), candidate)) {
-            QMessageBox::warning(this, T("file_error_title"),
-                T("file_error_write").arg(candidate));
+            ui::warn(this, T("file_error_title"), T("file_error_write").arg(candidate));
             return;
         }
         workingArchive = candidate;
@@ -5916,8 +5894,7 @@ void MainWindow::onMoveModsDir()
 {
     // -- Pre-flight: downloads must be idle ---
     if (!m_downloadQueue->isEmpty()) {
-        QMessageBox::warning(this, T("move_mods_title"),
-            T("move_mods_err_downloads"));
+        ui::warn(this, T("move_mods_title"), T("move_mods_err_downloads"));
         return;
     }
 
@@ -5965,8 +5942,7 @@ void MainWindow::onMoveModsDir()
     }
 
     if (candidates.isEmpty()) {
-        QMessageBox::information(this, T("move_mods_title"),
-            T("move_mods_err_nothing"));
+        ui::info(this, T("move_mods_title"), T("move_mods_err_nothing"));
         return;
     }
 
@@ -5979,21 +5955,18 @@ void MainWindow::onMoveModsDir()
 
     // -- Destination validation ---
     if (!QFileInfo(dest).isDir()) {
-        QMessageBox::warning(this, T("move_mods_title"),
-            T("move_mods_err_dest_not_dir").arg(dest));
+        ui::warn(this, T("move_mods_title"), T("move_mods_err_dest_not_dir").arg(dest));
         return;
     }
     if (dest == modsRoot) {
-        QMessageBox::warning(this, T("move_mods_title"),
-            T("move_mods_err_dest_same"));
+        ui::warn(this, T("move_mods_title"), T("move_mods_err_dest_same"));
         return;
     }
     // Reject nesting in either direction - catching someone picking a sub
     // folder of the current mods dir (or accidentally a parent that contains
     // the current mods dir).
     if (dest.startsWith(modsRoot + "/") || modsRoot.startsWith(dest + "/")) {
-        QMessageBox::warning(this, T("move_mods_title"),
-            T("move_mods_err_dest_nested"));
+        ui::warn(this, T("move_mods_title"), T("move_mods_err_dest_nested"));
         return;
     }
 
@@ -6002,8 +5975,7 @@ void MainWindow::onMoveModsDir()
         QString stamp = QDir(dest).filePath(".nerev_write_test");
         QFile probe(stamp);
         if (!probe.open(QIODevice::WriteOnly)) {
-            QMessageBox::warning(this, T("move_mods_title"),
-                T("move_mods_err_dest_not_writable").arg(dest));
+            ui::warn(this, T("move_mods_title"), T("move_mods_err_dest_not_writable").arg(dest));
             return;
         }
         probe.close();
@@ -6018,8 +5990,7 @@ void MainWindow::onMoveModsDir()
             const double GB = 1024.0 * 1024.0 * 1024.0;
             return QString::number(b / GB, 'f', 2) + " GB";
         };
-        QMessageBox::warning(this, T("move_mods_title"),
-            T("move_mods_err_no_space")
+        ui::warn(this, T("move_mods_title"), T("move_mods_err_no_space")
                 .arg(fmt(dstStorage.bytesAvailable()))
                 .arg(fmt(required)));
         return;
@@ -6035,8 +6006,7 @@ void MainWindow::onMoveModsDir()
         QString list = collisions.mid(0, 10).join("\n  • ");
         if (collisions.size() > 10)
             list += "\n  … (+" + QString::number(collisions.size() - 10) + ")";
-        QMessageBox::warning(this, T("move_mods_title"),
-            T("move_mods_err_collision").arg(list));
+        ui::warn(this, T("move_mods_title"), T("move_mods_err_collision").arg(list));
         return;
     }
 
@@ -6185,8 +6155,7 @@ void MainWindow::onCreateDiagnosticBundle()
     QTemporaryDir staging;
     staging.setAutoRemove(true);
     if (!staging.isValid()) {
-        QMessageBox::warning(this, T(Tk::diag_bundle_title),
-            T(Tk::diag_bundle_err_tmp).arg(staging.errorString()));
+        ui::warn(this, T(Tk::diag_bundle_title), T(Tk::diag_bundle_err_tmp).arg(staging.errorString()));
         return;
     }
     const QDir stageDir(staging.path());
@@ -6362,14 +6331,12 @@ void MainWindow::onCreateDiagnosticBundle()
               {QStringLiteral("a"), QStringLiteral("-tzip"),
                outZip, QStringLiteral("nerev_diagnostics")});
     if (!zip.waitForStarted(3000)) {
-        QMessageBox::warning(this, T(Tk::diag_bundle_title),
-            T(Tk::diag_bundle_err_no_7z));
+        ui::warn(this, T(Tk::diag_bundle_title), T(Tk::diag_bundle_err_no_7z));
         return;
     }
     if (!zip.waitForFinished(60000) || zip.exitCode() != 0) {
         const QString stderr_ = QString::fromUtf8(zip.readAllStandardError());
-        QMessageBox::warning(this, T(Tk::diag_bundle_title),
-            T(Tk::diag_bundle_err_7z_failed).arg(zip.exitCode()).arg(stderr_));
+        ui::warn(this, T(Tk::diag_bundle_title), T(Tk::diag_bundle_err_7z_failed).arg(zip.exitCode()).arg(stderr_));
         return;
     }
 
@@ -6396,8 +6363,7 @@ void MainWindow::onCreateDiagnosticBundle()
 void MainWindow::onConsolidateModsIntoActiveProfile()
 {
     if (!m_downloadQueue->isEmpty()) {
-        QMessageBox::warning(this, T("consolidate_mods_title"),
-            T("move_mods_err_downloads"));
+        ui::warn(this, T("consolidate_mods_title"), T("move_mods_err_downloads"));
         return;
     }
 
@@ -6440,8 +6406,7 @@ void MainWindow::onConsolidateModsIntoActiveProfile()
     }
 
     if (candidates.isEmpty()) {
-        QMessageBox::information(this, T("consolidate_mods_title"),
-            T("consolidate_mods_nothing"));
+        ui::info(this, T("consolidate_mods_title"), T("consolidate_mods_nothing"));
         return;
     }
 
@@ -6454,8 +6419,7 @@ void MainWindow::onConsolidateModsIntoActiveProfile()
             const double GB = 1024.0 * 1024.0 * 1024.0;
             return QString::number(b / GB, 'f', 2) + " GB";
         };
-        QMessageBox::warning(this, T("consolidate_mods_title"),
-            T("move_mods_err_no_space")
+        ui::warn(this, T("consolidate_mods_title"), T("move_mods_err_no_space")
                 .arg(fmt(dstStorage.bytesAvailable()))
                 .arg(fmt(required)));
         return;
@@ -6473,8 +6437,7 @@ void MainWindow::onConsolidateModsIntoActiveProfile()
         QString list = collisions.mid(0, 10).join("\n  • ");
         if (collisions.size() > 10)
             list += "\n  … (+" + QString::number(collisions.size() - 10) + ")";
-        QMessageBox::warning(this, T("consolidate_mods_title"),
-            T("move_mods_err_collision").arg(list));
+        ui::warn(this, T("consolidate_mods_title"), T("move_mods_err_collision").arg(list));
         return;
     }
 
@@ -6598,8 +6561,7 @@ void MainWindow::onInspectOpenMWSetup()
     syncGameConfig();
 
     if (m_profiles->isEmpty() || currentProfile().id != "morrowind") {
-        QMessageBox::information(this, T("openmw_inspect_title"),
-            T("openmw_inspect_not_morrowind"));
+        ui::info(this, T("openmw_inspect_title"), T("openmw_inspect_not_morrowind"));
         return;
     }
 
@@ -6960,8 +6922,7 @@ void MainWindow::onTriageOpenMWLog()
     const QString logPath = QDir::homePath() + "/.config/openmw/openmw.log";
     QFile lf(logPath);
     if (!lf.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        QMessageBox::information(this, T("log_triage_title"),
-            T("log_triage_no_log").arg(logPath));
+        ui::info(this, T("log_triage_title"), T("log_triage_no_log").arg(logPath));
         return;
     }
     const QString logText = QString::fromUtf8(lf.readAll());
@@ -7091,8 +7052,7 @@ void MainWindow::onEditLoadOrder()
     reconcileLoadOrder(); // make sure the list reflects what's actually installed
 
     if (m_loadOrder.isEmpty()) {
-        QMessageBox::information(this, T("loadorder_title"),
-            T("loadorder_empty"));
+        ui::info(this, T("loadorder_title"), T("loadorder_empty"));
         return;
     }
 
@@ -7943,13 +7903,11 @@ void MainWindow::launchProgram(QString &storedPath,
         proc->start(storedPath, {});
         if (!proc->waitForStarted(3000)) {
             proc->deleteLater();
-            QMessageBox::warning(this, T("launch_error_title"),
-                                 T("launch_error_body").arg(storedPath));
+            ui::warn(this, T("launch_error_title"), T("launch_error_body").arg(storedPath));
         }
     } else {
         if (!QProcess::startDetached(storedPath, {}))
-            QMessageBox::warning(this, T("launch_error_title"),
-                                 T("launch_error_body").arg(storedPath));
+            ui::warn(this, T("launch_error_title"), T("launch_error_body").arg(storedPath));
     }
 }
 
@@ -8071,8 +8029,7 @@ void MainWindow::onLaunchSteamLauncher()
     const QString gogExe = GameProfileRegistry::findGogGameExe(id, /*wantLauncher=*/true);
     if (!gogExe.isEmpty() && QFile::exists(gogExe)) {
         if (!launchViaGog(gogExe))
-            QMessageBox::warning(this, T("launch_error_title"),
-                                 T("launch_error_body").arg(gogExe));
+            ui::warn(this, T("launch_error_title"), T("launch_error_body").arg(gogExe));
         return;
     }
 
@@ -8112,8 +8069,7 @@ void MainWindow::onLaunchSteamLauncher()
     if (path.isEmpty()) return;
     Settings::setLauncherExePath(id, path);
     if (!QProcess::startDetached(path, {}))
-        QMessageBox::warning(this, T("launch_error_title"),
-                             T("launch_error_body").arg(path));
+        ui::warn(this, T("launch_error_title"), T("launch_error_body").arg(path));
 }
 
 void MainWindow::onLaunchGame()
@@ -8125,8 +8081,7 @@ void MainWindow::onLaunchGame()
     const QString gogExe = GameProfileRegistry::findGogGameExe(id);
     if (!gogExe.isEmpty() && QFile::exists(gogExe)) {
         if (!launchViaGog(gogExe))
-            QMessageBox::warning(this, T("launch_error_title"),
-                                 T("launch_error_body").arg(gogExe));
+            ui::warn(this, T("launch_error_title"), T("launch_error_body").arg(gogExe));
         return;
     }
 
@@ -8152,8 +8107,7 @@ void MainWindow::onLaunchGame()
     if (exePath.isEmpty()) return;
     Settings::setGameExePath(id, exePath);
     if (!QProcess::startDetached(exePath, {}))
-        QMessageBox::warning(this, T("launch_error_title"),
-                             T("launch_error_body").arg(exePath));
+        ui::warn(this, T("launch_error_title"), T("launch_error_body").arg(exePath));
 }
 
 void MainWindow::exportModList()
@@ -8242,8 +8196,7 @@ void MainWindow::doImportMO2ModList(const QString &path)
 
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        QMessageBox::warning(this, T("import_title"),
-            T("import_mo2_read_error").arg(path));
+        ui::warn(this, T("import_title"), T("import_mo2_read_error").arg(path));
         return;
     }
 
@@ -8464,8 +8417,7 @@ void MainWindow::doImportWabbajack(const QString &path)
 
         const WJRaw result = watcher->result();
         if (!result.errorKey.isEmpty()) {
-            QMessageBox::warning(this, T("import_wabbajack_title"),
-                T(result.errorKey).arg(result.errorArg));
+            ui::warn(this, T("import_wabbajack_title"), T(result.errorKey).arg(result.errorArg));
             return;
         }
         finishWabbajackImport(result.root);
@@ -8638,8 +8590,7 @@ void MainWindow::finishWabbajackImport(const QJsonObject &root)
     }
 
     if (mods.isEmpty()) {
-        QMessageBox::warning(this, T("import_wabbajack_title"),
-            T("import_wabbajack_no_mods"));
+        ui::warn(this, T("import_wabbajack_title"), T("import_wabbajack_no_mods"));
         return;
     }
 
@@ -8745,8 +8696,7 @@ void MainWindow::handleDroppedImportFile(const QString &path)
     }
     f.close();
     if (!looksLikeAnyModlist) {
-        QMessageBox::warning(this, T("import_title"),
-            T("import_unknown_format").arg(fi.fileName()));
+        ui::warn(this, T("import_title"), T("import_unknown_format").arg(fi.fileName()));
         return;
     }
 
@@ -8774,8 +8724,7 @@ void MainWindow::onImportMO2Profile()
     bool hasProfiles = iDir.exists("profiles");
 
     if (!hasIni && !(hasMods && hasProfiles)) {
-        QMessageBox::warning(this, T("import_mo2_profile_pick_title"),
-            T("import_mo2_profile_not_instance"));
+        ui::warn(this, T("import_mo2_profile_pick_title"), T("import_mo2_profile_not_instance"));
         return;
     }
 
@@ -8810,8 +8759,7 @@ void MainWindow::onImportMO2Profile()
     QStringList profiles = profDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
 
     if (profiles.isEmpty()) {
-        QMessageBox::warning(this, T("import_mo2_profile_pick_title"),
-            T("import_mo2_profile_no_profiles").arg(profilesDir));
+        ui::warn(this, T("import_mo2_profile_pick_title"), T("import_mo2_profile_no_profiles").arg(profilesDir));
         return;
     }
 
@@ -8860,8 +8808,7 @@ void MainWindow::onImportMO2Profile()
     QString modlistFile = profilesDir + "/" + selectedProfile + "/modlist.txt";
     QFile f(modlistFile);
     if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        QMessageBox::warning(this, T("import_mo2_profile_pick_title"),
-            T("import_mo2_profile_no_modlist").arg(modlistFile));
+        ui::warn(this, T("import_mo2_profile_pick_title"), T("import_mo2_profile_no_modlist").arg(modlistFile));
         return;
     }
 
@@ -8968,8 +8915,7 @@ void MainWindow::onViewChangelog(QListWidgetItem *item)
     if (!item) return;
 
     if (m_apiKey.isEmpty()) {
-        QMessageBox::information(this, T("nxm_api_key_required_title"),
-            T("nxm_api_key_required_body"));
+        ui::info(this, T("nxm_api_key_required_title"), T("nxm_api_key_required_body"));
         onSetApiKey();
         if (m_apiKey.isEmpty()) return;
     }
@@ -9176,8 +9122,7 @@ void MainWindow::onImportFromOpenMWConfig()
 
     QString cfgPath = defaultCfg;
     if (!QFileInfo::exists(cfgPath)) {
-        QMessageBox::information(this, T("import_openmw_pick_title"),
-            T("import_openmw_default_missing").arg(defaultCfg));
+        ui::info(this, T("import_openmw_pick_title"), T("import_openmw_default_missing").arg(defaultCfg));
         cfgPath = QFileDialog::getOpenFileName(
             this, T("import_openmw_pick_title"), QDir::homePath(),
             T("import_openmw_pick_filter"));
@@ -9192,8 +9137,7 @@ void MainWindow::doImportOpenMWConfig(const QString &cfgPath)
     // unit test can hit it without dragging the GUI in.
     QFile cfg(cfgPath);
     if (!cfg.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        QMessageBox::warning(this, T("import_openmw_pick_title"),
-            T("import_openmw_default_missing").arg(cfgPath));
+        ui::warn(this, T("import_openmw_pick_title"), T("import_openmw_default_missing").arg(cfgPath));
         return;
     }
     const openmw::ImportEntries entries =
@@ -9201,8 +9145,7 @@ void MainWindow::doImportOpenMWConfig(const QString &cfgPath)
     cfg.close();
 
     if (entries.dataPaths.isEmpty()) {
-        QMessageBox::information(this, T("import_openmw_empty_title"),
-            T("import_openmw_empty_body").arg(cfgPath));
+        ui::info(this, T("import_openmw_empty_title"), T("import_openmw_empty_body").arg(cfgPath));
         return;
     }
 
@@ -9795,8 +9738,7 @@ int MainWindow::createNewModlistProfile(const QString &suggestedName)
 
     const int idx = m_profiles->addModlistProfile(name);
     if (idx < 0) {
-        QMessageBox::warning(this, T("profile_new_title"),
-                             T("profile_new_collision").arg(name));
+        ui::warn(this, T("profile_new_title"), T("profile_new_collision").arg(name));
         return -1;
     }
     return idx;
@@ -9860,8 +9802,7 @@ void MainWindow::onManageModlistProfiles()
             QLineEdit::Normal, suggest, &ok).trimmed();
         if (!ok || name.isEmpty()) return;
         if (m_profiles->cloneModlistProfile(srcIdx, name) < 0) {
-            QMessageBox::warning(&dlg, T("profile_clone_title"),
-                                 T("profile_new_collision").arg(name));
+            ui::warn(&dlg, T("profile_clone_title"), T("profile_new_collision").arg(name));
             return;
         }
         refresh();
@@ -9875,8 +9816,7 @@ void MainWindow::onManageModlistProfiles()
             QLineEdit::Normal, gp.modlistProfiles[idx].name, &ok).trimmed();
         if (!ok || name.isEmpty()) return;
         if (!m_profiles->renameModlistProfile(idx, name)) {
-            QMessageBox::warning(&dlg, T("profile_rename_title"),
-                                 T("profile_new_collision").arg(name));
+            ui::warn(&dlg, T("profile_rename_title"), T("profile_new_collision").arg(name));
             return;
         }
         refresh();
@@ -9886,8 +9826,7 @@ void MainWindow::onManageModlistProfiles()
         const int idx = list->currentRow();
         if (idx < 0) return;
         if (gp.modlistProfiles.size() <= 1) {
-            QMessageBox::information(&dlg, T("profile_delete_title"),
-                                     T("profile_delete_last"));
+            ui::info(&dlg, T("profile_delete_title"), T("profile_delete_last"));
             return;
         }
         const QString name = gp.modlistProfiles[idx].name;
@@ -9911,8 +9850,7 @@ void MainWindow::onManageModlistProfiles()
             saveLoadOrder();
         }
         if (!m_profiles->removeModlistProfile(idx, deleteFiles)) {
-            QMessageBox::warning(&dlg, T("profile_delete_title"),
-                                 T("profile_delete_failed"));
+            ui::warn(&dlg, T("profile_delete_title"), T("profile_delete_failed"));
             return;
         }
         // After a remove that kicked the active profile, the registry
@@ -9982,8 +9920,7 @@ void MainWindow::updateProfileButton()
             QLineEdit::Normal, g.modlistProfiles[idx].name, &ok).trimmed();
         if (!ok || name.isEmpty()) return;
         if (!m_profiles->renameModlistProfile(idx, name)) {
-            QMessageBox::warning(this, T("profile_rename_title"),
-                                 T("profile_new_collision").arg(name));
+            ui::warn(this, T("profile_rename_title"), T("profile_new_collision").arg(name));
             return;
         }
         updateProfileButton();
@@ -10008,8 +9945,7 @@ void MainWindow::updateProfileButton()
 void MainWindow::onAddGame()
 {
     // Disable adding other games in this release - OpenMW only
-    QMessageBox::information(this, T("add_game_title"),
-        "Only OpenMW (Morrowind) is supported in this release.");
+    ui::info(this, T("add_game_title"), "Only OpenMW (Morrowind) is supported in this release.");
 }
 
 void MainWindow::addAndDetectGame(const QString &gameId, const QString &displayName)
@@ -10031,9 +9967,7 @@ void MainWindow::addAndDetectGame(const QString &gameId, const QString &displayN
 
     if (exe.isEmpty() || !QFile::exists(exe)) {
         // Ask the user.
-        QMessageBox::information(this,
-            QString("Locate %1").arg(displayName),
-            QString("%1 was not found in Steam, Heroic, or Lutris.\n"
+        ui::info(this, QString("Locate %1").arg(displayName), QString("%1 was not found in Steam, Heroic, or Lutris.\n"
                     "Please point to the game's executable.").arg(displayName));
         const QString picked = QFileDialog::getOpenFileName(this,
             QString("Locate %1 executable").arg(displayName),
@@ -10044,8 +9978,7 @@ void MainWindow::addAndDetectGame(const QString &gameId, const QString &displayN
     }
 
     // Confirm to the user where it was found.
-    QMessageBox::information(this, displayName,
-        QString("%1 detected at:\n%2").arg(displayName, QDir::toNativeSeparators(exe)));
+    ui::info(this, displayName, QString("%1 detected at:\n%2").arg(displayName, QDir::toNativeSeparators(exe)));
 
     // Per-game mods directory: each profile gets its own root so users can
     // park heavy installs (FNV, Skyrim, etc) on a different mount than OpenMW.

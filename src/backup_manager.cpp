@@ -20,6 +20,7 @@
 
 #include "safe_fs.h"
 #include "translator.h"
+#include "prompts.h"
 
 BackupManager::BackupManager(LivePathFn livePath, SaveFn saveBeforeMark,
                               QObject *parent)
@@ -43,8 +44,7 @@ void BackupManager::showRestoreBackupDialog(QWidget *parent)
         {bakPattern}, QDir::Files | QDir::Readable, QDir::Name | QDir::Reversed);
 
     if (snapshots.isEmpty()) {
-        QMessageBox::information(parent, T("restore_backup_title"),
-            T("restore_backup_none").arg(liveName));
+        ui::info(parent, T("restore_backup_title"), T("restore_backup_none").arg(liveName));
         return;
     }
 
@@ -109,13 +109,11 @@ void BackupManager::showRestoreBackupDialog(QWidget *parent)
     (void)safefs::snapshotBackup(livePath);
 
     if (QFile::exists(livePath) && !QFile::remove(livePath)) {
-        QMessageBox::critical(parent, T("restore_backup_fail_title"),
-            T("restore_backup_fail_body").arg(livePath));
+        ui::critical(parent, T("restore_backup_fail_title"), T("restore_backup_fail_body").arg(livePath));
         return;
     }
     if (!QFile::copy(chosenPath, livePath)) {
-        QMessageBox::critical(parent, T("restore_backup_fail_title"),
-            T("restore_backup_fail_body").arg(livePath));
+        ui::critical(parent, T("restore_backup_fail_title"), T("restore_backup_fail_body").arg(livePath));
         return;
     }
 
@@ -127,8 +125,7 @@ void BackupManager::markCurrentAsGoodState(QWidget *parent)
 {
     const QString livePath = m_livePath();
     if (!QFile::exists(livePath)) {
-        QMessageBox::warning(parent, T("good_state_mark_title"),
-            T("good_state_mark_nothing").arg(QFileInfo(livePath).fileName()));
+        ui::warn(parent, T("good_state_mark_title"), T("good_state_mark_nothing").arg(QFileInfo(livePath).fileName()));
         return;
     }
 
@@ -140,8 +137,7 @@ void BackupManager::markCurrentAsGoodState(QWidget *parent)
     const QString goodPath = livePath + ".good." + stamp;
     if (QFile::exists(goodPath)) QFile::remove(goodPath);
     if (!QFile::copy(livePath, goodPath)) {
-        QMessageBox::critical(parent, T("good_state_mark_fail_title"),
-            T("good_state_mark_fail_body").arg(goodPath));
+        ui::critical(parent, T("good_state_mark_fail_title"), T("good_state_mark_fail_body").arg(goodPath));
         return;
     }
     emit statusMessage(
@@ -199,8 +195,7 @@ void BackupManager::restoreGoodState(const QString &path, const QString &label,
 {
     const QString livePath = m_livePath();
     if (!QFile::exists(path)) {
-        QMessageBox::warning(parent, T("good_state_restore_fail_title"),
-            T("good_state_restore_fail_body").arg(path));
+        ui::warn(parent, T("good_state_restore_fail_title"), T("good_state_restore_fail_body").arg(path));
         return;
     }
 
@@ -214,13 +209,11 @@ void BackupManager::restoreGoodState(const QString &path, const QString &label,
     (void)safefs::snapshotBackup(livePath);
 
     if (QFile::exists(livePath) && !QFile::remove(livePath)) {
-        QMessageBox::critical(parent, T("good_state_restore_fail_title"),
-            T("good_state_restore_fail_body").arg(livePath));
+        ui::critical(parent, T("good_state_restore_fail_title"), T("good_state_restore_fail_body").arg(livePath));
         return;
     }
     if (!QFile::copy(path, livePath)) {
-        QMessageBox::critical(parent, T("good_state_restore_fail_title"),
-            T("good_state_restore_fail_body").arg(livePath));
+        ui::critical(parent, T("good_state_restore_fail_title"), T("good_state_restore_fail_body").arg(livePath));
         return;
     }
 
@@ -236,8 +229,7 @@ void BackupManager::deleteGoodState(const QString &path, const QString &label,
             QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
         return;
     if (!QFile::remove(path)) {
-        QMessageBox::critical(parent, T("good_state_delete_fail_title"),
-            T("good_state_delete_fail_body").arg(path));
+        ui::critical(parent, T("good_state_delete_fail_title"), T("good_state_delete_fail_body").arg(path));
         return;
     }
     emit statusMessage(T("good_state_deleted").arg(label), 5000);

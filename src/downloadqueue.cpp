@@ -9,6 +9,7 @@
 #include "nexusclient.h"
 #include "settings.h"
 #include "translator.h"
+#include "prompts.h"
 
 #include <QAbstractButton>
 #include <QAction>
@@ -488,8 +489,7 @@ void DownloadQueue::downloadFile(const QUrl    &downloadUrl,
 
     QFile *file = new QFile(savePath, this);
     if (!file->open(QIODevice::WriteOnly)) {
-        QMessageBox::warning(m_parentWidget, T("file_error_title"),
-            T("file_error_write").arg(savePath));
+        ui::warn(m_parentWidget, T("file_error_title"), T("file_error_write").arg(savePath));
         delete file;
         return;
     }
