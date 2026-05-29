@@ -1229,8 +1229,8 @@ void MainWindow::setupCentralWidget()
 
         QString name = item->data(ModRole::CustomName).toString();
         if (name.isEmpty()) name = item->text();
-        if (QMessageBox::question(this, T("update_mod_title"),
-                T("update_mod_body").arg(name)) != QMessageBox::Yes)
+        if (!ui::confirm(this, T("update_mod_title"),
+                T("update_mod_body").arg(name)))
             return;
 
         prepareItemForInstall(item);
@@ -3175,7 +3175,7 @@ void MainWindow::onRemoveSelected()
         ? T("remove_one").arg(selected.first()->text())
         : T("remove_many").arg(selected.size());
 
-    if (QMessageBox::question(this, T("remove_title"), msg) != QMessageBox::Yes)
+    if (!ui::confirm(this, T("remove_title"), msg))
         return;
 
     // Scan for dependents: other mods whose DependsOn points at any of the
@@ -3788,9 +3788,8 @@ void MainWindow::onContextMenu(const QPoint &pos)
                         QString name = item->data(ModRole::CustomName).toString();
                         if (name.isEmpty()) name = item->text();
 
-                        if (QMessageBox::question(this, T("ctx_reinstall"),
-                                T("reinstall_confirm").arg(name))
-                            != QMessageBox::Yes) return;
+                        if (!ui::confirm(this, T("ctx_reinstall"),
+                                T("reinstall_confirm").arg(name))) return;
 
                         item->setData(ModRole::InstallStatus, 0);
                         item->setData(ModRole::ModSize, QVariant());
@@ -3820,9 +3819,8 @@ void MainWindow::onContextMenu(const QPoint &pos)
                     QString path = item->data(ModRole::ModPath).toString();
                     QString name = item->data(ModRole::CustomName).toString();
                     if (name.isEmpty()) name = item->text();
-                    auto btn = QMessageBox::question(this, T("ctx_uninstall"),
-                        T("uninstall_confirm").arg(name));
-                    if (btn != QMessageBox::Yes) return;
+                    if (!ui::confirm(this, T("ctx_uninstall"),
+                        T("uninstall_confirm").arg(name))) return;
                     if (!path.isEmpty()) {
                         QDir dir(path);
                         if (dir.exists() && !dir.removeRecursively()) {
@@ -8992,8 +8990,7 @@ bool MainWindow::confirmReplaceModList()
 {
     if (m_modList->count() == 0) return true;
 
-    if (QMessageBox::question(this, T("import_title"), T("import_confirm"))
-            != QMessageBox::Yes)
+    if (!ui::confirm(this, T("import_title"), T("import_confirm")))
         return false;
 
     // Collect paths of installed mods that actually exist on disk.
@@ -9237,8 +9234,7 @@ void MainWindow::onNewModList()
     const QString msg =
         T("menu_new_modlist_confirm_body").arg(QFileInfo(currentPath).fileName());
 
-    if (QMessageBox::question(this, T("menu_new_modlist_confirm_title"), msg)
-            != QMessageBox::Yes)
+    if (!ui::confirm(this, T("menu_new_modlist_confirm_title"), msg))
         return;
 
     QFile::remove(currentPath);
