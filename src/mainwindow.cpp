@@ -4837,27 +4837,11 @@ static QString detectLootBinary()
     return QString();
 }
 
-// Build a QProcessEnvironment safe for launching a *foreign* Qt program
-// (LOOT, OpenMW Launcher, MWSE-launcher, …) from inside our AppImage.
-//
-// linuxdeploy's AppRun exports LD_LIBRARY_PATH / QT_PLUGIN_PATH /
-// QML2_IMPORT_PATH / XDG_DATA_DIRS so the Qt6 we ship can find its own
-// plugins. QProcess inherits the parent env by default, so a child Qt
-// app would resolve `libQt6Core.so` and the platform/IM plugins from
-// inside our squashfs - almost always an ABI mismatch with whatever Qt
-// the child was linked against. The user-visible failure mode is a
-// stray "QIBusPlatformInputContext: invalid portal bus" on the
-// terminal followed by the child exiting silently before doing any
-// real work (the IBus platform input plugin from our bundled Qt
-// can't talk to the child's session bus, and the platform-plugin
-// initialization aborts with it).
-//
-// linuxdeploy stashes the pre-AppImage values with an "_ORIG" suffix
-// for exactly this purpose: restore them where present, otherwise
-// unset. No-op outside the AppImage runtime.
-// The AppImage Qt-environment scrub moved to subprocess::childEnvironment()
-// (include/subprocess.h) so every external-process launch shares it and the
-// scrub can't be forgotten at a new call site. See that file for the why.
+// The AppImage Qt-environment scrub (which keeps a foreign Qt child like
+// LOOT or the OpenMW Launcher from loading our bundled Qt and dying with
+// "QIBusPlatformInputContext: invalid portal bus") moved to
+// subprocess::childEnvironment() (include/subprocess.h), so every external
+// launch shares it and it can't be forgotten at a new call site.
 
 // Maps our per-profile ID to the game-folder name LOOT uses on its CLI
 // (`--game <name>`).  The slug now lives on each game's GameAdapter
