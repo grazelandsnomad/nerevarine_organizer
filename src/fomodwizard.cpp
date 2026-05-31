@@ -361,14 +361,16 @@ void FomodWizard::buildUi()
             auto *box    = new QGroupBox(group.name);
             auto *boxLay = new QVBoxLayout(box);
 
-            bool exclusive = (group.type == "SelectExactlyOne" ||
-                              group.type == "SelectAtMostOne");
+            bool selectExactlyOne = (group.type == "SelectExactlyOne");
+            bool selectAtMostOne  = (group.type == "SelectAtMostOne");
+            bool exclusive = selectExactlyOne || selectAtMostOne;
             bool selectAll = (group.type == "SelectAll");
 
             QButtonGroup *btnGroup = exclusive ? new QButtonGroup(box) : nullptr;
             if (btnGroup) btnGroup->setExclusive(true);
 
             bool firstSelectable = true;
+            bool anyChecked = false;
 
             for (int pi = 0; pi < group.plugins.size(); ++pi) {
                 const FomodPlugin &plugin = group.plugins[pi];
@@ -390,11 +392,14 @@ void FomodWizard::buildUi()
                 if (!defaultOn && !exclusive && group.plugins.size() == 1) {
                     defaultOn = true; // SelectAny single-plugin groups default ON (common pattern, e.g. core components)
                 }
-                if (exclusive && firstSelectable && !notUsable) {
+                // Only SelectExactlyOne forces a default pick. SelectAtMostOne
+                // may legitimately start - and stay - on "none".
+                if (selectExactlyOne && firstSelectable && !notUsable) {
                     defaultOn = true;   // ensure at least one radio is on
                     firstSelectable = false;
                 }
                 btn->setChecked(defaultOn);
+                if (defaultOn) anyChecked = true;
                 if (required || notUsable) btn->setEnabled(false);
 
                 if (!plugin.description.isEmpty())
@@ -402,6 +407,21 @@ void FomodWizard::buildUi()
 
                 boxLay->addWidget(btn);
                 m_buttons[si][gi].append(btn);
+            }
+
+            // SelectAtMostOne permits zero selections, but an exclusive radio
+            // group has no way back to "none" once one is picked - and the FOMOD
+            // may intend nothing selected by default (OAAB_Saplings' optional
+            // patch steps were the report). Add a synthetic "None" radio to the
+            // same exclusive group: picking a plugin clears it and vice-versa.
+            // It is deliberately NOT added to m_buttons, so applySelections /
+            // collectChoices (which index by plugin) install nothing for the
+            // group while "None" is the active choice.
+            if (selectAtMostOne) {
+                auto *noneBtn = new QRadioButton(T("fomod_select_none"), box);
+                if (btnGroup) btnGroup->addButton(noneBtn);
+                noneBtn->setChecked(!anyChecked);
+                boxLay->addWidget(noneBtn);
             }
 
             // boxLay (line above) is owned by `box` via Qt's parent-child
@@ -859,13 +879,15 @@ QString FomodWizard::applySelections()
         if (isFolder) {
             QString dst = normalizedDest.isEmpty()
                 ? installDir
-                : installDir + "/" + normalizedDest;
+                : fomod::resolveDest(installDir, normalizedDest);
             fomod_copy::copyContents(src, dst);
         } else {
-            QString dst = normalizedDest.isEmpty()
-                ? installDir + "/" + QFileInfo(src).fileName()
-                : installDir + "/" + normalizedDest;
+            const QString rel = normalizedDest.isEmpty()
+                ? QFileInfo(src).fileName()
+                : normalizedDest;
+            QString dst = fomod::resolveDest(installDir, rel);
             QDir().mkpath(QFileInfo(dst).absolutePath());
+            QFile::remove(dst);
             if (!QFile::copy(src, dst)) failed << f.source;
 
             // Patch-hub rescue: an .omwscripts manifest declares lua

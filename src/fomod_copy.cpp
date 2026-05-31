@@ -1,4 +1,5 @@
 #include "fomod_copy.h"
+#include "fomod_path.h"
 
 #include <QDir>
 #include <QFile>
@@ -15,10 +16,19 @@ void copyContents(const QString &srcDir, const QString &dstDir)
     if (entries.isEmpty()) return;
     QDir().mkpath(dstDir);
     for (const QFileInfo &fi : entries) {
-        if (fi.isDir())
-            copyDir(fi.absoluteFilePath(), dstDir + "/" + fi.fileName());
-        else
-            QFile::copy(fi.absoluteFilePath(), dstDir + "/" + fi.fileName());
+        // Reconcile each child against what's already staged so a file or
+        // folder differing only in letter case ("meshes" vs an existing
+        // "Meshes") merges in place instead of forking a duplicate directory
+        // on a case-sensitive filesystem (the Project Atlas report).
+        const QString dst = fomod::resolveDest(dstDir, fi.fileName());
+        if (fi.isDir()) {
+            copyDir(fi.absoluteFilePath(), dst);
+        } else {
+            // Last writer wins: a later FOMOD option (e.g. a patch) must be
+            // able to overwrite an earlier file; QFile::copy won't clobber.
+            QFile::remove(dst);
+            QFile::copy(fi.absoluteFilePath(), dst);
+        }
     }
 }
 
@@ -31,10 +41,19 @@ void copyDir(const QString &srcDir, const QString &dstDir)
     if (entries.isEmpty()) return;
     QDir().mkpath(dstDir);
     for (const QFileInfo &fi : entries) {
-        if (fi.isDir())
-            copyDir(fi.absoluteFilePath(), dstDir + "/" + fi.fileName());
-        else
-            QFile::copy(fi.absoluteFilePath(), dstDir + "/" + fi.fileName());
+        // Reconcile each child against what's already staged so a file or
+        // folder differing only in letter case ("meshes" vs an existing
+        // "Meshes") merges in place instead of forking a duplicate directory
+        // on a case-sensitive filesystem (the Project Atlas report).
+        const QString dst = fomod::resolveDest(dstDir, fi.fileName());
+        if (fi.isDir()) {
+            copyDir(fi.absoluteFilePath(), dst);
+        } else {
+            // Last writer wins: a later FOMOD option (e.g. a patch) must be
+            // able to overwrite an earlier file; QFile::copy won't clobber.
+            QFile::remove(dst);
+            QFile::copy(fi.absoluteFilePath(), dst);
+        }
     }
 }
 

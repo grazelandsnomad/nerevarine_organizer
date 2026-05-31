@@ -126,6 +126,54 @@ static void testPatchHubMixedEmptyAndContent()
           !QFileInfo::exists(dst + "/scripts"));
 }
 
+// On a case-sensitive filesystem two FOMOD options can spell the same logical
+// folder with different casing ("Meshes" vs "meshes").  Naive copying forks two
+// directories and the user can't tell which one wins - the Project Atlas bug
+// report.  copyContents must merge the later option into the already-staged
+// folder, and the later file must overwrite the earlier one (last writer wins).
+static void testCaseVariantFoldersMerge()
+{
+    std::cout << "\n[case-variant folders merge into one]\n";
+    QTemporaryDir dir;
+    const QString dst = dir.filePath("install");
+
+    // Option 1 stages "Meshes/..." (mixed case, as the base mod ships it).
+    const QString opt1 = dir.filePath("opt1");
+    writeFile(opt1 + "/Meshes/x.nif", "base");
+    writeFile(opt1 + "/Meshes/keep.nif", "keep");
+    fomod_copy::copyContents(opt1, dst);
+
+    // Option 2 is a patch applied afterwards, spelling the folder "meshes".
+    const QString opt2 = dir.filePath("opt2");
+    writeFile(opt2 + "/meshes/x.nif", "patch");
+    writeFile(opt2 + "/meshes/y.nif", "new");
+    fomod_copy::copyContents(opt2, dst);
+
+    // Exactly one directory matching /meshes/i must exist after the merge.
+    int meshDirs = 0;
+    for (const QString &e : QDir(dst).entryList(QDir::Dirs | QDir::NoDotAndDotDot))
+        if (e.compare("meshes", Qt::CaseInsensitive) == 0) ++meshDirs;
+    check("no duplicate case-variant folder (one meshes dir)", meshDirs == 1,
+          QString("found %1").arg(meshDirs));
+
+    // The merged folder keeps the first-seen casing ("Meshes").
+    check("merged folder keeps first-seen casing",
+          QFileInfo::exists(dst + "/Meshes"));
+
+    // Files from both options coexist in the single merged folder.
+    check("base-only file survives the merge",
+          QFileInfo::exists(dst + "/Meshes/keep.nif"));
+    check("patch's new file joins the merged folder",
+          QFileInfo::exists(dst + "/Meshes/y.nif"));
+
+    // The later option overwrites the earlier same-named file.
+    QByteArray got;
+    QFile f(dst + "/Meshes/x.nif");
+    if (f.open(QIODevice::ReadOnly)) { got = f.readAll(); f.close(); }
+    check("later option overwrites earlier file (last writer wins)",
+          got == "patch", QString::fromUtf8(got));
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -135,6 +183,7 @@ int main(int argc, char **argv)
     testNonexistentSourceIsNoop();
     testPopulatedSourceCopiesEverything();
     testPatchHubMixedEmptyAndContent();
+    testCaseVariantFoldersMerge();
 
     std::cout << "\n"
               << s_passed << " passed, "

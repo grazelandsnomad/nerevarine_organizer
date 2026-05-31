@@ -2,21 +2,24 @@
 
 A native Linux mod manager for OpenMW.
 
-## What's new in 0.4
+## What's new in 0.5
 
-- **Modlist profiles per game.** Test a Wabbajack in a sibling profile
-  without wiping your daily-driver setup. Each profile owns its own
-  mods directory on disk - never shared. Toolbar picker, manage dialog,
-  clean-modlist mods-dir prompt, consolidate-mods tool. In-flight
-  installs survive game/profile switches.
-- BSA fix: The writer now emits
-  `fallback-archive=` for every `.bsa` found under each managed mod's
-  data directory. Authentic Signs IT, Tamriel Data BSA variants and
-  similar were silently rendering with `[None]` textures before.
+- **FOMOD case-folder fix.** Installing a FOMOD with patches no longer
+  leaves duplicate `Meshes` + `meshes` folders that differ only in case.
+  Destinations reconcile against what's already staged (reusing the
+  existing folder's casing) and a later patch correctly overwrites the
+  base file it replaces.
+- **FOMOD optional steps fixed.** Radio-button groups that allow "none"
+  (`SelectAtMostOne`, e.g. OAAB_Saplings' patch steps) now offer a *None*
+  option and no longer force you to pick a patch.
+- Internal: a `ui::` prompt-helper layer (~80 `QMessageBox` sites
+  collapsed) and a single `subprocess::` chokepoint for launching
+  external programs, so the AppImage Qt env-scrub applies to every LOOT /
+  OpenMW Launcher / game launch.
 
-Full notes: [`docs/release-notes/0.4.md`](docs/release-notes/0.4.md)
-(prior: [0.3.1](docs/release-notes/0.3.1.md), [0.3](docs/release-notes/0.3.md),
-[0.2](docs/release-notes/0.2.md))
+Full notes: [`docs/release-notes/0.5.md`](docs/release-notes/0.5.md)
+(prior: [0.4](docs/release-notes/0.4.md), [0.3.1](docs/release-notes/0.3.1.md),
+[0.3](docs/release-notes/0.3.md), [0.2](docs/release-notes/0.2.md))
 
 # Tech Stack
 C++26 and Qt6.

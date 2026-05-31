@@ -100,6 +100,11 @@ public:
     static bool hasFomod(const QString &archiveRoot);
 
 private:
+    // Test hook: tests/test_fomod_wizard_ui.cpp drives buildUi() with a
+    // hand-built m_steps and inspects the resulting widget tree (m_buttons
+    // plus the synthetic "None" radio that SelectAtMostOne groups grow).
+    friend struct FomodWizardTestHook;
+
     explicit FomodWizard(const QString &archiveRoot, QWidget *parent = nullptr);
 
     bool    parse();

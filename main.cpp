@@ -74,7 +74,7 @@ int main(int argc, char *argv[])
 
     QApplication app(argc, argv);
     app.setApplicationName("Nerevarine Organizer");
-    app.setApplicationVersion("0.4");
+    app.setApplicationVersion("0.5");
     app.setOrganizationName("nerevarine");
 
     // Install logging + crash handlers as early as possible after QApplication.

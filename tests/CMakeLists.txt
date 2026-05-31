@@ -104,6 +104,7 @@ target_link_libraries(test_modlist_profiles PRIVATE
 add_executable(test_fomod_copy
     test_fomod_copy.cpp
     ${CMAKE_SOURCE_DIR}/src/fomod_copy.cpp
+    ${CMAKE_SOURCE_DIR}/src/fomod_path.cpp
 )
 target_include_directories(test_fomod_copy PRIVATE
     ${CMAKE_SOURCE_DIR}/include
@@ -122,6 +123,32 @@ target_include_directories(test_fomod_scripts PRIVATE
 )
 target_link_libraries(test_fomod_scripts PRIVATE
     Qt6::Core
+)
+
+# buildUi UI test: drives FomodWizard::buildUi headless (offscreen QPA) and
+# inspects the radio/checkbox tree. FomodWizard is a Q_OBJECT (QDialog) so
+# AUTOMOC is on; listing the header in the sources makes AUTOMOC pick it up
+# reliably from tests/. fomodwizard.cpp includes translator.h -> the generated
+# translation_keys.h, hence the generated include dir (and the matching
+# add_dependencies in the top-level CMakeLists).
+add_executable(test_fomod_wizard_ui
+    test_fomod_wizard_ui.cpp
+    ${CMAKE_SOURCE_DIR}/src/fomodwizard.cpp
+    ${CMAKE_SOURCE_DIR}/src/fomod_copy.cpp
+    ${CMAKE_SOURCE_DIR}/src/fomod_path.cpp
+    ${CMAKE_SOURCE_DIR}/src/fomod_scripts.cpp
+    ${CMAKE_SOURCE_DIR}/src/translator.cpp
+    ${CMAKE_SOURCE_DIR}/include/fomodwizard.h
+)
+set_target_properties(test_fomod_wizard_ui PROPERTIES AUTOMOC ON)
+target_include_directories(test_fomod_wizard_ui PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/generated
+)
+target_link_libraries(test_fomod_wizard_ui PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
 )
 
 add_executable(test_install_layout
@@ -410,6 +437,7 @@ set(UNIT_TESTS
     test_fomod_install
     test_fomod_path
     test_fomod_scripts
+    test_fomod_wizard_ui
     test_game_adapters
     test_install_layout
     test_fs_utils

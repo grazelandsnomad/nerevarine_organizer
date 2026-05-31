@@ -29,6 +29,15 @@ namespace fomod {
 
 QString resolvePath(const QString &root, const QString &relative);
 
+// Resolve a *destination* `relative` path under `root` for writing.  Like
+// resolvePath it normalises separators and is case-insensitive per segment,
+// but it never fails: a component that already exists reuses its on-disk
+// casing, a component that does not keeps the authored casing.  Creates
+// nothing.  Routing FOMOD destinations through this makes case-mismatched
+// options ("Meshes" vs "meshes") merge into one folder instead of forking
+// duplicate case-variant directories on a case-sensitive filesystem.
+QString resolveDest(const QString &root, const QString &relative);
+
 } // namespace fomod
 
 #endif // FOMOD_PATH_H

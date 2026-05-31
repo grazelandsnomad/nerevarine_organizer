@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(NerevarineOrganizer VERSION 0.4 LANGUAGES CXX)
+project(NerevarineOrganizer VERSION 0.5 LANGUAGES CXX)
 
 # C++23 covers everything actually used here (std::expected, std::println).
 # C++26 was tripping Qt's q26numeric.h polyfill on the MSYS2 UCRT64 CI toolchain
@@ -38,6 +38,14 @@ add_custom_command(
 add_custom_target(translation_keys_header
     DEPENDS ${TRANSLATION_ENUM_HEADER}
 )
+
+# tests/test_fomod_wizard_ui compiles fomodwizard.cpp, which includes
+# translator.h -> the generated translation_keys.h. The test target lives in
+# tests/ (added above, before this target exists) but target names are global,
+# so wire the generation dependency here to keep clean builds race-free.
+if(TARGET test_fomod_wizard_ui)
+    add_dependencies(test_fomod_wizard_ui translation_keys_header)
+endif()
 
 # Optional: qt6keychain for secure API-key storage (libsecret / KWallet /
 # DPAPI backend).  When present, the Nexus API key is stored there instead

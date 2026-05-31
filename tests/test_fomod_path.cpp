@@ -130,6 +130,27 @@ int main(int argc, char **argv)
     expectEmpty("backslashed missing path",
                 "99 Missing\\thing.esp");
 
+    // -- resolveDest: a *writable* path resolver.  Like resolvePath it reuses
+    //    existing on-disk casing, but it never fails on a missing component -
+    //    that's how case-mismatched FOMOD options merge into one folder
+    //    instead of forking "Meshes" + "meshes" on a case-sensitive FS. ---
+    {
+        // Authored "Meshes" must map onto the existing on-disk "00 Core/meshes".
+        QString got = fomod::resolveDest(root, "00 Core\\Meshes");
+        check("resolveDest reuses existing folder casing",
+              got == root + "/00 Core/meshes", got);
+    }
+    {
+        // A brand-new component keeps its authored casing (nothing to merge).
+        QString got = fomod::resolveDest(root, "00 Core/NewArt/Thing.dds");
+        check("resolveDest keeps authored casing for new components",
+              got == root + "/00 Core/NewArt/Thing.dds", got);
+    }
+    {
+        QString got = fomod::resolveDest(root, "");
+        check("resolveDest empty path returns root", got == root, got);
+    }
+
     std::cout << "\n";
     std::cout << s_passed << " passed, " << s_failed << " failed\n";
     return s_failed == 0 ? 0 : 1;
