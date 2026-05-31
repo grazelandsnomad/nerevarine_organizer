@@ -48,6 +48,23 @@ cmake --build build
 ./build/nerevarine_organizer
 ```
 
+### Portable release build (AppImage + plain binary)
+
+Release artifacts are built **inside an old-glibc container** so they run on
+normal distros regardless of how new your build host's glibc is — this is what
+prevents the `version `GLIBC_2.xx' not found` failures on Fedora / Steam Deck.
+Needs Docker or Podman:
+
+```sh
+./build-portable.sh            # AppImage + plain release, both portable
+./build-portable.sh appimage   # AppImage only
+```
+
+See `packaging/Dockerfile.portable` for the base image (Ubuntu 24.04 = glibc
+2.39) and the rationale. Don't ship an AppImage built directly on a
+bleeding-edge host — `build-appimage.sh` now aborts if a bundled library still
+requires a glibc newer than 2.41, but the container is the real fix.
+
 ### Optional runtime tools
 
 - [LOOT](https://loot.github.io/) for plugin load-order sorting. Invoked

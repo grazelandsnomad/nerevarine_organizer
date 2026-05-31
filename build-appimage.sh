@@ -204,6 +204,27 @@ exec "${HERE}/AppRun.orig" "$@"
 APPRUN
 chmod +x "$APPDIR/AppRun"
 
+# -- 6c. Portability gate: never ship a too-new build --------------------
+# The recurring Fedora / Steam Deck breakage ("version `GLIBC_2.43' not
+# found") comes from a release built on a bleeding-edge glibc slipping out
+# as a hotfix without the patch step above having fully applied.  patch_glibc.py
+# targets GLIBC_2.41, so verify nothing left in the AppDir demands newer and
+# ABORT before packaging - a broken AppImage must never reach a user again.
+step "Verifying glibc portability (target <= 2.41)"
+MAX_VER=$(find "$APPDIR" -type f ! -l -exec sh -c '
+    readelf -V "$1" 2>/dev/null | grep -oP "GLIBC_\K[\d.]+"
+' _ {} \; 2>/dev/null | sort -V | tail -1 || true)
+if [[ -n "$MAX_VER" && "$(printf '%s\n2.41\n' "$MAX_VER" | sort -V | tail -1)" != "2.41" ]]; then
+    echo -e "${R}✗ Portability check FAILED: bundled libs require GLIBC_${MAX_VER} (> 2.41).${R}" >&2
+    echo "  This AppImage would fail on any glibc < ${MAX_VER} (Fedora, Steam Deck, ...)." >&2
+    echo "  patch_glibc.py did not cover these files:" >&2
+    find "$APPDIR" -type f ! -l -exec sh -c '
+        readelf -V "$1" 2>/dev/null | grep -q "GLIBC_'"$MAX_VER"'" && echo "    $1"
+    ' _ {} \; 2>/dev/null | sort -u >&2
+    exit 1
+fi
+echo "  OK - max glibc requirement: ${MAX_VER:-none} (<= 2.41)."
+
 # -- 7. Package with appimagetool ---
 step "Packaging AppImage"
 DEST="$REPO_ROOT/NerevarineOrganizer-${APPIMAGE_VERSION}-x86_64.AppImage"
