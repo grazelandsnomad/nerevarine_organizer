@@ -131,6 +131,7 @@ private slots:
     void onInspectConflicts();
     void onTriageOpenMWLog();
     void onModlistSummary();
+    void onToggleTheme();           // flip light <-> dark, persist, update button
     void onMoveModsDir();
     // Bundle the user's modlist + load-order files, openmw.cfg, the tail
     // of OpenMW.log, and a system-summary snapshot into a single
@@ -460,6 +461,8 @@ private:
     // Repaints m_profileBtn's text + menu from the registry.  Called after
     // any switch, add, rename, or delete.
     void updateProfileButton();
+    // Repaints m_themeBtn's label to name the theme it will switch TO.
+    void updateThemeButton();
     QString modlistPath() const;
     QString forbiddenModsPath() const;
     GameProfile       &currentProfile();
@@ -541,6 +544,7 @@ private:
     // menu of "Switch to <name>", "New profile…", "Manage profiles…".
     QToolButton           *m_profileBtn             = nullptr;
     QToolButton           *m_featuredModlistsBtn    = nullptr;
+    QToolButton           *m_themeBtn                = nullptr;  // light/dark toggle
     QAction               *m_actLaunchOpenMW          = nullptr;
     QAction               *m_actLaunchLauncher        = nullptr;
     QAction               *m_actLaunchGame            = nullptr;  // "▶ Start" for non-Morrowind

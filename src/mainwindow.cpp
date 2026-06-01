@@ -1,5 +1,6 @@
 #include "mainwindow.h"
 #include "settings.h"
+#include "theme.h"
 #include "annotation_codec.h"
 #include "load_order_merge.h"
 #include "separatordialog.h"
@@ -942,9 +943,10 @@ void MainWindow::setupToolbar()
     // dropdown so the profile picker reads as a sub-selector of the
     // current game rather than a peer toolbar control.
     auto *profileLbl = new QLabel(T("toolbar_profile_label"), tb);
+    // color follows the active palette so the label stays readable in dark mode
     profileLbl->setStyleSheet(
         "QLabel {"
-        "  color: #000000;"
+        "  color: palette(window-text);"
         "  padding: 0 6px 0 8px;"
         "  font-size: 9pt;"
         "  font-weight: bold;"
@@ -966,9 +968,9 @@ void MainWindow::setupToolbar()
         "  border: 1px solid #555;"
         "  border-radius: 4px;"
         "  background: transparent;"
-        "  color: #000000;"
+        "  color: palette(button-text);"
         "}"
-        "QToolButton:hover  { background: rgba(255,255,255,0.08); }"
+        "QToolButton:hover  { background: rgba(127,127,127,0.18); }"
         "QToolButton:pressed{ background: rgba(0,0,0,0.22); }"
         "QToolButton::menu-indicator { image: none; }");
     tb->addWidget(m_profileBtn);
@@ -1049,6 +1051,25 @@ void MainWindow::setupToolbar()
     auto *tbSpacer = new QWidget(tb);
     tbSpacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     tb->addWidget(tbSpacer);
+
+    // -- Light/Dark theme toggle ---
+    // Flips the whole-app palette (see theme::) and persists the choice.  The
+    // button label always names the theme it will switch TO, so "Dark mode" is
+    // shown while light is active and vice-versa.  Its own chrome follows the
+    // active palette so it stays legible in either theme.
+    m_themeBtn = new QToolButton(tb);
+    m_themeBtn->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    m_themeBtn->setStyleSheet(
+        "QToolButton {"
+        "  padding: 3px 8px;"
+        "  border: 1px solid palette(mid);"
+        "  border-radius: 4px;"
+        "  color: palette(button-text);"
+        "}"
+        "QToolButton:hover { background: rgba(127,127,127,0.18); }");
+    connect(m_themeBtn, &QToolButton::clicked, this, &MainWindow::onToggleTheme);
+    tb->addWidget(m_themeBtn);
+    updateThemeButton();
 
     // -- Good States dropdown ---
     // Leftmost button of the right-aligned group.  Click to see the list of
@@ -1142,6 +1163,22 @@ void MainWindow::setupToolbar()
     updateGameButton(); // sets game button text/menu + shows correct launch button(s)
     updateProfileButton();
     m_tbCustom->applyAll();
+}
+
+void MainWindow::updateThemeButton()
+{
+    if (!m_themeBtn) return;
+    // Label names the theme the click will switch TO.
+    m_themeBtn->setText(Settings::uiDarkMode() ? T("toolbar_light_mode")
+                                               : T("toolbar_dark_mode"));
+}
+
+void MainWindow::onToggleTheme()
+{
+    const bool dark = !Settings::uiDarkMode();
+    Settings::setUiDarkMode(dark);
+    theme::applyTheme(dark);
+    updateThemeButton();
 }
 
 void MainWindow::setupCentralWidget()

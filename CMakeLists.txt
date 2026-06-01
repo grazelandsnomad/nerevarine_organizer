@@ -73,6 +73,7 @@ set(SOURCES
     main.cpp
     src/prompts.cpp
     src/subprocess.cpp
+    src/theme.cpp
     src/mainwindow.cpp
     src/separatordialog.cpp
     src/modlistdelegate.cpp
@@ -132,6 +133,7 @@ set(SOURCES
     src/send_to_dialog.cpp
     src/logging.cpp
     include/mainwindow.h
+    include/theme.h
     include/undo_stack.h
     include/zoom_controller.h
     include/filter_bar.h

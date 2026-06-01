@@ -14,6 +14,7 @@
 #include "mainwindow.h"
 #include "settings.h"
 #include "settings_migrations.h"
+#include "theme.h"
 #include "translator.h"
 
 // -- QSettings adapter for settings::Store ---
@@ -192,6 +193,11 @@ int main(int argc, char *argv[])
 
     // Mirror the UI for right-to-left languages (e.g. Arabic)
     app.setLayoutDirection(Translator::isRtl() ? Qt::RightToLeft : Qt::LeftToRight);
+
+    // Capture the native (light) style + palette, then apply the saved theme
+    // before the main window is built so there's no light-to-dark flash.
+    theme::captureDefault();
+    theme::applyTheme(Settings::uiDarkMode());
 
     // Collect any nxm:// URL passed as argument (from protocol handler)
     QString nxmUrl;

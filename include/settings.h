@@ -98,6 +98,8 @@ struct Settings {
     static void    setUiLanguage(const QString &lang);
     static bool    utilityExplainerSeen();
     static void    setUtilityExplainerSeen(bool seen);
+    static bool    uiDarkMode();                 // defaults to false (light)
+    static void    setUiDarkMode(bool dark);
 
     // Mod-list column visibility (`ui/col_<col>`).
     static bool    colVisible(const QString &col, bool defaultVisible);

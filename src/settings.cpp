@@ -22,6 +22,7 @@ constexpr auto kUiZoomPt              = "ui/zoom_pt";
 constexpr auto kUiScaleFactor         = "ui/scale_factor";
 constexpr auto kUiLanguage            = "ui/language";
 constexpr auto kUiUtilityExplainer    = "ui/utility_explainer_seen";
+constexpr auto kUiDarkMode            = "ui/dark_mode";
 
 constexpr auto kLootBannerDisabled  = "loot/banner_disabled";
 constexpr auto kQueueVisible        = "queue/visible";
@@ -310,6 +311,16 @@ bool Settings::utilityExplainerSeen()
 void Settings::setUtilityExplainerSeen(bool seen)
 {
     QSettings().setValue(kUiUtilityExplainer, seen);
+}
+
+bool Settings::uiDarkMode()
+{
+    return QSettings().value(kUiDarkMode, false).toBool();
+}
+
+void Settings::setUiDarkMode(bool dark)
+{
+    QSettings().setValue(kUiDarkMode, dark);
 }
 
 bool Settings::colVisible(const QString &col, bool defaultVisible)
