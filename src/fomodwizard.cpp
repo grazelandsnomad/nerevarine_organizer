@@ -48,9 +48,11 @@ QString FomodWizard::findModuleConfig(const QString &archiveRoot)
 // when no FOMOD installer exists anywhere in the tree.
 QString FomodWizard::findFomodRoot(const QString &archiveRoot)
 {
+    constexpr int kMaxDirs = 8192;   // runaway guard for pathological archives
     QStringList queue{archiveRoot};
     int visited = 0;
-    while (!queue.isEmpty() && visited++ < 8192) {
+    while (!queue.isEmpty() && visited < kMaxDirs) {
+        ++visited;
         const QString dir = queue.takeFirst();
         if (!findModuleConfig(dir).isEmpty())
             return dir;
@@ -59,6 +61,13 @@ QString FomodWizard::findFomodRoot(const QString &archiveRoot)
                                             | QDir::NoSymLinks))
             queue.append(d.filePath(s));
     }
+    // Hitting the cap means a huge archive whose fomod/ (if any) we may not have
+    // reached - log it so a "no wizard spawned" report is diagnosable rather
+    // than silent.
+    if (visited >= kMaxDirs)
+        qWarning("FomodWizard::findFomodRoot: scanned %d dirs under '%s' without "
+                 "finding fomod/ModuleConfig.xml; giving up (archive too deep?)",
+                 visited, qUtf8Printable(archiveRoot));
     return {};
 }
 

@@ -74,9 +74,23 @@ void applyTheme(bool dark)
             qApp->setStyle(fusion);
         qApp->setPalette(darkPalette());
     } else {
+        bool styleOk = false;
         if (!s_lightStyle.isEmpty()) {
-            if (auto *s = QStyleFactory::create(s_lightStyle))
+            if (auto *s = QStyleFactory::create(s_lightStyle)) {
                 qApp->setStyle(s);
+                styleOk = true;
+            }
+        }
+        // If the captured native style can't be re-created (empty/unknown
+        // objectName on some exotic platform), don't leave the dark session's
+        // Fusion style wearing a light palette - that's a visible half-state.
+        // Keep a known-good light combo (Fusion renders s_lightPalette cleanly)
+        // instead of a mismatch.
+        if (!styleOk
+            && qApp->style()->objectName().compare(
+                   QStringLiteral("fusion"), Qt::CaseInsensitive) != 0) {
+            if (auto *fusion = QStyleFactory::create(QStringLiteral("Fusion")))
+                qApp->setStyle(fusion);
         }
         qApp->setPalette(s_lightPalette);
     }
