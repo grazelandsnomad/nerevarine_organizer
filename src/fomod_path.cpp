@@ -15,6 +15,11 @@ QString resolvePath(const QString &root, const QString &relativeIn)
     QStringList segments = relative.split('/', Qt::SkipEmptyParts);
     QString current = root;
     for (const QString &seg : segments) {
+        // Refuse path traversal: a FOMOD source path is attacker-controlled
+        // (downloaded archive), and "../" would let it read outside the
+        // extracted archive root. Legit FOMOD paths never contain it.
+        if (seg == QLatin1String("..")) return {};
+        if (seg == QLatin1String(".")) continue;
         QDir d(current);
         if (!d.exists()) return {};
 
@@ -46,6 +51,12 @@ QString resolveDest(const QString &root, const QString &relativeIn)
     QString current = root;
     const QStringList segments = relative.split('/', Qt::SkipEmptyParts);
     for (const QString &seg : segments) {
+        // Refuse path traversal. The destination comes straight from an
+        // untrusted FOMOD; a "../" segment would let copyContents / QFile::copy
+        // write OUTSIDE the staging dir (arbitrary-file overwrite). Return ""
+        // so the caller treats it as a failed entry rather than escaping root.
+        if (seg == QLatin1String("..")) return {};
+        if (seg == QLatin1String(".")) continue;
         QDir d(current);
         // Reuse the on-disk casing of a component that already exists (exact
         // match wins, else the first case-insensitive match). This is what

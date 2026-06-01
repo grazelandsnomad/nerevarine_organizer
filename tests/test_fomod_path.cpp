@@ -130,6 +130,23 @@ int main(int argc, char **argv)
     expectEmpty("backslashed missing path",
                 "99 Missing\\thing.esp");
 
+    // -- Path traversal must be refused (untrusted FOMOD paths) ---
+    expectEmpty("resolvePath rejects ../ escape",
+                "00 Core/../../../etc/passwd");
+    expectEmpty("resolvePath rejects backslash ../ escape",
+                "..\\..\\outside.esp");
+    {
+        // resolveDest must also refuse to climb out of root via "..".
+        QString got = fomod::resolveDest(root, "meshes/../../escape.nif");
+        check("resolveDest rejects ../ escape", got.isEmpty(), got);
+    }
+    {
+        // A bare "." segment is harmless and is skipped, not an escape.
+        QString got = fomod::resolveDest(root, "00 Core/./meshes");
+        check("resolveDest skips harmless ./ segment",
+              got == root + "/00 Core/meshes", got);
+    }
+
     // -- resolveDest: a *writable* path resolver.  Like resolvePath it reuses
     //    existing on-disk casing, but it never fails on a missing component -
     //    that's how case-mismatched FOMOD options merge into one folder

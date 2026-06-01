@@ -28,6 +28,11 @@ void installDeclaredScripts(const QString &manifestSrc,
         QString scriptPath = line.mid(colon + 1).trimmed();
         scriptPath.replace(u'\\', u'/');
         if (scriptPath.isEmpty()) continue;
+        // The manifest is untrusted; refuse a traversing path so the
+        // `installDir + "/" + scriptPath` destination below can't escape the
+        // staging dir.
+        if (scriptPath.split(u'/', Qt::SkipEmptyParts).contains(QLatin1String("..")))
+            continue;
 
         // Try archive root first (the "scripts/ at root has all content"
         // shape), then the manifest's parent (the per-plugin folder shape
