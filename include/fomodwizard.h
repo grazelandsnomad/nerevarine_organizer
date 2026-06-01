@@ -118,6 +118,12 @@ private:
     // Returns path to ModuleConfig.xml, or empty string if not found.
     static QString findModuleConfig(const QString &archiveRoot);
 
+    // Returns the shallowest directory at/under archiveRoot that directly
+    // contains fomod/ModuleConfig.xml (handles Nexus wrapper folders the
+    // post-extraction dive heuristic doesn't unwrap), or "" when no FOMOD
+    // installer exists anywhere in the tree.
+    static QString findFomodRoot(const QString &archiveRoot);
+
     QString              m_archiveRoot;
     QString              m_modName;
     QString              m_priorChoices;      // serialized prior choices, set before buildUi()

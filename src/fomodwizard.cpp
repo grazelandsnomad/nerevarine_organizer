@@ -39,9 +39,32 @@ QString FomodWizard::findModuleConfig(const QString &archiveRoot)
     return {};
 }
 
+// Find the shallowest directory at/under archiveRoot that directly contains
+// fomod/ModuleConfig.xml.  The post-extraction dive heuristic doesn't always
+// land on it - a Nexus wrapper folder, especially with a stray file beside it
+// (which suppresses the dive so it can't orphan that file), leaves fomod/ one
+// or more levels below archiveRoot.  Breadth-first so the shallowest match
+// wins (a multi-mod pack with several FOMODs picks the topmost).  Returns ""
+// when no FOMOD installer exists anywhere in the tree.
+QString FomodWizard::findFomodRoot(const QString &archiveRoot)
+{
+    QStringList queue{archiveRoot};
+    int visited = 0;
+    while (!queue.isEmpty() && visited++ < 8192) {
+        const QString dir = queue.takeFirst();
+        if (!findModuleConfig(dir).isEmpty())
+            return dir;
+        QDir d(dir);
+        for (const QString &s : d.entryList(QDir::Dirs | QDir::NoDotAndDotDot
+                                            | QDir::NoSymLinks))
+            queue.append(d.filePath(s));
+    }
+    return {};
+}
+
 bool FomodWizard::hasFomod(const QString &archiveRoot)
 {
-    return !findModuleConfig(archiveRoot).isEmpty();
+    return !findFomodRoot(archiveRoot).isEmpty();
 }
 
 // Public entry point
@@ -141,6 +164,15 @@ void FomodWizard::showAsync(
 FomodWizard::FomodWizard(const QString &archiveRoot, QWidget *parent)
     : QDialog(parent), m_archiveRoot(archiveRoot)
 {
+    // The caller passes the post-extraction mod root, but fomod/ModuleConfig.xml
+    // may sit below it (Nexus wrapper folder, etc.).  Rebase onto the directory
+    // that actually holds the FOMOD so <file>/<folder> source paths resolve and
+    // the staging dir lands in the right place.  No-op when fomod/ is already
+    // here (or absent).
+    const QString root = findFomodRoot(archiveRoot);
+    if (!root.isEmpty())
+        m_archiveRoot = root;
+
     setModal(true);
     setMinimumSize(540, 420);
 }

@@ -28,9 +28,13 @@
 #include <QApplication>
 #include <QAbstractButton>
 #include <QByteArray>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QRadioButton>
 #include <QSet>
 #include <QString>
+#include <QTemporaryDir>
 #include <QWidget>
 
 #include <iostream>
@@ -57,6 +61,8 @@ struct FomodWizardTestHook {
     { return w->m_buttons[si][gi].size(); }
 
     static QString collect(FomodWizard *w) { return w->collectChoices(); }
+
+    static QString fomodRoot(const QString &p) { return FomodWizard::findFomodRoot(p); }
 };
 
 // -- Test scaffolding ------------------------------------------------------
@@ -120,6 +126,52 @@ static QRadioButton *findNoneRadio(FomodWizard *w, int si, int gi)
     return nullptr;
 }
 
+// findFomodRoot detection — independent of buildUi, but lives here because it
+// needs the FomodWizard TU + the friend hook to reach the private static. The
+// wrapper-folder case is the "no FOMOD wizard spawned for Completionist" bug:
+// fomod/ sat one level below where the post-extraction dive landed.
+static void writeFile(const QString &path, const QByteArray &bytes = {})
+{
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    QFile f(path);
+    if (f.open(QIODevice::WriteOnly)) { f.write(bytes); f.close(); }
+}
+
+static void testFindFomodRoot()
+{
+    std::cout << "\n[findFomodRoot locates fomod/ under a wrapper]\n";
+    {   // fomod/ directly at the root
+        QTemporaryDir d;
+        writeFile(d.filePath("fomod/ModuleConfig.xml"));
+        check("direct fomod/ at root is found",
+              FomodWizardTestHook::fomodRoot(d.path()) == d.path(),
+              FomodWizardTestHook::fomodRoot(d.path()));
+    }
+    {   // Nexus wrapper folder + a stray sibling file (which suppresses the dive)
+        QTemporaryDir d;
+        writeFile(d.filePath("Completionist Patch Hub-58523/fomod/ModuleConfig.xml"));
+        writeFile(d.filePath("readme.txt"), "x");
+        const QString want = d.filePath("Completionist Patch Hub-58523");
+        check("fomod/ under a wrapper (with sibling file) is found",
+              FomodWizardTestHook::fomodRoot(d.path()) == want,
+              FomodWizardTestHook::fomodRoot(d.path()));
+    }
+    {   // no FOMOD anywhere
+        QTemporaryDir d;
+        writeFile(d.filePath("00 Core/meshes/x.nif"));
+        check("no fomod/ anywhere returns empty",
+              FomodWizardTestHook::fomodRoot(d.path()).isEmpty());
+    }
+    {   // shallowest wins when fomod/ exists at two depths
+        QTemporaryDir d;
+        writeFile(d.filePath("fomod/ModuleConfig.xml"));
+        writeFile(d.filePath("sub/fomod/ModuleConfig.xml"));
+        check("shallowest fomod/ wins",
+              FomodWizardTestHook::fomodRoot(d.path()) == d.path(),
+              FomodWizardTestHook::fomodRoot(d.path()));
+    }
+}
+
 // -- Scenarios -------------------------------------------------------------
 
 int main(int argc, char **argv)
@@ -128,6 +180,8 @@ int main(int argc, char **argv)
     QApplication app(argc, argv);
 
     std::cout << "=== fomod_wizard_ui (buildUi) tests ===\n";
+
+    testFindFomodRoot();
 
     // 1. SelectAtMostOne with nothing required -> starts on "none". This is
     //    the OAAB_Saplings regression.
