@@ -53,6 +53,31 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
         QColor bg = index.data(ModRole::BgColor).value<QColor>();
         QColor fg = index.data(ModRole::FgColor).value<QColor>();
 
+        // Theme-aware DEFAULT separators.  The separator dialog seeds new
+        // separators with exactly this blue-grey + white pair; any other
+        // value is a deliberate user choice (a preset or a custom colour) and
+        // is left untouched.  In dark mode the default (55,55,75) sits almost
+        // on top of the dark window (53,53,53) and the separator all but
+        // disappears - so swap the DEFAULT pair (only) for a lighter bar that
+        // reads against a dark background.  Detected from the palette, not a
+        // setting, so it costs nothing, repaints automatically on theme
+        // switch, and never modifies stored data: manual colours persist as-is
+        // and switching back to light restores the original look.
+        static const QColor kDefaultBg(55, 55, 75);
+        static const QColor kDefaultFg(Qt::white);
+        const bool darkUi = option.palette.color(QPalette::Window).lightness() < 128;
+        const bool defaultBg = !bg.isValid() || bg == kDefaultBg;
+        const bool defaultFg = !fg.isValid() || fg == kDefaultFg;
+        if (darkUi && defaultBg && defaultFg) {
+            bg = QColor(74, 86, 115);     // lighter/bluer than window(53,53,53)
+            fg = QColor(235, 238, 245);
+        } else {
+            // Materialise the light-mode defaults for any unset colour so an
+            // uncoloured separator still paints sensibly.
+            if (!bg.isValid()) bg = kDefaultBg;
+            if (!fg.isValid()) fg = kDefaultFg;
+        }
+
         // Temporary "needs attention" tint: at least one mod ANYWHERE in
         // the modlist has a pending Nexus update.  updateSectionCounts()
         // sets SepHasUpdate identically on every separator when that's

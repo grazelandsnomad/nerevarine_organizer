@@ -1179,6 +1179,10 @@ void MainWindow::onToggleTheme()
     Settings::setUiDarkMode(dark);
     theme::applyTheme(dark);
     updateThemeButton();
+    // Repaint the list so default-coloured separators pick up the theme-aware
+    // default immediately (the delegate keys off the active palette).
+    if (m_modList && m_modList->viewport())
+        m_modList->viewport()->update();
 }
 
 void MainWindow::setupCentralWidget()
