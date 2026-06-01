@@ -968,7 +968,10 @@ void MainWindow::setupToolbar()
         "  border: 1px solid #555;"
         "  border-radius: 4px;"
         "  background: transparent;"
-        "  color: palette(button-text);"
+        // window-text, not button-text: the button is transparent so it sits
+        // on the toolbar/window surface, where button-text can be near-invisible
+        // (e.g. KDE Breeze light). Matches the adjacent "Profile:" label.
+        "  color: palette(window-text);"
         "}"
         "QToolButton:hover  { background: rgba(127,127,127,0.18); }"
         "QToolButton:pressed{ background: rgba(0,0,0,0.22); }"
@@ -1064,7 +1067,9 @@ void MainWindow::setupToolbar()
         "  padding: 3px 8px;"
         "  border: 1px solid palette(mid);"
         "  border-radius: 4px;"
-        "  color: palette(button-text);"
+        // transparent fill -> sits on the window surface, so use window-text
+        // (button-text can be near-invisible on the toolbar in light themes).
+        "  color: palette(window-text);"
         "}"
         "QToolButton:hover { background: rgba(127,127,127,0.18); }");
     connect(m_themeBtn, &QToolButton::clicked, this, &MainWindow::onToggleTheme);
