@@ -1157,16 +1157,24 @@ void MainWindow::updateThemeButton()
 
 void MainWindow::restyleToolbarTextButtons()
 {
-    // The transparent-fill toolbar buttons (Profile picker, theme toggle) sit
-    // on the window surface, so their text must use the window-text colour.  We
-    // bake that colour in as a concrete hex value rather than a QSS
-    // `palette(window-text)` expression: QSS caches the resolved palette colour
-    // and does NOT re-resolve it across a global QStyle swap, so after a
-    // light->dark->light round-trip the cached colour went stale and the text
-    // turned invisible.  Re-running this on every theme change keeps the colour
-    // correct.
-    const QString txt = palette().color(QPalette::WindowText).name();
-    const QString mid = palette().color(QPalette::Mid).name();
+    // The transparent-fill toolbar widgets (Profile label + picker, theme
+    // toggle) sit on the window surface, so their text must contrast with it.
+    //
+    // Two traps avoided here:
+    //  1. A QSS `palette(window-text)` expression is resolved+cached once and
+    //     NOT re-resolved across a global QStyle swap, so it goes stale.
+    //  2. Reading qApp/this->palette() right after theme::applyTheme() also
+    //     gives a STALE value - QApplication::setPalette() propagates via
+    //     events, not synchronously, so during onToggleTheme() the live
+    //     palette is still the PREVIOUS theme's.  That's why dark->light left
+    //     light-grey (dark-theme) text on the light toolbar.
+    //
+    // So derive the colour deterministically from the theme flag instead of
+    // reading any palette: light theme -> near-black text, dark theme -> light
+    // text.  Concrete hex, re-applied on every toggle.
+    const bool dark = Settings::uiDarkMode();
+    const QString txt = dark ? QStringLiteral("#dcdcdc") : QStringLiteral("#1a1a1a");
+    const QString mid = dark ? QStringLiteral("#5a5a5a") : QStringLiteral("#888888");
 
     if (m_profileLbl)
         m_profileLbl->setStyleSheet(QStringLiteral(
