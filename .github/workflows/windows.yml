@@ -18,6 +18,12 @@ jobs:
     # finishes in minutes.
     runs-on: windows-latest
 
+    # The "Attach to release" step (softprops/action-gh-release) creates/updates
+    # the GitHub release, which needs write access to repo contents. Without
+    # this the default GITHUB_TOKEN is read-only and the attach step 403s.
+    permissions:
+      contents: write
+
     steps:
       - uses: actions/checkout@v4
 

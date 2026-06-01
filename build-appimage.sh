@@ -225,6 +225,29 @@ if [[ -n "$MAX_VER" && "$(printf '%s\n2.41\n' "$MAX_VER" | sort -V | tail -1)" !
 fi
 echo "  OK - max glibc requirement: ${MAX_VER:-none} (<= 2.41)."
 
+# -- 6d. Leak guard: never ship the maintainer's personal state -----------
+# The dev tree keeps modlists / load orders / backups / config / logs next to
+# the binary (bin/, build/).  A stray copy into AppDir would ship the
+# maintainer's entire modlist collection to every user.  Scan and ABORT.
+step "Scanning AppDir for personal state (must be none)"
+LEAKS=$(find "$APPDIR" -type f \( \
+        -iname 'modlist_*'      -o \
+        -iname 'loadorder_*'    -o \
+        -iname 'forbidden_*'    -o \
+        -iname 'log.txt'        -o \
+        -iname '*.bak'          -o \
+        -iname '*.bak.*'        -o \
+        -iname '*.good.*'       -o \
+        -iname '*.premanualedit' \) 2>/dev/null || true)
+# Note: *.conf is intentionally NOT matched here - linuxdeploy legitimately
+# bundles fontconfig/.conf system files into the AppDir.
+if [[ -n "$LEAKS" ]]; then
+    echo -e "${R}✗ ABORT: personal/state files found in the AppDir:${R}" >&2
+    echo "$LEAKS" | sed 's/^/    /' >&2
+    exit 1
+fi
+echo "  clean - no modlist/state files in AppDir."
+
 # -- 7. Package with appimagetool ---
 step "Packaging AppImage"
 DEST="$REPO_ROOT/NerevarineOrganizer-${APPIMAGE_VERSION}-x86_64.AppImage"

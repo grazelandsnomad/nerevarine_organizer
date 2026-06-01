@@ -14,6 +14,12 @@ jobs:
     # forward-compatible with anything on glibc >= 2.35.
     runs-on: ubuntu-22.04
 
+    # The "Attach to release" step (softprops/action-gh-release) creates/updates
+    # the GitHub release, which needs write access to repo contents. Without
+    # this the default GITHUB_TOKEN is read-only and the attach step 403s.
+    permissions:
+      contents: write
+
     # Job-level so cmake picks gcc-12 on its very first compiler probe.
     env:
       CC: gcc-12
