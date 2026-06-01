@@ -69,10 +69,12 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
         const bool defaultBg = !bg.isValid() || bg == kDefaultBg;
         const bool defaultFg = !fg.isValid() || fg == kDefaultFg;
         if (darkUi && defaultBg && defaultFg) {
-            // Deep blue-grey (#37374b) — close to the light-mode default but a
-            // touch above the dark window (53,53,53) so the bar still reads,
-            // without glaring. Soft off-white text for contrast.
-            bg = QColor(0x37, 0x37, 0x4b);   // #37374b == (55,55,75)
+            // Take the light-mode default (#37374b) and darken it toward black
+            // while keeping its hue/saturation - QColor::darker() reduces the
+            // HSV value only. ~33% darker lands near #252532: clearly a blue
+            // groove, calmer than the original against the dark window. Soft
+            // off-white text keeps the label readable.
+            bg = kDefaultBg.darker(150);     // #37374b -> ~#252532, same hue
             fg = QColor(206, 212, 224);
         } else {
             // Materialise the light-mode defaults for any unset colour so an
