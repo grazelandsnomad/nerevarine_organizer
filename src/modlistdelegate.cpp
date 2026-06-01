@@ -69,10 +69,10 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
         const bool defaultBg = !bg.isValid() || bg == kDefaultBg;
         const bool defaultFg = !fg.isValid() || fg == kDefaultFg;
         if (darkUi && defaultBg && defaultFg) {
-            // Muted blue-grey: distinctly above the dark window (53,53,53) so
-            // the bar reads, but low-saturation so it doesn't glare. Text is
-            // soft off-white rather than pure white.
-            bg = QColor(58, 64, 82);
+            // Deep blue-grey (#37374b) — close to the light-mode default but a
+            // touch above the dark window (53,53,53) so the bar still reads,
+            // without glaring. Soft off-white text for contrast.
+            bg = QColor(0x37, 0x37, 0x4b);   // #37374b == (55,55,75)
             fg = QColor(206, 212, 224);
         } else {
             // Materialise the light-mode defaults for any unset colour so an
