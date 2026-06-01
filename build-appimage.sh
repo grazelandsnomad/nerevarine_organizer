@@ -24,9 +24,28 @@ REPO_ROOT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 BUILD_DIR="$REPO_ROOT/build-appimage"
 APPDIR="$BUILD_DIR/AppDir"
 TOOLS_DIR="$BUILD_DIR/tools"
+DIST_DIR="$REPO_ROOT/dist"
 
 G='\033[0;32m'; R='\033[0m'
 step() { echo -e "${G}-- $* ${R}"; }
+
+# Zip a single file into a zip (flat, no leading dirs).  Prefers the `zip` CLI;
+# falls back to Python's stdlib when absent.
+zip_file() {
+    local src="$1" out="$2" dir base
+    dir="$(dirname "$src")"; base="$(basename "$src")"
+    rm -f "$out"
+    if command -v zip >/dev/null 2>&1; then
+        ( cd "$dir" && zip -q "$out" "$base" )
+    else
+        python3 - "$src" "$base" "$out" <<'PY'
+import sys, zipfile
+src, base, out = sys.argv[1], sys.argv[2], sys.argv[3]
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+    z.write(src, base)
+PY
+    fi
+}
 
 # -- 1. Build ---
 step "Configuring CMake"
@@ -249,12 +268,22 @@ fi
 echo "  clean - no modlist/state files in AppDir."
 
 # -- 7. Package with appimagetool ---
+# The .AppImage is written at the REPO ROOT (unchanged): CI globs it there
+# (NerevarineOrganizer-*-x86_64.AppImage) to attach to the release - do not move
+# it or that contract breaks.
 step "Packaging AppImage"
 DEST="$REPO_ROOT/NerevarineOrganizer-${APPIMAGE_VERSION}-x86_64.AppImage"
 rm -f "$DEST"
 ARCH=x86_64 "$AT_EXTRACTED/AppRun" --no-appstream "$APPDIR" "$DEST"
 
 echo -e "${G}✓ AppImage ready: $DEST${R}"
+
+# -- 8. Also drop a zipped copy into dist/ for local distribution ---
+step "Packaging dist/ zip"
+mkdir -p "$DIST_DIR"
+DIST_ZIP="$DIST_DIR/NerevarineOrganizer-${APPIMAGE_VERSION}-x86_64.AppImage.zip"
+zip_file "$DEST" "$DIST_ZIP"
+echo "  -> $DIST_ZIP"
 
 # Show actual minimum glibc the patched image requires
 MAX_VER=$(find "$APPDIR" -type f ! -l -exec sh -c '

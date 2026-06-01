@@ -3,6 +3,7 @@ build/
 build-*/
 build_windows_*/
 bin/
+dist/
 obj/
 moc/
 Testing/

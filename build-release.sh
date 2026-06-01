@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Build + package the PLAIN (non-AppImage) Linux release tarball.
+# Build + package the PLAIN (non-AppImage) Linux release into dist/ as a zip.
 #
-#   Nerevarine_Organizer-<version>-x86_64/
-#     nerevarine_organizer            (the binary)
-#     nerevarine_organizer.desktop
-#     nerevarine_prefs.ini            (shipped defaults)
-#     cystal_full_0.png               (icon)
-#     translations/*.ini
-#     README.md, LICENSE
+#   dist/Nerevarine_Organizer-<version>-x86_64.zip
+#     Nerevarine_Organizer-<version>-x86_64/
+#       nerevarine_organizer            (the binary)
+#       nerevarine_organizer.desktop
+#       nerevarine_prefs.ini            (shipped defaults)
+#       cystal_full_0.png               (icon)
+#       translations/*.ini
+#       README.md, LICENSE
 #
 # SAFETY: this packages an explicit ALLOW-LIST of files into a fresh staging
 # dir - it never copies build/ or bin/ wholesale, and a final scan ABORTS if
@@ -22,8 +23,32 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 BUILD_DIR="$REPO_ROOT/build"
+DIST_DIR="$REPO_ROOT/dist"
 DO_BUILD=1
 [[ "${1:-}" == "--no-build" ]] && DO_BUILD=0
+
+# Zip a directory (1st arg) into a zip file (2nd arg), staging-dir-relative so
+# the archive contains the top folder, not absolute paths.  Prefers the `zip`
+# CLI; falls back to Python's stdlib zipfile (always present) when absent.
+make_zip() {
+    local srcdir="$1" out="$2" parent base
+    parent="$(dirname "$srcdir")"; base="$(basename "$srcdir")"
+    rm -f "$out"
+    if command -v zip >/dev/null 2>&1; then
+        ( cd "$parent" && zip -rq "$out" "$base" )
+    else
+        python3 - "$parent" "$base" "$out" <<'PY'
+import os, sys, zipfile
+parent, base, out = sys.argv[1], sys.argv[2], sys.argv[3]
+root = os.path.join(parent, base)
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+    for dp, _, files in os.walk(root):
+        for f in files:
+            full = os.path.join(dp, f)
+            z.write(full, os.path.relpath(full, parent))
+PY
+    fi
+}
 
 G='\033[0;32m'; Y='\033[0;33m'; R='\033[0m'
 step() { echo -e "${G}-- $* ${R}"; }
@@ -34,8 +59,8 @@ VERSION=$(grep -m1 'project(NerevarineOrganizer VERSION' "$REPO_ROOT/CMakeLists.
           | grep -oP '\d+\.\d+(?:\.\d+)?')
 [[ -n "$VERSION" ]] || die "could not read version from CMakeLists.txt"
 DIRNAME="Nerevarine_Organizer-${VERSION}-x86_64"
-PKG="$REPO_ROOT/$DIRNAME"
-TARBALL="$REPO_ROOT/${DIRNAME}.tar.gz"
+PKG="$REPO_ROOT/$DIRNAME"            # transient staging dir
+ZIP="$DIST_DIR/${DIRNAME}.zip"
 step "Version: $VERSION"
 
 # -- 2. Build ---
@@ -90,14 +115,14 @@ if [[ -n "$LEAKS" ]]; then
 fi
 echo "  clean - no modlist/state files in payload."
 
-# -- 5. Archive ---
-step "Creating $TARBALL"
-rm -f "$TARBALL"
-( cd "$REPO_ROOT" && tar -czf "$TARBALL" "$DIRNAME" )
+# -- 5. Zip into dist/ ---
+step "Packaging $ZIP"
+mkdir -p "$DIST_DIR"
+make_zip "$PKG" "$ZIP"
 rm -rf "$PKG"
 
 echo -e "${G}✓ Done${R}"
-ls -lh "$TARBALL"
+ls -lh "$ZIP"
 echo
 echo "  Contents:"
-tar -tzf "$TARBALL" | sed 's/^/    /'
+( cd "$DIST_DIR" && python3 -c "import zipfile,sys; [print('    '+n) for n in zipfile.ZipFile(sys.argv[1]).namelist()]" "$ZIP" )
