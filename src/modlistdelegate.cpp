@@ -53,34 +53,34 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
         QColor bg = index.data(ModRole::BgColor).value<QColor>();
         QColor fg = index.data(ModRole::FgColor).value<QColor>();
 
-        // Theme-aware DEFAULT separators.  The separator dialog seeds new
-        // separators with exactly this blue-grey + white pair; any other
-        // value is a deliberate user choice (a preset or a custom colour) and
-        // is left untouched.  In dark mode the default (55,55,75) sits almost
-        // on top of the dark window (53,53,53) and the separator all but
-        // disappears - so swap the DEFAULT pair (only) for a lighter bar that
-        // reads against a dark background.  Detected from the palette, not a
-        // setting, so it costs nothing, repaints automatically on theme
-        // switch, and never modifies stored data: manual colours persist as-is
-        // and switching back to light restores the original look.
+        // Theme-aware separators.  The separator dialog seeds new separators
+        // with this blue-grey + white default; presets/custom picks are other
+        // (often pale) colours.  All of them are authored for a light list, so
+        // in dark mode they glare or wash out.  Rather than special-casing the
+        // default, darken EVERY separator's background toward black while
+        // keeping its hue - so the pink/cream/blue sections stay recognisably
+        // pink/cream/blue, just deep enough to belong in a dark UI - and use
+        // light text on top.  Keyed off the active palette so it costs nothing,
+        // repaints on theme switch, and never modifies stored data: manual
+        // colours persist as-is and light mode looks exactly as before.
         static const QColor kDefaultBg(55, 55, 75);
         static const QColor kDefaultFg(Qt::white);
+        if (!bg.isValid()) bg = kDefaultBg;
+        if (!fg.isValid()) fg = kDefaultFg;
+
         const bool darkUi = option.palette.color(QPalette::Window).lightness() < 128;
-        const bool defaultBg = !bg.isValid() || bg == kDefaultBg;
-        const bool defaultFg = !fg.isValid() || fg == kDefaultFg;
-        if (darkUi && defaultBg && defaultFg) {
-            // Take the light-mode default (#37374b) and darken it toward black
-            // while keeping its hue/saturation - QColor::darker() reduces the
-            // HSV value only. ~33% darker lands near #252532: clearly a blue
-            // groove, calmer than the original against the dark window. Soft
-            // off-white text keeps the label readable.
-            bg = kDefaultBg.darker(150);     // #37374b -> ~#252532, same hue
-            fg = QColor(206, 212, 224);
-        } else {
-            // Materialise the light-mode defaults for any unset colour so an
-            // uncoloured separator still paints sensibly.
-            if (!bg.isValid()) bg = kDefaultBg;
-            if (!fg.isValid()) fg = kDefaultFg;
+        if (darkUi) {
+            // Keep hue + saturation, clamp lightness down to a uniform dark
+            // band (~0.18) so every separator reads at the same depth in dark
+            // mode regardless of how light the original was.  Only pull DOWN -
+            // a separator the user already made dark stays as-is.
+            float h, s, l, a;
+            bg.getHslF(&h, &s, &l, &a);
+            if (l > 0.18f)
+                bg = QColor::fromHslF(h, s, 0.18f, a);
+            // Light label on the now-dark band (the stored fg was chosen for a
+            // pale background and would be unreadable here).
+            fg = QColor(214, 219, 230);
         }
 
         // Temporary "needs attention" tint: at least one mod ANYWHERE in
