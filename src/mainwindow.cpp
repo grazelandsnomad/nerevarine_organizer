@@ -942,16 +942,10 @@ void MainWindow::setupToolbar()
     // "Profile:" label - sits between the game button and the profile
     // dropdown so the profile picker reads as a sub-selector of the
     // current game rather than a peer toolbar control.
-    auto *profileLbl = new QLabel(T("toolbar_profile_label"), tb);
-    // color follows the active palette so the label stays readable in dark mode
-    profileLbl->setStyleSheet(
-        "QLabel {"
-        "  color: palette(window-text);"
-        "  padding: 0 6px 0 8px;"
-        "  font-size: 9pt;"
-        "  font-weight: bold;"
-        "}");
-    tb->addWidget(profileLbl);
+    m_profileLbl = new QLabel(T("toolbar_profile_label"), tb);
+    // Colour is baked in by restyleToolbarTextButtons() from the live palette
+    // (same QSS-palette()-goes-stale-across-style-swap reason as the buttons).
+    tb->addWidget(m_profileLbl);
 
     // Modlist profile picker.  Toned-down chrome - no filled background,
     // just a thin border + transparent fill so the profile looks like a
@@ -961,21 +955,12 @@ void MainWindow::setupToolbar()
     m_profileBtn = new QToolButton(tb);
     m_profileBtn->setPopupMode(QToolButton::InstantPopup);
     m_profileBtn->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    m_profileBtn->setStyleSheet(
-        "QToolButton {"
-        "  font-weight: bold;"
-        "  padding: 3px 10px 3px 8px;"
-        "  border: 1px solid #555;"
-        "  border-radius: 4px;"
-        "  background: transparent;"
-        // window-text, not button-text: the button is transparent so it sits
-        // on the toolbar/window surface, where button-text can be near-invisible
-        // (e.g. KDE Breeze light). Matches the adjacent "Profile:" label.
-        "  color: palette(window-text);"
-        "}"
-        "QToolButton:hover  { background: rgba(127,127,127,0.18); }"
-        "QToolButton:pressed{ background: rgba(0,0,0,0.22); }"
-        "QToolButton::menu-indicator { image: none; }");
+    // Text colour is baked in by restyleToolbarTextButtons() from the live
+    // palette (NOT a `palette(window-text)` QSS expression): QSS resolves that
+    // expression once and caches it, and a global QStyle swap (light->dark->
+    // light) doesn't re-resolve it, so the second light pass painted stale
+    // invisible text.  Re-applying a concrete colour on every theme change
+    // avoids the stale cache entirely.
     tb->addWidget(m_profileBtn);
     tb->addSeparator();
 
@@ -1062,19 +1047,11 @@ void MainWindow::setupToolbar()
     // active palette so it stays legible in either theme.
     m_themeBtn = new QToolButton(tb);
     m_themeBtn->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    m_themeBtn->setStyleSheet(
-        "QToolButton {"
-        "  padding: 3px 8px;"
-        "  border: 1px solid palette(mid);"
-        "  border-radius: 4px;"
-        // transparent fill -> sits on the window surface, so use window-text
-        // (button-text can be near-invisible on the toolbar in light themes).
-        "  color: palette(window-text);"
-        "}"
-        "QToolButton:hover { background: rgba(127,127,127,0.18); }");
+    // Stylesheet (incl. text colour) is applied by restyleToolbarTextButtons().
     connect(m_themeBtn, &QToolButton::clicked, this, &MainWindow::onToggleTheme);
     tb->addWidget(m_themeBtn);
     updateThemeButton();
+    restyleToolbarTextButtons();   // bake concrete colours from the live palette
 
     // -- Good States dropdown ---
     // Leftmost button of the right-aligned group.  Click to see the list of
@@ -1178,12 +1155,61 @@ void MainWindow::updateThemeButton()
                                                : T("toolbar_dark_mode"));
 }
 
+void MainWindow::restyleToolbarTextButtons()
+{
+    // The transparent-fill toolbar buttons (Profile picker, theme toggle) sit
+    // on the window surface, so their text must use the window-text colour.  We
+    // bake that colour in as a concrete hex value rather than a QSS
+    // `palette(window-text)` expression: QSS caches the resolved palette colour
+    // and does NOT re-resolve it across a global QStyle swap, so after a
+    // light->dark->light round-trip the cached colour went stale and the text
+    // turned invisible.  Re-running this on every theme change keeps the colour
+    // correct.
+    const QString txt = palette().color(QPalette::WindowText).name();
+    const QString mid = palette().color(QPalette::Mid).name();
+
+    if (m_profileLbl)
+        m_profileLbl->setStyleSheet(QStringLiteral(
+            "QLabel {"
+            "  color: %1;"
+            "  padding: 0 6px 0 8px;"
+            "  font-size: 9pt;"
+            "  font-weight: bold;"
+            "}").arg(txt));
+
+    if (m_profileBtn)
+        m_profileBtn->setStyleSheet(QStringLiteral(
+            "QToolButton {"
+            "  font-weight: bold;"
+            "  padding: 3px 10px 3px 8px;"
+            "  border: 1px solid #555;"
+            "  border-radius: 4px;"
+            "  background: transparent;"
+            "  color: %1;"
+            "}"
+            "QToolButton:hover  { background: rgba(127,127,127,0.18); }"
+            "QToolButton:pressed{ background: rgba(0,0,0,0.22); }"
+            "QToolButton::menu-indicator { image: none; }").arg(txt));
+
+    if (m_themeBtn)
+        m_themeBtn->setStyleSheet(QStringLiteral(
+            "QToolButton {"
+            "  padding: 3px 8px;"
+            "  border: 1px solid %1;"
+            "  border-radius: 4px;"
+            "  color: %2;"
+            "}"
+            "QToolButton:hover { background: rgba(127,127,127,0.18); }")
+            .arg(mid, txt));
+}
+
 void MainWindow::onToggleTheme()
 {
     const bool dark = !Settings::uiDarkMode();
     Settings::setUiDarkMode(dark);
     theme::applyTheme(dark);
     updateThemeButton();
+    restyleToolbarTextButtons();   // re-bake button text colour for the new theme
     // Repaint the list so default-coloured separators pick up the theme-aware
     // default immediately (the delegate keys off the active palette).
     if (m_modList && m_modList->viewport())

@@ -463,6 +463,9 @@ private:
     void updateProfileButton();
     // Repaints m_themeBtn's label to name the theme it will switch TO.
     void updateThemeButton();
+    // Re-bakes concrete text colours into the transparent toolbar buttons
+    // (Profile, theme toggle) from the live palette - call after a theme swap.
+    void restyleToolbarTextButtons();
     QString modlistPath() const;
     QString forbiddenModsPath() const;
     GameProfile       &currentProfile();
@@ -545,6 +548,7 @@ private:
     QToolButton           *m_profileBtn             = nullptr;
     QToolButton           *m_featuredModlistsBtn    = nullptr;
     QToolButton           *m_themeBtn                = nullptr;  // light/dark toggle
+    QLabel                *m_profileLbl              = nullptr;  // "Profile:" prefix
     QAction               *m_actLaunchOpenMW          = nullptr;
     QAction               *m_actLaunchLauncher        = nullptr;
     QAction               *m_actLaunchGame            = nullptr;  // "▶ Start" for non-Morrowind
