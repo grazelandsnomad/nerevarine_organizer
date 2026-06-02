@@ -4917,6 +4917,54 @@ static QString detectLootBinary()
     return QString();
 }
 
+// If `lootPath` is a Flatpak export symlink (…/flatpak/exports/bin/<app.id>),
+// return its Flatpak app id (e.g. "io.github.loot.loot"); otherwise empty.
+//
+// Why this matters: running that export symlink directly is identical to
+// `flatpak run <id>` with the app's DEFAULT sandbox - which can't read the
+// user's mods directories (often on a separate mount like /mnt/...) nor write
+// ~/.config/openmw/openmw.cfg.  So LOOT scans nothing, finds no plugins, and
+// exits.  When this returns non-empty we launch via `flatpak run` with explicit
+// --filesystem grants instead (see lootCommand()).
+static QString lootFlatpakAppId(const QString &lootPath)
+{
+#ifndef Q_OS_WIN
+    if (lootPath.contains(QLatin1String("/flatpak/exports/bin/"))) {
+        const QString id = QFileInfo(lootPath).fileName();
+        if (id.contains(QLatin1Char('.')))   // app ids are reverse-DNS
+            return id;
+    }
+#endif
+    return {};
+}
+
+// Build the actual (program, args) to run LOOT with `lootArgs` (e.g.
+// --auto-sort --game <slug>).  Native installs run directly; a Flatpak install
+// is wrapped in `flatpak run` with filesystem access so the sandboxed LOOT can
+// see the plugins and the game config:
+//   --filesystem=host             read plugins from any mods dir / mount
+//   --filesystem=xdg-config/openmw read+write the OpenMW config (LOOT rewrites
+//                                  openmw.cfg's content= order) at its real path
+// LOOT is a user-installed, trusted tool, so host access is acceptable; the
+// alternative (enumerating every data= path) would silently miss a mods root
+// and reproduce the exact "no plugins" failure this fixes.
+static QPair<QString, QStringList>
+lootCommand(const QString &lootPath, const QStringList &lootArgs)
+{
+    const QString fpId = lootFlatpakAppId(lootPath);
+    if (fpId.isEmpty())
+        return {lootPath, lootArgs};
+
+    QStringList args{
+        QStringLiteral("run"),
+        QStringLiteral("--filesystem=host"),
+        QStringLiteral("--filesystem=xdg-config/openmw"),
+        fpId,
+    };
+    args += lootArgs;
+    return {QStringLiteral("flatpak"), args};
+}
+
 // The AppImage Qt-environment scrub (which keeps a foreign Qt child like
 // LOOT or the OpenMW Launcher from loading our bundled Qt and dying with
 // "QIBusPlatformInputContext: invalid portal bus") moved to
@@ -4969,9 +5017,12 @@ void MainWindow::autoSortLoadOrder()
     header->setStyleSheet("padding: 4px 2px;");
     v->addWidget(header);
 
-    const QStringList args{"--auto-sort", "--game", game};
+    // Native LOOT runs directly; a Flatpak LOOT is wrapped in `flatpak run`
+    // with filesystem grants so the sandbox can reach the mods + openmw.cfg.
+    const QStringList lootArgs{"--auto-sort", "--game", game};
+    const auto [prog, args] = lootCommand(loot, lootArgs);
     auto *cmdLbl = new QLabel(
-        T("loot_dialog_command").arg(loot + " " + args.join(' ')), &dlg);
+        T("loot_dialog_command").arg(prog + " " + args.join(' ')), &dlg);
     cmdLbl->setTextInteractionFlags(Qt::TextSelectableByMouse);
     cmdLbl->setStyleSheet("color: #666; font-family: monospace;");
     v->addWidget(cmdLbl);
@@ -5037,7 +5088,7 @@ void MainWindow::autoSortLoadOrder()
         dlg.reject();
     });
 
-    proc->start(loot, args);
+    proc->start(prog, args);
     if (!proc->waitForStarted(5000)) {
         statusBar()->showMessage(T("loot_launch_failed"), 6000);
         return;
