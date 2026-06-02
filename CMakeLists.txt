@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(NerevarineOrganizer VERSION 0.5 LANGUAGES CXX)
+project(NerevarineOrganizer VERSION 0.6 LANGUAGES CXX)
 
 # C++23 covers everything actually used here (std::expected, std::println).
 # C++26 was tripping Qt's q26numeric.h polyfill on the MSYS2 UCRT64 CI toolchain

@@ -2,20 +2,22 @@
 
 A native Linux mod manager for OpenMW.
 
-## What's new in 0.5
+## 0.6 — in development
 
-- **FOMOD case-folder fix.** Installing a FOMOD with patches no longer
-  leaves duplicate `Meshes` + `meshes` folders that differ only in case.
-  Destinations reconcile against what's already staged (reusing the
-  existing folder's casing) and a later patch correctly overwrites the
-  base file it replaces.
-- **FOMOD optional steps fixed.** Radio-button groups that allow "none"
-  (`SelectAtMostOne`, e.g. OAAB_Saplings' patch steps) now offer a *None*
-  option and no longer force you to pick a patch.
-- Internal: a `ui::` prompt-helper layer (~80 `QMessageBox` sites
-  collapsed) and a single `subprocess::` chokepoint for launching
-  external programs, so the AppImage Qt env-scrub applies to every LOOT /
-  OpenMW Launcher / game launch.
+Changes for the next release are collected in
+[`docs/release-notes/0.6.md`](docs/release-notes/0.6.md) as they land.
+
+### Latest release: 0.5
+
+- **Dark mode.** A toolbar button toggles the whole app between light and
+  dark and remembers the choice; separators follow the theme.
+- **FOMOD case-folder fix** — no more duplicate `Meshes` + `meshes`
+  folders when installing a mod with patches.
+- **FOMOD optional steps** that allow "none" can now be declined, and
+  **installers hidden in a wrapper folder are detected** (Completionist
+  Patch Hub).
+- **Portable Linux builds** — no more `GLIBC_2.xx not found` failures on
+  Fedora / Steam Deck.
 
 Full notes: [`docs/release-notes/0.5.md`](docs/release-notes/0.5.md)
 (prior: [0.4](docs/release-notes/0.4.md), [0.3.1](docs/release-notes/0.3.1.md),
