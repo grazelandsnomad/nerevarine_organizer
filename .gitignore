@@ -60,8 +60,17 @@ packaging/aur/*.src.tar.*
 # Local session / working notes
 TODO.local
 scratch/
+SESSION_FINDINGS.md
 .claude/settings.local.json
 .claude/settings.json
+
+# Markdown is untracked except the top-level README.md (kept on disk, not in
+# version control). Covers docs/release-notes/*, packaging/README.md, etc.
+# NOTE: release.yml reads docs/release-notes/<version>.md at tag time, so a
+# release now requires re-adding that file (git add -f) or changing the
+# workflow before tagging.
+*.md
+!/README.md
 
 # Downloads / modlist state the user runs with
 modlist_*.txt
