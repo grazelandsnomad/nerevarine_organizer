@@ -9,6 +9,8 @@
 #include "translator.h"
 #include "fomod_install.h"
 #include "fomodwizard.h"
+#include "bain.h"
+#include "bainwizard.h"
 #include "installcontroller.h"
 #include "modlist_model.h"
 #include "modlist_model_widget_bridge.h"
@@ -2154,6 +2156,76 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
             QFile::remove(archivePath);
         });
         return; // wizard is now shown; callback drives the rest
+    }
+
+    // BAIN installer: reached only after FOMOD declined. A BAIN archive groups
+    // its content under numbered packages ("00 Core", "01 Optional", ...) the
+    // user picks among. Detection is conservative (every top-level folder must
+    // be numbered, no fomod/, no asset roots) and the picker pre-checks
+    // everything, so a false positive on an install-everything mod (Tamriel
+    // Rebuilt) is just one extra click with the same result as a plain install.
+    if (bain::looksLikeBain(modPath)) {
+        const QString archiveFileName = fi.fileName();
+        const QString title = placeholder->data(ModRole::NexusTitle).toString().trimmed();
+        const QString sanitizedTitle = sanitizeFolderName(title);
+
+        BainWizard::showAsync(modPath, this,
+            [this, archivePath, extractDir, modPath,
+             installToken, archiveFileName, sanitizedTitle]
+            (const QString &stagedPath, const QString &bainChoices) {
+            Q_UNUSED(bainChoices)
+
+            QString fkey;
+            QListWidgetItem *bph = findPlaceholderByToken(installToken, &fkey);
+            if (stagedPath.isEmpty()) {
+                QDir(extractDir).removeRecursively();
+                QFile::remove(archivePath);
+                if (bph) {
+                    if (fkey.isEmpty()) {
+                        resetPlaceholderAfterInstallCancel(bph, archivePath);
+                    } else {
+                        bph->setData(ModRole::InstallStatus,    0);
+                        bph->setData(ModRole::DownloadProgress, QVariant());
+                        bph->setData(ModRole::ModPath,          QVariant());
+                        bph->setData(ModRole::InstallToken,     QVariant());
+                        bph->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
+                                      Qt::ItemIsDragEnabled | Qt::ItemIsUserCheckable);
+                        QString name = bph->data(ModRole::CustomName).toString();
+                        if (name.isEmpty()) name = QFileInfo(archivePath).completeBaseName();
+                        if (!name.isEmpty()) {
+                            bph->setText(name);
+                            bph->setData(ModRole::CustomName, name);
+                        }
+                        saveModListFor(fkey, bph);
+                    }
+                }
+                statusBar()->showMessage(T("bain_cancelled"), 3000);
+                return;
+            }
+
+            // Reuse the FOMOD promote: move the staged merge out of extractDir
+            // (dropping the unselected packages), rename to the title.
+            const auto promote = fomod_install::promote(
+                extractDir, modPath, stagedPath, sanitizedTitle, m_modsDir);
+
+            QString finalPath = modPath;
+            if (promote.outcome == fomod_install::PromoteOutcome::EmptyFallback)
+                ui::warn(this, T("fomod_empty_title"),
+                         T("fomod_empty_body").arg(archiveFileName));
+            else
+                finalPath = promote.finalModPath;
+
+            if (bph) {
+                if (fkey.isEmpty()) {
+                    addModFromPath(finalPath, bph);
+                } else {
+                    applyInstalledStateToStrandedPlaceholder(bph, finalPath);
+                    saveModListFor(fkey, bph);
+                }
+            }
+            QFile::remove(archivePath);
+        });
+        return; // picker shown; callback drives the rest
     }
 
     if (profileKey.isEmpty()) {

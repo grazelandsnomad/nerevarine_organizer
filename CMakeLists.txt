@@ -83,6 +83,8 @@ set(SOURCES
     src/fomod_install.cpp
     src/fomod_path.cpp
     src/fomod_scripts.cpp
+    src/bain.cpp
+    src/bainwizard.cpp
     src/load_order_merge.cpp
     src/modentry.cpp
     src/modentry_item.cpp
@@ -168,6 +170,8 @@ set(SOURCES
     include/fomod_install.h
     include/fomod_path.h
     include/fomod_scripts.h
+    include/bain.h
+    include/bainwizard.h
     include/load_order_merge.h
     include/modlist_model.h
     include/modlist_model_widget_bridge.h

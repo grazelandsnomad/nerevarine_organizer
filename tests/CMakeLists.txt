@@ -125,6 +125,20 @@ target_link_libraries(test_fomod_scripts PRIVATE
     Qt6::Core
 )
 
+# BAIN detection + staging (pure logic, reuses fomod_copy/fomod_path).
+add_executable(test_bain
+    test_bain.cpp
+    ${CMAKE_SOURCE_DIR}/src/bain.cpp
+    ${CMAKE_SOURCE_DIR}/src/fomod_copy.cpp
+    ${CMAKE_SOURCE_DIR}/src/fomod_path.cpp
+)
+target_include_directories(test_bain PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(test_bain PRIVATE
+    Qt6::Core
+)
+
 # buildUi UI test: drives FomodWizard::buildUi headless (offscreen QPA) and
 # inspects the radio/checkbox tree. FomodWizard is a Q_OBJECT (QDialog) so
 # AUTOMOC is on; listing the header in the sources makes AUTOMOC pick it up
@@ -431,6 +445,7 @@ target_link_libraries(test_scan_coordinator PRIVATE
 set(UNIT_TESTS
     test_annotation_codec
     test_asset_collisions
+    test_bain
     test_bsa_reader
     test_deps_resolver
     test_fomod_copy
