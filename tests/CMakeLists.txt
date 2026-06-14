@@ -57,6 +57,7 @@ add_executable(test_modlist_model
     test_modlist_model.cpp
     ${CMAKE_SOURCE_DIR}/src/modlist_model.cpp
     ${CMAKE_SOURCE_DIR}/src/modentry.cpp
+    ${CMAKE_SOURCE_DIR}/src/nxmurl.cpp   # findInstalledByModId parses NexusUrl
     ${CMAKE_SOURCE_DIR}/include/modlist_model.h
 )
 # ModlistModel is a Q_OBJECT - needs AUTOMOC for the vtable.
@@ -176,6 +177,34 @@ target_link_libraries(test_install_layout PRIVATE
     Qt6::Core
 )
 
+# post_install: pure decision logic behind addModFromPath's post-install
+# prompts (groundcover/splash/patch detection).  QtCore + QTemporaryDir only.
+add_executable(test_post_install
+    test_post_install.cpp
+    ${CMAKE_SOURCE_DIR}/src/post_install.cpp
+)
+target_include_directories(test_post_install PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(test_post_install PRIVATE
+    Qt6::Core
+)
+
+# placeholder_state: install lifecycle role transitions.  Operates on a
+# standalone QListWidgetItem -> needs QtWidgets on the link line (no QApp).
+add_executable(test_placeholder_state
+    test_placeholder_state.cpp
+    ${CMAKE_SOURCE_DIR}/src/placeholder_state.cpp
+)
+target_include_directories(test_placeholder_state PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(test_placeholder_state PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+)
+
 add_executable(test_load_order_merge
     test_load_order_merge.cpp
     ${CMAKE_SOURCE_DIR}/src/load_order_merge.cpp
@@ -185,6 +214,20 @@ target_include_directories(test_load_order_merge PRIVATE
 )
 target_link_libraries(test_load_order_merge PRIVATE
     Qt6::Core
+)
+
+# separator_theme: light/dark colour resolution for separator rows.  Header-only
+# helper, QColor-only -> QtGui on the link line, no Widgets.
+add_executable(test_separator_theme
+    test_separator_theme.cpp
+    ${CMAKE_SOURCE_DIR}/include/separator_theme.h
+)
+target_include_directories(test_separator_theme PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(test_separator_theme PRIVATE
+    Qt6::Core
+    Qt6::Gui
 )
 
 add_executable(test_fs_utils test_fs_utils.cpp)
@@ -471,10 +514,13 @@ set(UNIT_TESTS
     test_openmw_config_writer
     test_openmw_config_writer_fuzz
     test_openmw_sync_prep
+    test_placeholder_state
     test_plugin_collisions
     test_plugin_parser
+    test_post_install
     test_safe_fs
     test_scan_coordinator
+    test_separator_theme
     test_settings_migrations
 )
 

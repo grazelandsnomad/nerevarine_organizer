@@ -86,6 +86,48 @@ static void testInvalidUrls()
     check("non-numeric fileId",      !badFile.has_value());
 }
 
+static void testNexusModUrlParsing()
+{
+    std::cout << "\n[nexus web mod-page URL parsing]\n";
+
+    auto canonical = parseNexusModUrl("https://www.nexusmods.com/morrowind/mods/49042");
+    check("canonical web URL accepted",   canonical.has_value());
+    check("web URL game extracted",       canonical && canonical->game  == "morrowind");
+    check("web URL modId extracted",      canonical && canonical->modId == 49042);
+
+    // Tolerate trailing path / query / fragment after the id.
+    auto tabbed = parseNexusModUrl("https://www.nexusmods.com/skyrimspecialedition/mods/266?tab=files");
+    check("trailing ?tab=files accepted",  tabbed && tabbed->modId == 266);
+    check("game with query still parsed",  tabbed && tabbed->game == "skyrimspecialedition");
+
+    auto filesTail = parseNexusModUrl("https://www.nexusmods.com/morrowind/mods/42/files");
+    check("trailing /files segment accepted", filesTail && filesTail->modId == 42);
+
+    // Game slug is lowercased (Nexus slugs are case-insensitive, stored lower).
+    auto mixedCase = parseNexusModUrl("https://www.nexusmods.com/Morrowind/mods/7");
+    check("game slug lowercased", mixedCase && mixedCase->game == "morrowind");
+
+    // Rejections: non-mod pages, non-numeric ids, empties.
+    check("empty URL rejected",        !parseNexusModUrl("").has_value());
+    check("non-mod path rejected",     !parseNexusModUrl("https://www.nexusmods.com/morrowind/users/1").has_value());
+    check("missing id rejected",       !parseNexusModUrl("https://www.nexusmods.com/morrowind/mods").has_value());
+    check("non-numeric id rejected",   !parseNexusModUrl("https://www.nexusmods.com/morrowind/mods/abc").has_value());
+}
+
+static void testNexusModUrlBuild()
+{
+    std::cout << "\n[nexus web mod-page URL building]\n";
+
+    const QString built = nexusModUrl("morrowind", 49042);
+    check("builds canonical URL",
+          built == "https://www.nexusmods.com/morrowind/mods/49042");
+
+    // build -> parse round-trips to the same identity.
+    auto rt = parseNexusModUrl(nexusModUrl("oblivion", 12345));
+    check("build/parse round-trips game",  rt && rt->game  == "oblivion");
+    check("build/parse round-trips modId", rt && rt->modId == 12345);
+}
+
 static void testProtocolFilesExist()
 {
     std::cout << "\n[KIO protocol registration]\n";
@@ -146,6 +188,8 @@ int main(int argc, char *argv[])
     testNxmUrlParsing();
     testNxmsUrlParsing();
     testInvalidUrls();
+    testNexusModUrlParsing();
+    testNexusModUrlBuild();
 
     // Integration tests - skip in CI / sandboxed builds where the KIO
     // protocol files aren't installed and outbound HTTPS isn't reachable.

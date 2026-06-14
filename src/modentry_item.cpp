@@ -57,9 +57,10 @@ ModEntry ModEntry::fromItem(const QListWidgetItem *item)
     e.hasMissingMaster = item->data(ModRole::HasMissingMaster).toBool();
     e.missingMasters   = item->data(ModRole::MissingMasters).toStringList();
 
-    e.videoUrl    = item->data(ModRole::VideoUrl).toString();
-    e.sourceUrl   = item->data(ModRole::SourceUrl).toString();
-    e.prevModPath = item->data(ModRole::PrevModPath).toString();
+    e.videoUrl        = item->data(ModRole::VideoUrl).toString();
+    e.sourceUrl       = item->data(ModRole::SourceUrl).toString();
+    e.prevModPath     = item->data(ModRole::PrevModPath).toString();
+    e.mergeTargetPath = item->data(ModRole::MergeTargetPath).toString();
 
     return e;
 }
@@ -112,7 +113,8 @@ void ModEntry::applyToItem(QListWidgetItem *item) const
     item->setData(ModRole::HasMissingMaster, hasMissingMaster);
     item->setData(ModRole::MissingMasters,   missingMasters);
 
-    item->setData(ModRole::VideoUrl,    videoUrl);
-    item->setData(ModRole::SourceUrl,   sourceUrl);
-    item->setData(ModRole::PrevModPath, prevModPath);
+    item->setData(ModRole::VideoUrl,        videoUrl);
+    item->setData(ModRole::SourceUrl,       sourceUrl);
+    item->setData(ModRole::PrevModPath,     prevModPath);
+    item->setData(ModRole::MergeTargetPath, mergeTargetPath);
 }

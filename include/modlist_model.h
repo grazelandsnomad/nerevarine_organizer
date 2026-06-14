@@ -68,6 +68,22 @@ public:
     int findByNexusUrl(const QString &url) const;
     int findByModPath(const QString &path) const;
 
+    // Find the row index of an INSTALLED mod (installStatus == 1) whose stored
+    // NexusUrl parses to (game, modId).  game is matched case-insensitively
+    // (Nexus slugs are stored lowercase).  `exceptRow`, when >= 0, is skipped -
+    // used to ignore the placeholder currently being installed.  Returns -1
+    // when no such row exists.  Centralizes the "is this mod page already
+    // installed?" scan that MainWindow used to open-code over m_modList.
+    int findInstalledByModId(const QString &game, int modId,
+                             int exceptRow = -1) const;
+
+    // Display names (the text shown in the list) of mod rows, in order;
+    // separators and empty names excluded.  installedModDisplayNames() narrows
+    // to mods with installStatus == 1.  Used for duplicate-name hints (FOMOD
+    // wizard) and "is companion mod Y present?" patch-skip checks.
+    QStringList modDisplayNames() const;
+    QStringList installedModDisplayNames() const;
+
     // Aggregate counts used by the modlist status bar and several other
     // places that previously walked m_modList row-by-row.  Mods only -
     // separators are excluded from both counts.  `active` counts mods

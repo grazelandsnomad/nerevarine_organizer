@@ -851,6 +851,30 @@ static void testParseConfigEntries_crlfTolerated()
     check("CRLF content= parses",  e.contentFiles == QStringList{"Bar.esp"});
 }
 
+// externalDataPaths returns data= dirs OUTSIDE the managed block - the splash
+// helper uses it to find the base game's Splash/ without picking a managed mod
+// folder.  Centralizing the BEGIN/END markers here (not in the caller) is the
+// point of the reader; this pins the managed-vs-external split.
+static void testExternalDataPaths()
+{
+    std::cout << "testExternalDataPaths\n";
+    const QString cfg =
+        "data=\"/usr/share/games/openmw/data\"\n"
+        "data=/home/u/Morrowind/Data Files\n"
+        "# --- Nerevarine Organizer BEGIN ---\n"
+        "data=\"/managed/mod1\"\n"
+        "data=\"/managed/mod2\"\n"
+        "# --- Nerevarine Organizer END ---\n"
+        "content=Morrowind.esm\n";
+
+    const QStringList ext = openmw::externalDataPaths(cfg);
+    check("parses both external data= lines", ext.size() == 2);
+    check("strips surrounding quotes",  ext.value(0) == "/usr/share/games/openmw/data");
+    check("keeps unquoted path as-is",  ext.value(1) == "/home/u/Morrowind/Data Files");
+    check("managed-block data= excluded", !ext.contains("/managed/mod1")
+                                       && !ext.contains("/managed/mod2"));
+}
+
 // looksLikeVanillaDataFolder is the heuristic that prevents the importer
 // from creating a "mod" row for the user's base-game Data Files folder.
 // Conservative on purpose: requires Morrowind.esm AND at least one of
@@ -921,6 +945,7 @@ int main(int argc, char **argv)
     testVanillaFallbackArchivePreserved();
     testPreambleBsaDuplicateDropped();
     testBsaIdempotent();
+    testExternalDataPaths();
 
     std::cout << "\n"
               << s_passed << " passed, "

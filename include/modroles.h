@@ -73,6 +73,14 @@ namespace ModRole {
     // saveModListFor).  Persisted in the modlist file so an in-flight
     // install survives a restart and can be matched back up after relaunch.
     constexpr int InstallToken          = Qt::UserRole + 38; // QUuid
+    // Set by handleNxmUrl when the user picks "Merge into existing" in the
+    // already-installed prompt.  Holds the existing mod folder the freshly
+    // downloaded files must be overlaid onto (last-writer-wins) instead of
+    // replacing it or landing in a separate folder - the MO2-style "merge"
+    // for optional files that override a main download (e.g. OAAB Data).
+    // Consumed by applyPendingMerge() once the new archive has extracted;
+    // transient, never persisted (mirrors PrevModPath).
+    constexpr int MergeTargetPath       = Qt::UserRole + 39; // QString
 }
 
 namespace ItemType {

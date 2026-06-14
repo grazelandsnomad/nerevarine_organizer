@@ -174,6 +174,50 @@ static void testCaseVariantFoldersMerge()
           got == "patch", QString::fromUtf8(got));
 }
 
+// "Merge into existing" (MainWindow::applyPendingMerge) overlays an optional
+// download on top of an already-installed mod folder by calling
+// copyContents(optional, existingFolder).  Some Nexus pages ship optional files
+// whose whole point is to OVERRIDE files from the main download (OAAB Data's
+// optionals).  This models that: the existing folder already holds the main
+// download; overlaying the optional must (a) override colliding files, (b) keep
+// the main download's untouched files, and (c) add the optional's new files -
+// all inside the one folder.  Locks the override semantics the merge UI relies
+// on so a refactor of the copy primitive can't silently regress it.
+static void testMergeOverlayOverridesMainDownload()
+{
+    std::cout << "\n[merge overlay: optional download overrides the main download]\n";
+    QTemporaryDir dir;
+    const QString existing = dir.filePath("mods/OAAB_Data");
+
+    // Main download, already installed into the existing mod folder.
+    writeFile(existing + "/OAAB_Data.esm", "main-plugin");
+    writeFile(existing + "/Textures/shared.dds", "main-texture");
+    writeFile(existing + "/Meshes/keep.nif", "main-only-mesh");
+
+    // Optional download (freshly extracted elsewhere) overlaid on top.
+    const QString optional = dir.filePath("extract/OAAB_optional");
+    writeFile(optional + "/Textures/shared.dds", "optional-texture");  // override
+    writeFile(optional + "/Textures/extra.dds",  "optional-extra");    // new file
+
+    fomod_copy::copyContents(optional, existing);
+
+    auto readAll = [](const QString &p) {
+        QByteArray b; QFile f(p);
+        if (f.open(QIODevice::ReadOnly)) { b = f.readAll(); f.close(); }
+        return b;
+    };
+
+    check("main download's untouched plugin survives the merge",
+          readAll(existing + "/OAAB_Data.esm") == "main-plugin");
+    check("main-only mesh survives the merge",
+          readAll(existing + "/Meshes/keep.nif") == "main-only-mesh");
+    check("optional overrides the colliding main file (last writer wins)",
+          readAll(existing + "/Textures/shared.dds") == "optional-texture",
+          QString::fromUtf8(readAll(existing + "/Textures/shared.dds")));
+    check("optional's new file joins the existing folder",
+          readAll(existing + "/Textures/extra.dds") == "optional-extra");
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -184,6 +228,7 @@ int main(int argc, char **argv)
     testPopulatedSourceCopiesEverything();
     testPatchHubMixedEmptyAndContent();
     testCaseVariantFoldersMerge();
+    testMergeOverlayOverridesMainDownload();
 
     std::cout << "\n"
               << s_passed << " passed, "

@@ -8,6 +8,9 @@
 #include "modroles.h"
 #include "translator.h"
 #include "fomod_install.h"
+#include "fomod_copy.h"
+#include "post_install.h"
+#include "placeholder_state.h"
 #include "fomodwizard.h"
 #include "bain.h"
 #include "bainwizard.h"
@@ -1297,18 +1300,13 @@ void MainWindow::setupCentralWidget()
         }
 
         const QString nexusUrl = item->data(ModRole::NexusUrl).toString();
-        const QStringList parts = QUrl(nexusUrl).path().split('/', Qt::SkipEmptyParts);
-        if (parts.size() < 3 || parts[1] != "mods") {
+        const auto ref = parseNexusModUrl(nexusUrl);
+        if (!ref) {
             ui::warn(this, T("nexus_api_error_title"), T("install_invalid_url"));
             return;
         }
-        const QString game = parts[0];
-        bool ok;
-        const int modId = parts[2].toInt(&ok);
-        if (!ok) {
-            ui::warn(this, T("nexus_api_error_title"), T("install_invalid_url"));
-            return;
-        }
+        const QString game  = ref->game;
+        const int     modId = ref->modId;
 
         QString name = item->data(ModRole::CustomName).toString();
         if (name.isEmpty()) name = item->text();
@@ -1712,28 +1710,19 @@ void MainWindow::handleNxmUrl(const QString &url)
     const QString &key     = parsed->key;
     const QString &expires = parsed->expires;
 
-    // Forbidden mod check - hard block, no install-anyway escape
-    if (const ForbiddenMod *f = m_forbidden->find(game, modId)) {
-        QMessageBox warn(this);
-        warn.setWindowTitle(T("forbidden_warn_title"));
-        warn.setIcon(QMessageBox::Critical);
-        warn.setText(T("forbidden_warn_body").arg(f->name, f->annotation));
-        auto *manageBtn = warn.addButton(T("forbidden_open_manager"), QMessageBox::ActionRole);
-        warn.addButton(QMessageBox::Ok);
-        warn.setDefaultButton(QMessageBox::Ok);
-        warn.exec();
-        if (warn.clickedButton() == manageBtn)
-            m_forbidden->showManageDialog(this);
-        return;
-    }
+    // Forbidden mod check - hard block, no install-anyway escape.
+    if (!confirmNotForbidden(game, modId)) return;
 
     // Already-installed guard: route Replace through the existing row-reuse
     // path (which deletes the prior folder via PrevModPath after install),
-    // and force a fresh placeholder for Separate so the new download lands
-    // in its own folder beside the existing entry.
+    // force a fresh placeholder for Separate so the new download lands in its
+    // own folder beside the existing entry, and route Merge through the same
+    // row-reuse path but overlay the new files onto the existing folder
+    // (stashed as MergeTargetPath) instead of deleting it.
     const auto reinstallChoice = confirmReinstallIfInstalled(game, modId);
     if (reinstallChoice == ReinstallChoice::Cancel) return;
     const bool forceSeparate = (reinstallChoice == ReinstallChoice::Separate);
+    const bool forceMerge    = (reinstallChoice == ReinstallChoice::Merge);
 
     if (m_apiKey.isEmpty()) {
         ui::info(this, T("nxm_api_key_required_title"), T("nxm_api_key_required_body"));
@@ -1754,7 +1743,7 @@ void MainWindow::handleNxmUrl(const QString &url)
     // qualify ONLY when the user picked Replace in the dispatch prompt;
     // Separate forces a fresh placeholder so the new download lands beside
     // the existing entry rather than on top of it.
-    QString nexusPageUrl = QString("https://www.nexusmods.com/%1/mods/%2").arg(game).arg(modId);
+    QString nexusPageUrl = nexusModUrl(game, modId);
     QListWidgetItem *placeholder = nullptr;
     QListWidgetItem *installedMatch = nullptr;
     for (int i = 0; i < m_modList->count(); ++i) {
@@ -1764,30 +1753,38 @@ void MainWindow::handleNxmUrl(const QString &url)
         if (status != 0 && status != 1) continue;
         const QString storedUrl = it->data(ModRole::NexusUrl).toString();
         if (storedUrl.isEmpty()) continue;
-        const QStringList parts = QUrl(storedUrl).path().split('/', Qt::SkipEmptyParts);
-        if (parts.size() < 3 || parts[1] != QLatin1String("mods")) continue;
-        bool ok; const int storedId = parts[2].toInt(&ok);
-        if (!ok || storedId != modId) continue;
-        if (parts[0].compare(game, Qt::CaseInsensitive) != 0) continue;
+        const auto ref = parseNexusModUrl(storedUrl);
+        if (!ref || ref->modId != modId) continue;
+        if (ref->game.compare(game, Qt::CaseInsensitive) != 0) continue;
         if (status == 0) { placeholder = it; break; }
         if (!installedMatch) installedMatch = it;
     }
     if (!placeholder && !forceSeparate) placeholder = installedMatch;
+    // Merge always targets the installed row; a pending download placeholder
+    // for the same modId (if any) has nothing to merge into.
+    if (forceMerge && installedMatch) placeholder = installedMatch;
 
     if (placeholder) {
-        // For an installed match, stash the current folder so addModFromPath
-        // can purge it once the new install lands.  Skip when the row already
-        // had a previous-path stashed (rare double-fire) to avoid losing the
-        // original.
+        // For an installed match, decide what happens to the current folder.
         if (placeholder == installedMatch) {
             const QString currentPath = placeholder->data(ModRole::ModPath).toString();
-            if (!currentPath.isEmpty()
-                && placeholder->data(ModRole::PrevModPath).toString().isEmpty())
+            if (forceMerge) {
+                // Merge: keep the existing folder and overlay the freshly
+                // downloaded files onto it (last-writer-wins).  applyPendingMerge
+                // consumes this once the new archive has extracted.
+                if (!currentPath.isEmpty())
+                    placeholder->setData(ModRole::MergeTargetPath, currentPath);
+            } else if (!currentPath.isEmpty()
+                       && placeholder->data(ModRole::PrevModPath).toString().isEmpty()) {
+                // Replace: stash the current folder so addModFromPath can purge
+                // it once the new install lands.  Skip when a previous-path is
+                // already stashed (rare double-fire) to avoid losing the original.
                 placeholder->setData(ModRole::PrevModPath, currentPath);
+            }
         }
         placeholder->setText(QString("⠋ %1 (mod %2)").arg(T("status_installing_label")).arg(modId));
         placeholder->setData(ModRole::InstallStatus, 2);
-        placeholder->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        placeholder_state::setBusyFlags(placeholder);
     } else {
         placeholder = new QListWidgetItem(
             QString("⠋ %1 (mod %2)").arg(T("status_installing_label")).arg(modId));
@@ -1796,7 +1793,7 @@ void MainWindow::handleNxmUrl(const QString &url)
         placeholder->setData(ModRole::NexusUrl,      nexusPageUrl);
         placeholder->setData(ModRole::DateAdded,     QDateTime::currentDateTime());
         placeholder->setCheckState(Qt::Checked);
-        placeholder->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        placeholder_state::setBusyFlags(placeholder);
         m_modList->addItem(placeholder);
     }
     m_modList->scrollToItem(placeholder);
@@ -1947,8 +1944,7 @@ void MainWindow::onArchiveVerificationFailed(const QString &archivePath,
         placeholder->setData(ModRole::ExpectedMd5,      QVariant());
         placeholder->setData(ModRole::ExpectedSize,     QVariant());
         placeholder->setData(ModRole::InstallToken,     QVariant());
-        placeholder->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
-                              Qt::ItemIsDragEnabled | Qt::ItemIsUserCheckable);
+        placeholder_state::restoreInteractiveFlags(placeholder);
         // Restore the display name, stripping the "⠋ installing…" prefix.
         QString name = placeholder->data(ModRole::CustomName).toString();
         if (name.isEmpty()) {
@@ -2016,7 +2012,16 @@ MainWindow::extractAndAdd(const QString &archivePath, QListWidgetItem *placehold
     // cross-machine syncs where the modlist came from the other machine).
     // Without it every install/reinstall would coin a fresh "_<ts>"
     // wrapper and the modlist path would drift.
-    const QString reuseHint = placeholder->data(ModRole::ModPath).toString();
+    //
+    // Exception: a merge-in-progress row still points ModPath at the existing
+    // folder we're about to overlay onto.  Reusing it as the extract dir would
+    // make resolveReuseWrapper wipe those very files first (when the optional
+    // archive's basename happens to match).  Force a fresh extract dir; the
+    // overlay onto MergeTargetPath happens in onExtractionSucceeded.
+    const QString reuseHint =
+        placeholder->data(ModRole::MergeTargetPath).toString().isEmpty()
+            ? placeholder->data(ModRole::ModPath).toString()
+            : QString();
     QUuid token = placeholder->data(ModRole::InstallToken).toUuid();
     if (token.isNull()) {
         token = QUuid::createUuid();
@@ -2084,13 +2089,10 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
     // runs inside the onDone callback; we return immediately after show().
     if (FomodWizard::hasFomod(modPath)) {
         const QString priorChoices = placeholder->data(ModRole::FomodChoices).toString();
-        QStringList installedModNames;
-        for (int mi = 0; mi < m_modList->count(); ++mi) {
-            auto *mitem = m_modList->item(mi);
-            if (mitem->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
-            const QString mname = mitem->text();
-            if (!mname.isEmpty()) installedModNames.append(mname);
-        }
+        // Existing mod names for the wizard's duplicate-name detection (model
+        // read; see confirmReinstallIfInstalled for the migration rationale).
+        const QStringList installedModNames =
+            m_model ? m_model->modDisplayNames() : QStringList();
         const QString archiveFileName = fi.fileName();
         const QString title = placeholder->data(ModRole::NexusTitle).toString().trimmed();
         const QString sanitizedTitle  = sanitizeFolderName(title);
@@ -2112,20 +2114,10 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
                     if (fkey.isEmpty()) {
                         resetPlaceholderAfterInstallCancel(fph, archivePath);
                     } else {
-                        // Stranded: clear the placeholder's installing state
-                        // and persist into the owning profile's modlist file.
-                        fph->setData(ModRole::InstallStatus,    0);
-                        fph->setData(ModRole::DownloadProgress, QVariant());
-                        fph->setData(ModRole::ModPath,          QVariant());
-                        fph->setData(ModRole::InstallToken,     QVariant());
-                        fph->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
-                                      Qt::ItemIsDragEnabled | Qt::ItemIsUserCheckable);
-                        QString name = fph->data(ModRole::CustomName).toString();
-                        if (name.isEmpty()) name = QFileInfo(archivePath).completeBaseName();
-                        if (!name.isEmpty()) {
-                            fph->setText(name);
-                            fph->setData(ModRole::CustomName, name);
-                        }
+                        // Stranded: roll the placeholder back and persist into
+                        // the owning profile's modlist file.
+                        placeholder_state::resetToNotInstalled(
+                            fph, QFileInfo(archivePath).completeBaseName());
                         saveModListFor(fkey, fph);
                     }
                 }
@@ -2146,10 +2138,14 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
             }
 
             if (fph) {
+                // Merge follow-through (FOMOD optionals that override the main
+                // download).  promote() already removed extractDir, so finalPath
+                // is the only throwaway folder to drop once merged.
+                const QString effPath = applyPendingMerge(fph, finalPath, finalPath);
                 if (fkey.isEmpty()) {
-                    addModFromPath(finalPath, fph);
+                    addModFromPath(effPath, fph);
                 } else {
-                    applyInstalledStateToStrandedPlaceholder(fph, finalPath);
+                    applyInstalledStateToStrandedPlaceholder(fph, effPath);
                     saveModListFor(fkey, fph);
                 }
             }
@@ -2184,18 +2180,8 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
                     if (fkey.isEmpty()) {
                         resetPlaceholderAfterInstallCancel(bph, archivePath);
                     } else {
-                        bph->setData(ModRole::InstallStatus,    0);
-                        bph->setData(ModRole::DownloadProgress, QVariant());
-                        bph->setData(ModRole::ModPath,          QVariant());
-                        bph->setData(ModRole::InstallToken,     QVariant());
-                        bph->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
-                                      Qt::ItemIsDragEnabled | Qt::ItemIsUserCheckable);
-                        QString name = bph->data(ModRole::CustomName).toString();
-                        if (name.isEmpty()) name = QFileInfo(archivePath).completeBaseName();
-                        if (!name.isEmpty()) {
-                            bph->setText(name);
-                            bph->setData(ModRole::CustomName, name);
-                        }
+                        placeholder_state::resetToNotInstalled(
+                            bph, QFileInfo(archivePath).completeBaseName());
                         saveModListFor(fkey, bph);
                     }
                 }
@@ -2216,10 +2202,14 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
                 finalPath = promote.finalModPath;
 
             if (bph) {
+                // Merge follow-through (BAIN package overriding the main
+                // download).  promote() already removed extractDir, so finalPath
+                // is the only throwaway folder to drop once merged.
+                const QString effPath = applyPendingMerge(bph, finalPath, finalPath);
                 if (fkey.isEmpty()) {
-                    addModFromPath(finalPath, bph);
+                    addModFromPath(effPath, bph);
                 } else {
-                    applyInstalledStateToStrandedPlaceholder(bph, finalPath);
+                    applyInstalledStateToStrandedPlaceholder(bph, effPath);
                     saveModListFor(fkey, bph);
                 }
             }
@@ -2228,13 +2218,18 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
         return; // picker shown; callback drives the rest
     }
 
+    // Merge follow-through: when the user picked "Merge into existing", overlay
+    // the freshly extracted files onto the existing folder and register the row
+    // there; otherwise effPath == modPath and this is a no-op.  extractDir is
+    // the throwaway wrapper to drop once a merge has consumed its contents.
+    const QString effPath = applyPendingMerge(placeholder, modPath, extractDir);
     if (profileKey.isEmpty()) {
-        addModFromPath(modPath, placeholder);
+        addModFromPath(effPath, placeholder);
     } else {
         // Stranded: do the placeholder-only updates and persist to the
         // owning profile's modlist file.  m_modList iteration / load-order
         // / openmw.cfg sync are deferred until the user switches back.
-        applyInstalledStateToStrandedPlaceholder(placeholder, modPath);
+        applyInstalledStateToStrandedPlaceholder(placeholder, effPath);
         saveModListFor(profileKey, placeholder);
     }
     QFile::remove(archivePath);
@@ -2246,23 +2241,21 @@ void MainWindow::resetPlaceholderAfterInstallCancel(QListWidgetItem *placeholder
     // Row may have been removed mid-install.  Bail silently if so.
     if (!placeholder || !m_modList->indexFromItem(placeholder).isValid())
         return;
-    placeholder->setData(ModRole::InstallStatus,    0);
-    placeholder->setData(ModRole::DownloadProgress, QVariant());
-    // The extracted folder was deleted - clear its path so the modlist
-    // doesn't store a reference to a non-existent dir.
-    placeholder->setData(ModRole::ModPath,          QVariant());
-    placeholder->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
-                          Qt::ItemIsDragEnabled | Qt::ItemIsUserCheckable);
-    // Recover the display name and persist it into CustomName so it
-    // survives a save/reload cycle (loadModList rebuilds the display name
-    // from CustomName, not from item->text()).
-    QString name = placeholder->data(ModRole::CustomName).toString();
-    if (name.isEmpty())
-        name = QFileInfo(archivePath).completeBaseName();
-    if (!name.isEmpty()) {
-        placeholder->setText(name);
-        placeholder->setData(ModRole::CustomName, name);
+
+    // Merge-in-progress cancel (FOMOD/BAIN wizard dismissed): this row is an
+    // existing installed mod we were about to overlay onto, and its folder was
+    // never touched.  Restore it to "installed" at the merge target instead of
+    // wiping it back to "not installed", which would orphan the live folder.
+    const QString mergeTarget = placeholder->data(ModRole::MergeTargetPath).toString();
+    placeholder->setData(ModRole::MergeTargetPath, QVariant());   // consume either way
+    if (!mergeTarget.isEmpty() && QDir(mergeTarget).exists()) {
+        placeholder_state::markInstalled(placeholder, mergeTarget);
+        saveModList();
+        return;
     }
+
+    placeholder_state::resetToNotInstalled(
+        placeholder, QFileInfo(archivePath).completeBaseName());
     saveModList();
 }
 
@@ -2278,29 +2271,53 @@ void MainWindow::prepareItemForInstall(QListWidgetItem *item)
     // present (re-install of a row that still carries a pending token).
     if (item->data(ModRole::InstallToken).toUuid().isNull())
         item->setData(ModRole::InstallToken, QUuid::createUuid());
-    item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+    placeholder_state::setBusyFlags(item);
 }
 
 void MainWindow::applyInstalledStateToStrandedPlaceholder(
     QListWidgetItem *placeholder, const QString &modPath)
 {
-    if (!placeholder) return;
-    const bool wasUpdate = placeholder->data(ModRole::UpdateAvailable).toBool();
-    QString cn = placeholder->data(ModRole::CustomName).toString();
-    placeholder->setText(cn.isEmpty() ? QFileInfo(modPath).fileName() : cn);
-    placeholder->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
-                          Qt::ItemIsDragEnabled | Qt::ItemIsUserCheckable);
-    placeholder->setData(ModRole::ItemType,        ItemType::Mod);
-    placeholder->setData(ModRole::ModPath,         modPath);
-    placeholder->setData(ModRole::InstallStatus,   1);
-    placeholder->setData(ModRole::UpdateAvailable, false);
-    placeholder->setData(ModRole::IntendedModPath, QVariant());
-    placeholder->setData(ModRole::PrevModPath,     QVariant());
-    placeholder->setData(ModRole::InstallToken,    QVariant());
-    if (wasUpdate || !placeholder->data(ModRole::DateAdded).toDateTime().isValid())
-        placeholder->setData(ModRole::DateAdded, QDateTime::currentDateTime());
-    placeholder->setCheckState(Qt::Checked);
-    placeholder->setToolTip(modPath);
+    // The cross-profile completion case is exactly the "mark installed" role
+    // transition - no m_modList iteration / load-order / openmw.cfg sync (those
+    // belong to the active profile); the caller persists via saveModListFor.
+    placeholder_state::markInstalled(placeholder, modPath);
+}
+
+QString MainWindow::applyPendingMerge(QListWidgetItem *placeholder,
+                                      const QString &contentPath,
+                                      const QString &discardDir)
+{
+    if (!placeholder) return contentPath;
+    const QString target = placeholder->data(ModRole::MergeTargetPath).toString();
+    if (target.isEmpty()) return contentPath;          // no merge pending
+    placeholder->setData(ModRole::MergeTargetPath, QVariant());  // consume
+
+    const QString cleanTarget  = QDir::cleanPath(target);
+    const QString cleanContent = QDir::cleanPath(contentPath);
+    // Target vanished out-of-band (user deleted the folder between picking
+    // Merge and the download finishing), or it already IS the content folder
+    // -> nothing to overlay; fall back to registering the content as-is.
+    if (cleanTarget == cleanContent || !QDir(target).exists())
+        return contentPath;
+
+    // Overlay the freshly downloaded files on top of the existing mod folder.
+    // fomod_copy::copyContents is last-writer-wins (it removes each colliding
+    // destination before copying) and case-folds directory names, so the
+    // optional download's files override the main download's - MO2's "merge".
+    m_scans->invalidateDataFoldersCache(target);
+    fomod_copy::copyContents(contentPath, target);
+
+    // The freshly extracted/promoted folder is now redundant.  Drop it so it
+    // doesn't linger as an orphan under the mods dir.  Guard against ever
+    // recursing into the merge target itself.
+    if (!discardDir.isEmpty()
+        && QDir::cleanPath(discardDir) != cleanTarget
+        && QDir(discardDir).exists())
+        QDir(discardDir).removeRecursively();
+
+    statusBar()->showMessage(
+        T("merge_done_status").arg(QFileInfo(target).fileName()), 5000);
+    return target;
 }
 
 void MainWindow::onInstallFromNexus(QListWidgetItem *item)
@@ -2311,41 +2328,27 @@ void MainWindow::onInstallFromNexus(QListWidgetItem *item)
         if (m_apiKey.isEmpty()) return;
     }
 
-    QString nexusUrl = item->data(ModRole::NexusUrl).toString();
-    QStringList parts = QUrl(nexusUrl).path().split('/', Qt::SkipEmptyParts);
+    const QString nexusUrl = item->data(ModRole::NexusUrl).toString();
     // path: /{game}/mods/{modId}
-    if (parts.size() < 3 || parts[1] != "mods") {
+    const auto ref = parseNexusModUrl(nexusUrl);
+    if (!ref) {
         ui::warn(this, T("nexus_api_error_title"), T("install_invalid_url"));
         return;
     }
-    QString game = parts[0];
-    bool ok;
-    int modId = parts[2].toInt(&ok);
-    if (!ok) {
-        ui::warn(this, T("nexus_api_error_title"), T("install_invalid_url"));
-        return;
-    }
+    const QString game  = ref->game;
+    const int     modId = ref->modId;
 
-    // Forbidden mod check - hard block, no install-anyway escape
-    if (const ForbiddenMod *f = m_forbidden->find(game, modId)) {
-        QMessageBox warn(this);
-        warn.setWindowTitle(T("forbidden_warn_title"));
-        warn.setIcon(QMessageBox::Critical);
-        warn.setText(T("forbidden_warn_body").arg(f->name, f->annotation));
-        auto *manageBtn = warn.addButton(T("forbidden_open_manager"), QMessageBox::ActionRole);
-        warn.addButton(QMessageBox::Ok);
-        warn.setDefaultButton(QMessageBox::Ok);
-        warn.exec();
-        if (warn.clickedButton() == manageBtn)
-            m_forbidden->showManageDialog(this);
-        return;
-    }
+    // Forbidden mod check - hard block, no install-anyway escape.
+    if (!confirmNotForbidden(game, modId)) return;
 
     // Already-installed guard - warn (and let user cancel) before re-installing.
     // The Search-on-Nexus flow installs into `item` itself rather than reusing
     // the existing match, so Replace and Separate are functionally identical
     // here - both proceed with `item` as the target.  Only Cancel aborts.
-    const auto choice = confirmReinstallIfInstalled(game, modId, item);
+    // Merge is suppressed (allowMerge=false): there's no reused folder to
+    // overlay onto in this flow, so offering it would mislead.
+    const auto choice = confirmReinstallIfInstalled(game, modId, item,
+                                                    /*allowMerge=*/false);
     if (choice == ReinstallChoice::Cancel) return;
 
     checkModDependencies(game, modId, item);
@@ -2423,53 +2426,76 @@ void MainWindow::onTitleFetched(QListWidgetItem *item, const QString &name)
         purgeDuplicatePlaceholders(item);
 }
 
+bool MainWindow::confirmNotForbidden(const QString &game, int modId)
+{
+    const ForbiddenMod *f = m_forbidden->find(game, modId);
+    if (!f) return true;   // not forbidden - clear to proceed
+
+    // Custom button set (Manage + OK) and clickedButton inspection, so this
+    // stays a raw QMessageBox rather than a ui:: helper (see prompts.h scope).
+    QMessageBox warn(this);
+    warn.setWindowTitle(T("forbidden_warn_title"));
+    warn.setIcon(QMessageBox::Critical);
+    warn.setText(T("forbidden_warn_body").arg(f->name, f->annotation));
+    auto *manageBtn = warn.addButton(T("forbidden_open_manager"), QMessageBox::ActionRole);
+    warn.addButton(QMessageBox::Ok);
+    warn.setDefaultButton(QMessageBox::Ok);
+    warn.exec();
+    if (warn.clickedButton() == manageBtn)
+        m_forbidden->showManageDialog(this);
+    return false;          // forbidden - hard block, no install-anyway escape
+}
+
 MainWindow::ReinstallChoice
 MainWindow::confirmReinstallIfInstalled(const QString &game, int modId,
-                                         QListWidgetItem *except)
+                                         QListWidgetItem *except, bool allowMerge)
 {
-    QString gameLc = game.toLower();
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *it = m_modList->item(i);
-        if (it == except) continue;
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
-        if (it->data(ModRole::InstallStatus).toInt() != 1) continue;
-        QString url = it->data(ModRole::NexusUrl).toString();
-        if (url.isEmpty()) continue;
+    // Find an already-installed row for this mod page through the typed model
+    // (Stage 2 of the QListWidget->ModlistModel migration) instead of walking
+    // m_modList and re-parsing every NexusUrl by hand.  m_model is kept in sync
+    // synchronously via modlist::connectAutoSync, so its row indices line up
+    // with m_modList and the scan sees current state.
+    if (!m_model) return ReinstallChoice::NotInstalled;
+    const int exceptRow = except ? m_modList->row(except) : -1;
+    const int row = m_model->findInstalledByModId(game, modId, exceptRow);
+    if (row < 0) return ReinstallChoice::NotInstalled;
 
-        QStringList parts = QUrl(url).path().split('/', Qt::SkipEmptyParts);
-        if (parts.size() < 3 || parts[1] != "mods") continue;
-        bool ok; int existingId = parts[2].toInt(&ok);
-        if (!ok) continue;
-        if (parts[0].toLower() != gameLc || existingId != modId) continue;
+    {
+        const QString existingName = m_model->at(row).effectiveName();
 
-        QString existingName = it->data(ModRole::CustomName).toString();
-        if (existingName.isEmpty()) existingName = it->text();
-
-        // Three-way disambiguation: a single Nexus mod page can ship
-        // multiple distinct optional files (Wretched + Sage's Backgrounds on
-        // mod 58704), but the same modId also identifies "the new version of
-        // <mod>" in Nexus's update flow.  The bare OK/Cancel prompt that
-        // used to live here interpreted every match as Replace, which
-        // silently overwrote the prior install when the user actually
-        // wanted a sibling file.  Default the focus to Separate - it's the
-        // non-destructive choice and the more common case for mod pages
-        // that bundle complementary content.
+        // Four-way disambiguation: a single Nexus mod page can ship multiple
+        // distinct optional files (Wretched + Sage's Backgrounds on mod
+        // 58704), the same modId also identifies "the new version of <mod>"
+        // in Nexus's update flow, and some pages ship optional downloads
+        // meant to OVERRIDE the main download's files (OAAB Data optionals).
+        //   · Replace  - treat as an update; old folder removed after install.
+        //   · Separate - sibling file; install in its own folder.
+        //   · Merge    - overlay the new files on top of the existing folder
+        //                (last-writer-wins); MO2's "merge".
+        // The bare OK/Cancel prompt that used to live here interpreted every
+        // match as Replace, which silently overwrote the prior install when
+        // the user actually wanted a sibling file.  Default the focus to
+        // Separate - the non-destructive choice and the more common case for
+        // mod pages that bundle complementary content.
         QMessageBox box(this);
         box.setWindowTitle(T("reinstall_warn_title"));
         box.setIcon(QMessageBox::Question);
         box.setText(T("reinstall_warn_body").arg(existingName));
         auto *replaceBtn  = box.addButton(T("reinstall_choice_replace"),
                                           QMessageBox::AcceptRole);
+        QPushButton *mergeBtn = allowMerge
+            ? box.addButton(T("reinstall_choice_merge"), QMessageBox::ActionRole)
+            : nullptr;
         auto *separateBtn = box.addButton(T("reinstall_choice_separate"),
                                           QMessageBox::ActionRole);
         box.addButton(QMessageBox::Cancel);
         box.setDefaultButton(separateBtn);
         box.exec();
-        if (box.clickedButton() == replaceBtn)  return ReinstallChoice::Replace;
-        if (box.clickedButton() == separateBtn) return ReinstallChoice::Separate;
+        if (box.clickedButton() == replaceBtn)        return ReinstallChoice::Replace;
+        if (mergeBtn && box.clickedButton() == mergeBtn) return ReinstallChoice::Merge;
+        if (box.clickedButton() == separateBtn)       return ReinstallChoice::Separate;
         return ReinstallChoice::Cancel;
     }
-    return ReinstallChoice::NotInstalled;
 }
 
 void MainWindow::checkModDependencies(const QString &game, int modId, QListWidgetItem *item)
@@ -2491,10 +2517,9 @@ void MainWindow::checkModDependencies(const QString &game, int modId, QListWidge
         if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
         const QString u = it->data(ModRole::NexusUrl).toString();
         if (u.isEmpty()) continue;
-        const QStringList p = QUrl(u).path().split('/', Qt::SkipEmptyParts);
-        if (p.size() < 3 || p[0] != game || p[1] != "mods") continue;
-        bool ok = false; int id = p[2].toInt(&ok);
-        if (ok) idToUrl[id] = u;
+        const auto ref = parseNexusModUrl(u);
+        if (!ref || ref->game != game) continue;
+        idToUrl[ref->modId] = u;
     }
     m_nexusCtl->scanDependencies(item, game, modId, idToUrl);
 }
@@ -2548,8 +2573,7 @@ void MainWindow::onDependenciesScanned(QListWidgetItem *item,
     scrollLayout->setSpacing(2);
 
     for (int id : missing) {
-        const QString depUrl =
-            QString("https://www.nexusmods.com/%1/mods/%2").arg(game).arg(id);
+        const QString depUrl = nexusModUrl(game, id);
 
         auto *row = new QWidget(scrollContainer);
         auto *h   = new QHBoxLayout(row);
@@ -2803,8 +2827,7 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
         item = placeholder;
         QString cn = item->data(ModRole::CustomName).toString();
         item->setText(cn.isEmpty() ? fi.fileName() : cn);
-        item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
-                       Qt::ItemIsDragEnabled | Qt::ItemIsUserCheckable);
+        placeholder_state::restoreInteractiveFlags(item);
     } else {
         item = new QListWidgetItem(fi.fileName());
         m_modList->insertItem(m_modList->count(), item);
@@ -2954,11 +2977,8 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
             }
             // Fall back to async fetch if no sibling had a usable name.
             if (!inherited && !nexusUrl.isEmpty()) {
-                QStringList parts = QUrl(nexusUrl).path().split('/', Qt::SkipEmptyParts);
-                if (parts.size() >= 3 && parts[1] == "mods") {
-                    bool ok; int modId = parts[2].toInt(&ok);
-                    if (ok) fetchNexusTitle(parts[0], modId, item, /*setAsCustomName=*/true);
-                }
+                if (const auto ref = parseNexusModUrl(nexusUrl))
+                    fetchNexusTitle(ref->game, ref->modId, item, /*setAsCustomName=*/true);
             }
         }
     }
@@ -3000,277 +3020,188 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
     updateModCount();
     scheduleConflictScan();
 
-    // -- Groundcover helper ---
-    // If the mod looks like a groundcover/grass mod, ask the user every
-    // install whether Nerevarine should manage it as groundcover.  The
-    // answer is used to set OR clear the approval for both the mod path
-    // and the Nexus URL, so changing one's mind on a later reinstall
-    // immediately downgrades the mod to regular content= handling.
-    if (!m_profiles->isEmpty() && currentProfile().id == "morrowind") {
-        const QString modPath = fi.absoluteFilePath();
-        QString displayName = item->data(ModRole::CustomName).toString();
-        if (displayName.isEmpty()) displayName = item->text();
-        // Additional known grass-mod name substrings that don't literally
-        // contain "grass"/"groundcover".  Extend this list as new named
-        // grass mods become popular; the helper matches case-insensitively
-        // against both the filesystem path and the display name.
-        static const QStringList kGroundcoverNameHints = {
-            QStringLiteral("lush synthesis"),
-        };
-        auto matchesGrassHint = [&](const QString &s) {
-            for (const QString &h : kGroundcoverNameHints)
-                if (s.contains(h, Qt::CaseInsensitive)) return true;
-            return false;
-        };
-        const bool looksLikeGroundcover =
-            modPath.contains("groundcover", Qt::CaseInsensitive)
-         || modPath.contains("grass", Qt::CaseInsensitive)
-         || displayName.contains("groundcover", Qt::CaseInsensitive)
-         || displayName.contains("grass", Qt::CaseInsensitive)
-         || matchesGrassHint(modPath)
-         || matchesGrassHint(displayName);
+    // Post-install prompts (groundcover / splash / bundled-patch re-enable).
+    // Each is self-guarding (no-op when not applicable); the "what counts as X"
+    // detection lives in post_install:: so it's unit-testable.
+    runGroundcoverHelper(item, fi.absoluteFilePath());
+    runSplashScreenHelper(fi.absoluteFilePath());
+    offerBundledPatchReenable(item);
 
-        const QString nexusUrl = item->data(ModRole::NexusUrl).toString();
-
-        if (looksLikeGroundcover) {
-            QMessageBox box(this);
-            box.setWindowTitle(T("groundcover_assist_title"));
-            box.setText(T("groundcover_assist_body").arg(displayName));
-            box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
-            box.setDefaultButton(QMessageBox::Yes);
-            // Paint a grass emoji as the dialog icon.
-            {
-                const int sz = box.style()->pixelMetric(QStyle::PM_MessageBoxIconSize, nullptr, &box);
-                QPixmap pm(sz, sz);
-                pm.fill(Qt::transparent);
-                QFont ef;
-                ef.setPixelSize(sz * 3 / 4);
-                QPainter p(&pm);
-                p.setFont(ef);
-                p.drawText(pm.rect(), Qt::AlignCenter, QStringLiteral("☘"));
-                p.end();
-                box.setIconPixmap(pm);
-            }
-            const bool userYes = (box.exec() == QMessageBox::Yes);
-
-            // Re-apply the latest answer unconditionally.  The mod path
-            // changes on every reinstall (timestamp suffix), so even a
-            // repeat "yes" may add a fresh path entry; a persisted save
-            // + saveModList() keep openmw.cfg in sync either way.
-            if (userYes) {
-                m_groundcoverApproved.insert(modPath);
-                if (!nexusUrl.isEmpty())
-                    m_groundcoverApproved.insert(nexusUrl);
-            } else {
-                m_groundcoverApproved.remove(modPath);
-                if (!nexusUrl.isEmpty())
-                    m_groundcoverApproved.remove(nexusUrl);
-            }
-            Settings::setGroundcoverApproved(
-                QStringList(m_groundcoverApproved.begin(),
-                            m_groundcoverApproved.end()));
-            saveModList();   // re-sync cfg with updated groundcover= lines
-        }
-    }
-
-    // -- Splash screen helper ---
-    // If the newly added mod ships a Splash/ directory (splash screen
-    // replacer), offer to delete the default Morrowind splash screens so
-    // only the mod's replacements show up in-game.
-    if (!m_profiles->isEmpty() && currentProfile().id == "morrowind") {
-        // Look for splash screen images in the mod.  The mod root itself
-        // may BE the Splash/ directory (e.g. path ends in "/Splash"), or it
-        // may contain a Splash/ subdirectory somewhere inside.
-        QString splashDir;
-        {
-            // First: check if the mod root itself is a splash directory.
-            if (fi.fileName().compare("splash", Qt::CaseInsensitive) == 0
-                || fi.fileName().compare("Splash", Qt::CaseInsensitive) == 0) {
-                QDir sd(fi.absoluteFilePath());
-                QStringList imgs = sd.entryList({"*.tga", "*.bmp", "*.png", "*.jpg"},
-                                                QDir::Files);
-                if (!imgs.isEmpty()) splashDir = sd.absolutePath();
-            }
-            // Second: recursively search for a splash/ subdirectory.
-            if (splashDir.isEmpty()) {
-                QList<QPair<QString,int>> queue;
-                queue.append({fi.absoluteFilePath(), 0});
-                while (!queue.isEmpty()) {
-                    auto [path, depth] = queue.takeFirst();
-                    QDir d(path);
-                    for (const QString &sub : d.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
-                        if (sub.compare("splash", Qt::CaseInsensitive) == 0) {
-                            QDir sd(d.filePath(sub));
-                            QStringList imgs = sd.entryList({"*.tga", "*.bmp", "*.png", "*.jpg"},
-                                                            QDir::Files);
-                            if (!imgs.isEmpty()) { splashDir = sd.absolutePath(); break; }
-                        }
-                        if (depth < 3)
-                            queue.append({d.filePath(sub), depth + 1});
-                    }
-                    if (!splashDir.isEmpty()) break;
-                }
-            }
-        }
-
-        if (!splashDir.isEmpty()) {
-            // Find the base game's Splash/ directory from external data= in openmw.cfg.
-            QString baseGameSplash;
-            {
-                QFile cfg(QDir::homePath() + "/.config/openmw/openmw.cfg");
-                if (cfg.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                    static const QString kBegin = "# --- Nerevarine Organizer BEGIN ---";
-                    bool inManaged = false;
-                    for (QString line : QString::fromUtf8(cfg.readAll()).split('\n')) {
-                        if (line.endsWith('\r')) line.chop(1);
-                        if (line == kBegin)  { inManaged = true;  continue; }
-                        if (line.startsWith("# --- Nerevarine Organizer END ---"))
-                                             { inManaged = false; continue; }
-                        if (inManaged) continue;
-                        if (!line.startsWith("data=")) continue;
-                        QString path = line.mid(5);
-                        if (path.size() >= 2 && path.startsWith('"') && path.endsWith('"'))
-                            path = path.mid(1, path.size() - 2);
-                        QDir d(path);
-                        // Look for Splash/ in this external data directory.
-                        for (const QString &sub : d.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
-                            if (sub.compare("splash", Qt::CaseInsensitive) == 0) {
-                                QDir sd(d.filePath(sub));
-                                QStringList imgs = sd.entryList({"*.tga", "*.bmp", "*.png", "*.jpg"},
-                                                                QDir::Files);
-                                if (!imgs.isEmpty()) {
-                                    baseGameSplash = sd.absolutePath();
-                                    break;
-                                }
-                            }
-                        }
-                        if (!baseGameSplash.isEmpty()) break;
-                    }
-                }
-            }
-
-            if (!baseGameSplash.isEmpty()) {
-                QDir sd(baseGameSplash);
-                QStringList defaultSplash = sd.entryList({"*.tga", "*.bmp", "*.png", "*.jpg"},
-                                                          QDir::Files);
-                if (!defaultSplash.isEmpty()) {
-                    int ret = QMessageBox::question(this,
-                        T("splash_delete_title"),
-                        T("splash_delete_body")
-                            .arg(defaultSplash.size())
-                            .arg(baseGameSplash),
-                        QMessageBox::Yes | QMessageBox::No,
-                        QMessageBox::Yes);
-                    if (ret == QMessageBox::Yes) {
-                        int removed = 0;
-                        for (const QString &f : defaultSplash) {
-                            if (QFile::remove(sd.filePath(f))) ++removed;
-                        }
-                        statusBar()->showMessage(
-                            T("splash_deleted_status").arg(removed), 5000);
-                    }
-                }
-            }
-        }
-    }
-
-    // Offer to re-enable patches for this mod that are bundled in OTHER mods
-    // as "<N> ... for <ThisMod>" subfolders.  syncOpenMWConfig auto-skips
-    // those subfolders while their target is absent, so when the target is
-    // finally installed the user may want the patch back - but may also
-    // prefer to keep it disabled (e.g. Remiros reinstalled as a dependency
-    // of another mod, not because the user wants its grass).  Ask once; the
-    // declined set persists the "no" answer across sessions.
-    {
-        const QString newModName = item->text().trimmed();
-        if (!newModName.isEmpty()) {
-            auto normalizeModName = [](const QString &s) {
-                QString n;
-                n.reserve(s.size());
-                for (const QChar &c : s)
-                    if (c.isLetterOrNumber()) n.append(c.toLower());
-                return n;
-            };
-            const QString newNormalized = normalizeModName(newModName);
-            static const QRegularExpression prefixed(
-                QStringLiteral("^\\s*\\d+[a-zA-Z]?\\s+(.+)$"));
-            static const QRegularExpression forPat(
-                QStringLiteral("\\bfor\\s+(.+?)\\s*$"),
-                QRegularExpression::CaseInsensitiveOption);
-
-            // Each hit = "<hostModDisplayName>\t<hostModPath>\t<subfolderName>"
-            QStringList hits;
-            if (newNormalized.length() >= 4) {
-                for (int i = 0; i < m_modList->count(); ++i) {
-                    auto *other = m_modList->item(i);
-                    if (other == item) continue;
-                    if (other->data(ModRole::ItemType).toString() != ItemType::Mod)
-                        continue;
-                    if (other->data(ModRole::InstallStatus).toInt() != 1) continue;
-                    const QString hostPath = other->data(ModRole::ModPath).toString();
-                    if (hostPath.isEmpty()) continue;
-                    QDir host(hostPath);
-                    const QStringList subs = host.entryList(
-                        QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
-                    for (const QString &sub : subs) {
-                        const auto pm = prefixed.match(sub);
-                        if (!pm.hasMatch()) continue;
-                        const auto fm = forPat.match(pm.captured(1));
-                        if (!fm.hasMatch()) continue;
-                        if (!normalizeModName(fm.captured(1)).contains(newNormalized))
-                            continue;
-                        hits << other->text() + '\t' + hostPath + '\t' + sub;
-                    }
-                }
-            }
-
-            if (!hits.isEmpty()) {
-                QStringList bulletList;
-                bulletList.reserve(hits.size());
-                for (const QString &h : hits) {
-                    const QStringList parts = h.split('\t');
-                    bulletList << "  • " + parts.value(0) + " → " + parts.value(2);
-                }
-                QMessageBox box(this);
-                box.setWindowTitle(T("patch_prompt_title"));
-                box.setIcon(QMessageBox::Question);
-                box.setText(T("patch_prompt_body").arg(newModName).arg(hits.size()));
-                box.setInformativeText(bulletList.join('\n'));
-                box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
-                box.setDefaultButton(QMessageBox::Yes);
-                const int ret = box.exec();
-
-                bool changed = false;
-                for (const QString &h : hits) {
-                    const QStringList parts = h.split('\t');
-                    if (parts.size() != 3) continue;
-                    const QString key = parts.value(1) + '\t' + parts.value(2);
-                    if (ret == QMessageBox::Yes) {
-                        if (m_declinedPatches.remove(key)) changed = true;
-                    } else {
-                        if (!m_declinedPatches.contains(key)) {
-                            m_declinedPatches.insert(key);
-                            changed = true;
-                        }
-                    }
-                }
-                if (changed) {
-                    Settings::setDeclinedPatches(
-                        QStringList(m_declinedPatches.begin(),
-                                    m_declinedPatches.end()));
-                    syncOpenMWConfig();
-                }
-            }
-        }
-    }
-
-    // User-perceived "grey freeze" on Add/Update lands here - the modal
-    // prompts above (groundcover/splash/patches) are excluded only because
-    // QMessageBox::exec() blocks; everything else is wall-clock UI-thread
-    // time and feeds straight into log.txt for regression-bisect.
+    // User-perceived "grey freeze" on Add/Update lands here - the modal prompts
+    // above (groundcover/splash/patches) are excluded only because
+    // QMessageBox::exec() blocks; everything else is wall-clock UI-thread time.
     qCInfo(logging::lcModList).nospace()
         << "addModFromPath ms=" << addTimer.elapsed()
         << " name='" << QFileInfo(dirPath).fileName() << "'";
+}
+
+void MainWindow::runGroundcoverHelper(QListWidgetItem *item, const QString &modRoot)
+{
+    // If the mod looks like a groundcover/grass mod, ask the user every install
+    // whether Nerevarine should manage it as groundcover.  The answer sets OR
+    // clears the approval for both the mod path and the Nexus URL, so changing
+    // one's mind on a later reinstall downgrades it to regular content=.
+    if (m_profiles->isEmpty() || currentProfile().id != "morrowind") return;
+
+    QString displayName = item->data(ModRole::CustomName).toString();
+    if (displayName.isEmpty()) displayName = item->text();
+    if (!post_install::looksLikeGroundcover(modRoot, displayName)) return;
+
+    const QString nexusUrl = item->data(ModRole::NexusUrl).toString();
+
+    QMessageBox box(this);
+    box.setWindowTitle(T("groundcover_assist_title"));
+    box.setText(T("groundcover_assist_body").arg(displayName));
+    box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+    box.setDefaultButton(QMessageBox::Yes);
+    // Paint a grass emoji as the dialog icon.
+    {
+        const int sz = box.style()->pixelMetric(QStyle::PM_MessageBoxIconSize, nullptr, &box);
+        QPixmap pm(sz, sz);
+        pm.fill(Qt::transparent);
+        QFont ef;
+        ef.setPixelSize(sz * 3 / 4);
+        QPainter p(&pm);
+        p.setFont(ef);
+        p.drawText(pm.rect(), Qt::AlignCenter, QStringLiteral("☘"));
+        p.end();
+        box.setIconPixmap(pm);
+    }
+    const bool userYes = (box.exec() == QMessageBox::Yes);
+
+    // Re-apply the latest answer unconditionally.  The mod path changes on
+    // every reinstall (timestamp suffix), so even a repeat "yes" may add a
+    // fresh path entry; a persisted save + saveModList() keep openmw.cfg in
+    // sync either way.
+    if (userYes) {
+        m_groundcoverApproved.insert(modRoot);
+        if (!nexusUrl.isEmpty())
+            m_groundcoverApproved.insert(nexusUrl);
+    } else {
+        m_groundcoverApproved.remove(modRoot);
+        if (!nexusUrl.isEmpty())
+            m_groundcoverApproved.remove(nexusUrl);
+    }
+    Settings::setGroundcoverApproved(
+        QStringList(m_groundcoverApproved.begin(), m_groundcoverApproved.end()));
+    saveModList();   // re-sync cfg with updated groundcover= lines
+}
+
+void MainWindow::runSplashScreenHelper(const QString &modRoot)
+{
+    // If the newly added mod ships a Splash/ directory (splash replacer), offer
+    // to delete the default Morrowind splash screens so only the mod's show.
+    if (m_profiles->isEmpty() || currentProfile().id != "morrowind") return;
+
+    const QString splashDir = post_install::findSplashDir(modRoot);
+    if (splashDir.isEmpty()) return;
+
+    // Find the base game's Splash/ directory from external data= in openmw.cfg.
+    QString baseGameSplash;
+    {
+        QFile cfg(QDir::homePath() + "/.config/openmw/openmw.cfg");
+        if (cfg.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            const QStringList externals =
+                openmw::externalDataPaths(QString::fromUtf8(cfg.readAll()));
+            static const QStringList globs = {"*.tga", "*.bmp", "*.png", "*.jpg"};
+            for (const QString &ext : externals) {
+                QDir d(ext);
+                for (const QString &sub : d.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+                    if (sub.compare("splash", Qt::CaseInsensitive) != 0) continue;
+                    QDir sd(d.filePath(sub));
+                    if (!sd.entryList(globs, QDir::Files).isEmpty()) {
+                        baseGameSplash = sd.absolutePath();
+                        break;
+                    }
+                }
+                if (!baseGameSplash.isEmpty()) break;
+            }
+        }
+    }
+    if (baseGameSplash.isEmpty()) return;
+
+    QDir sd(baseGameSplash);
+    const QStringList defaultSplash =
+        sd.entryList({"*.tga", "*.bmp", "*.png", "*.jpg"}, QDir::Files);
+    if (defaultSplash.isEmpty()) return;
+
+    const int ret = QMessageBox::question(this,
+        T("splash_delete_title"),
+        T("splash_delete_body").arg(defaultSplash.size()).arg(baseGameSplash),
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::Yes);
+    if (ret != QMessageBox::Yes) return;
+
+    int removed = 0;
+    for (const QString &f : defaultSplash)
+        if (QFile::remove(sd.filePath(f))) ++removed;
+    statusBar()->showMessage(T("splash_deleted_status").arg(removed), 5000);
+}
+
+void MainWindow::offerBundledPatchReenable(QListWidgetItem *item)
+{
+    // Offer to re-enable patches for this mod that are bundled in OTHER mods as
+    // "<N> ... for <ThisMod>" subfolders.  syncOpenMWConfig auto-skips those
+    // while their target is absent; when the target finally installs the user
+    // may want the patch back - but may also prefer it stay off.  Ask once; the
+    // declined set persists the "no" answer across sessions.
+    const QString newModName = item->text().trimmed();
+    if (newModName.isEmpty()) return;
+    const QString newNormalized = post_install::normalizeModName(newModName);
+    if (newNormalized.length() < 4) return;
+
+    // Each hit = "<hostModDisplayName>\t<hostModPath>\t<subfolderName>"
+    QStringList hits;
+    for (int i = 0; i < m_modList->count(); ++i) {
+        auto *other = m_modList->item(i);
+        if (other == item) continue;
+        if (other->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (other->data(ModRole::InstallStatus).toInt() != 1) continue;
+        const QString hostPath = other->data(ModRole::ModPath).toString();
+        if (hostPath.isEmpty()) continue;
+        QDir host(hostPath);
+        const QStringList subs = host.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+        for (const QString &sub : subs) {
+            if (post_install::bundledPatchMatchesMod(sub, newNormalized))
+                hits << other->text() + '\t' + hostPath + '\t' + sub;
+        }
+    }
+    if (hits.isEmpty()) return;
+
+    QStringList bulletList;
+    bulletList.reserve(hits.size());
+    for (const QString &h : hits) {
+        const QStringList parts = h.split('\t');
+        bulletList << "  • " + parts.value(0) + " → " + parts.value(2);
+    }
+    QMessageBox box(this);
+    box.setWindowTitle(T("patch_prompt_title"));
+    box.setIcon(QMessageBox::Question);
+    box.setText(T("patch_prompt_body").arg(newModName).arg(hits.size()));
+    box.setInformativeText(bulletList.join('\n'));
+    box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+    box.setDefaultButton(QMessageBox::Yes);
+    const int ret = box.exec();
+
+    bool changed = false;
+    for (const QString &h : hits) {
+        const QStringList parts = h.split('\t');
+        if (parts.size() != 3) continue;
+        const QString key = parts.value(1) + '\t' + parts.value(2);
+        if (ret == QMessageBox::Yes) {
+            if (m_declinedPatches.remove(key)) changed = true;
+        } else {
+            if (!m_declinedPatches.contains(key)) {
+                m_declinedPatches.insert(key);
+                changed = true;
+            }
+        }
+    }
+    if (changed) {
+        Settings::setDeclinedPatches(
+            QStringList(m_declinedPatches.begin(), m_declinedPatches.end()));
+        syncOpenMWConfig();
+    }
 }
 
 // Existing slots
@@ -3663,16 +3594,13 @@ void MainWindow::onCheckUpdates()
         const QString nexusUrl = item->data(ModRole::NexusUrl).toString();
         if (nexusUrl.isEmpty()) continue;
 
-        const QStringList parts = QUrl(nexusUrl).path().split('/', Qt::SkipEmptyParts);
         // path: /{game}/mods/{modId}
-        if (parts.size() < 3 || parts[1] != "mods") continue;
-        bool ok = false;
-        const int modId = parts[2].toInt(&ok);
-        if (!ok) continue;
+        const auto ref = parseNexusModUrl(nexusUrl);
+        if (!ref) continue;
 
         // Clear any stale flag from a previous check
         item->setData(ModRole::UpdateAvailable, false);
-        toCheck.append({item, parts[0], modId});
+        toCheck.append({item, ref->game, ref->modId});
     }
 
     if (toCheck.isEmpty()) {
@@ -3743,14 +3671,12 @@ void MainWindow::onReviewUpdates()
         if (!it->data(ModRole::UpdateAvailable).toBool())            continue;
 
         const QString url = it->data(ModRole::NexusUrl).toString();
-        const QStringList parts = QUrl(url).path().split('/', Qt::SkipEmptyParts);
-        if (parts.size() < 3 || parts[1] != "mods") continue;
-        bool ok; int modId = parts[2].toInt(&ok);
-        if (!ok) continue;
+        const auto ref = parseNexusModUrl(url);
+        if (!ref) continue;
 
         QString name = it->data(ModRole::CustomName).toString();
         if (name.isEmpty()) name = it->text();
-        candidates.append({it, name, parts[0], modId, url});
+        candidates.append({it, name, ref->game, ref->modId, url});
     }
 
     if (candidates.isEmpty()) {
@@ -3949,8 +3875,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                         item->setData(ModRole::ModSize, QVariant());
                         item->setData(ModRole::HasMissingMaster, false);
                         item->setData(ModRole::MissingMasters, QStringList());
-                        item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
-                                       Qt::ItemIsDragEnabled | Qt::ItemIsUserCheckable);
+                        placeholder_state::restoreInteractiveFlags(item);
                         item->setText(name);
                         saveModList();
 
@@ -5706,11 +5631,10 @@ static QListWidgetItem *findPendingRowForModId(QListWidget *list, int modId,
         if (status == 1) continue;                // already installed - don't clobber
         const QString url = it->data(ModRole::NexusUrl).toString();
         if (url.isEmpty()) continue;
-        const QStringList p = QUrl(url).path().split('/', Qt::SkipEmptyParts);
-        if (p.size() < 3 || p[1] != "mods") continue;
-        if (!gameLc.isEmpty() && p[0].toLower() != gameLc) continue;
-        bool ok; const int rowId = p[2].toInt(&ok);
-        if (ok && rowId == modId) return it;
+        const auto ref = parseNexusModUrl(url);
+        if (!ref) continue;
+        if (!gameLc.isEmpty() && ref->game != gameLc) continue;
+        if (ref->modId == modId) return it;
     }
     return nullptr;
 }
@@ -5767,7 +5691,7 @@ void MainWindow::installLocalArchive(const QString &archivePath)
         placeholder->setText(QString("⠋ %1 (%2)").arg(
             T("status_installing_label"), existingName));
         placeholder->setData(ModRole::InstallStatus, 2);
-        placeholder->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        placeholder_state::setBusyFlags(placeholder);
         m_modList->scrollToItem(placeholder);
     } else {
         // No matching row - fresh local install, build a placeholder from
@@ -5779,7 +5703,7 @@ void MainWindow::installLocalArchive(const QString &archivePath)
         placeholder->setData(ModRole::InstallStatus, 2);
         placeholder->setData(ModRole::DateAdded,     QDateTime::currentDateTime());
         placeholder->setCheckState(Qt::Checked);
-        placeholder->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        placeholder_state::setBusyFlags(placeholder);
         m_modList->addItem(placeholder);
         m_modList->scrollToItem(placeholder);
     }
@@ -7577,14 +7501,8 @@ void MainWindow::syncOpenMWConfig()
     // (e.g. Ashfront's "01 Grass for Remiros' Groundcover") get dropped when
     // their Y mod isn't in the list - OpenMW would otherwise warn / crash
     // loading plugins that reference an absent companion mod.
-    QStringList installedModNames;
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *item = m_modList->item(i);
-        if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
-        if (item->data(ModRole::InstallStatus).toInt() != 1) continue;
-        const QString n = item->text();
-        if (!n.isEmpty()) installedModNames << n;
-    }
+    const QStringList installedModNames =
+        m_model ? m_model->installedModDisplayNames() : QStringList();
     auto normalizeModName = [](const QString &s) {
         QString n;
         n.reserve(s.size());
@@ -8413,8 +8331,7 @@ void MainWindow::doImportMO2ModList(const QString &path)
                 modId = readMO2MetaId(modsDir + "/" + name + "/meta.ini");
 
             if (modId > 0) {
-                const QString url = QString("https://www.nexusmods.com/%1/mods/%2")
-                                        .arg(nexusGame).arg(modId);
+                const QString url = nexusModUrl(nexusGame, modId);
                 item->setData(ModRole::NexusId,  modId);
                 item->setData(ModRole::NexusUrl, url);
                 ++linked;
@@ -8673,8 +8590,7 @@ void MainWindow::finishWabbajackImport(const QJsonObject &root)
                 // (e.g. a Skyrim SE list that links a mod for plain Skyrim).
                 const QString modSlug = kGameSlug.value(
                     state["GameName"].toString(), defaultSlug);
-                nexusUrl = QString("https://www.nexusmods.com/%1/mods/%2")
-                           .arg(modSlug).arg(nexusId);
+                nexusUrl = nexusModUrl(modSlug, nexusId);
             }
         } else {
             // Non-Nexus sources: extract a human-visitable download URL so
@@ -9010,8 +8926,7 @@ void MainWindow::onImportMO2Profile()
                 ? QStringLiteral("morrowind") : currentProfile().id;
             const int modId = readMO2MetaId(modsDir + "/" + name + "/meta.ini");
             if (modId > 0) {
-                const QString url = QString("https://www.nexusmods.com/%1/mods/%2")
-                                        .arg(nexusGame).arg(modId);
+                const QString url = nexusModUrl(nexusGame, modId);
                 item->setData(ModRole::NexusId,  modId);
                 item->setData(ModRole::NexusUrl, url);
             } else {
@@ -9064,12 +8979,10 @@ void MainWindow::onViewChangelog(QListWidgetItem *item)
     }
 
     const QString nexusUrl = item->data(ModRole::NexusUrl).toString();
-    const QStringList parts = QUrl(nexusUrl).path().split('/', Qt::SkipEmptyParts);
-    if (parts.size() < 3 || parts[1] != QLatin1String("mods")) return;
-    bool ok = false;
-    const int modId = parts[2].toInt(&ok);
-    if (!ok) return;
-    const QString game = parts[0];
+    const auto ref = parseNexusModUrl(nexusUrl);
+    if (!ref) return;
+    const int     modId = ref->modId;
+    const QString game  = ref->game;
 
     QString modName = item->data(ModRole::CustomName).toString();
     if (modName.isEmpty()) modName = item->text();

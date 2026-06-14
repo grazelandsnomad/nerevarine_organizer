@@ -36,3 +36,23 @@ std::expected<NxmTarget, QString> parseNxmUrl(const QString &rawUrl)
         query.queryItemValue(QStringLiteral("expires")),
     };
 }
+
+std::optional<NexusModRef> parseNexusModUrl(const QString &rawUrl)
+{
+    // Canonical stored form is /{game}/mods/{modId}; mirror the open-coded
+    // checks this replaces (size >= 3, second segment "mods", numeric id).
+    const QStringList parts = QUrl(rawUrl).path().split('/', Qt::SkipEmptyParts);
+    if (parts.size() < 3 || parts[1] != QStringLiteral("mods"))
+        return std::nullopt;
+    bool ok = false;
+    const int modId = parts[2].toInt(&ok);
+    if (!ok)
+        return std::nullopt;
+    return NexusModRef{parts[0].toLower(), modId};
+}
+
+QString nexusModUrl(const QString &game, int modId)
+{
+    return QStringLiteral("https://www.nexusmods.com/%1/mods/%2")
+        .arg(game).arg(modId);
+}

@@ -11,10 +11,19 @@
 
 namespace openmw {
 
+// Single source of truth for the managed-block markers Nerevarine wraps its own
+// data=/content= lines in.  The writer (renderOpenMWConfig), the sync-prep
+// scrub (prepareForSync) and the external-data reader (externalDataPaths) all
+// key off these, so the openmw.cfg "managed section" format lives in one place.
+namespace {
+const QString kManagedBegin = QStringLiteral("# --- Nerevarine Organizer BEGIN ---");
+const QString kManagedEnd   = QStringLiteral("# --- Nerevarine Organizer END ---");
+} // namespace
+
 SyncPrepareResult prepareForSync(const SyncPrepareInputs &in)
 {
-    static const QString kBegin = "# --- Nerevarine Organizer BEGIN ---";
-    static const QString kEnd   = "# --- Nerevarine Organizer END ---";
+    const QString &kBegin = kManagedBegin;
+    const QString &kEnd   = kManagedEnd;
     static const QStringList contentExts{".esp", ".esm", ".omwaddon", ".omwscripts"};
 
     SyncPrepareResult out;
@@ -296,8 +305,8 @@ QString renderOpenMWConfig(const QList<ConfigMod> &mods,
                            const QStringList   &loadOrder,
                            const QString       &existingCfg)
 {
-    static const QString BEGIN = "# --- Nerevarine Organizer BEGIN ---";
-    static const QString END   = "# --- Nerevarine Organizer END ---";
+    const QString &BEGIN = kManagedBegin;
+    const QString &END   = kManagedEnd;
 
     // --- Pass 1: build lists from the mod list ---
     //
@@ -756,6 +765,25 @@ ImportEntries parseConfigEntries(const QString &cfgText)
         } else if (trimmed.startsWith(QStringLiteral("groundcover="))) {
             out.groundcoverFiles << stripQuotes(trimmed.mid(12));
         }
+    }
+    return out;
+}
+
+QStringList externalDataPaths(const QString &cfgText)
+{
+    QStringList out;
+    bool inManaged = false;
+    for (QString line : cfgText.split(QLatin1Char('\n'))) {
+        if (line.endsWith(QLatin1Char('\r'))) line.chop(1);
+        if (line == kManagedBegin)        { inManaged = true;  continue; }
+        if (line.startsWith(kManagedEnd)) { inManaged = false; continue; }
+        if (inManaged) continue;
+        if (!line.startsWith(QStringLiteral("data="))) continue;
+        QString path = line.mid(5);
+        if (path.size() >= 2 && path.startsWith(QLatin1Char('"'))
+                             && path.endsWith(QLatin1Char('"')))
+            path = path.mid(1, path.size() - 2);
+        out.append(path);
     }
     return out;
 }

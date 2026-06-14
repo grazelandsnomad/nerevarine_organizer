@@ -173,6 +173,14 @@ struct ImportEntries {
 // parses; tests pass canned strings without any FS I/O.
 ImportEntries parseConfigEntries(const QString &cfgText);
 
+// Extract the EXTERNAL (non-managed) data= directories from an openmw.cfg's
+// text - data= lines OUTSIDE the "# --- Nerevarine Organizer BEGIN/END ---"
+// managed block, with surrounding quotes stripped, in encounter order.  Lives
+// here (not in a caller) so the managed-block markers + data= shape stay in
+// one place; used to locate the base game's Splash/ when offering to clear the
+// default splash screens.  Pure: caller reads the file, this parses.
+QStringList externalDataPaths(const QString &cfgText);
+
 // Heuristic: returns true if `dirPath` looks like the vanilla Bethesda
 // game-data folder (the one containing Morrowind.esm and friends).
 // Used by the importer to skip emitting that path as a managed mod row

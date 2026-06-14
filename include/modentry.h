@@ -89,6 +89,10 @@ struct ModEntry {
     // lands.  Cleared once consumed.  Not persisted (it's a transient
     // mid-install hint).
     QString prevModPath;
+    // Set when the user picks "Merge into existing"; holds the existing mod
+    // folder the freshly downloaded files are overlaid onto.  Sibling of
+    // prevModPath - consumed by applyPendingMerge, transient, not persisted.
+    QString mergeTargetPath;
 
     [[nodiscard]] static ModEntry fromItem(const QListWidgetItem *item);
     void applyToItem(QListWidgetItem *item) const;

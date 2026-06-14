@@ -96,6 +96,8 @@ set(SOURCES
     src/openmwconfigwriter.cpp
     src/log_triage.cpp
     src/plugin_collisions.cpp
+    src/post_install.cpp
+    src/placeholder_state.cpp
     src/asset_collisions.cpp
     src/modlist_sync_guard.cpp
     src/settings.cpp
@@ -177,6 +179,8 @@ set(SOURCES
     include/modlist_model_widget_bridge.h
     include/modlist_serializer.h
     include/pluginparser.h
+    include/post_install.h
+    include/placeholder_state.h
     include/firstrunwizard.h
     include/fs_utils.h
     include/openmwconfigwriter.h

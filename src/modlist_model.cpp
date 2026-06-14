@@ -1,5 +1,7 @@
 #include "modlist_model.h"
 
+#include "nxmurl.h"
+
 ModlistModel::ModlistModel(QObject *parent)
     : QObject(parent)
 {
@@ -81,6 +83,41 @@ int ModlistModel::findByModPath(const QString &path) const
         if (m_entries[i].modPath == path) return i;
     }
     return -1;
+}
+
+int ModlistModel::findInstalledByModId(const QString &game, int modId,
+                                       int exceptRow) const
+{
+    const QString gameLc = game.toLower();
+    for (int i = 0; i < m_entries.size(); ++i) {
+        if (i == exceptRow) continue;
+        const ModEntry &e = m_entries[i];
+        if (!e.isMod() || e.installStatus != 1) continue;
+        const auto ref = parseNexusModUrl(e.nexusUrl);
+        if (ref && ref->modId == modId && ref->game == gameLc)
+            return i;
+    }
+    return -1;
+}
+
+QStringList ModlistModel::modDisplayNames() const
+{
+    QStringList out;
+    for (const ModEntry &e : m_entries) {
+        if (!e.isMod() || e.displayName.isEmpty()) continue;
+        out.append(e.displayName);
+    }
+    return out;
+}
+
+QStringList ModlistModel::installedModDisplayNames() const
+{
+    QStringList out;
+    for (const ModEntry &e : m_entries) {
+        if (!e.isMod() || e.installStatus != 1 || e.displayName.isEmpty()) continue;
+        out.append(e.displayName);
+    }
+    return out;
 }
 
 ModlistModel::ModCounts ModlistModel::modCounts() const

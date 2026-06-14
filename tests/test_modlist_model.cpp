@@ -43,6 +43,23 @@ static ModEntry mod(const QString &name, const QString &url = {},
     return e;
 }
 
+// A mod with installStatus == 1 (the state findInstalledByModId /
+// installedModDisplayNames filter on).
+static ModEntry installedMod(const QString &name, const QString &url = {})
+{
+    ModEntry e = mod(name, url);
+    e.installStatus = 1;
+    return e;
+}
+
+static ModEntry separator(const QString &name)
+{
+    ModEntry e;
+    e.itemType    = QStringLiteral("separator");
+    e.displayName = name;
+    return e;
+}
+
 // -- Scenarios ---
 
 static void testEmptyModelStartsEmpty()
@@ -224,6 +241,64 @@ static void testAllReturnsIndependentSnapshot()
     check("snapshot was mutated",     snap[0].displayName == "Mutated");
 }
 
+// Stage-2 reader migration: MainWindow::confirmReinstallIfInstalled used to
+// walk m_modList parsing every NexusUrl by hand to answer "is this mod page
+// already installed?".  findInstalledByModId centralizes that scan.  Lock in:
+// only installed rows match, game is case-insensitive, exceptRow is skipped,
+// and a same-id different-game page does not match.
+static void testFindInstalledByModId()
+{
+    std::cout << "\n[findInstalledByModId matches installed rows by game+modId]\n";
+    ModlistModel m;
+    m.append(installedMod("OAAB Data", "https://www.nexusmods.com/morrowind/mods/49042")); // 0
+    m.append(mod("Pending DL",         "https://www.nexusmods.com/morrowind/mods/55555")); // 1 (status 0)
+    m.append(separator("── Section ──"));                                                  // 2
+    m.append(installedMod("Same id, other game", "https://www.nexusmods.com/skyrim/mods/49042")); // 3
+
+    check("finds the installed row",
+          m.findInstalledByModId("morrowind", 49042) == 0);
+    check("game match is case-insensitive",
+          m.findInstalledByModId("Morrowind", 49042) == 0);
+    check("not-installed (status 0) row is ignored",
+          m.findInstalledByModId("morrowind", 55555) == -1);
+    check("same modId on a different game does not match",
+          m.findInstalledByModId("oblivion", 49042) == -1);
+    check("unknown modId returns -1",
+          m.findInstalledByModId("morrowind", 1) == -1);
+    check("exceptRow is skipped",
+          m.findInstalledByModId("morrowind", 49042, /*exceptRow=*/0) == -1);
+}
+
+static void testModDisplayNames()
+{
+    std::cout << "\n[modDisplayNames lists mod names, excludes separators + blanks]\n";
+    ModlistModel m;
+    m.append(mod("Alpha"));
+    m.append(separator("── Section ──"));
+    m.append(mod(""));   // blank display name -> excluded
+    m.append(installedMod("Beta", "https://www.nexusmods.com/morrowind/mods/2"));
+
+    const QStringList names = m.modDisplayNames();
+    check("includes both named mods in order",
+          names == QStringList({"Alpha", "Beta"}),
+          names.join(','));
+    check("separator excluded", !names.contains("── Section ──"));
+}
+
+static void testInstalledModDisplayNames()
+{
+    std::cout << "\n[installedModDisplayNames narrows to installStatus == 1]\n";
+    ModlistModel m;
+    m.append(installedMod("Installed One", "https://www.nexusmods.com/morrowind/mods/1"));
+    m.append(mod("Not Installed"));   // status 0
+    m.append(installedMod("Installed Two", "https://www.nexusmods.com/morrowind/mods/2"));
+
+    const QStringList names = m.installedModDisplayNames();
+    check("only installed mods listed",
+          names == QStringList({"Installed One", "Installed Two"}),
+          names.join(','));
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -237,6 +312,9 @@ int main(int argc, char **argv)
     testReplaceEmitsModelReset();
     testFindByNexusUrl();
     testFindByModPath();
+    testFindInstalledByModId();
+    testModDisplayNames();
+    testInstalledModDisplayNames();
     testModCountsExcludeSeparators();
     testModCountsEmptyModelReturnsZero();
     testAllReturnsIndependentSnapshot();

@@ -312,6 +312,18 @@ private:
     void addModFromPath(const QString &dirPath, QListWidgetItem *placeholder = nullptr);
     void purgeDuplicatePlaceholders(QListWidgetItem *installed);
 
+    // Optional prompts fired by addModFromPath once a mod is registered.  Each
+    // is self-guarding (no-op when not applicable) so the call site stays three
+    // plain calls; the "what counts as X" decisions live in post_install:: so
+    // they're unit-testable.  modRoot is the installed mod's folder.
+    //   · groundcover: offer to manage a grass mod via groundcover= lines.
+    //   · splash:      offer to clear the base-game splash so the mod's show.
+    //   · bundled-patch: re-enable "<N> ... for <ThisMod>" subfolders in other
+    //                  mods that were auto-skipped while this mod was absent.
+    void runGroundcoverHelper(QListWidgetItem *item, const QString &modRoot);
+    void runSplashScreenHelper(const QString &modRoot);
+    void offerBundledPatchReenable(QListWidgetItem *item);
+
     // Kick off extraction of the downloaded archive.  Returns immediately
     // - the actual extract runs in InstallController::extractArchive via
     // QProcess and reports back through extractionSucceeded/Failed signals.
@@ -363,21 +375,36 @@ private:
     //                  Sage's Backgrounds vs The Wretched And The Weird,
     //                  Nexus mod 58704); install in its own folder, leave
     //                  the existing entry alone.
+    //   · Merge      - the new download is an optional file meant to override
+    //                  files from the main download (e.g. OAAB Data optionals);
+    //                  overlay its files on top of the existing mod folder
+    //                  (last-writer-wins), keeping a single entry.  MO2's
+    //                  "merge" behaviour.
     //   · Cancel     - abort the install.
     //   · NotInstalled - no existing match found; caller should just continue.
     enum class ReinstallChoice {
         NotInstalled,
         Replace,
         Separate,
+        Merge,
         Cancel,
     };
     // Looks up an installed mod with the same (game, modId).  When one
-    // exists, prompts the user to pick Replace / Separate / Cancel.  Returns
-    // NotInstalled when there's nothing to disambiguate.  `except` is an
-    // item to skip during the lookup (the placeholder currently being
-    // installed).
+    // exists, prompts the user to pick Replace / Merge / Separate / Cancel.
+    // Returns NotInstalled when there's nothing to disambiguate.  `except` is
+    // an item to skip during the lookup (the placeholder currently being
+    // installed).  `allowMerge` hides the Merge button for callers that can't
+    // honour it (the Search-on-Nexus flow installs into `item` itself rather
+    // than reusing the matched row, so there's no folder to overlay onto).
     ReinstallChoice confirmReinstallIfInstalled(const QString &game, int modId,
-                                                 QListWidgetItem *except = nullptr);
+                                                 QListWidgetItem *except = nullptr,
+                                                 bool allowMerge = true);
+    // Hard block for forbidden mods.  Returns true when (game, modId) is clear
+    // to install; returns false (after showing the critical "this mod is
+    // forbidden" dialog, with a shortcut to the Forbidden Mods manager) when it
+    // is blocked.  Call as `if (!confirmNotForbidden(game, modId)) return;` -
+    // the dialog has no install-anyway escape.
+    bool confirmNotForbidden(const QString &game, int modId);
     void checkModDependencies(const QString &game, int modId, QListWidgetItem *item);
     // Fetches the Nexus file list for (game, modId). With autoPickMain=true,
     // the per-mod picker is skipped and the first MAIN/UPDATE file is taken;
@@ -400,6 +427,17 @@ private:
     // caller is responsible for persistence via saveModListFor().
     void applyInstalledStateToStrandedPlaceholder(QListWidgetItem *placeholder,
                                                   const QString &modPath);
+    // "Merge into existing" follow-through.  When `placeholder` carries a
+    // pending ModRole::MergeTargetPath (set in handleNxmUrl), overlay every
+    // file from the freshly installed `contentPath` onto that existing mod
+    // folder (last-writer-wins, so an optional download overrides the main
+    // download), delete the now-redundant `discardDir`, and return the merge
+    // target as the path the row should register at.  When no merge is pending
+    // (or the target vanished) returns `contentPath` unchanged and leaves
+    // `discardDir` alone.  Consumes the MergeTargetPath role.
+    QString applyPendingMerge(QListWidgetItem *placeholder,
+                              const QString &contentPath,
+                              const QString &discardDir);
     // Same-modpage auto-link: when a new install shares a Nexus mod page with
     // an existing entry, point their DependsOn lists at each other so the
     // missing-dep warnings fire on "patch enabled, base disabled" etc.
