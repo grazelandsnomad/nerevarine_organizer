@@ -3208,6 +3208,18 @@ void MainWindow::offerBundledPatchReenable(QListWidgetItem *item)
 
 void MainWindow::onAddSeparator()
 {
+    // Always append at the end of the list.  That's a clean section boundary
+    // (a fresh, empty section) and a predictable spot, unlike the old
+    // "insert after the last-selected row" behaviour which - when the
+    // selection was a collapsed separator - dropped the new separator between
+    // it and its still-present hidden children, silently stealing that whole
+    // section.  For precise placement, the row context menu offers "Add
+    // separator above".
+    addSeparatorAtRow(m_modList->count());
+}
+
+void MainWindow::addSeparatorAtRow(int targetRow)
+{
     SeparatorDialog dlg(this);
     if (dlg.exec() != QDialog::Accepted) return;
 
@@ -3221,10 +3233,11 @@ void MainWindow::onAddSeparator()
     item->setData(ModRole::FgColor,  dlg.fontColor());
     item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled);
 
-    int row = m_modList->currentRow();
-    m_modList->insertItem(row < 0 ? m_modList->count() : row + 1, item);
+    m_modList->insertItem(qBound(0, targetRow, m_modList->count()), item);
     m_modList->setCurrentItem(item);
+    m_modList->scrollToItem(item);
     statusBar()->showMessage(T("status_separator_added").arg(name), 2000);
+    updateSectionCounts();   // new boundary - refresh the (active/total) tallies
     saveModList();
 }
 
@@ -4072,6 +4085,13 @@ void MainWindow::onContextMenu(const QPoint &pos)
             }
         }
         menu.addSeparator();
+        // Precise placement: drop a new separator directly above the
+        // right-clicked row.  Always a visible row, so it never lands inside a
+        // collapsed neighbour's hidden children.  (The Mods menu / empty-space
+        // "Add separator" appends at the end instead.)
+        menu.addAction(T("ctx_add_separator_above"), this, [this, item]{
+            addSeparatorAtRow(m_modList->row(item));
+        });
         menu.addAction(T("ctx_remove"), this, &MainWindow::onRemoveSelected);
     } else {
         menu.addAction(T("ctx_add_separator"), this, &MainWindow::onAddSeparator);

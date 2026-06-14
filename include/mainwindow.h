@@ -67,6 +67,12 @@ public slots:
 private slots:
     void onAddSeparator();
     void onAddMod();
+    // Core separator insertion used by both onAddSeparator (appends at the end)
+    // and the "Add separator above" context action (inserts above a specific
+    // row).  targetRow is clamped to [0, count]; a fresh separator is never
+    // collapsed, so it can't land between a collapsed neighbour and its hidden
+    // children (the "absorbed adjacent section" bug).
+    void addSeparatorAtRow(int targetRow);
     void onRemoveSelected();
     void onMoveUp();
     void onMoveDown();
