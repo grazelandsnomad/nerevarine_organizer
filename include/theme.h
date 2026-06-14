@@ -31,4 +31,12 @@ void captureDefault();
 // the whole application.  Does not persist - the caller owns Settings.
 void applyTheme(bool dark);
 
+// Whether the EFFECTIVE window background for the given app theme is dark.
+// Dark mode is always dark; "light mode" restores the captured platform
+// default, which on a dark desktop theme (Breeze Dark, etc.) is ITSELF dark -
+// so a light-mode app there still needs light text, not the near-black it would
+// otherwise hard-code.  Reads the captured-once default palette, so it's stable
+// across theme toggles (unlike qApp->palette(), which lags a setPalette()).
+bool backgroundIsDark(bool darkMode);
+
 } // namespace theme

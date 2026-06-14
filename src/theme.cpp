@@ -96,4 +96,11 @@ void applyTheme(bool dark)
     }
 }
 
+bool backgroundIsDark(bool darkMode)
+{
+    if (darkMode) return true;            // our dark palette is always dark
+    if (!s_captured) captureDefault();    // light mode = the captured default
+    return s_lightPalette.color(QPalette::Window).lightness() < 128;
+}
+
 } // namespace theme

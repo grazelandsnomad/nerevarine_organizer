@@ -1174,12 +1174,15 @@ void MainWindow::restyleToolbarTextButtons()
     //     palette is still the PREVIOUS theme's.  That's why dark->light left
     //     light-grey (dark-theme) text on the light toolbar.
     //
-    // So derive the colour deterministically from the theme flag instead of
-    // reading any palette: light theme -> near-black text, dark theme -> light
-    // text.  Concrete hex, re-applied on every toggle.
-    const bool dark = Settings::uiDarkMode();
-    const QString txt = dark ? QStringLiteral("#dcdcdc") : QStringLiteral("#1a1a1a");
-    const QString mid = dark ? QStringLiteral("#5a5a5a") : QStringLiteral("#888888");
+    // So derive the colour from the EFFECTIVE background darkness via theme::
+    // (which reads the captured-once default palette, never the live/stale one):
+    // dark background -> light text, light background -> near-black.  Keying off
+    // the real background - not just the app's dark-mode flag - is what fixes
+    // dark-on-dark text when the app runs in "light mode" on a dark desktop
+    // theme (Breeze Dark), where the restored platform palette is itself dark.
+    const bool bgDark = theme::backgroundIsDark(Settings::uiDarkMode());
+    const QString txt = bgDark ? QStringLiteral("#dcdcdc") : QStringLiteral("#1a1a1a");
+    const QString mid = bgDark ? QStringLiteral("#5a5a5a") : QStringLiteral("#888888");
 
     if (m_profileLbl)
         m_profileLbl->setStyleSheet(QStringLiteral(
