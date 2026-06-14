@@ -458,6 +458,13 @@ private:
     QString applyPendingMerge(QListWidgetItem *placeholder,
                               const QString &contentPath,
                               const QString &discardDir);
+    // Copy-on-write fork for a mod folder shared with another profile: verified-
+    // copy `sharedPath` into a fresh folder under the active m_modsDir and
+    // return the copy's path (empty on failure, after warning).  Used before an
+    // in-place mutation (a merge overlay) so the other profile's files stay put.
+    // Download-based mutations (reinstall/update) don't need this - they extract
+    // fresh and just repoint the row.
+    QString forkSharedModFolder(const QString &sharedPath);
     // Same-modpage auto-link: when a new install shares a Nexus mod page with
     // an existing entry, point their DependsOn lists at each other so the
     // missing-dep warnings fire on "patch enabled, base disabled" etc.

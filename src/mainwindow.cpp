@@ -2022,10 +2022,21 @@ MainWindow::extractAndAdd(const QString &archivePath, QListWidgetItem *placehold
     // make resolveReuseWrapper wipe those very files first (when the optional
     // archive's basename happens to match).  Force a fresh extract dir; the
     // overlay onto MergeTargetPath happens in onExtractionSucceeded.
-    const QString reuseHint =
-        placeholder->data(ModRole::MergeTargetPath).toString().isEmpty()
-            ? placeholder->data(ModRole::ModPath).toString()
-            : QString();
+    QString reuseHint;
+    if (placeholder->data(ModRole::MergeTargetPath).toString().isEmpty()) {
+        reuseHint = placeholder->data(ModRole::ModPath).toString();
+        // Copy-on-write fork: if this folder is SHARED with another modlist
+        // profile, never reuse/overwrite it.  Extracting fresh makes this
+        // reinstall / update / FOMOD-reconfigure land in THIS profile's own
+        // copy while the other profile keeps the original (the sibling-dedup +
+        // prevModPath deletes are already shared-aware, so the original
+        // survives and the row repoints to the fresh folder).
+        if (!reuseHint.isEmpty()
+            && modPathReferencedByOtherProfile(mod_sharing::cleanModPath(reuseHint))) {
+            statusBar()->showMessage(T("share_fork_on_reinstall"), 6000);
+            reuseHint.clear();
+        }
+    }
     QUuid token = placeholder->data(ModRole::InstallToken).toUuid();
     if (token.isNull()) {
         token = QUuid::createUuid();
@@ -2292,7 +2303,7 @@ QString MainWindow::applyPendingMerge(QListWidgetItem *placeholder,
                                       const QString &discardDir)
 {
     if (!placeholder) return contentPath;
-    const QString target = placeholder->data(ModRole::MergeTargetPath).toString();
+    QString target = placeholder->data(ModRole::MergeTargetPath).toString();
     if (target.isEmpty()) return contentPath;          // no merge pending
     placeholder->setData(ModRole::MergeTargetPath, QVariant());  // consume
 
@@ -2303,6 +2314,19 @@ QString MainWindow::applyPendingMerge(QListWidgetItem *placeholder,
     // -> nothing to overlay; fall back to registering the content as-is.
     if (cleanTarget == cleanContent || !QDir(target).exists())
         return contentPath;
+
+    // Copy-on-write: a merge overlays files IN PLACE, so if the target folder is
+    // shared with another profile, overlay onto a private copy instead and leave
+    // the other profile's mod untouched.  Fall back to in-place if the copy
+    // fails (a successful merge beats a lost optional).
+    if (modPathReferencedByOtherProfile(cleanTarget)) {
+        const QString forked = forkSharedModFolder(target);
+        if (!forked.isEmpty()) {
+            target = forked;
+            statusBar()->showMessage(
+                T("share_fork_on_merge").arg(QFileInfo(target).fileName()), 6000);
+        }
+    }
 
     // Overlay the freshly downloaded files on top of the existing mod folder.
     // fomod_copy::copyContents is last-writer-wins (it removes each colliding
@@ -2322,6 +2346,28 @@ QString MainWindow::applyPendingMerge(QListWidgetItem *placeholder,
     statusBar()->showMessage(
         T("merge_done_status").arg(QFileInfo(target).fileName()), 5000);
     return target;
+}
+
+QString MainWindow::forkSharedModFolder(const QString &sharedPath)
+{
+    if (sharedPath.isEmpty() || m_modsDir.isEmpty()) return {};
+
+    // Fresh, collision-safe destination under the active profile's mods dir.
+    const QString folderName = QFileInfo(sharedPath).fileName();
+    QString dest = QDir(m_modsDir).filePath(folderName);
+    if (QFileInfo::exists(dest))
+        dest += QStringLiteral("_") + QString::number(QDateTime::currentSecsSinceEpoch());
+
+    // Verified recursive copy (cleans up its own partial dest on failure;
+    // never touches the source).
+    const auto r = safefs::copyTreeVerified(sharedPath, dest);
+    if (!r) {
+        ui::warn(this, T("share_fork_failed_title"),
+                 T("share_fork_failed_body").arg(folderName));
+        return {};
+    }
+    m_scans->invalidateDataFoldersCache(dest);
+    return dest;
 }
 
 void MainWindow::onInstallFromNexus(QListWidgetItem *item)
