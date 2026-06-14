@@ -98,6 +98,7 @@ set(SOURCES
     src/plugin_collisions.cpp
     src/post_install.cpp
     src/placeholder_state.cpp
+    src/mod_sharing.cpp
     src/asset_collisions.cpp
     src/modlist_sync_guard.cpp
     src/settings.cpp
@@ -181,6 +182,7 @@ set(SOURCES
     include/pluginparser.h
     include/post_install.h
     include/placeholder_state.h
+    include/mod_sharing.h
     include/firstrunwizard.h
     include/fs_utils.h
     include/openmwconfigwriter.h

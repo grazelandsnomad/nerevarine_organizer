@@ -18,6 +18,7 @@
 #include "modlist_model.h"
 #include "modlist_model_widget_bridge.h"
 #include "modlist_serializer.h"
+#include "mod_sharing.h"
 #include "loadordercontroller.h"
 #include "nexusclient.h"
 #include "nexuscontroller.h"
@@ -2907,6 +2908,9 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
                     if (QDir::cleanPath(rmp) == QDir::cleanPath(oldPath))
                         delete m_modList->takeItem(r);
                 }
+                // Keep the files if another profile shares this folder.
+                if (modPathReferencedByOtherProfile(mod_sharing::cleanModPath(oldPath)))
+                    continue;
                 if (QDir(oldPath).removeRecursively()) ++removed;
             }
             if (removed > 0)
@@ -2928,7 +2932,9 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
         const bool insideMods = !cleanRoot.isEmpty()
             && (cleanOld == cleanRoot
                 || cleanOld.startsWith(cleanRoot + QLatin1Char('/')));
-        if (insideMods && QDir(prevModPath).exists()) {
+        // Don't delete the old folder if another profile shares it.
+        if (insideMods && QDir(prevModPath).exists()
+            && !modPathReferencedByOtherProfile(cleanOld)) {
             m_scans->invalidateDataFoldersCache(prevModPath);
             if (QDir(prevModPath).removeRecursively()) {
                 statusBar()->showMessage(
@@ -3423,7 +3429,16 @@ void MainWindow::onRemoveSelected()
         const QString modsRootAbs = m_modsDir.isEmpty()
             ? QString()
             : QDir::cleanPath(QDir(m_modsDir).absolutePath());
+        int keptShared = 0;
         for (const QString &p : installedPaths) {
+            // Shared with another profile? Keep the files on disk - the row has
+            // already been removed from this profile (the correct "remove from
+            // this profile only" outcome).  Removing the LAST reference falls
+            // through naturally (the scan returns false) and deletes.
+            if (modPathReferencedByOtherProfile(mod_sharing::cleanModPath(p))) {
+                ++keptShared;
+                continue;
+            }
             QDir(p).removeRecursively();
             // Sweep up empty wrapper directories left between the mods
             // root and the freshly-removed modPath.  Single-subdir
@@ -3446,6 +3461,9 @@ void MainWindow::onRemoveSelected()
                 cur = QDir::cleanPath(QFileInfo(cur).absolutePath());
             }
         }
+        if (keptShared > 0)
+            ui::info(this, T("remove_title"),
+                     T("share_remove_kept_shared").arg(keptShared));
     }
 
     saveModList();
@@ -3916,6 +3934,15 @@ void MainWindow::onContextMenu(const QPoint &pos)
                     if (name.isEmpty()) name = item->text();
                     if (!ui::confirm(this, T("ctx_uninstall"),
                         T("uninstall_confirm").arg(name))) return;
+                    // Shared with another profile? Drop the row here but KEEP the
+                    // files - another profile still points at this folder.
+                    if (!path.isEmpty()
+                        && modPathReferencedByOtherProfile(mod_sharing::cleanModPath(path))) {
+                        delete m_modList->takeItem(m_modList->row(item));
+                        saveModList();
+                        ui::info(this, T("ctx_uninstall"), T("share_uninstall_kept_shared"));
+                        return;
+                    }
                     if (!path.isEmpty()) {
                         QDir dir(path);
                         if (dir.exists() && !dir.removeRecursively()) {
@@ -3926,6 +3953,42 @@ void MainWindow::onContextMenu(const QPoint &pos)
                     delete m_modList->takeItem(m_modList->row(item));
                     saveModList();
                 });
+
+                // Share this mod with another modlist profile (no file copy):
+                // appends a row to that profile's modlist pointing at the same
+                // folder, optionally carrying this profile's config.  Only when
+                // the current game has more than one modlist profile.
+                if (m_profiles && !m_profiles->isEmpty()
+                    && m_profiles->current().modlistProfiles.size() > 1) {
+                    auto *shareMenu = menu.addMenu(T("ctx_share_with_profile"));
+                    const GameProfile &gp = m_profiles->current();
+                    for (int pi = 0; pi < gp.modlistProfiles.size(); ++pi) {
+                        if (pi == gp.activeModlistIdx) continue;   // skip the active one
+                        const QString targetName = gp.modlistProfiles[pi].name;
+                        const QString targetKey  = gp.id + QStringLiteral("__") + targetName;
+                        shareMenu->addAction(targetName, this,
+                            [this, item, targetKey, targetName]{
+                            QString modName = item->data(ModRole::CustomName).toString();
+                            if (modName.isEmpty()) modName = item->text();
+
+                            QMessageBox box(this);
+                            box.setWindowTitle(T("share_prompt_title"));
+                            box.setIcon(QMessageBox::Question);
+                            box.setText(T("share_prompt_body").arg(modName, targetName));
+                            auto *copyBtn = box.addButton(T("share_prompt_copy"),
+                                                          QMessageBox::AcceptRole);
+                            auto *defBtn  = box.addButton(T("share_prompt_default"),
+                                                          QMessageBox::ActionRole);
+                            box.addButton(QMessageBox::Cancel);
+                            box.setDefaultButton(copyBtn);
+                            box.exec();
+                            if (box.clickedButton() != copyBtn
+                                && box.clickedButton() != defBtn) return;
+                            shareModIntoProfile(ModEntry::fromItem(item), targetKey,
+                                                box.clickedButton() == copyBtn);
+                        });
+                    }
+                }
             }
             if (installStatus == 0) {
                 QString nexusUrl = item->data(ModRole::NexusUrl).toString();
@@ -7910,9 +7973,15 @@ void MainWindow::loadModList(const QString &path,
             item->setData(ModRole::InstallStatus, installed ? 1 : 0);
         }
         item->setCheckState(e.checked ? Qt::Checked : Qt::Unchecked);
-        item->setToolTip(e.annotation.isEmpty()
-                         ? modPath
-                         : modPath + "\n\n" + e.annotation);
+        QString tip = e.annotation.isEmpty() ? modPath
+                                             : modPath + "\n\n" + e.annotation;
+        // Mark a shared install: its folder lives outside this profile's mods
+        // dir (it was shared in from another profile, or added from elsewhere).
+        if (!modPath.isEmpty() && !m_modsDir.isEmpty()
+            && !mod_sharing::cleanModPath(modPath).startsWith(
+                   mod_sharing::cleanModPath(m_modsDir) + QLatin1Char('/')))
+            tip += QStringLiteral("\n\n") + T("share_external_tooltip");
+        item->setToolTip(tip);
         m_modList->addItem(item);
     }
 
@@ -9625,6 +9694,70 @@ void MainWindow::saveModListFor(const QString &profileKey,
     }
     QTextStream ts(&out);
     ts << modlist_serializer::serializeModlist(entries);
+}
+
+bool MainWindow::shareModIntoProfile(const ModEntry &source,
+                                     const QString &targetProfileKey,
+                                     bool copyConfig)
+{
+    const QString file = modlistPathFor(targetProfileKey);
+    if (file.isEmpty()) return false;
+
+    QList<ModEntry> entries;
+    {
+        QFile in(file);
+        if (in.open(QIODevice::ReadOnly | QIODevice::Text))
+            entries = modlist_serializer::parseModlist(
+                          QString::fromUtf8(in.readAll()));
+        // Missing file is fine - a fresh one is written with just this row.
+    }
+
+    const ModEntry shared = mod_sharing::makeSharedRow(source, copyConfig);
+    auto result = mod_sharing::appendSharedRow(std::move(entries), shared);
+
+    const QString targetName = targetProfileKey.section(QStringLiteral("__"), 1, -1);
+    if (!result.added) {
+        // Idempotent: the target already references this exact mod.
+        statusBar()->showMessage(T("share_already_present").arg(targetName), 5000);
+        return true;
+    }
+
+    // Synchronous write to a NON-active profile's file (same rationale as
+    // saveModListFor); failures route through the shared async-write banner.
+    QFile out(file);
+    if (!out.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+        onAsyncWriteFailed(file, out.errorString());
+        return false;
+    }
+    QTextStream ts(&out);
+    ts << modlist_serializer::serializeModlist(result.entries);
+    out.close();
+
+    statusBar()->showMessage(T("share_done").arg(targetName), 5000);
+    return true;
+}
+
+bool MainWindow::modPathReferencedByOtherProfile(const QString &cleanPath) const
+{
+    if (cleanPath.isEmpty() || !m_profiles || m_profiles->isEmpty()) return false;
+    const QString activeKey = currentProfileKey();
+
+    // Parse every OTHER profile's modlist file and let the pure scan decide.
+    // Only called on delete paths (cold), so the per-profile file reads are fine.
+    QList<QPair<QString, QList<ModEntry>>> others;
+    for (const GameProfile &gp : m_profiles->games()) {
+        for (const ModlistProfile &mp : gp.modlistProfiles) {
+            const QString key = gp.id + QStringLiteral("__") + mp.name;
+            if (key == activeKey) continue;
+            const QString file = modlistPathFor(key);
+            if (file.isEmpty()) continue;
+            QFile in(file);
+            if (!in.open(QIODevice::ReadOnly | QIODevice::Text)) continue;
+            others.append({ key, modlist_serializer::parseModlist(
+                                     QString::fromUtf8(in.readAll())) });
+        }
+    }
+    return mod_sharing::pathReferencedIn(mod_sharing::cleanModPath(cleanPath), others);
 }
 
 void MainWindow::strandInflightInstalls()

@@ -35,6 +35,7 @@ class QTimer;
 class QToolButton;
 class QWidget;
 class ModListDelegate;
+struct ModEntry;
 class LoadOrderController;
 class NexusClient;
 class NexusController;
@@ -254,6 +255,19 @@ private:
     // emits).  Returns empty when the key doesn't match any registered
     // profile.
     QString modlistPathFor(const QString &profileKey) const;
+    // Share a mod into another modlist profile WITHOUT copying its files:
+    // append a row for `source` (same ModPath) to `targetProfileKey`'s modlist
+    // file, deduping if that profile already references the mod.  copyConfig
+    // carries the source's enabled/FOMOD/annotation/deps; otherwise the row
+    // starts disabled at default config.  Writes the foreign file synchronously
+    // (same rationale as saveModListFor); never targets the active profile.
+    // Returns false on a resolve/write failure.
+    bool shareModIntoProfile(const ModEntry &source,
+                             const QString &targetProfileKey, bool copyConfig);
+    // True when any modlist profile OTHER than the active one references this
+    // exact (cleaned) mod folder - the guard that stops a destructive disk
+    // delete from removing files a shared-into profile still points at.
+    bool modPathReferencedByOtherProfile(const QString &cleanPath) const;
     // Look up an in-flight placeholder row by its InstallToken.  Searches
     // m_modList first, then m_strandedInstalls (parked across profile
     // switches).  When found in a stranded bucket, `outProfileKey` (if

@@ -438,6 +438,22 @@ target_link_libraries(test_modlist_serialization PRIVATE
     Qt6::Gui    # ModEntry has QColor members → QtGui (header-only here)
 )
 
+# mod_sharing: pure logic for sharing a mod between profiles (shared-row build,
+# dedup, cross-profile reference scan).  QtCore + QtGui (ModEntry QColor).
+add_executable(test_mod_sharing
+    test_mod_sharing.cpp
+    ${CMAKE_SOURCE_DIR}/src/mod_sharing.cpp
+    ${CMAKE_SOURCE_DIR}/src/modlist_serializer.cpp
+    ${CMAKE_SOURCE_DIR}/src/modentry.cpp
+)
+target_include_directories(test_mod_sharing PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(test_mod_sharing PRIVATE
+    Qt6::Core
+    Qt6::Gui
+)
+
 # Pure value-type tests for ModEntry.  Links ONLY the QtCore half
 # (modentry.cpp), NOT modentry_item.cpp - that's the whole point of the
 # split: business logic is testable without QtWidgets on the link line.
@@ -510,6 +526,7 @@ set(UNIT_TESTS
     test_modlist_io
     test_modlist_serialization
     test_modlist_sync_guard
+    test_mod_sharing
     test_nexus_client
     test_openmw_config_writer
     test_openmw_config_writer_fuzz
