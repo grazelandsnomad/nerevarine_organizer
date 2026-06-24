@@ -1,0 +1,51 @@
+# Maintainer: jalcazo <see GitHub>
+#
+# Stable-release PKGBUILD.  Bump `pkgver` + update `sha256sums` each release.
+# For a bleeding-edge variant that tracks main, see PKGBUILD-git in this dir.
+
+pkgname=nerevarine-organizer
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Native Qt6 mod manager for OpenMW (Morrowind)"
+arch=('x86_64')
+url="https://github.com/jalcazo/nerevarine_organizer"
+license=('MIT')
+depends=(
+    'qt6-base'
+    'qt6-networkauth'
+    'qt6-svg'
+    'qtkeychain-qt6'
+    'p7zip'
+)
+optdepends=(
+    'unzip: fallback extractor for .zip archives'
+    'unrar: .rar extractor (more reliable than p7zip for some archives)'
+    'openmw: launch the Morrowind game from the toolbar button'
+    'loot: community-curated plugin load-order sorting'
+)
+makedepends=('cmake' 'ninja')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+# Run `updpkgsums` after updating pkgver to refresh this; `SKIP` is a
+# placeholder for unreleased versions.
+sha256sums=('d69ed48c8f51f53ae989a0f223404422ae25ebf5e6b5e06fa5c5f5ee4cc08618')
+
+build() {
+    cd "nerevarine_organizer-$pkgver"
+    cmake -B build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr
+    cmake --build build
+}
+
+check() {
+    cd "nerevarine_organizer-$pkgver"
+    ./build/tests/test_annotation_codec
+    ./build/tests/test_plugin_parser
+    ./build/tests/test_fs_utils
+}
+
+package() {
+    cd "nerevarine_organizer-$pkgver"
+    DESTDIR="$pkgdir" cmake --install build
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE" 2>/dev/null || true
+}

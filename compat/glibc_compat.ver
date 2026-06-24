@@ -1,0 +1,7 @@
+GLIBC_2.41 {
+    global:
+        free_aligned_sized;
+        free_sized;
+    local:
+        *;
+};

@@ -1,0 +1,590 @@
+#include "bethesda_deploy.h"
+#include "bethesda_loadorder.h"
+#include "bethesda_archives.h"
+#include "proton_paths.h"
+#include "game_adapter.h"
+
+#include <QCoreApplication>
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QSet>
+#include <QString>
+#include <QStringList>
+#include <QTemporaryDir>
+
+#include <iostream>
+
+using bethesda_archives::configureArchives;
+
+static int s_passed = 0;
+static int s_failed = 0;
+
+static void check(const char *name, bool ok, const QString &detail = {})
+{
+    if (ok) {
+        std::cout << "  \033[32m✓\033[0m " << name << "\n";
+        ++s_passed;
+    } else {
+        std::cout << "  \033[31m✗\033[0m " << name;
+        if (!detail.isEmpty()) std::cout << "  (" << detail.toStdString() << ")";
+        std::cout << "\n";
+        ++s_failed;
+    }
+}
+
+namespace deploy_section {
+using namespace bethesda_deploy;
+
+static void touch(const QString &p, const QByteArray &b)
+{
+    QDir().mkpath(QFileInfo(p).absolutePath());
+    QFile f(p);
+    if (f.open(QIODevice::WriteOnly)) { f.write(b); f.close(); }
+}
+static QByteArray readAll(const QString &p)
+{
+    QFile f(p);
+    return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
+}
+static bool exists(const QString &p)
+{
+    return QFileInfo::exists(p) || QFileInfo(p).isSymLink();
+}
+
+static void testLastWriterWins()
+{
+    std::cout << "\n[deploy: later mod overrides earlier]\n";
+    QTemporaryDir tmp;
+    const QString data = tmp.filePath("Data");
+    const QString bak  = tmp.filePath("backup");
+    QDir().mkpath(data);
+
+    touch(tmp.filePath("A/meshes/x.nif"), "A");
+    touch(tmp.filePath("A/meshes/keep.nif"), "A");
+    touch(tmp.filePath("B/meshes/x.nif"), "B");
+
+    const DeployResult r = deploy(data, bak,
+        {{"A", tmp.filePath("A")}, {"B", tmp.filePath("B")}});
+
+    check("no errors", r.errors.isEmpty(), r.errors.join(';'));
+    check("two distinct files deployed", r.filesDeployed == 2,
+          QString::number(r.filesDeployed));
+    check("no vanilla displaced", r.vanillaBackedUp == 0);
+    check("later mod won x.nif", readAll(data + "/meshes/x.nif") == "B",
+          readAll(data + "/meshes/x.nif"));
+    check("earlier-only file kept", readAll(data + "/meshes/keep.nif") == "A");
+
+    QString winner;
+    for (const auto &f : r.manifest.files)
+        if (f.rel.endsWith("x.nif")) winner = f.sourceMod;
+    check("manifest credits B as x.nif's source", winner == "B", winner);
+}
+
+static void testVanillaBackupRestore()
+{
+    std::cout << "\n[deploy: vanilla backed up; undeploy restores it exactly]\n";
+    QTemporaryDir tmp;
+    const QString data = tmp.filePath("Data");
+    const QString bak  = tmp.filePath("backup");
+
+    touch(data + "/meshes/x.nif", "VANILLA");     // pre-existing game file
+    touch(data + "/Oblivion.esm", "BASE");        // bystander
+    touch(tmp.filePath("A/meshes/x.nif"), "MOD"); // mod overrides it
+
+    const DeployResult r = deploy(data, bak, {{"A", tmp.filePath("A")}});
+
+    check("one vanilla displaced", r.vanillaBackedUp == 1,
+          QString::number(r.vanillaBackedUp));
+    check("mod file now in Data/", readAll(data + "/meshes/x.nif") == "MOD");
+    check("vanilla preserved in backup", readAll(bak + "/meshes/x.nif") == "VANILLA");
+    check("bystander untouched", readAll(data + "/Oblivion.esm") == "BASE");
+    bool flagged = false;
+    for (const auto &f : r.manifest.files)
+        if (f.rel.endsWith("x.nif")) flagged = f.displacedVanilla;
+    check("manifest flags x.nif as displacing vanilla", flagged);
+
+    const UndeployResult u = undeploy(data, bak, r.manifest);
+    check("undeploy removed our file", u.removed == 1, QString::number(u.removed));
+    check("undeploy restored vanilla", u.restored == 1, QString::number(u.restored));
+    check("Data/ x.nif back to vanilla", readAll(data + "/meshes/x.nif") == "VANILLA");
+    check("bystander still untouched after undeploy",
+          readAll(data + "/Oblivion.esm") == "BASE");
+}
+
+static void testUndeployNoVanilla()
+{
+    std::cout << "\n[undeploy: a purely-added file is removed cleanly]\n";
+    QTemporaryDir tmp;
+    const QString data = tmp.filePath("Data");
+    const QString bak  = tmp.filePath("backup");
+    QDir().mkpath(data);
+    touch(tmp.filePath("A/plugin.esp"), "P");
+
+    const DeployResult r = deploy(data, bak, {{"A", tmp.filePath("A")}});
+    check("deployed into empty Data/", exists(data + "/plugin.esp"));
+
+    const UndeployResult u = undeploy(data, bak, r.manifest);
+    check("removed the added file", u.removed == 1);
+    check("nothing restored (no vanilla)", u.restored == 0);
+    check("Data/ no longer has the file", !exists(data + "/plugin.esp"));
+}
+
+static void testNestedAndCopyMethod()
+{
+    std::cout << "\n[deploy: deep paths, explicit Copy method]\n";
+    QTemporaryDir tmp;
+    const QString data = tmp.filePath("Data");
+    const QString bak  = tmp.filePath("backup");
+    QDir().mkpath(data);
+    touch(tmp.filePath("A/textures/armor/iron/boots.dds"), "DDS");
+
+    const DeployResult r = deploy(data, bak, {{"A", tmp.filePath("A")}},
+                                  LinkMethod::Copy);
+    check("deep nested file deployed",
+          readAll(data + "/textures/armor/iron/boots.dds") == "DDS");
+    check("method recorded as Copy",
+          !r.manifest.files.isEmpty()
+              && r.manifest.files.first().method == LinkMethod::Copy);
+}
+
+static void testManifestRoundTrip()
+{
+    std::cout << "\n[manifest: JSON load/save preserves every field]\n";
+    Manifest m;
+    m.files.append({"meshes/x.nif", "Better Meshes", LinkMethod::Hardlink, true});
+    m.files.append({"plugin.esp",   "Cool Mod",      LinkMethod::Copy,     false});
+
+    const Manifest back = manifestFromJson(manifestToJson(m));
+    check("file count round-trips", back.files.size() == 2,
+          QString::number(back.files.size()));
+    if (back.files.size() == 2) {
+        check("rel + mod + method + vanilla flag round-trip",
+              back.files[0].rel == "meshes/x.nif"
+              && back.files[0].sourceMod == "Better Meshes"
+              && back.files[0].method == LinkMethod::Hardlink
+              && back.files[0].displacedVanilla == true
+              && back.files[1].method == LinkMethod::Copy
+              && back.files[1].displacedVanilla == false);
+    }
+    check("garbage JSON parses to empty manifest",
+          manifestFromJson("not json").files.isEmpty());
+}
+} // namespace deploy_section
+
+static void run_bethesda_deploy()
+{
+    std::cout << "=== bethesda_deploy tests ===\n";
+    deploy_section::testLastWriterWins();
+    deploy_section::testVanillaBackupRestore();
+    deploy_section::testUndeployNoVanilla();
+    deploy_section::testNestedAndCopyMethod();
+    deploy_section::testManifestRoundTrip();
+}
+
+namespace loadorder_section {
+using namespace bethesda_loadorder;
+
+static void touch(const QString &p, const QByteArray &b = "x")
+{
+    QDir().mkpath(QFileInfo(p).absolutePath());
+    QFile f(p);
+    if (f.open(QIODevice::WriteOnly)) { f.write(b); f.close(); }
+}
+
+static void testMastersFirst()
+{
+    std::cout << "\n[mastersFirst: .esm/.esl before .esp, order stable]\n";
+    const QStringList in{"B.esp", "Core.esm", "A.esp", "Light.esl", "Base.esm"};
+    const QStringList out = mastersFirst(in);
+    check("masters/esl float to the front in original relative order",
+          out == QStringList({"Core.esm", "Light.esl", "Base.esm", "B.esp", "A.esp"}),
+          out.join(','));
+    check("case-insensitive master detection",
+          mastersFirst({"a.ESP", "b.EsM"}) == QStringList({"b.EsM", "a.ESP"}));
+}
+
+static void testPluginsTxt()
+{
+    std::cout << "\n[pluginsTxtContent: CRLF, no '*' prefix, order preserved]\n";
+    const QString body = pluginsTxtContent({"Oblivion.esm", "Mod.esp"});
+    check("exact CRLF body", body == QStringLiteral("Oblivion.esm\r\nMod.esp\r\n"),
+          QString(body).replace("\r", "\\r").replace("\n", "\\n"));
+    check("empty list -> empty body", pluginsTxtContent({}).isEmpty());
+}
+
+static void testAsteriskPluginsTxt()
+{
+    std::cout << "\n[asteriskPluginsTxtContent: '*'-prefixed, CRLF, order]\n";
+    const QString body = asteriskPluginsTxtContent({"Core.esm", "Mod.esp"});
+    check("each line '*'-prefixed, CRLF",
+          body == QStringLiteral("*Core.esm\r\n*Mod.esp\r\n"),
+          QString(body).replace("\r", "\\r").replace("\n", "\\n"));
+    check("empty list -> empty body", asteriskPluginsTxtContent({}).isEmpty());
+}
+
+static void testTimestampOrder()
+{
+    std::cout << "\n[applyTimestampOrder: ascending mtimes, missing -> error]\n";
+    QTemporaryDir tmp;
+    touch(tmp.filePath("Core.esm"));
+    touch(tmp.filePath("First.esp"));
+    touch(tmp.filePath("Second.esp"));
+
+    const qint64 base = 1000000000000LL;   // 2001, well in the past
+    const QStringList order{"Core.esm", "First.esp", "Second.esp"};
+    const StampResult r = applyTimestampOrder(tmp.path(), order, base, 2000);
+
+    check("all three stamped", r.stamped == 3, QString::number(r.stamped));
+    check("no errors", r.errors.isEmpty(), r.errors.join(','));
+
+    auto mtime = [&](const QString &n) {
+        return QFileInfo(tmp.filePath(n)).lastModified().toMSecsSinceEpoch();
+    };
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    check("first plugin stamped into the past (not left at creation time)",
+          mtime("Core.esm") < now - 1000000000LL);
+    check("load order is strictly ascending in mtime",
+          mtime("Core.esm") < mtime("First.esp")
+              && mtime("First.esp") < mtime("Second.esp"),
+          QString("%1 < %2 < %3").arg(mtime("Core.esm"))
+              .arg(mtime("First.esp")).arg(mtime("Second.esp")));
+
+    const StampResult r2 = applyTimestampOrder(tmp.path(), {"Ghost.esp"}, base, 2000);
+    check("missing file reported as an error", r2.errors == QStringList{"Ghost.esp"});
+    check("missing file not counted as stamped", r2.stamped == 0);
+}
+} // namespace loadorder_section
+
+static void run_bethesda_loadorder()
+{
+    std::cout << "=== bethesda_loadorder tests ===\n";
+    loadorder_section::testMastersFirst();
+    loadorder_section::testPluginsTxt();
+    loadorder_section::testAsteriskPluginsTxt();
+    loadorder_section::testTimestampOrder();
+}
+
+namespace archives_section {
+
+// value after '=' on the SArchiveList line
+static QString archiveListValue(const QString &ini)
+{
+    for (const QString &raw : ini.split('\n')) {
+        QString l = raw; if (l.endsWith('\r')) l.chop(1);
+        if (l.trimmed().startsWith("SArchiveList=", Qt::CaseInsensitive))
+            return l.mid(l.indexOf('=') + 1);
+    }
+    return {};
+}
+
+static int count(const QString &hay, const QString &needle, Qt::CaseSensitivity cs)
+{
+    int c = 0, from = 0;
+    while ((from = hay.indexOf(needle, from, cs)) != -1) { ++c; from += needle.size(); }
+    return c;
+}
+
+static void testAppendToExisting()
+{
+    std::cout << "\n[existing [Archive]: append BSA, keep vanilla, fix invalidation]\n";
+    const QString ini =
+        "[General]\r\nSLanguage=ENGLISH\r\n"
+        "[Archive]\r\n"
+        "SArchiveList=Oblivion - Meshes.bsa, Oblivion - Textures - Compressed.bsa\r\n"
+        "bInvalidateOlderFiles=0\r\n";
+    const QString out = configureArchives(ini, {"CoolMod.bsa"});
+
+    check("invalidation turned on", out.contains("bInvalidateOlderFiles=1"));
+    check("old bInvalidateOlderFiles=0 replaced", !out.contains("bInvalidateOlderFiles=0"));
+    check("SInvalidationFile emptied (added)", out.contains("SInvalidationFile="));
+    const QString list = archiveListValue(out);
+    check("vanilla BSA kept", list.contains("Oblivion - Meshes.bsa"), list);
+    check("mod BSA appended", list.contains("CoolMod.bsa"), list);
+    check("unrelated section preserved",
+          out.contains("[General]") && out.contains("SLanguage=ENGLISH"));
+    check("output is CRLF", out.contains("\r\n"));
+}
+
+static void testNoArchiveSection()
+{
+    std::cout << "\n[no [Archive] section: append one seeded with vanilla]\n";
+    const QString ini = "[General]\r\nSLanguage=ENGLISH\r\n";
+    const QString out = configureArchives(ini, {"CoolMod.bsa"});
+    check("[Archive] section appended", out.contains("[Archive]"));
+    check("invalidation keys present",
+          out.contains("bInvalidateOlderFiles=1") && out.contains("SInvalidationFile="));
+    const QString list = archiveListValue(out);
+    check("seeded with vanilla", list.contains("Oblivion - Meshes.bsa"), list);
+    check("mod BSA present", list.contains("CoolMod.bsa"), list);
+    check("[General] preserved", out.contains("SLanguage=ENGLISH"));
+}
+
+static void testDedup()
+{
+    std::cout << "\n[case-insensitive de-dup: don't double-list a BSA]\n";
+    const QString ini = "[Archive]\r\nSArchiveList=CoolMod.bsa\r\n";
+    const QString out = configureArchives(ini, {"coolmod.bsa", "Other.bsa"});
+    const QString list = archiveListValue(out);
+    check("existing entry kept as-authored", list.contains("CoolMod.bsa"));
+    check("case-variant duplicate not added", !list.contains("coolmod.bsa"));
+    check("only one CoolMod entry", count(list, "coolmod.bsa", Qt::CaseInsensitive) == 1,
+          list);
+    check("the genuinely new BSA is added", list.contains("Other.bsa"), list);
+}
+
+static void testAddsMissingInvalidationKeys()
+{
+    std::cout << "\n[section present but missing invalidation keys -> added]\n";
+    const QString ini = "[Archive]\r\nSArchiveList=Oblivion - Meshes.bsa\r\n";
+    const QString out = configureArchives(ini, {});
+    check("bInvalidateOlderFiles added", out.contains("bInvalidateOlderFiles=1"));
+    check("SInvalidationFile added", out.contains("SInvalidationFile="));
+    check("no spurious second SArchiveList",
+          count(out, "SArchiveList=", Qt::CaseInsensitive) == 1);
+}
+} // namespace archives_section
+
+static void run_bethesda_archives()
+{
+    std::cout << "=== bethesda_archives tests ===\n";
+    archives_section::testAppendToExisting();
+    archives_section::testNoArchiveSection();
+    archives_section::testDedup();
+    archives_section::testAddsMissingInvalidationKeys();
+}
+
+static void run_proton_paths()
+{
+    std::cout << "=== proton path tests ===\n";
+
+    const QString root = "/home/u/.local/share/Steam/steamapps/compatdata";
+
+    {
+        const QString p = proton::prefixUserDir(root, "22330");
+        check("prefixUserDir builds the steamuser profile path",
+              p == root + "/22330/pfx/drive_c/users/steamuser", p);
+        check("prefixUserDir empty when appId empty",
+              proton::prefixUserDir(root, "").isEmpty());
+        check("prefixUserDir empty when root empty",
+              proton::prefixUserDir("", "22330").isEmpty());
+    }
+
+    // localAppData: where Plugins.txt lives
+    {
+        const QString pu = proton::prefixUserDir(root, "22330");
+        check("localAppData with folder -> AppData/Local/<folder>",
+              proton::localAppData(pu, "Oblivion") == pu + "/AppData/Local/Oblivion",
+              proton::localAppData(pu, "Oblivion"));
+        check("localAppData without folder -> AppData/Local",
+              proton::localAppData(pu) == pu + "/AppData/Local");
+        check("localAppData empty when prefix empty",
+              proton::localAppData("", "Oblivion").isEmpty());
+    }
+
+    // myGamesDirs: where the engine .ini lives, both variants in order
+    {
+        const QString pu = "/p/users/steamuser";
+        const QStringList d = proton::myGamesDirs(pu, "Oblivion");
+        check("myGamesDirs returns two candidates", d.size() == 2,
+              QString::number(d.size()));
+        check("myGamesDirs[0] = Documents/My Games (newer Proton)",
+              d.value(0) == pu + "/Documents/My Games/Oblivion", d.value(0));
+        check("myGamesDirs[1] = My Documents/My Games (older)",
+              d.value(1) == pu + "/My Documents/My Games/Oblivion", d.value(1));
+        check("myGamesDirs without folder stops at My Games",
+              proton::myGamesDirs(pu).value(0) == pu + "/Documents/My Games");
+    }
+
+    {
+        const QStringList common = {
+            "/home/u/.local/share/Steam/steamapps/common",
+            "/mnt/games/SteamLibrary/steamapps/common",
+            "/weird/path/not/matching",                     // skipped
+            "/home/u/.local/share/Steam/steamapps/common",  // dup -> collapsed
+        };
+        const QStringList cd = proton::compatdataRootsFromCommon(common);
+        check("compatdataRootsFromCommon maps common->compatdata + dedups",
+              cd == QStringList({
+                  "/home/u/.local/share/Steam/steamapps/compatdata",
+                  "/mnt/games/SteamLibrary/steamapps/compatdata",
+              }),
+              cd.join(" | "));
+        check("compatdataRootsFromCommon empty input -> empty",
+              proton::compatdataRootsFromCommon({}).isEmpty());
+    }
+}
+
+namespace adapters_section {
+
+// empty id breaks profile lookup; empty displayName = blank menu entry
+static void testAllAdaptersHaveBasicIdentity()
+{
+    std::cout << "\n-- adapters: every entry has id + displayName --\n";
+    for (const GameAdapter *a : GameAdapterRegistry::all()) {
+        check("non-empty id",
+              !a->id().isEmpty(),
+              QStringLiteral("displayName=%1").arg(a->displayName()));
+        check("non-empty displayName",
+              !a->displayName().isEmpty(),
+              QStringLiteral("id=%1").arg(a->id()));
+    }
+}
+
+// duplicate ids shadow each other - second is unreachable via find()
+static void testIdsAreUnique()
+{
+    std::cout << "\n-- adapters: ids are unique --\n";
+    QSet<QString> seen;
+    bool clean = true;
+    for (const GameAdapter *a : GameAdapterRegistry::all()) {
+        if (seen.contains(a->id())) {
+            clean = false;
+            std::cout << "    duplicate id: " << a->id().toStdString() << "\n";
+        }
+        seen.insert(a->id());
+    }
+    check("no duplicate ids", clean);
+}
+
+// find()==nullptr = unknown game (fall back to file picker); known ids must resolve
+static void testFindLookup()
+{
+    std::cout << "\n-- adapters: find() round-trips known and unknown ids --\n";
+    const GameAdapter *m = GameAdapterRegistry::find("morrowind");
+    check("find(morrowind) is non-null", m != nullptr);
+    if (m) check("find(morrowind) returns the OpenMW adapter",
+                 m->isMorrowind());
+
+    check("find(\"\") is null",     GameAdapterRegistry::find("") == nullptr);
+    check("find(unknown) is null",  GameAdapterRegistry::find("nope") == nullptr);
+}
+
+// hasLauncher() = "any layout declares a launcher". Pin known cases so a
+// refactor doesn't silently flip toolbar visibility.
+static void testHasLauncherDerivedFromLayouts()
+{
+    std::cout << "\n-- adapters: hasLauncher() reflects layout data --\n";
+    const auto *fnv = GameAdapterRegistry::find("falloutnewvegas");
+    check("Fallout NV declares a launcher",  fnv && fnv->hasLauncher());
+
+    const auto *flondon = GameAdapterRegistry::find("falloutlondon");
+    // total conversion forces hasLauncher() false even though its borrowed
+    // Steam folder lists Fallout4Launcher.exe
+    check("Fallout London hides the launcher",
+          flondon && !flondon->hasLauncher());
+
+    const auto *cyber = GameAdapterRegistry::find("cyberpunk2077");
+    // Steam + GOG layouts, neither declares a launcher
+    check("Cyberpunk 2077 has no launcher", cyber && !cyber->hasLauncher());
+}
+
+// pinned subset feeds the toolbar's "switch game" section; OpenMW (Morrowind)
+// must be in it
+static void testPinnedContainsOpenMW()
+{
+    std::cout << "\n-- adapters: pinned() includes OpenMW (Morrowind) --\n";
+    bool foundOpenMW = false;
+    for (const GameAdapter *a : GameAdapterRegistry::pinned()) {
+        if (a->isMorrowind()) { foundOpenMW = true; break; }
+    }
+    check("Morrowind is pinned", foundOpenMW);
+}
+
+// builtin subset (first-run wizard chooser) must be a subset of all() and
+// include OpenMW
+static void testBuiltinIsSubsetOfAll()
+{
+    std::cout << "\n-- adapters: builtin() ⊆ all() --\n";
+    QSet<QString> allIds;
+    for (const GameAdapter *a : GameAdapterRegistry::all()) allIds.insert(a->id());
+
+    bool subset = true;
+    bool foundOpenMW = false;
+    for (const GameAdapter *a : GameAdapterRegistry::builtin()) {
+        if (!allIds.contains(a->id())) {
+            subset = false;
+            std::cout << "    builtin id not in all(): "
+                      << a->id().toStdString() << "\n";
+        }
+        if (a->isMorrowind()) foundOpenMW = true;
+    }
+    check("every builtin id appears in all()", subset);
+    check("builtin() includes Morrowind",      foundOpenMW);
+}
+
+// misclassification routes a game through the wrong load-order writer. One
+// case per LoadOrderStyle, plus the data-dir/config-name fields Oblivion needs.
+// Unclassified games must stay Unknown or they get treated as managed.
+static void testLoadOrderClassification()
+{
+    std::cout << "\n-- adapters: load-order style classification --\n";
+    const auto *mw = GameAdapterRegistry::find("morrowind");
+    check("Morrowind -> OpenMW style",
+          mw && mw->loadOrderStyle() == LoadOrderStyle::OpenMW);
+
+    const auto *ob = GameAdapterRegistry::find("oblivion");
+    check("Oblivion -> TimestampPluginsTxt style",
+          ob && ob->loadOrderStyle() == LoadOrderStyle::TimestampPluginsTxt);
+    check("Oblivion data subdir is Data",
+          ob && ob->dataSubdir() == QStringLiteral("Data"));
+    check("Oblivion config folder names resolve to Oblivion",
+          ob && ob->localAppDataName() == QStringLiteral("Oblivion")
+             && ob->myGamesName() == QStringLiteral("Oblivion"));
+
+    const auto *se = GameAdapterRegistry::find("skyrimspecialedition");
+    check("Skyrim SE -> AsteriskPluginsTxt style",
+          se && se->loadOrderStyle() == LoadOrderStyle::AsteriskPluginsTxt);
+
+    const auto *fo4 = GameAdapterRegistry::find("fallout4");
+    check("Fallout 4 -> AsteriskPluginsTxt style",
+          fo4 && fo4->loadOrderStyle() == LoadOrderStyle::AsteriskPluginsTxt);
+    const auto *fnv = GameAdapterRegistry::find("falloutnewvegas");
+    check("Fallout NV -> TimestampPluginsTxt style",
+          fnv && fnv->loadOrderStyle() == LoadOrderStyle::TimestampPluginsTxt);
+    const auto *fo3 = GameAdapterRegistry::find("fallout3");
+    check("Fallout 3 -> TimestampPluginsTxt + FalloutNV/Fallout3 config names",
+          fo3 && fo3->loadOrderStyle() == LoadOrderStyle::TimestampPluginsTxt
+              && fo3->localAppDataName() == QStringLiteral("Fallout3")
+              && fnv && fnv->localAppDataName() == QStringLiteral("FalloutNV"));
+
+    const auto *cyber = GameAdapterRegistry::find("cyberpunk2077");
+    check("unclassified game stays Unknown",
+          cyber && cyber->loadOrderStyle() == LoadOrderStyle::Unknown);
+
+    // Oblivion lists OBSE loaders, xOBSE first; unclassified games have none
+    check("Oblivion lists OBSE loaders, xOBSE first",
+          ob && ob->scriptExtenderLoaders().value(0) == QStringLiteral("xobse_loader.exe")
+             && ob->scriptExtenderLoaders().contains(QStringLiteral("obse_loader.exe")));
+    check("unclassified game has no script extender",
+          cyber && cyber->scriptExtenderLoaders().isEmpty());
+}
+} // namespace adapters_section
+
+static void run_game_adapters()
+{
+    std::cout << "=== GameAdapter registry tests ===\n";
+
+    adapters_section::testAllAdaptersHaveBasicIdentity();
+    adapters_section::testIdsAreUnique();
+    adapters_section::testFindLookup();
+    adapters_section::testHasLauncherDerivedFromLayouts();
+    adapters_section::testPinnedContainsOpenMW();
+    adapters_section::testBuiltinIsSubsetOfAll();
+    adapters_section::testLoadOrderClassification();
+}
+
+int main(int argc, char **argv)
+{
+    QCoreApplication app(argc, argv);
+
+    run_bethesda_deploy();
+    run_bethesda_loadorder();
+    run_bethesda_archives();
+    run_proton_paths();
+    run_game_adapters();
+
+    std::cout << "\n" << s_passed << " passed, " << s_failed << " failed\n";
+    return s_failed == 0 ? 0 : 1;
+}

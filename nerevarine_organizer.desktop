@@ -1,0 +1,14 @@
+#!/usr/bin/env xdg-open
+[Desktop Entry]
+Name=Nerevarine Organizer
+Comment=Mod manager for OpenMW (Morrowind)
+GenericName=Mod Manager
+Exec=nerevarine_organizer %u
+TryExec=nerevarine_organizer
+Icon=nerevarine_organizer
+Type=Application
+Categories=Game;Utility;
+MimeType=x-scheme-handler/nxm;x-scheme-handler/nxms;
+StartupNotify=true
+StartupWMClass=nerevarine_organizer
+Terminal=false

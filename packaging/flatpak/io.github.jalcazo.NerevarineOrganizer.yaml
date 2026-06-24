@@ -1,0 +1,80 @@
+# Flatpak manifest for Nerevarine Organizer.
+#
+# Build with:
+#   flatpak-builder --user --install --force-clean build-flatpak \
+#       packaging/flatpak/io.github.jalcazo.NerevarineOrganizer.yaml
+#
+# Run:
+#   flatpak run io.github.jalcazo.NerevarineOrganizer
+#
+# Uses the KDE Platform runtime (based on Qt 6) because the app is pure Qt6
+# Widgets.  qtkeychain is built as a module so API-key storage wires into the
+# freedesktop.secrets service (Flatpak portal exposes libsecret automatically).
+#
+# finish-args are intentionally conservative.  Review if adding a feature that
+# needs more access (e.g. USB, audio) rather than broadening home access
+# further.
+
+app-id: io.github.jalcazo.NerevarineOrganizer
+runtime: org.kde.Platform
+runtime-version: "6.7"
+sdk: org.kde.Sdk
+command: nerevarine_organizer
+
+finish-args:
+  # Standard GUI + network
+  - --share=ipc
+  - --share=network
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+
+  # Filesystem: user's home for mod folders + OpenMW config
+  # (Could be tightened to specific subpaths once the Mods Directory is
+  # finalised - for now full home keeps "Set Mods Directory…" flexible.)
+  - --filesystem=home
+  - --filesystem=xdg-config/openmw:rw
+  - --filesystem=xdg-data/openmw:rw
+
+  # Secret Service (for the Nexus API key via qtkeychain)
+  - --talk-name=org.freedesktop.secrets
+
+  # Launch external programs: OpenMW, LOOT, xdg-open, extractors
+  # (Flatpak sandbox blocks direct execs; --filesystem=host-os wouldn't help.
+  #  Use flatpak-spawn --host internally, or install LOOT/OpenMW as flatpaks.
+  #  This manifest relies on the host tools being flatpaks themselves;
+  #  see the README notes for packaging caveats.)
+  - --talk-name=org.freedesktop.Flatpak
+
+  # NXM protocol handler - registered via xdg-mime on host; portal passes
+  # the URL through so the app can receive nxm:// and nxms:// links.
+
+modules:
+  # qtkeychain - needed for secure API key storage.
+  - name: qtkeychain
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DBUILD_WITH_QT6=ON
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DBUILD_TEST_APPLICATION=OFF
+      - -DBUILD_TRANSLATIONS=OFF
+    sources:
+      - type: git
+        url: https://github.com/frankosterfeld/qtkeychain.git
+        tag: v0.15.0
+        commit: a8ec74fe3c4ef7cf2b1a95e70fd36a87e9f53e50
+    cleanup:
+      - /include
+      - /lib/cmake
+      - /lib/pkgconfig
+      - /share
+
+  - name: nerevarine_organizer
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DCMAKE_INSTALL_PREFIX=/app
+    sources:
+      - type: git
+        url: https://github.com/jalcazo/nerevarine_organizer.git
+        branch: main

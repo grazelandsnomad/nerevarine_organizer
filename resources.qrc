@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/">
+        <file>assets/icons/cystal_full_0.png</file>
+    </qresource>
+</RCC>
