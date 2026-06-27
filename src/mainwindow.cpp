@@ -502,6 +502,9 @@ MainWindow::MainWindow(QWidget *parent)
     QTimer::singleShot(800, this, &MainWindow::maybeShowLootMissingBanner);
     // First-run welcome. Deferred so the window paints before the modal grabs focus.
     QTimer::singleShot(300, this, &MainWindow::maybeShowFirstRunWizard);
+    // After that window: nag once if the archive extractors are missing (the
+    // helper self-gates on wizard-completed + a persisted "don't show again").
+    QTimer::singleShot(1200, this, &MainWindow::checkExtractorsAvailable);
 
     // Animation timer for "installing" spinner (120 ms ≈ 8 fps)
     m_animTimer = new QTimer(this);
@@ -1741,6 +1744,13 @@ void MainWindow::setupDownloadQueue()
             this, [this](const QString &msg, int t){
                 statusBar()->showMessage(msg, t);
             });
+    // 401 on a download-link request means the apikey is bad/expired (not a
+    // premium wall). Offer to open the key dialog instead of the "need Premium"
+    // loop the user would otherwise be stuck in.
+    connect(m_downloadQueue, &DownloadQueue::apiKeyRejected, this, [this]{
+        if (ui::confirm(this, T("api_key_invalid_title"), T("api_key_invalid_body")))
+            onSetApiKey();
+    });
 
     m_downloadQueue->setModsDir(m_modsDir);
     // Persist download-integrity diagnostics to a writable file so a corrupt-
@@ -2675,9 +2685,10 @@ void MainWindow::fetchModFiles(const QString &game, int modId, QListWidgetItem *
 void MainWindow::onFileListFetchFailed(QListWidgetItem *item, const QString &reason, int httpStatus)
 {
     m_autoPickMainItems.remove(item);
-    const QString msg = (httpStatus == 403)
-        ? T("nexus_api_error_link_403")
-        : T("nexus_api_error_link").arg(reason);
+    const QString msg =
+          (httpStatus == 401) ? T("nexus_api_error_link_401")
+        : (httpStatus == 403) ? T("nexus_api_error_link_403")
+        :                        T("nexus_api_error_link").arg(reason);
     ui::warn(this, T("nexus_api_error_title"), msg);
     statusBar()->showMessage(T("status_download_failed"), 4000);
 }
@@ -4607,16 +4618,31 @@ void MainWindow::onTuneSkyrimIni()
 void MainWindow::onSetApiKey()
 {
     bool ok;
-    QString key = QInputDialog::getText(
+    const QString raw = QInputDialog::getText(
         this, T("api_key_dialog_title"), T("api_key_dialog_prompt"),
         QLineEdit::Password, m_apiKey, &ok);
+    if (!ok) return;   // Cancel: leave the stored key untouched.
 
-    if (ok && !key.trimmed().isEmpty()) {
-        m_apiKey = key.trimmed();
-        saveApiKey(m_apiKey);
-        if (m_nexus) m_nexus->setApiKey(m_apiKey);
-        statusBar()->showMessage(T("status_api_key_saved"), 3000);
+    const QString key = raw.trimmed();
+    if (key.isEmpty()) {
+        // Empty field + OK == delete. (This used to be silently ignored, so the
+        // key could never be cleared - it resurrected on every reopen, forcing
+        // users to overwrite it with gibberish.)
+        if (m_apiKey.isEmpty()) return;   // nothing to remove
+        if (!ui::confirm(this, T("api_key_delete_title"), T("api_key_delete_confirm")))
+            return;
+        m_apiKey.clear();
+        deleteApiKey();
+        if (m_nexus) m_nexus->setApiKey(QString());
+        statusBar()->showMessage(T("status_api_key_removed"), 3000);
+        return;
     }
+
+    m_apiKey = key;
+    saveApiKey(m_apiKey);
+    if (m_nexus) m_nexus->setApiKey(m_apiKey);
+    statusBar()->showMessage(T("status_api_key_saved"), 3000);
+    validateApiKeyAndReport();   // confirm Nexus accepts it and report the tier
 }
 
 // API-key storage - prefers QKeychain (libsecret / KWallet / DPAPI),
@@ -4688,6 +4714,98 @@ void MainWindow::saveApiKey(const QString &key)
 #else
     Settings::setNexusApiKey(key);
 #endif
+}
+
+void MainWindow::deleteApiKey()
+{
+#ifdef HAVE_QTKEYCHAIN
+    auto *job = new QKeychain::DeletePasswordJob(kKeychainService, this);
+    job->setKey(kKeychainKey);
+    connect(job, &QKeychain::Job::finished, this, [job]{
+        // EntryNotFound just means there was nothing stored - not a failure.
+        if (job->error() != QKeychain::NoError
+            && job->error() != QKeychain::EntryNotFound) {
+            qCWarning(logging::lcApp, "Keychain delete failed: %s",
+                      qUtf8Printable(job->errorString()));
+        }
+        job->deleteLater();
+    });
+    job->start();
+#endif
+    // Always scrub the plain-text / legacy copy too: loadApiKey() re-migrates a
+    // leftover QSettings value into the keychain on the next launch, which would
+    // resurrect the key we just deleted.
+    Settings::removeNexusApiKey();
+}
+
+// Confirm the saved key is accepted and surface the account tier. Free accounts
+// are fine - they just have to use the website "Mod Manager Download" button -
+// so a free result is reported, not warned about. A direct NexusClient call
+// (not via NexusController): validate-user is account-global, with no
+// QListWidgetItem to key the controller's item-scoped signals on. Same
+// precedent as the dependency title-fetch above.
+void MainWindow::validateApiKeyAndReport()
+{
+    if (!m_nexus || m_apiKey.isEmpty()) return;
+    QNetworkReply *reply = m_nexus->requestValidateUser();
+    connect(reply, &QNetworkReply::finished, this, [this, reply]{
+        reply->deleteLater();
+        const int http =
+            reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (reply->error() != QNetworkReply::NoError) {
+            if (http == 401)
+                ui::warn(this, T("api_key_invalid_title"), T("api_key_invalid_body"));
+            else   // offline / transient: the key is saved, don't alarm
+                statusBar()->showMessage(T("status_api_key_unverified"), 4000);
+            return;
+        }
+        const auto u = NexusClient::parseValidateUser(reply->readAll());
+        if (!u) {
+            statusBar()->showMessage(T("status_api_key_unverified"), 4000);
+            return;
+        }
+        statusBar()->showMessage(u->isPremium ? T("status_api_key_verified_premium")
+                                              : T("status_api_key_verified_free"),
+                                 6000);
+    });
+}
+
+// One-time startup nag if the archive extractors are missing, so the user finds
+// out before a download fails mid-install with a confusing "could not launch
+// '7z'". Gated on the first-run wizard being done (don't stack on it) and a
+// persisted "don't show again".
+void MainWindow::checkExtractorsAvailable()
+{
+    if (!Settings::wizardCompleted() || Settings::skipExtractorCheck())
+        return;
+
+    // Resolve against the same PATH the real extraction uses: childEnvironment()
+    // is the system env outside an AppImage and the restored pre-AppImage env
+    // inside one, so a system-installed tool isn't missed under the bundle. An
+    // empty list makes findExecutable fall back to $PATH, which is the no-op
+    // (non-AppImage) case anyway.
+    const QStringList paths =
+        subprocess::childEnvironment().value(QStringLiteral("PATH"))
+            .split(QDir::listSeparator(), Qt::SkipEmptyParts);
+
+    QStringList missing;
+    for (const QString &prog : {QStringLiteral("7z"), QStringLiteral("unzip"),
+                                QStringLiteral("unrar")}) {
+        if (QStandardPaths::findExecutable(prog, paths).isEmpty())
+            missing << prog;
+    }
+    if (missing.isEmpty()) return;
+
+    QMessageBox box(this);
+    box.setIcon(QMessageBox::Warning);
+    box.setWindowTitle(T("extractor_missing_title"));
+    box.setText(T("extractor_missing_body").arg(missing.join(QStringLiteral(", "))));
+    box.addButton(QMessageBox::Ok);
+    QPushButton *dontAsk = box.addButton(T("extractor_missing_dismiss"),
+                                         QMessageBox::ActionRole);
+    box.exec();
+    if (box.clickedButton() == dontAsk)
+        Settings::setSkipExtractorCheck(true);
 }
 
 void MainWindow::onSetModsDir()

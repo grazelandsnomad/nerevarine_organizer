@@ -32,6 +32,7 @@ constexpr auto kPatchesDeclined     = "patches/declined";
 constexpr auto kGroundcoverApproved = "groundcover/approved";
 constexpr auto kWizardCompleted     = "wizard/completed";
 constexpr auto kSkipDesktopCheck    = "shortcuts/skipDesktopCheck";
+constexpr auto kExtractorCheckSkip  = "tools/skip_extractor_check";
 constexpr auto kShowAllGames        = "ui/showAllGames";
 constexpr auto kNexusApiKey         = "nexus/apikey";
 
@@ -463,6 +464,16 @@ void Settings::setShowAllGames(bool show)
 void Settings::setSkipDesktopCheck(bool skip)
 {
     QSettings().setValue(kSkipDesktopCheck, skip);
+}
+
+bool Settings::skipExtractorCheck()
+{
+    return QSettings().value(kExtractorCheckSkip, false).toBool();
+}
+
+void Settings::setSkipExtractorCheck(bool skip)
+{
+    QSettings().setValue(kExtractorCheckSkip, skip);
 }
 
 QString Settings::nexusApiKey()

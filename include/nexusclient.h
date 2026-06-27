@@ -50,6 +50,11 @@ public:
                                         const QString &key     = QString(),
                                         const QString &expires = QString());
 
+    // GET /v1/users/validate.json - confirms the apikey is accepted and returns
+    // the account's name + premium status. Sends only the apikey header; a bad
+    // key comes back as HTTP 401 (the reply error), not a parse failure.
+    QNetworkReply *requestValidateUser();
+
     // --- Pure parsers (testable without network) ---
     //
     // Parsers return std::expected<DTO, NexusError>. Distinct failure modes
@@ -93,6 +98,18 @@ public:
     // Top level must be a JSON object. Missing individual fields aren't an
     // error - they keep their defaults (Nexus omits optional fields).
     static std::expected<ModInfo, NexusError> parseModInfo(const QByteArray &json);
+
+    struct ValidatedUser {
+        qint64  userId      = 0;
+        QString name;
+        QString email;
+        bool    isPremium   = false;
+        bool    isSupporter = false;
+    };
+    // Top level must be a JSON object carrying "user_id"; a 200 error-envelope
+    // without it is MissingField("user_id"), so a rejected key never reads as a
+    // valid account. is_premium / is_supporter default to false when absent.
+    static std::expected<ValidatedUser, NexusError> parseValidateUser(const QByteArray &json);
 
     struct FileEntry {
         int     fileId   = 0;

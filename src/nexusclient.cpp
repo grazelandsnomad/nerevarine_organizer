@@ -76,6 +76,11 @@ QNetworkReply *NexusClient::requestDownloadLink(const QString &game, int modId, 
     return m_nam->get(req);
 }
 
+QNetworkReply *NexusClient::requestValidateUser()
+{
+    return buildGet(QStringLiteral("/v1/users/validate.json"));
+}
+
 QList<NexusClient::ChangelogEntry> NexusClient::parseChangelog(const QByteArray &json)
 {
     const QJsonObject obj = QJsonDocument::fromJson(json).object();
@@ -133,6 +138,30 @@ NexusClient::parseModInfo(const QByteArray &json)
     info.description      = obj["description"].toString();
     info.updatedTimestamp = obj["updated_timestamp"].toInteger();
     return info;
+}
+
+std::expected<NexusClient::ValidatedUser, NexusClient::NexusError>
+NexusClient::parseValidateUser(const QByteArray &json)
+{
+    QJsonParseError err{};
+    const QJsonDocument doc = QJsonDocument::fromJson(json, &err);
+    if (err.error != QJsonParseError::NoError || doc.isNull())
+        return std::unexpected(NexusError{NexusError::Kind::InvalidJson, {}});
+    if (!doc.isObject())
+        return std::unexpected(NexusError{NexusError::Kind::WrongShape, {}});
+
+    const QJsonObject obj = doc.object();
+    if (!obj.contains("user_id"))
+        return std::unexpected(NexusError{NexusError::Kind::MissingField,
+                                          QStringLiteral("user_id")});
+
+    ValidatedUser u;
+    u.userId      = obj["user_id"].toVariant().toLongLong();
+    u.name        = obj["name"].toString().trimmed();
+    u.email       = obj["email"].toString();
+    u.isPremium   = obj["is_premium"].toBool();
+    u.isSupporter = obj["is_supporter"].toBool();
+    return u;
 }
 
 std::expected<QList<NexusClient::FileEntry>, NexusClient::NexusError>

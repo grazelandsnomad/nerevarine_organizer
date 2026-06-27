@@ -251,6 +251,69 @@ static void testDownloadUri()
     }
 }
 
+static void testValidateUser()
+{
+    using K = NexusClient::NexusError::Kind;
+    std::cout << "\nparseValidateUser:\n";
+
+    // /v1/users/validate.json shape - premium account.
+    {
+        QByteArray json = R"({
+            "user_id": 1234,
+            "key": "abc",
+            "name": "  Nerevar  ",
+            "email": "nerevar@example.com",
+            "is_premium": true,
+            "is_supporter": false
+        })";
+        const auto u = NexusClient::parseValidateUser(json);
+        check("premium - parsed OK", u.has_value(),
+              u ? QString() : u.error().toString());
+        check("premium - user_id",        u && u->userId == 1234);
+        check("premium - name trimmed",   u && u->name == "Nerevar",
+              u ? u->name : u.error().toString());
+        check("premium - email extracted", u && u->email == "nerevar@example.com");
+        check("premium - isPremium true",  u && u->isPremium);
+    }
+
+    // Free account: is_premium false, fields still parse.
+    {
+        QByteArray json = R"({"user_id": 5, "name": "Free", "is_premium": false})";
+        const auto u = NexusClient::parseValidateUser(json);
+        check("free - parsed OK",       u.has_value(),
+              u ? QString() : u.error().toString());
+        check("free - isPremium false", u && !u->isPremium);
+    }
+
+    // A 200 error-envelope without user_id must NOT read as a valid account.
+    {
+        const auto u = NexusClient::parseValidateUser(
+            R"({"message":"Please provide a valid API Key"})");
+        check("no user_id → MissingField(user_id)",
+              !u && u.error().kind == K::MissingField
+                 && u.error().detail == QStringLiteral("user_id"),
+              u ? QString() : u.error().toString());
+    }
+    {
+        const auto u = NexusClient::parseValidateUser("{}");
+        check("empty object → MissingField(user_id)",
+              !u && u.error().kind == K::MissingField,
+              u ? QString() : u.error().toString());
+    }
+    {
+        const auto u = NexusClient::parseValidateUser("not json");
+        check("garbage → InvalidJson",
+              !u && u.error().kind == K::InvalidJson,
+              u ? QString() : u.error().toString());
+    }
+    {
+        const auto u = NexusClient::parseValidateUser("[]");
+        check("array → WrongShape",
+              !u && u.error().kind == K::WrongShape,
+              u ? QString() : u.error().toString());
+    }
+}
+
 static void run_nexus_client()
 {
     std::cout << "=== nexus_client tests ===\n";
@@ -258,6 +321,7 @@ static void run_nexus_client()
     testModInfo();
     testFilesList();
     testDownloadUri();
+    testValidateUser();
 }
 
 using deps::ModEntry;

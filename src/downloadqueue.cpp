@@ -128,6 +128,22 @@ void DownloadQueue::fetchDownloadLink(const QString &game, int modId, int fileId
             [this, reply, placeholder, game, modId, fileId]() {
         reply->deleteLater();
 
+        // Drop the placeholder out of its "installing" spinner so retry-Install
+        // or a manual drag-drop both work again. Shared by the premium-fallback
+        // and the bad-key (401) paths below.
+        auto resetPlaceholder = [&]() {
+            if (!placeholder) return;
+            placeholder->setData(ModRole::InstallStatus, 0);
+            placeholder->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
+                                  Qt::ItemIsDragEnabled |
+                                  Qt::ItemIsUserCheckable);
+            QString name = placeholder->data(ModRole::CustomName).toString();
+            if (name.isEmpty()) name = placeholder->text();
+            if (name.startsWith(QStringLiteral("⠋ "))) name = name.mid(2);
+            placeholder->setText(name);
+            emit saveRequested();
+        };
+
         // /download_link.json is Premium-only. Free accounts must click
         // "Mod Manager Download" on the site, which fires an nxm:// URL with a
         // short-lived signed key+expires we resubmit here. So on API rejection
@@ -168,23 +184,22 @@ void DownloadQueue::fetchDownloadLink(const QString &game, int modId, int fileId
             if (placeholder) m_manualDlBoxes.insert(placeholder, dlg);
             dlg->show();
 
-            // drop the "installing" spinner so retry-Install or manual-drop both work
-            if (placeholder) {
-                placeholder->setData(ModRole::InstallStatus, 0);
-                placeholder->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
-                                      Qt::ItemIsDragEnabled |
-                                      Qt::ItemIsUserCheckable);
-                QString name = placeholder->data(ModRole::CustomName).toString();
-                if (name.isEmpty()) name = placeholder->text();
-                if (name.startsWith(QStringLiteral("⠋ "))) name = name.mid(2);
-                placeholder->setText(name);
-                emit saveRequested();
-            }
+            resetPlaceholder();
             emit statusMessage(T("manual_dl_status"), 6000);
         };
 
         const QByteArray body = reply->readAll();
+        const int httpStatus =
+            reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         if (reply->error() != QNetworkReply::NoError) {
+            if (httpStatus == 401) {
+                // Bad or expired apikey. Even the free nxm:// flow sends the key
+                // in the header, so this is NOT a premium wall - steer the user
+                // to fix the key instead of looping on "need Premium".
+                resetPlaceholder();
+                emit apiKeyRejected();
+                return;
+            }
             offerManualFallback();
             return;
         }

@@ -495,6 +495,9 @@ private:
     // available. See impls for the fallback when keychain isn't linked.
     void loadApiKey();
     void saveApiKey(const QString &key);
+    void deleteApiKey();            // scrub the key from keychain + QSettings
+    void validateApiKeyAndReport(); // GET validate.json; report premium/free/rejected
+    void checkExtractorsAvailable();// one-time startup nag if 7z/unzip/unrar absent
     // Convenience mirrors of the current game profile's fields.
     QString                m_modsDir;
     QString                m_openmwPath;

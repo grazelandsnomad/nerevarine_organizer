@@ -110,6 +110,12 @@ signals:
     // until replaced.
     void statusMessage(const QString &msg, int timeoutMs = 0);
 
+    // Nexus rejected the apikey (HTTP 401) on a download-link request. Distinct
+    // from the premium-required fallback: the key itself is bad/expired, not the
+    // account tier - even the free nxm:// flow needs a valid key. MainWindow
+    // offers to open the API-key dialog instead of the "need Premium" loop.
+    void apiKeyRejected();
+
 private slots:
     void onQueuePauseToggled();
     void onQueueRowsMoved(const QModelIndex &srcParent, int srcStart, int srcEnd,

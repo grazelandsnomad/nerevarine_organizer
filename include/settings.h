@@ -138,6 +138,12 @@ struct Settings {
     static bool    skipDesktopCheck();
     static void    setSkipDesktopCheck(bool skip);
 
+    // -- Archive-tool startup check suppression ---
+    // Set when the user dismisses the "missing 7z/unzip/unrar" notice with
+    // "don't show again".
+    static bool    skipExtractorCheck();
+    static void    setSkipExtractorCheck(bool skip);
+
     // -- Experimental "show all games" toggle ---
     // 0.4 dropdown shows only OpenMW + FNV (the tested install/launch
     // paths). This unhides Skyrim / Oblivion / FO4 / etc. Default false
