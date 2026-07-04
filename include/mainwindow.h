@@ -76,7 +76,7 @@ private slots:
     void onCheckUpdates();
     void onCheckUpdatesFinished(int foundCount);
     void onTitleFetched(QListWidgetItem *item, const QString &name);
-    void onExpectedChecksumFetched(QListWidgetItem *item,
+    void onExpectedChecksumFetched(QListWidgetItem *item, const QString &fileName,
                                    const QString &md5, qint64 sizeBytes);
     void onFileListFetched(QListWidgetItem *item,
                            const QString &game, int modId,

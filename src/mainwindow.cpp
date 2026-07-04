@@ -18,6 +18,7 @@
 #include "bethesda_archives.h"
 #include "proton_paths.h"
 #include "extract_errors.h"
+#include "archive_magic.h"
 #include "installcontroller.h"
 #include "install_layout.h"
 #include "modlist_model.h"
@@ -1860,6 +1861,7 @@ void MainWindow::onArchiveVerificationFailed(const QString &archivePath,
         placeholder->setData(ModRole::DownloadProgress, QVariant());
         placeholder->setData(ModRole::ExpectedMd5,      QVariant());
         placeholder->setData(ModRole::ExpectedSize,     QVariant());
+        placeholder->setData(ModRole::NexusFileName,    QVariant());
         placeholder->setData(ModRole::InstallToken,     QVariant());
         placeholder_state::restoreInteractiveFlags(placeholder);
         // Restore the display name, stripping the "⠋ installing…" prefix.
@@ -1954,7 +1956,33 @@ MainWindow::extractAndAdd(const QString &archivePath, QListWidgetItem *placehold
     QString looseHint = placeholder->data(ModRole::NexusTitle).toString().trimmed();
     if (looseHint.isEmpty())
         looseHint = placeholder->data(ModRole::CustomName).toString().trimmed();
-    m_installCtl->extractArchive(archivePath, m_modsDir, token, reuseHint, looseHint);
+
+    // A CDN download can land under a bare, extensionless id. Give it its real
+    // name before extracting so the mod FOLDER (named after the archive
+    // basename) comes out proper and stable - routing itself is already
+    // magic-based and correct either way. Only touch a file we staged inside
+    // modsDir (never a user's dragged-in file elsewhere), prefer the
+    // authoritative Nexus files.json name, and keep it best-effort: a rename
+    // must never block an otherwise-good install.
+    QString effectivePath = archivePath;
+    if (QFileInfo(archivePath).absolutePath() == QDir(m_modsDir).absolutePath()) {
+        QByteArray header;
+        if (QFile hf(archivePath); hf.open(QIODevice::ReadOnly))
+            header = hf.read(16);
+        const QString currentName = QFileInfo(archivePath).fileName();
+        const QString corrected = archive_magic::archiveFileName(
+            currentName,
+            placeholder->data(ModRole::NexusFileName).toString().trimmed(),
+            archive_magic::sniff(header));
+        if (corrected != currentName) {
+            const QString target = QDir(m_modsDir).filePath(corrected);
+            if (!QFileInfo::exists(target) && QFile::rename(archivePath, target))
+                effectivePath = target;
+        }
+    }
+    placeholder->setData(ModRole::NexusFileName, QVariant());  // consumed
+
+    m_installCtl->extractArchive(effectivePath, m_modsDir, token, reuseHint, looseHint);
     return {};
 }
 
@@ -1968,10 +1996,16 @@ void MainWindow::onExtractionFailed(const QString &archivePath,
     const QFileInfo fi(archivePath);
     const bool missing = (kind == InstallController::ExtractFailKind::ProgramMissing);
 
-    // Route via the pure, unit-tested helper.  Downloads are staged under a bare
-    // token UUID with no extension, so a nonzero exit must NOT fall back to a
-    // "7z is missing" message - a nonzero exit proves the extractor ran.
-    const QString key = extract_errors::failureKey(missing, detail, fi.suffix().toLower());
+    // Route via the pure, unit-tested helper. Sniff the container from the bytes
+    // (the archive still exists; it's removed below) rather than the extension -
+    // downloads stage under a bare token UUID with none, so a failed RAR still
+    // gets the unrar/p7zip message and a nonzero exit never blames a missing 7z.
+    archive_magic::Format fmt = archive_magic::Format::Unknown;
+    {
+        QFile hf(archivePath);
+        if (hf.open(QIODevice::ReadOnly)) fmt = archive_magic::sniff(hf.read(16));
+    }
+    const QString key = extract_errors::failureKey(missing, detail, fmt);
     QString body;
     if (key == QLatin1String("extraction_error_no_program"))
         body = T(key).arg(detail);                             // %1 = program name
@@ -2360,12 +2394,13 @@ void MainWindow::fetchNexusTitle(const QString &game, int modId, QListWidgetItem
     m_nexusCtl->fetchModTitle(item, game, modId);
 }
 
-void MainWindow::onExpectedChecksumFetched(QListWidgetItem *item,
+void MainWindow::onExpectedChecksumFetched(QListWidgetItem *item, const QString &fileName,
                                             const QString &md5, qint64 sizeBytes)
 {
     if (!m_modList->indexFromItem(item).isValid()) return;
-    if (!md5.isEmpty())  item->setData(ModRole::ExpectedMd5,  md5);
-    if (sizeBytes > 0)   item->setData(ModRole::ExpectedSize, sizeBytes);
+    if (!fileName.isEmpty()) item->setData(ModRole::NexusFileName, fileName);
+    if (!md5.isEmpty())      item->setData(ModRole::ExpectedMd5,  md5);
+    if (sizeBytes > 0)       item->setData(ModRole::ExpectedSize, sizeBytes);
 }
 
 // Removes not-installed, path-less placeholders whose NexusUrl or CustomName
@@ -2712,8 +2747,9 @@ void MainWindow::onFileListFetched(QListWidgetItem *item,
     }
 
     auto stashChecksum = [](QListWidgetItem *ph, const NexusClient::FileEntry &f) {
-        if (!f.md5.isEmpty()) ph->setData(ModRole::ExpectedMd5,  f.md5);
-        if (f.sizeBytes > 0)  ph->setData(ModRole::ExpectedSize, f.sizeBytes);
+        if (!f.name.isEmpty()) ph->setData(ModRole::NexusFileName, f.name);
+        if (!f.md5.isEmpty())  ph->setData(ModRole::ExpectedMd5,  f.md5);
+        if (f.sizeBytes > 0)   ph->setData(ModRole::ExpectedSize, f.sizeBytes);
     };
 
     // Engine-aware default: Nexus mods often ship parallel MWSE/MGE XE and

@@ -214,9 +214,11 @@ void InstallController::extractArchive(const QString &archivePath,
         return;
     }
 
-    // For .rar, try unrar first (RAR5/solid) then fall back to 7z's RAR codec.
-    // unrar-free fails on RAR5, and many distros ship it as the system unrar.
-    const QString ext = fi.suffix().toLower();
+    // Route by the container we SNIFFED, not the file extension: CDN downloads
+    // frequently land under a bare, extensionless id, and a .rar sent to 7z-only
+    // dies with exit 2 (p7zip can't extract RAR5 on many distros). For RAR we
+    // try unrar first (RAR5/solid) then fall back to 7z's RAR codec.
+    const archive_magic::Format fmt = archive_magic::sniff(header);
 
     // Launch a process; false if it couldn't start.
     auto launch = [this](QProcess *p, const QString &prog,
@@ -225,7 +227,7 @@ void InstallController::extractArchive(const QString &archivePath,
         return p->waitForStarted(3000);
     };
 
-    if (ext == QStringLiteral("zip")) {
+    if (fmt == archive_magic::Format::Zip) {
         auto *proc = new QProcess(this);
         connect(proc, &QProcess::finished, this,
                 [this, proc, archivePath, extractDir, installToken, emitSuccess]
@@ -248,7 +250,7 @@ void InstallController::extractArchive(const QString &archivePath,
                                   ExtractFailKind::ProgramMissing, "unzip");
         }
 
-    } else if (ext == QStringLiteral("rar")) {
+    } else if (fmt == archive_magic::Format::Rar) {
         auto trySevenZ = [this, archivePath, extractDir, installToken,
                           emitSuccess]() {
             auto *p2 = new QProcess(this);

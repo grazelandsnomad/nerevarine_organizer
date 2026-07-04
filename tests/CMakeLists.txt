@@ -153,6 +153,15 @@ add_executable(test_mods
 target_include_directories(test_mods PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(test_mods PRIVATE Qt6::Core Qt6::Gui)
 
+# Archive magic sniffing + extractor error-message routing (both pure, moc-free).
+add_executable(test_extract
+    test_extract.cpp
+    ${CMAKE_SOURCE_DIR}/src/archive_magic.cpp
+    ${CMAKE_SOURCE_DIR}/src/extract_errors.cpp
+)
+target_include_directories(test_extract PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(test_extract PRIVATE Qt6::Core)
+
 # CTest registration. "unit" = hermetic; test_nxm also carries an "integration"
 # variant gated on NEREVARINE_SKIP_INTEGRATION.
 set(UNIT_TESTS
@@ -167,6 +176,7 @@ set(UNIT_TESTS
     test_fs
     test_settings
     test_mods
+    test_extract
 )
 
 foreach(t ${UNIT_TESTS})

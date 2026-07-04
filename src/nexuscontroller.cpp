@@ -91,7 +91,7 @@ void NexusController::fetchExpectedChecksum(QListWidgetItem *item,
         if (!files) return;
         for (const auto &f : *files) {
             if (f.fileId != fileId) continue;
-            emit expectedChecksumFetched(item, f.md5, f.sizeBytes);
+            emit expectedChecksumFetched(item, f.name, f.md5, f.sizeBytes);
             return;
         }
     });

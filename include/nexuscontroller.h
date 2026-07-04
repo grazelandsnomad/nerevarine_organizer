@@ -45,10 +45,11 @@ public:
     // No-op without an API key.
     void fetchModTitle(QListWidgetItem *item, const QString &game, int modId);
 
-    // Pre-fetch md5 + size_in_bytes so post-download verify has something to
-    // compare. Runs alongside the download. Success ->
-    // expectedChecksumFetched(item, md5, sizeBytes); errors/missing fields
-    // silent (download still completes, verify just checks less).
+    // Pre-fetch the file's name + md5 + size_in_bytes so post-download verify
+    // has something to compare and the staged file can be given its real name.
+    // Runs alongside the download. Success ->
+    // expectedChecksumFetched(item, fileName, md5, sizeBytes); errors/missing
+    // fields silent (download still completes, verify just checks less).
     void fetchExpectedChecksum(QListWidgetItem *item, const QString &game,
                                int modId, int fileId);
 
@@ -75,7 +76,7 @@ signals:
     void updateFoundForItem(QListWidgetItem *item);
     void checkUpdatesFinished(int foundCount);
     void titleFetched(QListWidgetItem *item, const QString &name);
-    void expectedChecksumFetched(QListWidgetItem *item,
+    void expectedChecksumFetched(QListWidgetItem *item, const QString &fileName,
                                  const QString &md5, qint64 sizeBytes);
     void fileListFetched(QListWidgetItem *item, const QString &game, int modId,
                          const QList<NexusClient::FileEntry> &files);

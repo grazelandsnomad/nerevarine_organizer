@@ -74,6 +74,12 @@ namespace ModRole {
     // Lets a re-install pre-tick the same packages instead of all, and copies
     // when a mod is shared into another profile. Empty for non-BAIN mods.
     constexpr int BainChoices           = Qt::UserRole + 40; // QString
+    // Authoritative archive filename from the Nexus files.json "name" (e.g.
+    // "Mod Name-1234-1-0-1700000000.7z"). Set when the file metadata resolves;
+    // consumed at the verify->extract handoff to rename a bare, extensionless
+    // CDN download so the mod folder gets a real, stable name. Transient - not
+    // persisted; cleared once consumed or on verify failure.
+    constexpr int NexusFileName         = Qt::UserRole + 41; // QString
 }
 
 namespace ItemType {

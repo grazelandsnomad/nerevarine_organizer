@@ -50,9 +50,10 @@ public:
     void verifyArchive(const QString &archivePath, const QUuid &installToken,
                        const QString &expectedMd5Lower, qint64 expectedSize);
 
-    // Spawn the extractor for archivePath's extension (unzip / unrar / 7z;
-    // .fomod and unknown fall to 7z, which sniffs the real container). Dest is
-    // a dir under modsDir named after the archive basename.
+    // Spawn the extractor chosen by the archive's sniffed magic bytes, NOT its
+    // file extension (a bare extensionless CDN download still routes correctly):
+    // zip -> unzip, rar -> unrar then 7z, everything else -> 7z. Dest is a dir
+    // under modsDir named after the archive basename.
     //
     // reuseHintPath (optional) - an existing install for this placeholder,
     // usually the current ModPath. When it lives under modsDir in a top-level
