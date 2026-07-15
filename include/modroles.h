@@ -80,6 +80,13 @@ namespace ModRole {
     // CDN download so the mod folder gets a real, stable name. Transient - not
     // persisted; cleared once consumed or on verify failure.
     constexpr int NexusFileName         = Qt::UserRole + 41; // QString
+    // Transient: the row's canonical (saved) position 0..n-1, stamped on every
+    // row when a temporary view sort begins (Sort by Size / Date). Lets the
+    // persistence walks emit the real saved order while the display is sorted.
+    // Invalid/unset on rows that were never stamped (added mid-sort) and cleared
+    // when the view sort is reset or a deliberate reorder commits. Never
+    // serialized.
+    constexpr int SortAnchor            = Qt::UserRole + 42; // qint64
 }
 
 namespace ItemType {

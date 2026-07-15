@@ -23,8 +23,16 @@ public:
     void showWithLink(const QString &msg, const QString &bgColor,
                       const QString &url, const QString &kind = QString());
 
+    // Persistent banner (no 7s auto-dismiss) for an ongoing state the user must
+    // be able to see and undo - e.g. a temporary view sort. A left-click emits
+    // stickyClicked() and hides it. Stays up until hideSticky() or a click.
+    void showSticky(const QString &msg, const QString &bgColor);
+    void hideSticky();
+
 signals:
     void statusMessage(const QString &msg, int timeoutMs);
+    // Emitted when a sticky banner (showSticky) is clicked.
+    void stickyClicked();
 
 protected:
     bool eventFilter(QObject *obj, QEvent *event) override;

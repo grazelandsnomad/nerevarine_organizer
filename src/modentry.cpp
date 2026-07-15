@@ -7,6 +7,9 @@
 
 #include "modentry.h"
 
+#include <algorithm>
+#include <limits>
+
 bool lessByDisplayName(const ModEntry &a, const ModEntry &b)
 {
     // Separators always trail mods.  Relative order among separators is
@@ -45,4 +48,22 @@ bool lessByModSize(const ModEntry &a, const ModEntry &b)
     if (a.modSize <= 0) return false;
     if (b.modSize <= 0) return true;
     return a.modSize < b.modSize;
+}
+
+QList<int> canonicalOrderFromAnchors(const QList<qint64> &anchors)
+{
+    QList<int> order;
+    order.reserve(anchors.size());
+    for (int i = 0; i < anchors.size(); ++i)
+        order.append(i);
+
+    // stable_sort so unstamped rows (key == max) keep their relative order at
+    // the end, and equal anchors (shouldn't happen for stamped rows) are stable.
+    constexpr qint64 kLast = std::numeric_limits<qint64>::max();
+    std::stable_sort(order.begin(), order.end(), [&anchors](int a, int b) {
+        const qint64 ka = anchors[a] < 0 ? kLast : anchors[a];
+        const qint64 kb = anchors[b] < 0 ? kLast : anchors[b];
+        return ka < kb;
+    });
+    return order;
 }

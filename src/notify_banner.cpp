@@ -46,13 +46,37 @@ void NotifyBanner::showWithLink(const QString &msg, const QString &bgColor,
     m_label->setProperty("nerev_banner_kind", kind);
 }
 
+void NotifyBanner::showSticky(const QString &msg, const QString &bgColor)
+{
+    // Same look as show() but NO auto-dismiss timer: the banner reflects an
+    // ongoing state (a temporary view sort) and must persist until reset.
+    m_label->setText(msg);
+    m_label->setStyleSheet(
+        QString("background-color: %1; color: white;"
+                " font-weight: bold; font-size: 10pt;"
+                " padding: 6px 12px; border-radius: 0px;")
+            .arg(bgColor));
+    m_label->setCursor(Qt::PointingHandCursor);
+    m_label->setProperty("nerev_banner_url",  QVariant());
+    m_label->setProperty("nerev_banner_kind", QStringLiteral("sticky"));
+    m_label->show();
+}
+
+void NotifyBanner::hideSticky()
+{
+    if (m_label->property("nerev_banner_kind").toString() == QStringLiteral("sticky"))
+        m_label->hide();
+}
+
 bool NotifyBanner::eventFilter(QObject *obj, QEvent *event)
 {
     if (obj == m_label && event->type() == QEvent::MouseButtonRelease) {
         auto *me = static_cast<QMouseEvent *>(event);
         QVariant urlVar  = m_label->property("nerev_banner_url");
         QVariant kindVar = m_label->property("nerev_banner_kind");
-        if (me->button() == Qt::RightButton && kindVar.toString() == "loot_missing") {
+        if (kindVar.toString() == "sticky") {
+            emit stickyClicked();
+        } else if (me->button() == Qt::RightButton && kindVar.toString() == "loot_missing") {
             Settings::setLootBannerDisabled(true);
             emit statusMessage(T("loot_banner_suppressed"), 4000);
         } else if (urlVar.isValid() && !urlVar.toString().isEmpty()) {

@@ -20,6 +20,7 @@
 #include "installcontroller.h"   // for InstallController::VerifyFailKind in slot
 #include "nexusclient.h"
 #include "game_profiles.h"
+#include "modentry.h"            // ModEntry complete type: QList<ModEntry> by value below
 
 class QAction;
 class QCloseEvent;
@@ -35,7 +36,6 @@ class QTimer;
 class QToolButton;
 class QWidget;
 class ModListDelegate;
-struct ModEntry;
 class LoadOrderController;
 class NexusClient;
 class NexusController;
@@ -127,6 +127,20 @@ private slots:
     void onSortByDate();
     void onSortBySize();
     void onSortSeparators();
+    // Sort by Size / Date is a TEMPORARY view sort: it reorders only the
+    // display, never the saved load order. enterViewSort() stamps each row's
+    // current (saved) position into ModRole::SortAnchor once and flags the lens
+    // active; every persistence walk then goes through rowOrderForPersist() so
+    // what's written to disk stays in the saved order. The lens ends via
+    // resetToSavedOrder() (restore the saved order to the display) or
+    // dropViewSortKeepingOrder() (a deliberate reorder commits the current
+    // display as the new saved order).
+    void enterViewSort();
+    void resetToSavedOrder();
+    void dropViewSortKeepingOrder();
+    void clearViewSortState();   // cosmetic reset on list rebuild (banner + flag)
+    QList<int> rowOrderForPersist() const;
+    QList<ModEntry> snapshotEntriesForPersist() const;
     void onInspectOpenMWSetup();
     void onInspectConflicts();
     void onDeployBethesda();        // experimental: link enabled mods into a Bethesda game's Data/
@@ -489,6 +503,9 @@ private:
     bool                   m_dateSortAsc  = true;
     QPushButton           *m_sizeSortBtn  = nullptr;
     bool                   m_sizeSortAsc  = false; // biggest-first finds "GB offenders"
+    // True while a temporary Size/Date view sort is layered over the saved
+    // order. Drives rowOrderForPersist() so saves never write the sorted order.
+    bool                   m_viewSortActive = false;
     QString                m_apiKey;
     // API-key persistence - prefers QKeychain (libsecret/KWallet/DPAPI),
     // migrates from old QSettings storage on first run when keychain is

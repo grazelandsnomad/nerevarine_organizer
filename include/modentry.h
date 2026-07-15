@@ -108,4 +108,12 @@ bool lessByDateAdded(const ModEntry &a, const ModEntry &b);
 // Ascending by modSize; zero/unknown last.
 bool lessByModSize(const ModEntry &a, const ModEntry &b);
 
+// Row indices in canonical (saved) order given each row's SortAnchor stamp.
+// `anchors[i]` is row i's stamped saved position, or < 0 if it was never
+// stamped (e.g. a mod added while a temporary view sort was active). Returns a
+// stable permutation: stamped rows by ascending anchor, unstamped rows last in
+// their original relative order. Pure - lets the "view sort" persistence walks
+// reproduce the saved order without touching any widget.
+[[nodiscard]] QList<int> canonicalOrderFromAnchors(const QList<qint64> &anchors);
+
 #endif // MODENTRY_H

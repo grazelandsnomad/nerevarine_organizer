@@ -738,6 +738,8 @@ void MainWindow::setupMenuBar()
     modsMenu->addAction(T("menu_sort_date_desc"), this, [this]{ m_dateSortAsc = false; onSortByDate(); });
     modsMenu->addAction(T("menu_sort_size_desc"), this, [this]{ m_sizeSortAsc = false; onSortBySize(); });
     modsMenu->addAction(T("menu_sort_size_asc"),  this, [this]{ m_sizeSortAsc = true;  onSortBySize(); });
+    // Undo a temporary Size/Date view sort (no-op when none is active).
+    modsMenu->addAction(T("menu_reset_order"), this, [this]{ resetToSavedOrder(); });
     modsMenu->addSeparator();
     // Hidden for profiles LOOT doesn't support, matching the toolbar button's
     // per-profile visibility.
@@ -1278,6 +1280,9 @@ void MainWindow::setupCentralWidget()
             this, [this]() { if (!m_undoStack->isApplyingState()) m_undoStack->pushUndo(); });
     connect(m_modList->model(), &QAbstractItemModel::rowsMoved,
             this, [this]() {
+        // A drag-drop reorder commits the current display as the saved order,
+        // ending any temporary view sort.
+        dropViewSortKeepingOrder();
         // Debounced - a multi-row drag fires N rowsMoved signals; coalescing
         // avoids the N×waitForFinished stall on the m_lastSaveFuture chain.
         scheduleSaveModList();
@@ -1322,6 +1327,9 @@ void MainWindow::setupCentralWidget()
             this, [this](const QString &msg, int ms) {
         statusBar()->showMessage(msg, ms);
     });
+    // Clicking the "temporary view sort" banner restores the saved order.
+    connect(m_notify, &NotifyBanner::stickyClicked,
+            this, &MainWindow::resetToSavedOrder);
 
     m_filterBar = new FilterBar(m_modList, this);
 
@@ -3674,6 +3682,7 @@ void MainWindow::onMoveUp()
 {
     int row = m_modList->currentRow();
     if (row <= 0) return;
+    dropViewSortKeepingOrder();   // a manual move commits the current display as saved order
     m_undoStack->pushUndo();
     auto *item = m_modList->takeItem(row);
     m_modList->insertItem(row - 1, item);
@@ -3685,6 +3694,7 @@ void MainWindow::onMoveDown()
 {
     int row = m_modList->currentRow();
     if (row < 0 || row >= m_modList->count() - 1) return;
+    dropViewSortKeepingOrder();   // a manual move commits the current display as saved order
     m_undoStack->pushUndo();
     auto *item = m_modList->takeItem(row);
     m_modList->insertItem(row + 1, item);
@@ -5096,8 +5106,11 @@ void MainWindow::reconcileLoadOrder()
     // existing list in a predictable position; the topo pass below will
     // lift their masters above any dependents.
     QSet<QString> inList(m_loadOrder.begin(), m_loadOrder.end());
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *item = m_modList->item(i);
+    // Saved order (identity unless a temporary view sort is active) so newly
+    // discovered plugins append in load-order position, never the sorted display.
+    const QList<int> loOrder = rowOrderForPersist();
+    for (int oi = 0; oi < loOrder.size(); ++oi) {
+        auto *item = m_modList->item(loOrder[oi]);
         if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
         if (item->data(ModRole::InstallStatus).toInt() != 1) continue;
         QString modPath = item->data(ModRole::ModPath).toString();
@@ -5464,7 +5477,10 @@ void MainWindow::saveModList()
     // schema-versioned JSONL serializer.  Mid-install placeholders that
     // have nothing useful to persist (no NexusUrl) are dropped here so
     // the v2 file doesn't carry garbage rows; matches v1 behaviour.
-    QList<ModEntry> entries = modlist::snapshotEntries(m_modList);
+    // snapshotEntriesForPersist walks rows in saved order, so a temporary
+    // Size/Date view sort never rewrites the modlist file (identity walk when
+    // no view sort is active).
+    QList<ModEntry> entries = snapshotEntriesForPersist();
     for (int i = entries.size() - 1; i >= 0; --i) {
         const ModEntry &e = entries[i];
         if (e.isMod() && e.installStatus == 2 && e.nexusUrl.isEmpty()) {
@@ -8024,6 +8040,9 @@ void MainWindow::onSortSeparators()
     auto newOrder = modlist_sort::showReorderSeparatorsDialog(this, m_modList);
     if (newOrder.isEmpty()) return;
 
+    // A deliberate structural reorder commits the current display as the new
+    // saved order (clears any temporary view sort without restoring it).
+    dropViewSortKeepingOrder();
     m_undoStack->pushUndo();
 
     // Detach all items, then re-add in the new order. Pointers stay valid.
@@ -8035,16 +8054,141 @@ void MainWindow::onSortSeparators()
     scheduleConflictScan();
 }
 
+// --- Temporary "view sort" (Sort by Size / Date) ------------------------------
+// These sorts reorder only what's on screen; the saved load order is preserved.
+// Each row's saved position is stamped into ModRole::SortAnchor when the lens
+// opens, and every persistence walk (saveModList, syncOpenMWConfig,
+// reconcileLoadOrder, exportModList) iterates rowOrderForPersist() so the disk
+// state always reflects the saved order, not the sorted display.
+
+QList<int> MainWindow::rowOrderForPersist() const
+{
+    // Source of truth is the per-row SortAnchor stamp, NOT m_viewSortActive, so
+    // persistence stays correct even if the flag is briefly stale (e.g. a list
+    // rebuild after a profile switch left it set). No stamps present -> identity,
+    // the common case with no view sort active.
+    const int n = m_modList->count();
+    QList<qint64> anchors;
+    anchors.reserve(n);
+    bool anyStamped = false;
+    for (int i = 0; i < n; ++i) {
+        const QVariant v = m_modList->item(i)->data(ModRole::SortAnchor);
+        if (v.isValid()) { anchors.append(v.toLongLong()); anyStamped = true; }
+        else             { anchors.append(-1); }
+    }
+    if (!anyStamped) {
+        QList<int> identity;
+        identity.reserve(n);
+        for (int i = 0; i < n; ++i) identity.append(i);
+        return identity;
+    }
+    return canonicalOrderFromAnchors(anchors);
+}
+
+void MainWindow::clearViewSortState()
+{
+    // Cosmetic reset for list rebuilds (load / profile switch / new): drop the
+    // banner + flag. Correctness doesn't depend on this - the rebuilt rows carry
+    // no SortAnchor stamps, so rowOrderForPersist already returns identity.
+    m_viewSortActive = false;
+    if (m_notify) m_notify->hideSticky();
+}
+
+QList<ModEntry> MainWindow::snapshotEntriesForPersist() const
+{
+    const QList<int> order = rowOrderForPersist();
+    QList<ModEntry> out;
+    out.reserve(order.size());
+    for (int idx : order)
+        if (const auto *it = m_modList->item(idx))
+            out.append(ModEntry::fromItem(it));
+    return out;
+}
+
+void MainWindow::enterViewSort()
+{
+    // Re-stamp only if the rows aren't already stamped from an earlier sort this
+    // session; otherwise the current (already-sorted) order would be recorded as
+    // the saved baseline. Keying off the rows (not just m_viewSortActive) also
+    // means a stale flag after a list rebuild can't corrupt the saved order.
+    bool anyStamped = false;
+    for (int i = 0; i < m_modList->count(); ++i)
+        if (m_modList->item(i)->data(ModRole::SortAnchor).isValid()) { anyStamped = true; break; }
+
+    if (!anyStamped) {
+        // Stamp each row's current index as its saved position. Block signals so
+        // the bulk setData doesn't fire the itemChanged handler once per row.
+        const QSignalBlocker blocker(m_modList);
+        for (int i = 0; i < m_modList->count(); ++i)
+            m_modList->item(i)->setData(ModRole::SortAnchor, static_cast<qint64>(i));
+    }
+    m_viewSortActive = true;
+}
+
+void MainWindow::dropViewSortKeepingOrder()
+{
+    if (!m_viewSortActive) return;
+    {
+        const QSignalBlocker blocker(m_modList);
+        for (int i = 0; i < m_modList->count(); ++i)
+            m_modList->item(i)->setData(ModRole::SortAnchor, QVariant());
+    }
+    m_viewSortActive = false;
+    if (m_notify) m_notify->hideSticky();
+}
+
+void MainWindow::resetToSavedOrder()
+{
+    if (!m_viewSortActive) return;
+
+    // Reorder the display back to the stamped saved order. Same item pointers,
+    // so no data is lost; unstamped rows (added mid-sort) trail.
+    const QList<int> order = rowOrderForPersist();
+    QList<QListWidgetItem *> items;
+    items.reserve(order.size());
+    for (int idx : order) items.append(m_modList->item(idx));
+
+    {
+        const QSignalBlocker blocker(m_modList);
+        while (m_modList->count() > 0) m_modList->takeItem(0);
+        for (auto *it : items) {
+            it->setData(ModRole::SortAnchor, QVariant());
+            m_modList->addItem(it);   // re-added items default to visible
+        }
+    }
+    m_viewSortActive = false;
+
+    // Hidden state is lost across takeItem/addItem, so re-collapse the sections
+    // that were collapsed (mirrors loadModList's post-build pass).
+    for (int i = 0; i < m_modList->count(); ++i) {
+        auto *sep = m_modList->item(i);
+        if (sep->data(ModRole::ItemType).toString() == ItemType::Separator
+                && sep->data(ModRole::Collapsed).toBool())
+            collapseSection(sep, true);
+    }
+
+    if (m_notify) m_notify->hideSticky();
+    if (m_sizeSortBtn) m_sizeSortBtn->setText(m_sizeSortAsc ? T("col_size_asc") : T("col_size_desc"));
+    if (m_dateSortBtn) m_dateSortBtn->setText(m_dateSortAsc ? T("col_date_added_asc") : T("col_date_added_desc"));
+    updateModCount();
+    updateSectionCounts();
+    statusBar()->showMessage(T("status_view_sort_reset"), 3000);
+}
+
 void MainWindow::onSortBySize()
 {
     if (sender() == m_sizeSortBtn)
         m_sizeSortAsc = !m_sizeSortAsc;
     m_sizeSortBtn->setText(m_sizeSortAsc ? T("col_size_asc") : T("col_size_desc"));
 
+    // View-only: stamp the saved order once, then reorder just the display. The
+    // saved load order is emitted by rowOrderForPersist() on the next save, so
+    // there is deliberately no saveModList() here.
+    enterViewSort();
     modlist_sort::bySize(m_modList, m_sizeSortAsc);
-
-    saveModList();
     updateSectionCounts();
+
+    if (m_notify) m_notify->showSticky(T("viewsort_banner"), QStringLiteral("#7a5c17"));
     statusBar()->showMessage(
         m_sizeSortAsc ? T("status_sorted_size_asc") : T("status_sorted_size_desc"),
         3000);
@@ -8322,8 +8466,12 @@ void MainWindow::syncOpenMWConfig()
             if (n.contains(nt)) return true;
         return false;
     };
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *item = m_modList->item(i);
+    // Walk mods in saved order (identity unless a temporary Size/Date view sort
+    // is active) so data= precedence in openmw.cfg follows the real load order,
+    // not the sorted display.
+    const QList<int> cfgOrder = rowOrderForPersist();
+    for (int oi = 0; oi < cfgOrder.size(); ++oi) {
+        auto *item = m_modList->item(cfgOrder[oi]);
         if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
 
         openmw::ConfigMod cm;
@@ -8580,6 +8728,8 @@ void MainWindow::loadModList(const QString &path,
     if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
         return;
 
+    // A freshly loaded list is in saved order; end any temporary view sort.
+    clearViewSortState();
     m_modList->clear();
 
     // Schema-versioned read.  parseModlist sniffs the first non-empty
@@ -8998,7 +9148,9 @@ void MainWindow::exportModList()
     // "Import Modlist" (loadModList + parseModlist) already remaps mod paths per
     // machine - so a shared list imports missing mods as placeholders to re-
     // download, while a same-machine import restores everything.
-    QList<ModEntry> entries = modlist::snapshotEntries(m_modList);
+    // Saved order (not the temporary view-sort display) so an export taken
+    // while sorted by size/date is still the real load order.
+    QList<ModEntry> entries = snapshotEntriesForPersist();
     // In-flight install placeholders are transient, machine-local state - not
     // something a recipient (or a later restore) should inherit.
     for (int i = entries.size() - 1; i >= 0; --i)
@@ -10088,6 +10240,7 @@ void MainWindow::onNewModList()
         return;
 
     QFile::remove(currentPath);
+    clearViewSortState();
     m_modList->clear();
     updateModCount();
     updateSectionCounts();
@@ -10105,9 +10258,13 @@ void MainWindow::onSortByDate()
         ? T("col_date_added_asc")
         : T("col_date_added_desc"));
 
+    // View-only sort (see onSortBySize): reorders the display, never the saved
+    // order. No saveModList() - rowOrderForPersist() keeps disk canonical.
+    enterViewSort();
     modlist_sort::byDate(m_modList, m_dateSortAsc);
+    updateSectionCounts();
 
-    saveModList();
+    if (m_notify) m_notify->showSticky(T("viewsort_banner"), QStringLiteral("#7a5c17"));
     statusBar()->showMessage(
         m_dateSortAsc ? T("status_sorted_asc") : T("status_sorted_desc"), 3000);
 }

@@ -960,6 +960,31 @@ static void run_modentry()
                       || lessByDateAdded  (m, m) || lessByDateAdded  (s, s);
         check("comparators are irreflexive", !reflexive);
     }
+
+    // canonicalOrderFromAnchors: reproduce the saved order from per-row anchor
+    // stamps. Drives the temporary Size/Date view sort's persistence walks so a
+    // sorted display never rewrites the saved load order.
+    {
+        // Display rows [A,B,C] whose saved positions are [2,0,1]: B was saved
+        // first, C second, A third -> persist order is B,C,A = indices 1,2,0.
+        check("anchors: reorders to saved positions",
+              canonicalOrderFromAnchors(QList<qint64>{2, 0, 1})
+                  == QList<int>{1, 2, 0});
+
+        // No stamps -> identity (the common case, no view sort active).
+        check("anchors: unstamped -> identity",
+              canonicalOrderFromAnchors(QList<qint64>{-1, -1, -1})
+                  == QList<int>{0, 1, 2});
+
+        // Rows added mid-sort carry no stamp (< 0): they trail, keeping their
+        // original relative order (stable).
+        check("anchors: unstamped rows trail in order",
+              canonicalOrderFromAnchors(QList<qint64>{1, -1, 0, -1})
+                  == QList<int>{2, 0, 1, 3});
+
+        check("anchors: empty -> empty",
+              canonicalOrderFromAnchors(QList<qint64>{}) == QList<int>{});
+    }
 }
 
 // === modlist sync guard ===
