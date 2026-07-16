@@ -8040,6 +8040,8 @@ void MainWindow::onSortSeparators()
     auto newOrder = modlist_sort::showReorderSeparatorsDialog(this, m_modList);
     if (newOrder.isEmpty()) return;
 
+    checkpointBeforeSort();   // recoverable pre-sort checkpoint
+
     // A deliberate structural reorder commits the current display as the new
     // saved order (clears any temporary view sort without restoring it).
     dropViewSortKeepingOrder();
@@ -8175,8 +8177,22 @@ void MainWindow::resetToSavedOrder()
     statusBar()->showMessage(T("status_view_sort_reset"), 3000);
 }
 
+void MainWindow::checkpointBeforeSort()
+{
+    if (!m_backups) return;
+    // Capture the current in-memory canonical order (snapshotEntriesForPersist
+    // walks rows in saved order - identity when no view sort is active, and
+    // un-sorted via rowOrderForPersist when a lens is). Serializing in memory
+    // keeps this cheap and race-free; deliberately NOT saveModList(), which also
+    // resyncs openmw.cfg/launcher.cfg and runs the master/dependency scans.
+    const QByteArray content =
+        modlist_serializer::serializeModlist(snapshotEntriesForPersist()).toUtf8();
+    m_backups->writePreSortCheckpoint(content);
+}
+
 void MainWindow::onSortBySize()
 {
+    checkpointBeforeSort();   // recoverable pre-sort checkpoint
     if (sender() == m_sizeSortBtn)
         m_sizeSortAsc = !m_sizeSortAsc;
     m_sizeSortBtn->setText(m_sizeSortAsc ? T("col_size_asc") : T("col_size_desc"));
@@ -10251,6 +10267,7 @@ void MainWindow::onNewModList()
 
 void MainWindow::onSortByDate()
 {
+    checkpointBeforeSort();   // recoverable pre-sort checkpoint
     // Menu actions pre-set m_dateSortAsc; only the header button toggles.
     if (sender() == m_dateSortBtn)
         m_dateSortAsc = !m_dateSortAsc;

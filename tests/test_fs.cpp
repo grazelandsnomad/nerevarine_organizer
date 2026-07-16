@@ -95,8 +95,9 @@ static void testSnapshotRotation()
     writeFile(live, "v0");
 
     // Seed 6 snapshots with lexically-ordered timestamps (QDir::Name sort ==
-    // chronological). Rotation keeps the newest 5, so the oldest drops after
-    // one more snapshot.
+    // chronological). Pin keep=5 explicitly so this exercises the pruning logic
+    // regardless of the (larger) production default; the oldest drops after one
+    // more snapshot.
     const QString base = live + ".bak.";
     writeFile(base + "20000101-000000", "oldest");
     writeFile(base + "20010101-000000", "old-2");
@@ -106,7 +107,7 @@ static void testSnapshotRotation()
     writeFile(base + "20050101-000000", "old-6");
     check("pre-seeded 6 backups", countBackups(live) == 6);
 
-    (void)safefs::snapshotBackup(live);
+    (void)safefs::snapshotBackup(live, /*keep=*/5);
     check("rotation kept exactly 5", countBackups(live) == 5);
     check("oldest snapshot was pruned",
           !QFileInfo::exists(base + "20000101-000000"));

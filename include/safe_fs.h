@@ -24,8 +24,12 @@ namespace safefs {
 // called twice in the same second - the existing snapshot for that timestamp
 // survives). Returns the new snapshot path, or a short reason on failure.
 // Callers mostly ignore it; tests assert on the rotation.
+//
+// keep defaults to 20: a burst of saves (a couple of sort/reorder passes plus
+// the launcher/openmw.cfg sync each save) can otherwise rotate a still-wanted
+// order out of reach within one session. 20 spans that comfortably.
 std::expected<QString, QString>
-snapshotBackup(const QString &liveFile, int keep = 5);
+snapshotBackup(const QString &liveFile, int keep = 20);
 
 // Streaming per-file copy with size verification; fallback when QDir::rename
 // fails (typically EXDEV on cross-filesystem moves).

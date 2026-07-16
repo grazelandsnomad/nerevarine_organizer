@@ -141,6 +141,11 @@ private slots:
     void clearViewSortState();   // cosmetic reset on list rebuild (banner + flag)
     QList<int> rowOrderForPersist() const;
     QList<ModEntry> snapshotEntriesForPersist() const;
+    // Rotation-proof good-state checkpoint of the current saved order, taken
+    // right before any sort so a scrambling sort is always recoverable. Cheap
+    // on purpose (no syncGameConfig/scans, unlike saveModList): call before the
+    // view-only Size/Date sorts too, so it must stay light.
+    void checkpointBeforeSort();
     void onInspectOpenMWSetup();
     void onInspectConflicts();
     void onDeployBethesda();        // experimental: link enabled mods into a Bethesda game's Data/

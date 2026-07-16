@@ -123,6 +123,23 @@ add_executable(test_fs
 target_include_directories(test_fs PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(test_fs PRIVATE Qt6::Core)
 
+# BackupManager checkpoints, incl. the auto pre-sort good-state (Q_OBJECT ->
+# AUTOMOC; pulls prompts + translator.h -> generated translation_keys.h).
+add_executable(test_backup
+    test_backup.cpp
+    ${CMAKE_SOURCE_DIR}/src/backup_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/safe_fs.cpp
+    ${CMAKE_SOURCE_DIR}/src/prompts.cpp
+    ${CMAKE_SOURCE_DIR}/src/translator.cpp
+    ${CMAKE_SOURCE_DIR}/include/backup_manager.h
+)
+set_target_properties(test_backup PROPERTIES AUTOMOC ON)
+target_include_directories(test_backup PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/generated
+)
+target_link_libraries(test_backup PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+
 # Settings migrations + per-game forbidden mods (registry TU is a Q_OBJECT and
 # pulls translator.h -> generated translation_keys.h).
 add_executable(test_settings
@@ -174,6 +191,7 @@ set(UNIT_TESTS
     test_plugins
     test_load_order
     test_fs
+    test_backup
     test_settings
     test_mods
     test_extract

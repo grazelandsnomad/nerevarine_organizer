@@ -145,6 +145,40 @@ void BackupManager::markCurrentAsGoodState(QWidget *parent)
             .toString("yyyy-MM-dd HH:mm:ss")), 6000);
 }
 
+void BackupManager::writePreSortCheckpoint(const QByteArray &modlistContent)
+{
+    const QString   livePath = m_livePath();
+    const QFileInfo liveInfo(livePath);
+    const QDir      dir = liveInfo.dir();
+    if (!dir.exists())
+        return;
+
+    // Dedupe against the newest good state: Size/Date sorts are view-only and
+    // don't change the saved order, so sorting repeatedly must not spawn a run
+    // of identical checkpoints. Only a real change since the last one earns a
+    // new snapshot.
+    const QString pattern = liveInfo.fileName() + ".good.*";
+    const QFileInfoList goods = dir.entryInfoList(
+        {pattern}, QDir::Files | QDir::Readable, QDir::Name | QDir::Reversed);
+    if (!goods.isEmpty()) {
+        QFile prev(goods.first().absoluteFilePath());
+        if (prev.open(QIODevice::ReadOnly) && prev.readAll() == modlistContent)
+            return;
+    }
+
+    const QString stamp    = QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss");
+    const QString goodPath = livePath + ".good." + stamp;
+    if (QFile::exists(goodPath))
+        return;   // already checkpointed within this same second
+
+    QFile out(goodPath);
+    if (out.open(QIODevice::WriteOnly)) {
+        out.write(modlistContent);
+        out.close();
+        emit statusMessage(T("good_state_presort"), 5000);
+    }
+}
+
 void BackupManager::populateGoodStatesMenu(QMenu *menu, QWidget *parent)
 {
     menu->clear();

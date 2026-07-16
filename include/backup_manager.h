@@ -12,8 +12,9 @@ class QWidget;
 // Manages the two snapshot mechanisms for the modlist file:
 //   · Rotating auto-backups: <livePath>.bak.<stamp>, written by safefs on
 //     every save. Surfaced via showRestoreBackupDialog().
-//   · User-marked checkpoints: <livePath>.good.<stamp>, written only by
-//     explicit "Mark current" action. Surfaced via the toolbar dropdown.
+//   · User-marked checkpoints: <livePath>.good.<stamp>, written by the explicit
+//     "Mark current" action AND automatically by snapshotBeforeSort() right
+//     before a sort. Surfaced via the toolbar dropdown; never auto-pruned.
 class BackupManager : public QObject {
     Q_OBJECT
 public:
@@ -29,6 +30,13 @@ public:
     // User-marked checkpoint flow.
     void markCurrentAsGoodState(QWidget *parent);
     void populateGoodStatesMenu(QMenu *menu, QWidget *parent);
+
+    // Write `modlistContent` (the caller's already-serialized current order) as
+    // a good-state checkpoint, unless it's byte-identical to the newest existing
+    // checkpoint. Silent (no dialogs, no save/config-sync) and deduped so the
+    // view-only Size/Date sorts don't pile up identical checkpoints. Used by the
+    // automatic pre-sort safety net (MainWindow::checkpointBeforeSort).
+    void writePreSortCheckpoint(const QByteArray &modlistContent);
 
 signals:
     // After a successful restore, MainWindow does loadModList +
