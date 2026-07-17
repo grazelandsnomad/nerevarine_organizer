@@ -95,6 +95,7 @@ set(SOURCES
     src/modlist_model_widget_bridge.cpp
     src/modlist_serializer.cpp
     src/modlist_summary.cpp
+    src/modlist_summary_dialog.cpp
     src/pluginparser.cpp
     src/firstrunwizard.cpp
     src/openmwconfigwriter.cpp
@@ -105,6 +106,7 @@ set(SOURCES
     src/extract_errors.cpp
     src/archive_magic.cpp
     src/log_triage.cpp
+    src/log_triage_dialog.cpp
     src/plugin_collisions.cpp
     src/post_install.cpp
     src/placeholder_state.cpp
@@ -137,6 +139,7 @@ set(SOURCES
     src/ini_doc.cpp
     src/nexus_name.cpp
     src/conflict_scan.cpp
+    src/conflict_inspector.cpp
     src/reboot_check.cpp
     src/toolbar_customization.cpp
     src/scan_coordinator.cpp
@@ -160,6 +163,8 @@ set(SOURCES
     include/ini_doc.h
     include/nexus_name.h
     include/conflict_scan.h
+    include/log_triage_dialog.h
+    include/conflict_inspector.h
     include/reboot_check.h
     include/toolbar_customization.h
     include/scan_coordinator.h
@@ -190,6 +195,7 @@ set(SOURCES
     include/modlist_model_widget_bridge.h
     include/modlist_serializer.h
     include/modlist_summary.h
+    include/modlist_summary_dialog.h
     include/pluginparser.h
     include/post_install.h
     include/placeholder_state.h

@@ -24,7 +24,7 @@
 #include "modlist_model.h"
 #include "modlist_model_widget_bridge.h"
 #include "modlist_serializer.h"
-#include "modlist_summary.h"
+#include "modlist_summary_dialog.h"
 #include "mod_sharing.h"
 #include "loadordercontroller.h"
 #include "nexusclient.h"
@@ -41,6 +41,7 @@
 #include "game_adapter.h"
 #include "ini_doc.h"
 #include "nexus_name.h"
+#include "conflict_inspector.h"
 #include "conflict_scan.h"
 #include "toolbar_customization.h"
 #include "scan_coordinator.h"
@@ -143,6 +144,7 @@
 #include "modlist_io.h"
 #include "openmwconfigwriter.h"
 #include "log_triage.h"
+#include "log_triage_dialog.h"
 #include "plugin_collisions.h"
 #include "asset_collisions.h"
 #include "modlist_sync_guard.h"
@@ -6114,102 +6116,32 @@ void MainWindow::onModlistSummary()
     const QList<ModEntry> entries = snapshotEntriesForPersist();
 
     // The counting/formatting lives in modlist_summary (Qt Core only, unit
-    // tested); this slot just snapshots the rows and renders the result.
-    // ScanCoordinator::sizeOf checks its cache before falling back to a
-    // synchronous walk, so it's the right resolver for rows the async size
+    // tested) and the rendering in modlist_summary_dialog; this slot only
+    // gathers.  ScanCoordinator::sizeOf checks its cache before falling back to
+    // a synchronous walk, so it's the right resolver for rows the async size
     // scan hasn't landed on yet.
-    const modlist_summary::Stats stats = modlist_summary::computeStats(
+    modlist_summary::View view;
+    view.stats = modlist_summary::computeStats(
         entries, [this](const QString &modPath) { return m_scans->sizeOf(modPath); });
+    view.outsideCount = modlist_summary::countOutsideModsDir(entries, m_modsDir);
 
-    // OpenMW binary location.
-    QString openmwPath = locateOpenMWBinary(m_openmwPath);
-    QString openmwLine = openmwPath.isEmpty()
-        ? T("summary_openmw_not_found")
-        : openmwPath;
-
-    QString modsDirPath = m_modsDir;
-    QString cfgPath;
+    view.profileName = currentProfile().displayName;
+    view.modsDir     = m_modsDir;
 #ifdef Q_OS_WIN
-    cfgPath = QDir::homePath() + "/Documents/My Games/OpenMW/openmw.cfg";
+    view.platform  = QStringLiteral("Windows");
+    view.openmwCfg = QDir::homePath() + "/Documents/My Games/OpenMW/openmw.cfg";
 #else
-    cfgPath = QDir::homePath() + "/.config/openmw/openmw.cfg";
+    view.platform  = QStringLiteral("Linux");
+    view.openmwCfg = QDir::homePath() + "/.config/openmw/openmw.cfg";
 #endif
 
-    // Build dialog.
-    QDialog dlg(this);
-    dlg.setWindowTitle(T("summary_title"));
-    dlg.setMinimumWidth(540);
+    const QString openmwPath = locateOpenMWBinary(m_openmwPath);
+    view.openmwBinary = openmwPath.isEmpty() ? T("summary_openmw_not_found")
+                                             : openmwPath;
 
-    auto *vlay = new QVBoxLayout(&dlg);
-
-    auto addRow = [&](const QString &label, const QString &value) {
-        auto *row = new QHBoxLayout;
-        auto *l = new QLabel("<b>" + label + "</b>", &dlg);
-        l->setMinimumWidth(190);
-        auto *v = new QLabel(value, &dlg);
-        v->setTextInteractionFlags(Qt::TextSelectableByMouse);
-        v->setWordWrap(true);
-        v->setStyleSheet("font-family: monospace;");
-        row->addWidget(l);
-        row->addWidget(v, 1);
-        vlay->addLayout(row);
-    };
-
-    addRow(T("summary_profile"),          currentProfile().displayName);
-    addRow(T("summary_platform"),
-#ifdef Q_OS_WIN
-        QStringLiteral("Windows")
-#else
-        QStringLiteral("Linux")
-#endif
-    );
-    vlay->addSpacing(10);
-
-    addRow(T("summary_total_mods"),       QString::number(stats.modCount));
-    addRow(T("summary_enabled_mods"),
-           QString("%1 / %2").arg(stats.enabledCount).arg(stats.modCount));
-    addRow(T("summary_separator_count"),  QString::number(stats.sepCount));
-    vlay->addSpacing(10);
-
-    addRow(T("summary_total_size"),   modlist_summary::formatBytes(stats.totalBytes));
-    addRow(T("summary_enabled_size"), modlist_summary::formatBytes(stats.enabledBytes));
-    vlay->addSpacing(10);
-
-    addRow(T("summary_mods_dir"),         modsDirPath);
-    addRow(T("summary_openmw_binary"),    openmwLine);
-    addRow(T("summary_openmw_cfg"),       cfgPath);
-
-    auto *btns = new QDialogButtonBox(QDialogButtonBox::Close, &dlg);
-    auto *moveBtn = new QPushButton(T("summary_move_mods_btn"), &dlg);
-    moveBtn->setStyleSheet("color: #8a4a1a; font-weight: bold;");
-    moveBtn->setToolTip(T("summary_move_mods_tooltip"));
-    btns->addButton(moveBtn, QDialogButtonBox::ActionRole);
-
-    // Consolidate button: only meaningful when at least one mod lives outside
-    // the active profile's modsDir.  The actual count + folder list is reported
-    // by onConsolidateModsIntoActiveProfile() so the user sees concrete numbers
-    // in the confirmation dialog.
-    const int outsideCount = modlist_summary::countOutsideModsDir(entries, m_modsDir);
-    if (outsideCount > 0) {
-        auto *consolidateBtn = new QPushButton(
-            T("summary_consolidate_btn").arg(outsideCount), &dlg);
-        consolidateBtn->setStyleSheet("color: #6a1b9a; font-weight: bold;");
-        consolidateBtn->setToolTip(T("summary_consolidate_tooltip"));
-        btns->addButton(consolidateBtn, QDialogButtonBox::ActionRole);
-        connect(consolidateBtn, &QPushButton::clicked, &dlg, [this, &dlg]{
-            dlg.accept();
-            onConsolidateModsIntoActiveProfile();
-        });
-    }
-
-    vlay->addWidget(btns);
-    connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-    connect(moveBtn, &QPushButton::clicked, &dlg, [this, &dlg]{
-        dlg.accept();
-        onMoveModsDir();
-    });
-
-    dlg.exec();
+    modlist_summary::showDialog(this, view,
+        [this] { onMoveModsDir(); },
+        [this] { onConsolidateModsIntoActiveProfile(); });
 }
 
 // Move the entire mod library to another location. Refuses if downloads
@@ -7123,117 +7055,10 @@ void MainWindow::onInspectConflicts()
         snapshot.append(e);
     }
 
-    // --- Phase 2: run scan off-thread, modal progress dialog with cancel -----
-    auto cancel = std::make_shared<std::atomic<bool>>(false);
-
-    QProgressDialog progress(T("conflict_inspector_scanning"),
-                             T("conflict_inspector_cancel"),
-                             0, 0, this);
-    progress.setWindowTitle(T("conflict_inspector_title"));
-    progress.setWindowModality(Qt::WindowModal);
-    progress.setMinimumDuration(150);   // tiny scans skip the dialog entirely
-    progress.setAutoClose(false);
-    progress.setAutoReset(false);
-
-    QFutureWatcher<ConflictMap> watcher;
-    QObject::connect(&watcher, &QFutureWatcherBase::finished,
-                     &progress, &QProgressDialog::accept);
-    QObject::connect(&progress, &QProgressDialog::canceled, this,
-                     [cancel]{ cancel->store(true); });
-
-    watcher.setFuture(QtConcurrent::run(scanConflicts, snapshot, cancel));
-    progress.exec();
-    watcher.waitForFinished();   // ensure the worker thread has actually stopped
-
-    if (cancel->load()) return;
-
-    const ConflictMap conflicts = watcher.result();
-
-    QSet<QString> modsInConflicts;
-    for (auto it = conflicts.constBegin(); it != conflicts.constEnd(); ++it)
-        for (const auto &p : it.value()) modsInConflicts.insert(p.mod);
-
-    QDialog dlg(this);
-    dlg.setWindowTitle(T("conflict_inspector_title"));
-    dlg.setMinimumSize(820, 560);
-    auto *v = new QVBoxLayout(&dlg);
-
-    auto *explainLbl = new QLabel(T("conflict_inspector_explain"), &dlg);
-    explainLbl->setWordWrap(true);
-    explainLbl->setStyleSheet("color: #444; padding: 4px 2px;");
-    v->addWidget(explainLbl);
-
-    if (conflicts.isEmpty()) {
-        auto *none = new QLabel(T("conflict_inspector_none"), &dlg);
-        none->setStyleSheet("padding: 16px; font-style: italic;");
-        v->addWidget(none);
-    } else {
-        auto *counts = new QLabel(
-            T("conflict_inspector_counts")
-                .arg(conflicts.size()).arg(modsInConflicts.size()),
-            &dlg);
-        counts->setStyleSheet("font-weight: bold; padding: 2px;");
-        v->addWidget(counts);
-
-        auto *filter = new QLineEdit(&dlg);
-        filter->setPlaceholderText(T("conflict_inspector_filter"));
-        filter->setClearButtonEnabled(true);
-        v->addWidget(filter);
-
-        auto *tree = new QTreeWidget(&dlg);
-        tree->setHeaderLabels({"File / Mod", "Data folder"});
-        tree->setAlternatingRowColors(true);
-        tree->setRootIsDecorated(true);
-
-        // QMap iterates sorted by key, which gives alphabetical relPath order.
-        for (auto it = conflicts.constBegin(); it != conflicts.constEnd(); ++it) {
-            const auto &providers = it.value();
-            auto *top = new QTreeWidgetItem(tree,
-                {it.key(), QString("%1 providers").arg(providers.size())});
-            for (int p = 0; p < providers.size(); ++p) {
-                const bool isWinner = (p == providers.size() - 1);
-                QString label = providers[p].mod;
-                if (!providers[p].sourceBsa.isEmpty())
-                    label += T("conflict_inspector_bsa_marker")
-                                 .arg(providers[p].sourceBsa);
-                if (isWinner) label += T("conflict_inspector_winner_marker");
-                auto *child = new QTreeWidgetItem(top,
-                    {label, providers[p].root});
-                if (isWinner) {
-                    QFont f = child->font(0); f.setBold(true);
-                    child->setFont(0, f);
-                } else {
-                    child->setForeground(0, QBrush(QColor(150, 150, 150)));
-                }
-            }
-        }
-        tree->resizeColumnToContents(0);
-        v->addWidget(tree, 1);
-
-        connect(filter, &QLineEdit::textChanged, &dlg,
-                [tree](const QString &q) {
-            const QString needle = q.trimmed().toLower();
-            for (int i = 0; i < tree->topLevelItemCount(); ++i) {
-                auto *item = tree->topLevelItem(i);
-                bool match = needle.isEmpty() ||
-                             item->text(0).contains(needle);
-                if (!match) {
-                    for (int c = 0; c < item->childCount(); ++c) {
-                        if (item->child(c)->text(0).toLower().contains(needle)) {
-                            match = true; break;
-                        }
-                    }
-                }
-                item->setHidden(!match);
-            }
-        });
-    }
-
-    auto *btns = new QDialogButtonBox(QDialogButtonBox::Close, &dlg);
-    v->addWidget(btns);
-    connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-
-    dlg.exec();
+    // Phase 2+3 (scan off-thread behind a progress dialog, then render the
+    // provider tree) live in conflict_inspector so this TU keeps only the
+    // snapshot that has to happen on the UI thread.
+    conflict_inspector::show(this, snapshot);
 }
 
 // Candidate Proton-prefix "users/steamuser" dirs for a Bethesda profile, best
@@ -7779,98 +7604,10 @@ void MainWindow::onTriageOpenMWLog()
     const openmw::LogTriageReport report =
         openmw::triageOpenMWLog(logText, triageMods);
 
-    // -- Group issues by suspect mod for the display ---
-    //
-    // Mods that show up in the log get a named group; issues with no
-    // resolved suspect land under a single "Unattributed" bucket so the
-    // user still sees them.  Within a group we list MissingMaster first
-    // (the hardest crashes), then MissingPlugin, then MissingAsset, then
-    // OtherError - roughly "most actionable first".
-    auto kindRank = [](openmw::LogIssueKind k) {
-        switch (k) {
-            case openmw::LogIssueKind::MissingMaster:  return 0;
-            case openmw::LogIssueKind::MissingPlugin:  return 1;
-            case openmw::LogIssueKind::MissingAsset:   return 2;
-            case openmw::LogIssueKind::OtherError:     return 3;
-        }
-        return 4;
-    };
-    auto kindLabel = [this](openmw::LogIssueKind k) {
-        switch (k) {
-            case openmw::LogIssueKind::MissingMaster:  return T("log_triage_kind_master");
-            case openmw::LogIssueKind::MissingPlugin:  return T("log_triage_kind_plugin");
-            case openmw::LogIssueKind::MissingAsset:   return T("log_triage_kind_asset");
-            case openmw::LogIssueKind::OtherError:     return T("log_triage_kind_other");
-        }
-        return QString();
-    };
-
-    // QMap<mod display name or unattributed bucket, issues in sort order>.
-    const QString unattributed = T("log_triage_unattributed");
-    QMap<QString, QList<openmw::LogIssue>> grouped;
-    for (const openmw::LogIssue &i : report.issues) {
-        const QString key = i.suspectMod.isEmpty() ? unattributed : i.suspectMod;
-        grouped[key].append(i);
-    }
-    for (auto it = grouped.begin(); it != grouped.end(); ++it) {
-        std::sort(it.value().begin(), it.value().end(),
-                  [&](const openmw::LogIssue &a, const openmw::LogIssue &b) {
-            const int ra = kindRank(a.kind);
-            const int rb = kindRank(b.kind);
-            if (ra != rb) return ra < rb;
-            return a.target.compare(b.target, Qt::CaseInsensitive) < 0;
-        });
-    }
-
-    // -- Render ---
-    QString summary;
-    summary += QString("%1: %2\n").arg(T("log_triage_log_path"), logPath);
-    summary += T("log_triage_summary_counts")
-               .arg(report.errorLines)
-               .arg(report.issues.size())
-               .arg(grouped.size()) + "\n";
-
-    QString body;
-    if (report.issues.isEmpty()) {
-        body = T("log_triage_none");
-    } else {
-        for (auto it = grouped.constBegin(); it != grouped.constEnd(); ++it) {
-            const QString &mod = it.key();
-            body += QString("\n=== %1 ===\n").arg(mod);
-            for (const openmw::LogIssue &i : it.value()) {
-                body += "  [" + kindLabel(i.kind) + "] " + i.target;
-                if (!i.parent.isEmpty())
-                    body += " → " + T("log_triage_needs") + " " + i.parent;
-                body += "\n";
-                body += "      " + i.detail.trimmed() + "\n";
-            }
-        }
-    }
-
-    QDialog dlg(this);
-    dlg.setWindowTitle(T("log_triage_title"));
-    dlg.setMinimumSize(820, 560);
-    auto *v = new QVBoxLayout(&dlg);
-
-    auto *sumLbl = new QLabel(summary, &dlg);
-    sumLbl->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    sumLbl->setStyleSheet(
-        "background: #f4f1ee; padding: 8px; border-radius: 4px; "
-        "font-family: monospace;");
-    v->addWidget(sumLbl);
-
-    auto *bodyEdit = new QPlainTextEdit(&dlg);
-    bodyEdit->setReadOnly(true);
-    bodyEdit->setLineWrapMode(QPlainTextEdit::NoWrap);
-    bodyEdit->setFont(QFont("monospace"));
-    bodyEdit->setPlainText(body);
-    v->addWidget(bodyEdit, 1);
-
-    auto *btns = new QDialogButtonBox(QDialogButtonBox::Close, &dlg);
-    v->addWidget(btns);
-    connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-
-    dlg.exec();
+    // Grouping + rendering live in log_triage_dialog; this slot keeps only
+    // the parts that need MainWindow state (reading the log, indexing the
+    // mod list into TriageMod rows).
+    openmw::showTriageDialog(this, report, logPath);
 }
 
 void MainWindow::onEditLoadOrder()
