@@ -2,6 +2,7 @@
 #include "mod_sharing.h"
 #include "modentry.h"
 #include "modlist_serializer.h"
+#include "modlist_summary.h"
 #include "install_layout.h"
 #include "post_install.h"
 
@@ -614,6 +615,125 @@ static void run_post_install()
     testBundledPatchMatchesMod();
 }
 
+// -- modlist_summary ----------------------------------------------------------
+
+static ModEntry mkSummaryMod(const QString &name, int status, bool checked,
+                             qint64 size, const QString &path = {})
+{
+    ModEntry e;
+    e.itemType      = QStringLiteral("mod");
+    e.displayName   = name;
+    e.installStatus = status;
+    e.checked       = checked;
+    e.modSize       = size;
+    e.modPath       = path;
+    return e;
+}
+
+static ModEntry mkSummarySep(const QString &name)
+{
+    ModEntry e;
+    e.itemType    = QStringLiteral("separator");
+    e.displayName = name;
+    return e;
+}
+
+static void testFormatBytes()
+{
+    using modlist_summary::formatBytes;
+    check("0 bytes renders as 0 B",  formatBytes(0) == "0 B",       formatBytes(0));
+    check("negative renders as 0 B", formatBytes(-5) == "0 B",      formatBytes(-5));
+    check("sub-KB keeps bytes",      formatBytes(512) == "512 B",   formatBytes(512));
+    check("1023 B does not round up",formatBytes(1023) == "1023 B", formatBytes(1023));
+    check("exactly 1 KB",            formatBytes(1024) == "1 KB",   formatBytes(1024));
+    check("1.5 MB",  formatBytes(1024LL * 1024 * 3 / 2) == "1.5 MB",
+          formatBytes(1024LL * 1024 * 3 / 2));
+    check("2.00 GB", formatBytes(2LL * 1024 * 1024 * 1024) == "2.00 GB",
+          formatBytes(2LL * 1024 * 1024 * 1024));
+}
+
+static void testComputeStats()
+{
+    const QList<ModEntry> rows{
+        mkSummarySep("GUI"),
+        mkSummaryMod("a", 1, true,  1000),
+        mkSummaryMod("b", 1, false, 2000),
+        mkSummarySep("World"),
+        mkSummaryMod("c", 0, true,  9999),   // not installed -> ignored
+        mkSummaryMod("d", 2, true,  9999),   // mid-install   -> ignored
+    };
+    const auto s = modlist_summary::computeStats(rows);
+    check("separators counted",           s.sepCount == 2,      QString::number(s.sepCount));
+    check("only installed mods counted",  s.modCount == 2,      QString::number(s.modCount));
+    check("enabled mods counted",         s.enabledCount == 1,  QString::number(s.enabledCount));
+    check("total bytes summed",           s.totalBytes == 3000, QString::number(s.totalBytes));
+    check("enabled bytes exclude unticked",
+          s.enabledBytes == 1000, QString::number(s.enabledBytes));
+}
+
+static void testComputeStatsSizeFallback()
+{
+    const QList<ModEntry> rows{
+        mkSummaryMod("known",   1, true, 4096, "/x/known"),
+        mkSummaryMod("unknown", 1, true, 0,    "/x/unknown"),
+    };
+
+    // No resolver: an unmeasured mod must still count, it just adds no bytes -
+    // otherwise the counts under-report while the async size scan is in flight.
+    const auto bare = modlist_summary::computeStats(rows);
+    check("unmeasured mod still counts toward modCount",
+          bare.modCount == 2, QString::number(bare.modCount));
+    check("unmeasured mod still counts as enabled",
+          bare.enabledCount == 2, QString::number(bare.enabledCount));
+    check("unmeasured mod contributes no bytes",
+          bare.totalBytes == 4096, QString::number(bare.totalBytes));
+
+    // With a resolver, only the unmeasured row is looked up.
+    QStringList asked;
+    const auto filled = modlist_summary::computeStats(
+        rows, [&](const QString &p) { asked << p; return 1024; });
+    check("resolver consulted only for unknown sizes",
+          asked == QStringList{"/x/unknown"}, asked.join(","));
+    check("resolved size is summed",
+          filled.totalBytes == 4096 + 1024, QString::number(filled.totalBytes));
+}
+
+static void testCountOutsideModsDir()
+{
+    QTemporaryDir tmp;
+    const QString root = tmp.filePath("mods");
+    QDir().mkpath(root + "/inside");
+    QDir().mkpath(tmp.filePath("elsewhere/outside"));
+    QDir().mkpath(tmp.filePath("mods_old/sibling"));   // prefix trap
+
+    const QList<ModEntry> rows{
+        mkSummaryMod("inside",  1, true, 0, root + "/inside"),
+        mkSummaryMod("outside", 1, true, 0, tmp.filePath("elsewhere/outside")),
+        mkSummaryMod("sibling", 1, true, 0, tmp.filePath("mods_old/sibling")),
+        mkSummaryMod("gone",    1, true, 0, tmp.filePath("does/not/exist")),
+        mkSummaryMod("uninst",  0, true, 0, tmp.filePath("elsewhere/outside")),
+        mkSummarySep("sep"),
+    };
+
+    // outside + sibling. "mods_old" must not read as a child of "mods".
+    check("counts installed mods outside modsDir (incl. the _old prefix trap)",
+          modlist_summary::countOutsideModsDir(rows, root) == 2,
+          QString::number(modlist_summary::countOutsideModsDir(rows, root)));
+    check("missing folders are not counted",
+          modlist_summary::countOutsideModsDir({rows[3]}, root) == 0);
+    check("empty modsDir yields 0",
+          modlist_summary::countOutsideModsDir(rows, QString()) == 0);
+}
+
+static void run_modlist_summary()
+{
+    std::cout << "=== modlist_summary ===\n";
+    testFormatBytes();
+    testComputeStats();
+    testComputeStatsSizeFallback();
+    testCountOutsideModsDir();
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -622,6 +742,7 @@ int main(int argc, char **argv)
     run_mod_sharing();
     run_install_layout();
     run_post_install();
+    run_modlist_summary();
 
     std::cout << "\n"
               << s_passed << " passed, "

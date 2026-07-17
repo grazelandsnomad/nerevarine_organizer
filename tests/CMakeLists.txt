@@ -157,12 +157,13 @@ target_include_directories(test_settings PRIVATE
 )
 target_link_libraries(test_settings PRIVATE Qt6::Core Qt6::Widgets)
 
-# Mod naming, sharing, install layout, post-install heuristics.
+# Mod naming, sharing, install layout, post-install heuristics, modlist summary.
 add_executable(test_mods
     test_mods.cpp
     ${CMAKE_SOURCE_DIR}/src/mod_naming.cpp
     ${CMAKE_SOURCE_DIR}/src/mod_sharing.cpp
     ${CMAKE_SOURCE_DIR}/src/modlist_serializer.cpp
+    ${CMAKE_SOURCE_DIR}/src/modlist_summary.cpp
     ${CMAKE_SOURCE_DIR}/src/modentry.cpp
     ${CMAKE_SOURCE_DIR}/src/install_layout.cpp
     ${CMAKE_SOURCE_DIR}/src/post_install.cpp

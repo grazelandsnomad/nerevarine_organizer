@@ -24,6 +24,7 @@
 #include "modlist_model.h"
 #include "modlist_model_widget_bridge.h"
 #include "modlist_serializer.h"
+#include "modlist_summary.h"
 #include "mod_sharing.h"
 #include "loadordercontroller.h"
 #include "nexusclient.h"
@@ -6110,46 +6111,15 @@ void MainWindow::onModlistSummary()
     // Aggregate sizes (refresh first so newly-installed mods get measured).
     m_scans->scheduleSizeScan();
 
-    qint64 totalBytes    = 0;
-    qint64 enabledBytes  = 0;
-    int    modCount      = 0;
-    int    enabledCount  = 0;
-    int    sepCount      = 0;
+    const QList<ModEntry> entries = snapshotEntriesForPersist();
 
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *item = m_modList->item(i);
-        QString type = item->data(ModRole::ItemType).toString();
-        if (type == ItemType::Separator) { ++sepCount; continue; }
-        if (item->data(ModRole::InstallStatus).toInt() != 1) continue;
-        ++modCount;
-        qint64 s = item->data(ModRole::ModSize).toLongLong();
-        if (s <= 0) {
-            // Async scan may not have landed yet - ScanCoordinator::sizeOf
-            // checks the cache first, then falls back to a synchronous walk.
-            const QString mp = item->data(ModRole::ModPath).toString();
-            if (!mp.isEmpty()) s = m_scans->sizeOf(mp);
-        }
-        if (s > 0) {
-            totalBytes += s;
-            if (item->checkState() == Qt::Checked) {
-                enabledBytes += s;
-                ++enabledCount;
-            }
-        } else if (item->checkState() == Qt::Checked) {
-            ++enabledCount;
-        }
-    }
-
-    auto fmtBytes = [](qint64 b) {
-        if (b <= 0) return QString("0 B");
-        const double KB = 1024.0;
-        const double MB = KB * 1024.0;
-        const double GB = MB * 1024.0;
-        if (b >= GB) return QString::number(b / GB, 'f', 2) + " GB";
-        if (b >= MB) return QString::number(b / MB, 'f', 1) + " MB";
-        if (b >= KB) return QString::number(b / KB, 'f', 0) + " KB";
-        return QString::number(b) + " B";
-    };
+    // The counting/formatting lives in modlist_summary (Qt Core only, unit
+    // tested); this slot just snapshots the rows and renders the result.
+    // ScanCoordinator::sizeOf checks its cache before falling back to a
+    // synchronous walk, so it's the right resolver for rows the async size
+    // scan hasn't landed on yet.
+    const modlist_summary::Stats stats = modlist_summary::computeStats(
+        entries, [this](const QString &modPath) { return m_scans->sizeOf(modPath); });
 
     // OpenMW binary location.
     QString openmwPath = locateOpenMWBinary(m_openmwPath);
@@ -6195,14 +6165,14 @@ void MainWindow::onModlistSummary()
     );
     vlay->addSpacing(10);
 
-    addRow(T("summary_total_mods"),       QString::number(modCount));
+    addRow(T("summary_total_mods"),       QString::number(stats.modCount));
     addRow(T("summary_enabled_mods"),
-           QString("%1 / %2").arg(enabledCount).arg(modCount));
-    addRow(T("summary_separator_count"),  QString::number(sepCount));
+           QString("%1 / %2").arg(stats.enabledCount).arg(stats.modCount));
+    addRow(T("summary_separator_count"),  QString::number(stats.sepCount));
     vlay->addSpacing(10);
 
-    addRow(T("summary_total_size"),       fmtBytes(totalBytes));
-    addRow(T("summary_enabled_size"),     fmtBytes(enabledBytes));
+    addRow(T("summary_total_size"),   modlist_summary::formatBytes(stats.totalBytes));
+    addRow(T("summary_enabled_size"), modlist_summary::formatBytes(stats.enabledBytes));
     vlay->addSpacing(10);
 
     addRow(T("summary_mods_dir"),         modsDirPath);
@@ -6215,25 +6185,11 @@ void MainWindow::onModlistSummary()
     moveBtn->setToolTip(T("summary_move_mods_tooltip"));
     btns->addButton(moveBtn, QDialogButtonBox::ActionRole);
 
-    // Consolidate button: only meaningful when at least one mod lives
-    // outside the active profile's modsDir.  Quick scan of the modlist
-    // to decide visibility - the actual count + folder list is reported
-    // by onConsolidateModsIntoActiveProfile() so the user sees concrete
-    // numbers in the confirmation dialog.
-    int outsideCount = 0;
-    if (!m_modsDir.isEmpty()) {
-        const QString modsRoot = QFileInfo(m_modsDir).absoluteFilePath();
-        for (int i = 0; i < m_modList->count(); ++i) {
-            auto *it = m_modList->item(i);
-            if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
-            if (it->data(ModRole::InstallStatus).toInt() != 1)           continue;
-            const QString p = it->data(ModRole::ModPath).toString();
-            if (p.isEmpty() || !QFileInfo(p).isDir())                    continue;
-            const QString abs = QFileInfo(p).absoluteFilePath();
-            if (abs != modsRoot && !abs.startsWith(modsRoot + "/"))
-                ++outsideCount;
-        }
-    }
+    // Consolidate button: only meaningful when at least one mod lives outside
+    // the active profile's modsDir.  The actual count + folder list is reported
+    // by onConsolidateModsIntoActiveProfile() so the user sees concrete numbers
+    // in the confirmation dialog.
+    const int outsideCount = modlist_summary::countOutsideModsDir(entries, m_modsDir);
     if (outsideCount > 0) {
         auto *consolidateBtn = new QPushButton(
             T("summary_consolidate_btn").arg(outsideCount), &dlg);

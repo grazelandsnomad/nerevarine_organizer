@@ -94,6 +94,7 @@ set(SOURCES
     src/modlist_model.cpp
     src/modlist_model_widget_bridge.cpp
     src/modlist_serializer.cpp
+    src/modlist_summary.cpp
     src/pluginparser.cpp
     src/firstrunwizard.cpp
     src/openmwconfigwriter.cpp
@@ -188,6 +189,7 @@ set(SOURCES
     include/modlist_model.h
     include/modlist_model_widget_bridge.h
     include/modlist_serializer.h
+    include/modlist_summary.h
     include/pluginparser.h
     include/post_install.h
     include/placeholder_state.h
