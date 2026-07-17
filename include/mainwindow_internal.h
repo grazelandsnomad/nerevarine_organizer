@@ -17,3 +17,9 @@ QString resolveUserStatePath(const QString &filename);
 // LOOT game-id for a profile (empty => LOOT not applicable). Defined in
 // mainwindow.cpp; used by the toolbar/menu gating there and the config TU.
 QString lootGameFor(const QString &profileId);
+
+// Suffix predicates for drop handling - used by the ModListWidget drop target
+// (setup TU) and MainWindow's drag/drop events (home).
+bool isInstallableArchiveSuffix(const QString &path);
+bool isImportFileSuffix(const QString &path);
+
