@@ -42,6 +42,8 @@
 #include "ini_doc.h"
 #include "nexus_name.h"
 #include "conflict_inspector.h"
+#include "deployment_report.h"
+#include "report_dialog.h"
 #include "conflict_scan.h"
 #include "toolbar_customization.h"
 #include "scan_coordinator.h"
@@ -151,9 +153,6 @@
 #include "safe_fs.h"
 #include "deps_resolver.h"
 #include <QFutureWatcher>
-#include <QProgressDialog>
-#include <atomic>
-#include <memory>
 // From src/pluginparser.cpp.
 using plugins::collectDataFolders;
 using plugins::readTes3Masters;
@@ -6992,30 +6991,7 @@ void MainWindow::onInspectOpenMWSetup()
                  + emptyInstalls.join("\n  ") + "\n";
     }
 
-    QDialog dlg(this);
-    dlg.setWindowTitle(T("openmw_inspect_title"));
-    dlg.setMinimumSize(720, 520);
-    auto *v = new QVBoxLayout(&dlg);
-
-    auto *sumLbl = new QLabel(summary, &dlg);
-    sumLbl->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    sumLbl->setStyleSheet(
-        "background: #f4f1ee; padding: 8px; border-radius: 4px; "
-        "font-family: monospace;");
-    v->addWidget(sumLbl);
-
-    auto *body = new QPlainTextEdit(&dlg);
-    body->setReadOnly(true);
-    body->setLineWrapMode(QPlainTextEdit::NoWrap);
-    body->setFont(QFont("monospace"));
-    body->setPlainText(report);
-    v->addWidget(body, 1);
-
-    auto *btns = new QDialogButtonBox(QDialogButtonBox::Close, &dlg);
-    v->addWidget(btns);
-    connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-
-    dlg.exec();
+    ui::showMonospaceReport(this, T("openmw_inspect_title"), report, 720, 520, summary);
 }
 
 // File Conflict Inspector - MO2-style overwrite view for OpenMW's VFS.
@@ -7467,100 +7443,71 @@ void MainWindow::onInspectDeployment()
         return;
     }
 
-    auto yn = [](bool b) { return b ? QStringLiteral("  [found]") : QStringLiteral("  [MISSING]"); };
-    QString styleStr;
+    // Resolve every path via the same bethesda* helpers the real deploy path
+    // uses, gather into a plain Facts, then let deployment_report format it and
+    // report_dialog show it - the two testable/reusable halves.
+    deployment_report::Facts f;
+    f.gameName   = currentProfile().displayName;
+    f.gameId     = id;
+    f.steamAppId = adapter->steamAppId();
     switch (adapter->loadOrderStyle()) {
-    case LoadOrderStyle::TimestampPluginsTxt: styleStr = "timestamp + Plugins.txt (Oblivion/FO3/FNV)"; break;
-    case LoadOrderStyle::AsteriskPluginsTxt:  styleStr = "*-prefixed Plugins.txt (Skyrim SE/FO4)"; break;
-    case LoadOrderStyle::OpenMW:              styleStr = "OpenMW"; break;
-    default:                                  styleStr = "unknown"; break;
+    case LoadOrderStyle::TimestampPluginsTxt: f.loadOrderStyle = "timestamp + Plugins.txt (Oblivion/FO3/FNV)"; break;
+    case LoadOrderStyle::AsteriskPluginsTxt:  f.loadOrderStyle = "*-prefixed Plugins.txt (Skyrim SE/FO4)"; break;
+    case LoadOrderStyle::OpenMW:              f.loadOrderStyle = "OpenMW"; break;
+    default:                                  f.loadOrderStyle = "unknown"; break;
     }
 
-    QString r;
-    r += "Game:        " + currentProfile().displayName + " (" + id + ")\n";
-    r += "Load order:  " + styleStr + "\n";
-    r += "Steam appid: " + (adapter->steamAppId().isEmpty() ? QStringLiteral("(none)")
-                                                            : adapter->steamAppId()) + "\n\n";
-
     const QString dataDir = bethesdaResolveDataDir(this, id, adapter, /*allowPrompt=*/false);
-    r += "Data folder:\n  " + (dataDir.isEmpty()
-            ? QStringLiteral("*** NOT RESOLVED - is the game installed via Steam/GOG? ***")
-            : dataDir + yn(QDir(dataDir).exists())) + "\n\n";
+    f.dataFolder = { dataDir, !dataDir.isEmpty() && QDir(dataDir).exists() };
 
     const QString installDir = dataDir.isEmpty() ? QString() : QFileInfo(dataDir).path();
-    if (!installDir.isEmpty()) {
+    f.installDirKnown = !installDir.isEmpty();
+    if (f.installDirKnown) {
         const QString se = findScriptExtenderLoader(adapter, installDir);
-        r += "Script extender: " + (se.isEmpty() ? QStringLiteral("not installed beside the game exe")
-                                                  : QFileInfo(se).fileName() + " [found]") + "\n\n";
+        f.scriptExtender = se.isEmpty() ? QString() : QFileInfo(se).fileName();
     }
 
     const QString pluginsTxt = dataDir.isEmpty() ? QString()
                                                  : resolveBethesdaPluginsTxt(id, adapter, dataDir);
-    r += "Plugins.txt:\n  " + (pluginsTxt.isEmpty()
-            ? QStringLiteral("*** NOT RESOLVED - run the game once via Steam so the prefix exists ***")
-            : pluginsTxt + yn(QFileInfo::exists(pluginsTxt))) + "\n\n";
+    f.pluginsTxt = { pluginsTxt, !pluginsTxt.isEmpty() && QFileInfo::exists(pluginsTxt) };
 
     if (id == QLatin1String("oblivion") && !dataDir.isEmpty()) {
+        f.showOblivionIni = true;
         const QString iniDir = resolveBethesdaIniDir(id, adapter, dataDir);
         const QString iniPath = iniDir.isEmpty() ? QString() : QDir(iniDir).filePath("Oblivion.ini");
-        r += "Oblivion.ini:\n  " + (iniPath.isEmpty()
-                ? QStringLiteral("*** NOT RESOLVED ***")
-                : iniPath + yn(QFileInfo::exists(iniPath))) + "\n";
-        r += "  (only edited if it already exists - run the game once first)\n\n";
+        f.oblivionIni = { iniPath, !iniPath.isEmpty() && QFileInfo::exists(iniPath) };
     }
 
     QString manifestPath, backupDir;
     bethesdaStatePaths(modlistPath(), manifestPath, backupDir);
-    int deployed = 0;
-    const bool haveManifest = QFileInfo::exists(manifestPath);
-    if (haveManifest) {
+    f.manifestPath  = manifestPath;
+    f.backupDir     = backupDir;
+    f.haveManifest  = QFileInfo::exists(manifestPath);
+    if (f.haveManifest) {
         QFile mf(manifestPath);
         if (mf.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            deployed = int(bethesda_deploy::manifestFromJson(
-                            QString::fromUtf8(mf.readAll())).files.size());
+            f.deployedFileCount = int(bethesda_deploy::manifestFromJson(
+                                      QString::fromUtf8(mf.readAll())).files.size());
             mf.close();
         }
     }
-    r += "Deployment state:\n";
-    r += "  manifest: " + manifestPath + (haveManifest
-            ? "  [" + QString::number(deployed) + " files currently deployed]"
-            : QStringLiteral("  [nothing deployed yet]")) + "\n";
-    r += "  backups:  " + backupDir + "\n\n";
 
-    int enabledInstalled = 0;
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *it = m_modList->item(i);
         if (it->data(ModRole::ItemType).toString() == ItemType::Mod
             && it->checkState() == Qt::Checked
             && it->data(ModRole::InstallStatus).toInt() == 1)
-            ++enabledInstalled;
+            ++f.enabledInstalledMods;
     }
-    const auto sources = gatherBethesdaSources(m_modList);
-    r += "Mods to deploy: " + QString::number(enabledInstalled) + " enabled+installed mod(s), "
-       + QString::number(sources.size()) + " data root(s)\n\n";
+    f.dataRootCount = int(gatherBethesdaSources(m_modList).size());
 
-    r += "Proton prefix candidates probed (for Plugins.txt / ini):\n";
-    const QStringList prefixes = bethesdaPrefixUserDirs(adapter, dataDir);
-    if (prefixes.isEmpty()) r += "  (none - no steam appid or resolved install path)\n";
-    for (const QString &p : prefixes)
-        r += "  " + p + yn(QDir(p).exists()) + "\n";
+    f.prefixCandidates = bethesdaPrefixUserDirs(adapter, dataDir);
+    for (const QString &p : f.prefixCandidates)
+        f.prefixExists << (QDir(p).exists() ? QStringLiteral("  [found]")
+                                            : QStringLiteral("  [MISSING]"));
 
-    QDialog dlg(this);
-    dlg.setWindowTitle(T("deploy_inspect_title"));
-    dlg.setMinimumSize(760, 520);
-    auto *v = new QVBoxLayout(&dlg);
-    auto *te = new QPlainTextEdit(&dlg);
-    te->setReadOnly(true);
-    te->setLineWrapMode(QPlainTextEdit::NoWrap);
-    QFont mono(QStringLiteral("monospace"));
-    mono.setStyleHint(QFont::Monospace);
-    te->setFont(mono);
-    te->setPlainText(r);
-    v->addWidget(te);
-    auto *btns = new QDialogButtonBox(QDialogButtonBox::Close, &dlg);
-    connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-    v->addWidget(btns);
-    dlg.exec();
+    ui::showMonospaceReport(this, T("deploy_inspect_title"),
+                            deployment_report::format(f), 760, 520);
 }
 
 // OpenMW Log Triage - parse ~/.config/openmw/openmw.log and surface known

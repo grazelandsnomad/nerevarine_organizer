@@ -43,6 +43,7 @@ target_link_libraries(test_fomod PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
 # Bethesda subsystem: deploy, load order, archive ini, proton paths, adapters.
 add_executable(test_bethesda
     test_bethesda.cpp
+    ${CMAKE_SOURCE_DIR}/src/deployment_report.cpp
     ${CMAKE_SOURCE_DIR}/src/bethesda_deploy.cpp
     ${CMAKE_SOURCE_DIR}/src/bethesda_loadorder.cpp
     ${CMAKE_SOURCE_DIR}/src/bethesda_archives.cpp

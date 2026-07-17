@@ -1,6 +1,7 @@
 #include "bethesda_deploy.h"
 #include "bethesda_loadorder.h"
 #include "bethesda_archives.h"
+#include "deployment_report.h"
 #include "proton_paths.h"
 #include "game_adapter.h"
 
@@ -575,6 +576,65 @@ static void run_game_adapters()
     adapters_section::testLoadOrderClassification();
 }
 
+// -- deployment_report --------------------------------------------------------
+
+static void run_deployment_report()
+{
+    std::cout << "=== deployment_report ===\n";
+
+    // A fully-resolved Oblivion deployment: exercise the found/missing markers,
+    // the Oblivion-only ini section, the manifest count, and prefix probing.
+    deployment_report::Facts f;
+    f.gameName = "Oblivion"; f.gameId = "oblivion";
+    f.loadOrderStyle = "timestamp + Plugins.txt (Oblivion/FO3/FNV)";
+    f.steamAppId = "22330";
+    f.dataFolder = { "/games/Oblivion/Data", true };
+    f.installDirKnown = true; f.scriptExtender = "obse_loader.exe";
+    f.pluginsTxt = { "/prefix/Plugins.txt", false };
+    f.showOblivionIni = true;
+    f.oblivionIni = { "/prefix/Oblivion.ini", true };
+    f.manifestPath = "/state/deploy.json"; f.haveManifest = true; f.deployedFileCount = 42;
+    f.backupDir = "/state/backup";
+    f.enabledInstalledMods = 7; f.dataRootCount = 3;
+    f.prefixCandidates = { "/a/compatdata", "/b/compatdata" };
+    f.prefixExists = { "  [found]", "  [MISSING]" };
+
+    const QString r = deployment_report::format(f);
+    check("header names the game+id", r.contains("Game:        Oblivion (oblivion)"));
+    check("resolved+existing data folder is [found]",
+          r.contains("/games/Oblivion/Data  [found]"));
+    check("resolved+missing plugins.txt is [MISSING]",
+          r.contains("/prefix/Plugins.txt  [MISSING]"));
+    check("script-extender loader named", r.contains("obse_loader.exe [found]"));
+    check("oblivion ini section present for oblivion", r.contains("Oblivion.ini:"));
+    check("manifest file count shown", r.contains("[42 files currently deployed]"));
+    check("mods-to-deploy line", r.contains("7 enabled+installed mod(s), 3 data root(s)"));
+    check("prefix markers rendered per candidate",
+          r.contains("/a/compatdata  [found]") && r.contains("/b/compatdata  [MISSING]"));
+
+    // Unresolved paths render the distinct *** NOT RESOLVED *** form, not
+    // "  [MISSING]", and the non-oblivion path hides the ini section.
+    deployment_report::Facts g;
+    g.gameName = "Skyrim SE"; g.gameId = "skyrimse";
+    g.loadOrderStyle = "*-prefixed Plugins.txt (Skyrim SE/FO4)";
+    g.dataFolder = { QString(), false };   // unresolved
+    g.pluginsTxt = { QString(), false };
+    g.showOblivionIni = false;
+    g.manifestPath = "/state/deploy.json"; g.haveManifest = false;
+    g.backupDir = "/state/backup";
+    // no prefix candidates
+
+    const QString r2 = deployment_report::format(g);
+    check("unresolved data folder uses NOT RESOLVED, not MISSING",
+          r2.contains("*** NOT RESOLVED") && !r2.contains("  [MISSING]"));
+    check("no manifest -> nothing deployed yet",
+          r2.contains("[nothing deployed yet]"));
+    check("non-oblivion hides the ini section", !r2.contains("Oblivion.ini:"));
+    check("empty steam appid shows (none)", r2.contains("Steam appid: (none)"));
+    check("no prefix candidates -> explanatory line",
+          r2.contains("(none - no steam appid or resolved install path)"));
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -582,6 +642,7 @@ int main(int argc, char **argv)
     run_bethesda_deploy();
     run_bethesda_loadorder();
     run_bethesda_archives();
+    run_deployment_report();
     run_proton_paths();
     run_game_adapters();
 

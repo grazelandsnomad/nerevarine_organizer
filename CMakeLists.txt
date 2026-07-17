@@ -140,6 +140,8 @@ set(SOURCES
     src/nexus_name.cpp
     src/conflict_scan.cpp
     src/conflict_inspector.cpp
+    src/deployment_report.cpp
+    src/report_dialog.cpp
     src/reboot_check.cpp
     src/toolbar_customization.cpp
     src/scan_coordinator.cpp
@@ -165,6 +167,8 @@ set(SOURCES
     include/conflict_scan.h
     include/log_triage_dialog.h
     include/conflict_inspector.h
+    include/deployment_report.h
+    include/report_dialog.h
     include/reboot_check.h
     include/toolbar_customization.h
     include/scan_coordinator.h
