@@ -13,3 +13,7 @@
 // so this routes to AppDataLocation; otherwise it prefers next to the binary.
 // Defined in mainwindow.cpp; used there and by the deploy TU's state paths.
 QString resolveUserStatePath(const QString &filename);
+
+// LOOT game-id for a profile (empty => LOOT not applicable). Defined in
+// mainwindow.cpp; used by the toolbar/menu gating there and the config TU.
+QString lootGameFor(const QString &profileId);
