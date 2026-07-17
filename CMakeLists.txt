@@ -83,6 +83,7 @@ set(SOURCES
     src/mainwindow_install.cpp
     src/mainwindow_nexus.cpp
     src/mainwindow_config.cpp
+    src/mainwindow_list.cpp
     src/separatordialog.cpp
     src/modlistdelegate.cpp
     src/translator.cpp
