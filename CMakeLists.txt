@@ -79,6 +79,9 @@ set(SOURCES
     src/theme.cpp
     src/mainwindow.cpp
     src/mainwindow_deploy.cpp
+    src/mainwindow_import.cpp
+    src/mainwindow_install.cpp
+    src/mainwindow_nexus.cpp
     src/separatordialog.cpp
     src/modlistdelegate.cpp
     src/translator.cpp
