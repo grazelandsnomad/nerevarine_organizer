@@ -1,0 +1,40 @@
+name: clang-tidy
+
+# The gate scripts/clang-tidy.sh mirrors. Checks and severity live in
+# .clang-tidy (bugprone-* and clang-analyzer-* fatal, misc-include-cleaner
+# advisory while its legacy backlog is cleaned up) - keep policy there, not
+# here, so a local run and CI agree.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clang-tidy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clang-tidy:
+    name: clang-tidy (bugprone + clang-analyzer)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-tidy, GCC 14 headers and Qt 6
+        # g++-14 is here for its libstdc++ headers, not to compile: the side
+        # build uses clang, but clang picks up the newest installed libstdc++,
+        # and the project is C++23.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang clang-tidy g++-14 cmake ninja-build qt6-base-dev
+
+      - name: Run the clang-tidy gate
+        # Configures its own clang side build under build-tidy/ and walks every
+        # src/ TU. See scripts/clang-tidy.sh for why the side build exists.
+        run: scripts/clang-tidy.sh

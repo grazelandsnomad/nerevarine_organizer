@@ -26,11 +26,13 @@ BUILD_DIR=build-san
 # the sanitizer reports we'd actually need to triage failures.
 SAN_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g -O1"
 
+# Honour CC/CXX when set so CI can pin the same GCC 14 the build gate uses
+# (Ubuntu 24.04's default g++ is 13); plain `gcc`/`g++` locally otherwise.
 if [[ ! -f $BUILD_DIR/CMakeCache.txt ]]; then
     cmake -S . -B "$BUILD_DIR" -G Ninja \
         -DCMAKE_BUILD_TYPE=Debug \
-        -DCMAKE_C_COMPILER=gcc \
-        -DCMAKE_CXX_COMPILER=g++ \
+        -DCMAKE_C_COMPILER="${CC:-gcc}" \
+        -DCMAKE_CXX_COMPILER="${CXX:-g++}" \
         -DCMAKE_CXX_FLAGS="$SAN_FLAGS" \
         -DCMAKE_C_FLAGS="$SAN_FLAGS" \
         -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"

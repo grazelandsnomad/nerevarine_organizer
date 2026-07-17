@@ -39,6 +39,13 @@ cmake --build "$BUILD_DIR" --target nerevarine_organizer_autogen
 # -I{} prevents word-splitting on paths with spaces.  We don't use
 # run-clang-tidy because its prefix-matching of source files trips on
 # our tests/ subdir layout.
+#
+# No --warnings-as-errors here on purpose: passing it on the command line
+# *overrides* .clang-tidy's `WarningsAsErrors: '*,-misc-include-cleaner'`
+# rather than merging with it, which re-promotes the misc-include-cleaner
+# backlog to an error and fails the gate on the first TU.  Letting the
+# config file govern keeps bugprone-*/clang-analyzer-* fatal and
+# include-cleaner advisory, which is what .clang-tidy documents.
 find src -name "*.cpp" -print0 \
     | xargs -0 -P"$(nproc)" -I{} \
-        clang-tidy -p "$BUILD_DIR" --quiet --warnings-as-errors='*' {}
+        clang-tidy -p "$BUILD_DIR" --quiet {}

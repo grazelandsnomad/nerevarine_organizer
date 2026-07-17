@@ -1,0 +1,42 @@
+name: sanitizers
+
+# The Linux sanitizer job scripts/sanitize.sh mirrors: the unit suite under
+# ASan + UBSan. Nightly rather than per-push because it rebuilds the whole app
+# at -O1 with instrumentation; use "Run workflow" to trigger it on demand
+# before a release or after touching the install/placeholder lifetime code.
+
+on:
+  schedule:
+    # 03:00 UTC daily.
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sanitizers-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  asan-ubsan:
+    name: ASan + UBSan (unit suite)
+    runs-on: ubuntu-24.04
+    env:
+      # sanitize.sh honours CC/CXX; pin the same GCC 14 the build gate uses.
+      CC: gcc-14
+      CXX: g++-14
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain and Qt 6
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            g++-14 cmake ninja-build qt6-base-dev
+
+      - name: Run the sanitizer suite
+        # ASAN_OPTIONS / UBSAN_OPTIONS and the -fno-sanitize-recover=all policy
+        # live in the script so a local run reproduces CI exactly.
+        run: scripts/sanitize.sh

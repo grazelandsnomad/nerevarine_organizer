@@ -1,0 +1,53 @@
+name: CI
+
+# The gate README.md documents: build everything, then run the offline suite.
+# The integration tests need KIO .protocol files registered and a live Nexus
+# API key, so they stay local-only (ctest -L unit excludes them).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: build + unit tests (Ubuntu 24.04, GCC 14, Qt 6)
+    runs-on: ubuntu-24.04
+    env:
+      # GCC 14 is in noble's default repos, so this needs no toolchain PPA -
+      # the PPA timeouts are what pinned the old 22.04 job to GCC 13 (see the
+      # <print> note in src/logging.cpp).
+      CC: gcc-14
+      CXX: g++-14
+      # test_fomod drives the FOMOD wizard through a real QApplication; every
+      # other unit test is QCoreApplication-only. offscreen keeps the suite
+      # headless without dragging in xvfb.
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain and Qt 6
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            g++-14 cmake ninja-build qt6-base-dev
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        # Builds the app, not just the tests, on purpose: mainwindow.cpp is ~38%
+        # of the codebase and has no test coverage, so compiling it is the only
+        # automated check it gets.
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Unit tests
+        run: ctest --test-dir build -L unit --output-on-failure -j"$(nproc)"
