@@ -3157,11 +3157,11 @@ void MainWindow::closeEvent(QCloseEvent *event)
     saveModList();
     const qint64 ms_saveSched = closeTimer.elapsed();
 
-    // saveModList moved its file writes onto a worker thread. The actual
-    // bytes have to land on disk before the process exits or Alt+F4
-    // would silently lose the user's edits.  Wait here.
-    if (m_lastSaveFuture.isRunning())
-        m_lastSaveFuture.waitForFinished();
+    // saveModList moved its file writes onto the serialized save queue. The
+    // actual bytes have to land on disk before the process exits or Alt+F4
+    // would silently lose the user's edits.  Drain here (runs every still-
+    // queued write to completion, then returns).
+    m_saveQueue.drain();
     const qint64 ms_flush = closeTimer.elapsed() - ms_saveSched;
 
     Settings::setWindowGeometry(saveGeometry());

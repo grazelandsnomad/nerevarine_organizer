@@ -9,6 +9,7 @@
 // same-second collision guard. Driven off a QTemporaryDir.
 
 #include "backup_manager.h"
+#include "backup_ops.h"
 
 #include <QByteArray>
 #include <QCoreApplication>
@@ -132,6 +133,48 @@ static void testGuardsMissingDir()
     check("no checkpoint written into a non-existent directory", countGood(live) == 0);
 }
 
+// backup_ops - the Widget-free std::expected file ops carved out of
+// BackupManager. Exercises success + the data-loss-adjacent failure paths that
+// used to be locked behind ui::critical.
+static void testBackupOps()
+{
+    std::cout << "testBackupOps (std::expected file ops)\n";
+    QTemporaryDir dir;
+    const QString live = dir.filePath("modlist_morrowind.txt");
+
+    // -- markGoodState: copies the live file to <live>.good.<stamp> --
+    writeFile(live, "current-order\n");
+    const QString stamp = QStringLiteral("20260101-120000");
+    auto marked = backup_ops::markGoodState(live, stamp);
+    check("markGoodState succeeds", marked.has_value());
+    check("markGoodState returns the .good path",
+          marked.value_or(QString()) == live + ".good." + stamp);
+    check("good-state file holds the live bytes",
+          readFile(live + ".good." + stamp) == "current-order\n");
+
+    // -- restoreSnapshot: overwrite live from a snapshot, snapshotting old --
+    writeFile(live, "bad-order\n");                       // live drifted
+    const QString snap = live + ".good." + stamp;
+    auto restored = backup_ops::restoreSnapshot(live, snap);
+    check("restoreSnapshot succeeds", restored.has_value());
+    check("live now holds the restored bytes", readFile(live) == "current-order\n");
+    check("restore left a .bak snapshot of the pre-restore live",
+          !QDir(QFileInfo(live).absolutePath())
+               .entryList({QFileInfo(live).fileName() + ".bak.*"}, QDir::Files)
+               .isEmpty());
+
+    // -- restoreSnapshot with a vanished snapshot -> error, live untouched --
+    auto missing = backup_ops::restoreSnapshot(live, dir.filePath("nope.good.x"));
+    check("restoreSnapshot errors on a missing snapshot", !missing.has_value());
+    check("live untouched after a failed restore", readFile(live) == "current-order\n");
+
+    // -- deleteSnapshot --
+    check("deleteSnapshot succeeds", backup_ops::deleteSnapshot(snap).has_value());
+    check("good-state file is gone", !QFile::exists(snap));
+    check("deleteSnapshot errors on a missing file",
+          !backup_ops::deleteSnapshot(dir.filePath("gone.x")).has_value());
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -139,6 +182,7 @@ int main(int argc, char **argv)
     testCreatesAndNoPileUp();
     testContentDedupeAndChange();
     testGuardsMissingDir();
+    testBackupOps();
     std::cout << "\n" << s_passed << " passed, " << s_failed << " failed\n";
     return s_failed == 0 ? 0 : 1;
 }

@@ -147,8 +147,8 @@ static void testWriteModlistFile_serialOverwriteIsAtomicEnough()
     if (!tmp.isValid()) { std::cerr << "tmp setup failed\n"; std::exit(1); }
     const QString path = tmp.path() + "/modlist.txt";
 
-    // MainWindow serializes saves via m_lastSaveFuture.waitForFinished(),
-    // so "concurrent" saves are really two sequential writes. Last wins.
+    // MainWindow serializes saves through its single-thread SaveQueue, so
+    // "concurrent" saves are really two sequential writes. Last wins.
     (void)modlist_io::writeModlistFile(path, "FIRST\n");
     auto err = modlist_io::writeModlistFile(path, "SECOND\n");
 

@@ -15,6 +15,7 @@
 #include <Qt>
 #include <QtConcurrent/QtConcurrent>
 
+#include "async_guarded.h"
 #include "modroles.h"
 #include "pluginparser.h"
 
@@ -154,41 +155,43 @@ void ScanCoordinator::warmDataFoldersCache(const QStringList &paths)
     }
     if (coldPaths.isEmpty()) return;
 
-    QPointer<ScanCoordinator> safeSelf(this);
-    (void)QtConcurrent::run([safeSelf, coldPaths]() {
-        struct R {
-            QString path;
-            QList<QPair<QString, QStringList>> dataFolders;
-            QStringList bsaFiles;
-        };
-        QList<R> results;
-        results.reserve(coldPaths.size());
-        for (const QString &mp : coldPaths) {
-            R r;
-            r.path = mp;
-            r.dataFolders =
-                plugins::collectDataFolders(mp, plugins::contentExtensions());
-            QSet<QString> seen;
-            QDirIterator dit(mp,
-                {QStringLiteral("*.bsa"), QStringLiteral("*.BSA")},
-                QDir::Files, QDirIterator::Subdirectories);
-            while (dit.hasNext()) {
-                dit.next();
-                const QString name = dit.fileName();
-                if (seen.contains(name)) continue;
-                seen.insert(name);
-                r.bsaFiles << name;
+    // Worker touches no member state, so it ignores the passed self; the cache
+    // inserts all happen back on the UI thread in the epilogue.
+    struct R {
+        QString path;
+        QList<QPair<QString, QStringList>> dataFolders;
+        QStringList bsaFiles;
+    };
+    async::guarded(this,
+        [coldPaths](ScanCoordinator *) -> QList<R> {
+            QList<R> results;
+            results.reserve(coldPaths.size());
+            for (const QString &mp : coldPaths) {
+                R r;
+                r.path = mp;
+                r.dataFolders =
+                    plugins::collectDataFolders(mp, plugins::contentExtensions());
+                QSet<QString> seen;
+                QDirIterator dit(mp,
+                    {QStringLiteral("*.bsa"), QStringLiteral("*.BSA")},
+                    QDir::Files, QDirIterator::Subdirectories);
+                while (dit.hasNext()) {
+                    dit.next();
+                    const QString name = dit.fileName();
+                    if (seen.contains(name)) continue;
+                    seen.insert(name);
+                    r.bsaFiles << name;
+                }
+                results.append(std::move(r));
             }
-            results.append(std::move(r));
-        }
-        QMetaObject::invokeMethod(safeSelf.data(), [safeSelf, results]() {
-            if (!safeSelf) return;
+            return results;
+        },
+        [](ScanCoordinator *self, QList<R> results) {
             for (const auto &r : results) {
-                safeSelf->m_dataFoldersCache.insert(r.path, r.dataFolders);
-                safeSelf->m_bsaCache.insert(r.path, r.bsaFiles);
+                self->m_dataFoldersCache.insert(r.path, r.dataFolders);
+                self->m_bsaCache.insert(r.path, r.bsaFiles);
             }
-        }, Qt::QueuedConnection);
-    });
+        });
 }
 
 void ScanCoordinator::runSizeScan()
@@ -220,43 +223,39 @@ void ScanCoordinator::runSizeScan()
     }
     m_sizeScanInFlight = true;
 
-    QPointer<ScanCoordinator> safeSelf(this);
-    (void)QtConcurrent::run([safeSelf, inputs]() {
-        if (!safeSelf) return;
-        ScanCoordinator *self = safeSelf.data();
+    async::guarded(this,
+        [inputs](ScanCoordinator *self) -> QHash<QString, qint64> {
+            QHash<QString, qint64> results;
+            for (const Input &in : inputs) {
+                if (!in.installed || in.modPath.isEmpty()) continue;
 
-        QHash<QString, qint64> results;
-        for (const Input &in : inputs) {
-            if (!in.installed || in.modPath.isEmpty()) continue;
-
-            qint64 cachedMt  = -1;
-            qint64 cachedSz  = -1;
-            {
-                QMutexLocker lk(&self->m_sizeCacheMu);
-                auto it = self->m_sizeCache.constFind(in.modPath);
-                if (it != self->m_sizeCache.constEnd()) {
-                    cachedMt = it.value().first;
-                    cachedSz = it.value().second;
+                qint64 cachedMt  = -1;
+                qint64 cachedSz  = -1;
+                {
+                    QMutexLocker lk(&self->m_sizeCacheMu);
+                    auto it = self->m_sizeCache.constFind(in.modPath);
+                    if (it != self->m_sizeCache.constEnd()) {
+                        cachedMt = it.value().first;
+                        cachedSz = it.value().second;
+                    }
                 }
-            }
 
-            qint64 size = -1;
-            if (cachedMt == in.folderMtime && cachedSz >= 0) {
-                size = cachedSz;                         // cache hit
-            } else if (in.folderMtime >= 0) {
-                size = computeDirSize(in.modPath);       // slow path
-                QMutexLocker lk(&self->m_sizeCacheMu);
-                self->m_sizeCache.insert(in.modPath,
-                                          { in.folderMtime, size });
+                qint64 size = -1;
+                if (cachedMt == in.folderMtime && cachedSz >= 0) {
+                    size = cachedSz;                         // cache hit
+                } else if (in.folderMtime >= 0) {
+                    size = computeDirSize(in.modPath);       // slow path
+                    QMutexLocker lk(&self->m_sizeCacheMu);
+                    self->m_sizeCache.insert(in.modPath,
+                                              { in.folderMtime, size });
+                }
+                if (size >= 0) results.insert(in.modPath, size);
             }
-            if (size >= 0) results.insert(in.modPath, size);
-        }
-
-        QMetaObject::invokeMethod(safeSelf.data(), [safeSelf, results]{
-            if (!safeSelf) return;
-            safeSelf->applySizeResults(results);
-        }, Qt::QueuedConnection);
-    });
+            return results;
+        },
+        [](ScanCoordinator *self, QHash<QString, qint64> results) {
+            self->applySizeResults(results);
+        });
 }
 
 void ScanCoordinator::applySizeResults(const QHash<QString, qint64> &bytesByPath)

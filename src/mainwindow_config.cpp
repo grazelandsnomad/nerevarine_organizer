@@ -665,16 +665,14 @@ void MainWindow::saveModList()
 
     // Snapshot backup + modlist file write moved off the UI thread.  These
     // are pure-IO and previously sat squarely inside the user-perceived
-    // grey-freeze on Add/Edit.  closeEvent() waits on m_lastSaveFuture
-    // before exiting so unsaved state still flushes before the process
-    // dies.  Earlier in-flight saves are awaited synchronously here so we
-    // don't have two writers racing on the same file (mtime ordering also
-    // matters - absorbExternalLoadOrder above checks loadorder vs
-    // openmw.cfg mtime).
-    if (m_lastSaveFuture.isRunning())
-        m_lastSaveFuture.waitForFinished();
+    // grey-freeze on Add/Edit.  m_saveQueue serializes writes on one
+    // background thread in submission order, so two writers never race on the
+    // same file and the loadorder/openmw.cfg mtime relationship is preserved
+    // (absorbExternalLoadOrder above checks loadorder vs openmw.cfg mtime) -
+    // without the UI thread ever blocking on a prior save.  closeEvent drains
+    // the queue so unsaved state still flushes before the process dies.
     QPointer<MainWindow> safeSelf(this);
-    m_lastSaveFuture = QtConcurrent::run(
+    m_saveQueue.post(
         [safeSelf, modlistFile, modlistContent]() {
             // modlist_io::writeModlistFile is unit-tested in
             // tests/test_modlist_io.cpp - the carve-out is what makes
@@ -1249,17 +1247,14 @@ void MainWindow::syncOpenMWConfig()
     }
     const qint64 ms_render = syncPhase.restart();
 
-    // openmw.cfg + launcher.cfg writes moved off the UI thread.  Chained
-    // onto the same m_lastSaveFuture as the modlist file write so
-    // closeEvent only has to wait on one future, and sequenced behind
-    // any prior in-flight write so two saves can't race on the same
-    // file.  The launcher mtime gate runs in the worker so it sees the
-    // post-write mtime of openmw.cfg.
-    if (m_lastSaveFuture.isRunning())
-        m_lastSaveFuture.waitForFinished();
+    // openmw.cfg + launcher.cfg writes moved off the UI thread.  Posted onto
+    // the same m_saveQueue as the modlist file write so closeEvent drains one
+    // queue, and sequenced behind any prior write (single-thread FIFO) so two
+    // saves can't race on the same file.  The launcher mtime gate runs in the
+    // worker so it sees the post-write mtime of openmw.cfg.
     const QByteArray cfgBytes = rendered.toUtf8();
     QPointer<MainWindow> safeSelf(this);
-    m_lastSaveFuture = QtConcurrent::run(
+    m_saveQueue.post(
         [safeSelf, cfgPath, cfgBytes, launcherPath, lDataPaths, lContent]() {
             auto reportFail = [safeSelf](const QString &path, const QString &why) {
                 QMetaObject::invokeMethod(safeSelf.data(),

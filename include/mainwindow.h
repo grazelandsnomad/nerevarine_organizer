@@ -3,7 +3,6 @@
 
 #include <QColor>
 #include <QDateTime>
-#include <QFuture>
 #include <QJsonObject>
 #include <QList>
 #include <QMainWindow>
@@ -18,6 +17,7 @@
 
 #include "downloadqueue.h"
 #include "installcontroller.h"   // for InstallController::VerifyFailKind in slot
+#include "save_queue.h"          // serialized off-thread save writes (by-value member)
 #include "nexusclient.h"
 #include "game_profiles.h"
 #include "modentry.h"            // ModEntry complete type: QList<ModEntry> by value below
@@ -623,11 +623,12 @@ private:
     // empty m_modList is a real user delete and gets persisted.
     bool m_modListLoaded = false;
 
-    // Most recent async save-side file write (snapshot backup copies +
+    // Serialized off-thread save writes (snapshot backup copies +
     // openmw.cfg/launcher.cfg/modlist writes offloaded off the UI thread to keep
-    // Add/Edit-mod from greying out). closeEvent waits on this so the work has
-    // landed on disk before exit. isFinished() is true between writes.
-    QFuture<void> m_lastSaveFuture;
+    // Add/Edit-mod from greying out). Writes run one at a time in submission
+    // order on a single background thread; the UI thread only ever enqueues.
+    // closeEvent drains it so the work has landed on disk before exit.
+    SaveQueue m_saveQueue;
     void runMissingMastersScan();  // slot wired to m_mastersScanTimer::timeout
     // Missing-master cache + in-flight tracking + scan live in
     // LoadOrderController; this is the UI-side sink that writes the result map

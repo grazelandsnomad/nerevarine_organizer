@@ -809,7 +809,7 @@ void MainWindow::setupCentralWidget()
         // ending any temporary view sort.
         dropViewSortKeepingOrder();
         // Debounced - a multi-row drag fires N rowsMoved signals; coalescing
-        // avoids the N×waitForFinished stall on the m_lastSaveFuture chain.
+        // them into one saveModList avoids N redundant writes on the save queue.
         scheduleSaveModList();
         scheduleConflictScan();
     });

@@ -124,11 +124,19 @@ add_executable(test_fs
 target_include_directories(test_fs PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(test_fs PRIVATE Qt6::Core)
 
+# async::guarded helper (header-only; needs a real thread pool + event loop).
+add_executable(test_async
+    test_async.cpp
+)
+target_include_directories(test_async PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(test_async PRIVATE Qt6::Core Qt6::Concurrent)
+
 # BackupManager checkpoints, incl. the auto pre-sort good-state (Q_OBJECT ->
 # AUTOMOC; pulls prompts + translator.h -> generated translation_keys.h).
 add_executable(test_backup
     test_backup.cpp
     ${CMAKE_SOURCE_DIR}/src/backup_manager.cpp
+    ${CMAKE_SOURCE_DIR}/src/backup_ops.cpp
     ${CMAKE_SOURCE_DIR}/src/safe_fs.cpp
     ${CMAKE_SOURCE_DIR}/src/prompts.cpp
     ${CMAKE_SOURCE_DIR}/src/translator.cpp
@@ -193,6 +201,7 @@ set(UNIT_TESTS
     test_plugins
     test_load_order
     test_fs
+    test_async
     test_backup
     test_settings
     test_mods

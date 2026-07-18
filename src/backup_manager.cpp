@@ -18,7 +18,7 @@
 #include <QVBoxLayout>
 #include <Qt>
 
-#include "safe_fs.h"
+#include "backup_ops.h"
 #include "translator.h"
 #include "prompts.h"
 
@@ -104,16 +104,9 @@ void BackupManager::showRestoreBackupDialog(QWidget *parent)
             QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
         return;
 
-    // Snapshot the live file first so this restore can itself be undone
-    // from this dialog later.
-    (void)safefs::snapshotBackup(livePath);
-
-    if (QFile::exists(livePath) && !QFile::remove(livePath)) {
-        ui::critical(parent, T("restore_backup_fail_title"), T("restore_backup_fail_body").arg(livePath));
-        return;
-    }
-    if (!QFile::copy(chosenPath, livePath)) {
-        ui::critical(parent, T("restore_backup_fail_title"), T("restore_backup_fail_body").arg(livePath));
+    if (!backup_ops::restoreSnapshot(livePath, chosenPath)) {
+        ui::critical(parent, T("restore_backup_fail_title"),
+                     T("restore_backup_fail_body").arg(livePath));
         return;
     }
 
@@ -134,10 +127,10 @@ void BackupManager::markCurrentAsGoodState(QWidget *parent)
     if (m_saveBeforeMark) m_saveBeforeMark();
 
     const QString stamp = QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss");
-    const QString goodPath = livePath + ".good." + stamp;
-    if (QFile::exists(goodPath)) QFile::remove(goodPath);
-    if (!QFile::copy(livePath, goodPath)) {
-        ui::critical(parent, T("good_state_mark_fail_title"), T("good_state_mark_fail_body").arg(goodPath));
+    const auto marked = backup_ops::markGoodState(livePath, stamp);
+    if (!marked) {
+        ui::critical(parent, T("good_state_mark_fail_title"),
+                     T("good_state_mark_fail_body").arg(livePath + ".good." + stamp));
         return;
     }
     emit statusMessage(
@@ -238,16 +231,9 @@ void BackupManager::restoreGoodState(const QString &path, const QString &label,
             QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
         return;
 
-    // Snapshot current state before clobbering so this restore is undoable
-    // via the rotating Restore Backup dialog.
-    (void)safefs::snapshotBackup(livePath);
-
-    if (QFile::exists(livePath) && !QFile::remove(livePath)) {
-        ui::critical(parent, T("good_state_restore_fail_title"), T("good_state_restore_fail_body").arg(livePath));
-        return;
-    }
-    if (!QFile::copy(path, livePath)) {
-        ui::critical(parent, T("good_state_restore_fail_title"), T("good_state_restore_fail_body").arg(livePath));
+    if (!backup_ops::restoreSnapshot(livePath, path)) {
+        ui::critical(parent, T("good_state_restore_fail_title"),
+                     T("good_state_restore_fail_body").arg(livePath));
         return;
     }
 
@@ -262,8 +248,9 @@ void BackupManager::deleteGoodState(const QString &path, const QString &label,
             T("good_state_delete_confirm_body").arg(label),
             QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
         return;
-    if (!QFile::remove(path)) {
-        ui::critical(parent, T("good_state_delete_fail_title"), T("good_state_delete_fail_body").arg(path));
+    if (!backup_ops::deleteSnapshot(path)) {
+        ui::critical(parent, T("good_state_delete_fail_title"),
+                     T("good_state_delete_fail_body").arg(path));
         return;
     }
     emit statusMessage(T("good_state_deleted").arg(label), 5000);

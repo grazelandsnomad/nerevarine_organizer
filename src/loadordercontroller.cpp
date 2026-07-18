@@ -1,5 +1,6 @@
 #include "loadordercontroller.h"
 
+#include "async_guarded.h"
 #include "pluginparser.h"
 
 #include <QDir>
@@ -33,12 +34,16 @@ protected:
         fileOwners.reserve(4096);
 
         for (auto it = m_input.constBegin(); it != m_input.constEnd(); ++it) {
+            // ~LoadOrderController requests interruption then wait()s; without
+            // these checks a big scan ignores it and the wait just times out.
+            if (isInterruptionRequested()) return;
             const QString &modPath = it.key();
             QDir dir(modPath);
             if (!dir.exists()) continue;
             QDirIterator dit(modPath, QDir::Files | QDir::NoDotAndDotDot,
                              QDirIterator::Subdirectories);
             while (dit.hasNext()) {
+                if (isInterruptionRequested()) return;
                 dit.next();
                 QString rel = dir.relativeFilePath(dit.filePath()).toLower();
                 if (rel.endsWith(".txt")) continue;  // .txt never triggers conflicts
@@ -49,6 +54,7 @@ protected:
         // 2. Collect shared files per (unordered) mod pair.
         QHash<QString, QStringList> pairFiles;
         for (auto fit = fileOwners.constBegin(); fit != fileOwners.constEnd(); ++fit) {
+            if (isInterruptionRequested()) return;
             const QStringList &owners = fit.value();
             if (owners.size() < 2) continue;
             for (int i = 0; i < owners.size(); ++i) {
@@ -62,6 +68,7 @@ protected:
 
         // 3. Convert pairs -> per-mod results.
         for (auto pit = pairFiles.constBegin(); pit != pairFiles.constEnd(); ++pit) {
+            if (isInterruptionRequested()) return;
             const QStringList parts = pit.key().split('\t');
             const QString &pathA = parts[0], &pathB = parts[1];
             QStringList files = pit.value();
@@ -142,9 +149,9 @@ void LoadOrderController::scanMissingMasters(
     }
     m_mastersScanInFlight = true;
 
-    QPointer<LoadOrderController> safeSelf(this);
-    (void)QtConcurrent::run(
-        [safeSelf, enabledMods, availableLower]() {
+    async::guarded(this,
+        [enabledMods, availableLower](LoadOrderController *self)
+            -> QHash<QString, QPair<bool, QStringList>> {
         // Base Morrowind masters live in no mod; treat as always available or
         // the scan flags them.
         static const QSet<QString> baseMasters = {
@@ -152,8 +159,6 @@ void LoadOrderController::scanMissingMasters(
         };
 
         QHash<QString, QPair<bool, QStringList>> byModPath;
-        if (!safeSelf) return;
-
         for (const MastersInput &e : enabledMods) {
             QStringList entries;
             bool anyMissing = false;
@@ -163,15 +168,16 @@ void LoadOrderController::scanMissingMasters(
                 const QString &pluginName = plug.second;
 
                 // mtime-keyed cache: don't re-read plugins unchanged since
-                // the last scan.
+                // the last scan.  m_mastersCacheMu makes the cache the one
+                // thread-safe member the worker may touch.
                 const qint64 mtime = QFileInfo(pluginPath)
                                         .lastModified().toMSecsSinceEpoch();
                 QStringList masters;
                 bool hit = false;
-                if (safeSelf) {
-                    QMutexLocker lk(safeSelf->m_mastersCacheMu);
-                    auto it = safeSelf->m_mastersCache.constFind(pluginPath);
-                    if (it != safeSelf->m_mastersCache.constEnd()
+                {
+                    QMutexLocker lk(self->m_mastersCacheMu);
+                    auto it = self->m_mastersCache.constFind(pluginPath);
+                    if (it != self->m_mastersCache.constEnd()
                      && it.value().first == mtime) {
                         masters = it.value().second;
                         hit = true;
@@ -179,11 +185,8 @@ void LoadOrderController::scanMissingMasters(
                 }
                 if (!hit) {
                     masters = plugins::readTes3Masters(pluginPath);
-                    if (safeSelf) {
-                        QMutexLocker lk(safeSelf->m_mastersCacheMu);
-                        safeSelf->m_mastersCache.insert(pluginPath,
-                                                        { mtime, masters });
-                    }
+                    QMutexLocker lk(self->m_mastersCacheMu);
+                    self->m_mastersCache.insert(pluginPath, { mtime, masters });
                 }
 
                 QStringList missing;
@@ -200,22 +203,20 @@ void LoadOrderController::scanMissingMasters(
             }
             byModPath.insert(e.modPath, { anyMissing, entries });
         }
-
-        if (!safeSelf) return;
-        QMetaObject::invokeMethod(safeSelf.data(),
-            [safeSelf, byModPath]() {
-            if (!safeSelf) return;
-            emit safeSelf->missingMastersScanned(byModPath);
-            safeSelf->m_mastersScanInFlight = false;
-            // Drain a buffered retrigger once.
-            if (safeSelf->m_mastersScanPending) {
-                safeSelf->m_mastersScanPending = false;
-                const auto  in = std::move(safeSelf->m_pendingMastersInput);
-                const auto  av = std::move(safeSelf->m_pendingMastersAvailable);
-                safeSelf->m_pendingMastersInput.clear();
-                safeSelf->m_pendingMastersAvailable.clear();
-                safeSelf->scanMissingMasters(in, av);
-            }
-        }, Qt::QueuedConnection);
+        return byModPath;
+    },
+        [](LoadOrderController *self,
+           QHash<QString, QPair<bool, QStringList>> byModPath) {
+        emit self->missingMastersScanned(byModPath);
+        self->m_mastersScanInFlight = false;
+        // Drain a buffered retrigger once.
+        if (self->m_mastersScanPending) {
+            self->m_mastersScanPending = false;
+            const auto  in = std::move(self->m_pendingMastersInput);
+            const auto  av = std::move(self->m_pendingMastersAvailable);
+            self->m_pendingMastersInput.clear();
+            self->m_pendingMastersAvailable.clear();
+            self->scanMissingMasters(in, av);
+        }
     });
 }

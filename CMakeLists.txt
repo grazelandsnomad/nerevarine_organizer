@@ -153,6 +153,7 @@ set(SOURCES
     src/toolbar_customization.cpp
     src/scan_coordinator.cpp
     src/backup_manager.cpp
+    src/backup_ops.cpp
     src/bulk_install_queue.cpp
     src/review_updates_dialog.cpp
     src/launch_warnings.cpp
@@ -181,6 +182,7 @@ set(SOURCES
     include/toolbar_customization.h
     include/scan_coordinator.h
     include/backup_manager.h
+    include/backup_ops.h
     include/bulk_install_queue.h
     include/review_updates_dialog.h
     include/launch_warnings.h

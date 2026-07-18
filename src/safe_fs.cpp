@@ -1,6 +1,5 @@
 #include "safe_fs.h"
 
-#include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
 #include <QDirIterator>
@@ -101,7 +100,12 @@ copyTreeVerified(const QString &src, const QString &dst,
             return fail(QStringLiteral("copy failed: ") + rel);
         if (QFileInfo(target).size() != fi.size())
             return fail(QStringLiteral("size mismatch after copy: ") + rel);
-        QCoreApplication::processEvents();
+        // Deliberately NO processEvents() here: this is a Qt-Core helper with no
+        // event loop of its own, and pumping the *caller's* loop mid-copy would
+        // re-enter arbitrary UI slots (the debounced save / conflict-scan
+        // timers) over a half-copied tree during a data-destructive move.
+        // Cancellation is delivered out-of-band via isCancelled(), checked at
+        // the top of the loop; the caller keeps the UI responsive itself.
     }
     return {};
 }

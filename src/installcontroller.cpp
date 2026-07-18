@@ -2,6 +2,7 @@
 
 #include "install_layout.h"
 #include "archive_magic.h"
+#include "async_guarded.h"
 #include "logging.h"
 
 #include <QByteArray>
@@ -48,14 +49,12 @@ void InstallController::verifyArchive(const QString &archivePath,
         return;
     }
 
-    // MD5 is expensive: hash on a worker thread. QPointer guards against the
-    // controller being destroyed mid-hash (shutdown) and dangling the emit.
+    // MD5 is expensive: hash on a worker thread. async::guarded drops the
+    // result (and the emit) if the controller is destroyed mid-hash at shutdown.
     emit verificationStarted(archivePath);
-    QPointer<InstallController> safeSelf(this);
-    (void)QtConcurrent::run(
-        [safeSelf, archivePath, installToken, expectedMd5Lower]() {
-        QString actualMd5;
-        {
+    async::guarded(this,
+        [archivePath](InstallController *) -> QString {
+            QString actualMd5;
             QFile f(archivePath);
             if (f.open(QIODevice::ReadOnly)) {
                 QCryptographicHash h(QCryptographicHash::Md5);
@@ -70,14 +69,12 @@ void InstallController::verifyArchive(const QString &archivePath,
                 }
                 actualMd5 = QString::fromLatin1(h.result().toHex());
             }
-        }
-
-        if (!safeSelf) return;
-        QMetaObject::invokeMethod(safeSelf.data(),
-            [safeSelf, archivePath, installToken, actualMd5, expectedMd5Lower]() {
-            if (!safeSelf) return;
+            return actualMd5;
+        },
+        [archivePath, installToken, expectedMd5Lower](
+            InstallController *self, QString actualMd5) {
             if (actualMd5.compare(expectedMd5Lower, Qt::CaseInsensitive) != 0) {
-                emit safeSelf->verificationFailed(
+                emit self->verificationFailed(
                     archivePath, installToken,
                     VerifyFailKind::Md5,
                     actualMd5.isEmpty()
@@ -86,9 +83,8 @@ void InstallController::verifyArchive(const QString &archivePath,
                     expectedMd5Lower);
                 return;
             }
-            emit safeSelf->verified(archivePath, installToken);
-        }, Qt::QueuedConnection);
-    });
+            emit self->verified(archivePath, installToken);
+        });
 }
 
 namespace {
