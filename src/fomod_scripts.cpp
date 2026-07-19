@@ -1,7 +1,7 @@
 #include "fomod_scripts.h"
 #include "fomod_path.h"
+#include "fomod_copy.h"
 
-#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 
@@ -28,9 +28,9 @@ void installDeclaredScripts(const QString &manifestSrc,
         QString scriptPath = line.mid(colon + 1).trimmed();
         scriptPath.replace(u'\\', u'/');
         if (scriptPath.isEmpty()) continue;
-        // The manifest is untrusted; refuse a traversing path so the
-        // `installDir + "/" + scriptPath` destination below can't escape the
-        // staging dir.
+        // The manifest is untrusted; refuse a traversing path up front so a
+        // "../" can't escape the staging dir (resolveDest rejects it too, but
+        // skip cleanly here rather than fail the copy downstream).
         if (scriptPath.split(u'/', Qt::SkipEmptyParts).contains(QLatin1String("..")))
             continue;
 
@@ -44,10 +44,9 @@ void installDeclaredScripts(const QString &manifestSrc,
             src = fomod::resolvePath(manifestParent, scriptPath);
         if (src.isEmpty() || !QFileInfo::exists(src)) continue;
 
-        const QString dst = installDir + "/" + scriptPath;
+        const fomod::ResolvedPath dst = fomod::resolveDest(installDir, scriptPath);
         if (QFileInfo::exists(dst)) continue;  // already placed by a folder= entry
-        QDir().mkpath(QFileInfo(dst).absolutePath());
-        QFile::copy(src, dst);
+        fomod_copy::copyFile(src, dst);        // mkpath + last-writer-wins live in copyFile
     }
 }
 

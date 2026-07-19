@@ -15,19 +15,7 @@
 #include <QUrlQuery>
 #include <iostream>
 
-static int s_passed = 0;
-static int s_failed = 0;
-
-static void check(const char *name, bool ok)
-{
-    if (ok) {
-        std::cout << "  \033[32m✓\033[0m " << name << "\n";
-        ++s_passed;
-    } else {
-        std::cout << "  \033[31m✗\033[0m " << name << "\n";
-        ++s_failed;
-    }
-}
+#include "test_harness.h"
 
 static void testNxmUrlParsing()
 {

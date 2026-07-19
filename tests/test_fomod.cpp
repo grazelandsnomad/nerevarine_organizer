@@ -22,23 +22,9 @@
 #include <QWidget>
 
 #include <iostream>
+#include <type_traits>
 
-static int s_passed = 0;
-static int s_failed = 0;
-
-static void check(const char *name, bool ok, const QString &hint = QString())
-{
-    if (ok) {
-        std::cout << "  \033[32m✓\033[0m " << name << "\n";
-        ++s_passed;
-    } else {
-        std::cout << "  \033[31m✗\033[0m " << name;
-        if (!hint.isNull() && !hint.isEmpty())
-            std::cout << " (" << hint.toStdString() << ")";
-        std::cout << "\n";
-        ++s_failed;
-    }
-}
+#include "test_harness.h"
 
 static void writeFile(const QString &path, const QByteArray &bytes = {})
 {
@@ -66,6 +52,17 @@ static void fomodpath_seedArchive(const QString &root)
     touch(root + "/00 Core/bookart/tome.dds");
     touch(root + "/fomod/ModuleConfig.xml");
 }
+
+// The gate itself, checked at compile time: a raw QString cannot become a
+// ResolvedPath (so only resolveDest can mint one), and a ResolvedPath cannot be
+// copied (so it can't be stashed and reused stale). Loosen the ctor or the
+// move-only-ness and the build breaks here.
+static_assert(!std::is_constructible_v<fomod::ResolvedPath, QString>,
+              "ResolvedPath must not be constructible from a raw QString");
+static_assert(!std::is_copy_constructible_v<fomod::ResolvedPath>,
+              "ResolvedPath must stay move-only");
+static_assert(std::is_move_constructible_v<fomod::ResolvedPath>,
+              "resolveDest returns ResolvedPath by value, so it must be movable");
 
 static void run_fomod_path()
 {
@@ -305,6 +302,37 @@ static void fomodcopy_testMergeOverlayOverridesMainDownload()
           readAll(existing + "/Textures/extra.dds") == "optional-extra");
 }
 
+static void fomodcopy_testCopyFileLastWriterWinsAndReports()
+{
+    std::cout << "\n[copyFile: mkpath + last-writer-wins + bool result]\n";
+    QTemporaryDir dir;
+    const QString root = dir.path();
+    writeFile(root + "/src_a.txt", "AAA");
+    writeFile(root + "/src_b.txt", "BBB");
+
+    // First write into a not-yet-existing nested dest: the parent is created.
+    const bool ok1 = fomod_copy::copyFile(
+        root + "/src_a.txt", fomod::resolveDest(root + "/out", "sub/f.txt"));
+    check("copyFile creates the parent and returns true", ok1);
+    check("copyFile placed the first file",
+          QFileInfo::exists(root + "/out/sub/f.txt"));
+
+    // Second write to the same dest overwrites (plain QFile::copy would refuse).
+    const bool ok2 = fomod_copy::copyFile(
+        root + "/src_b.txt", fomod::resolveDest(root + "/out", "sub/f.txt"));
+    QFile out(root + "/out/sub/f.txt");
+    (void)out.open(QIODevice::ReadOnly);
+    const QByteArray got = out.readAll();
+    out.close();
+    check("copyFile overwrote (last writer wins)", ok2 && got == "BBB",
+          "got: " + QString::fromUtf8(got));
+
+    // Missing source -> QFile::copy fails -> false.
+    const bool ok3 = fomod_copy::copyFile(
+        root + "/nope.txt", fomod::resolveDest(root + "/out", "g.txt"));
+    check("copyFile returns false when the source is missing", !ok3);
+}
+
 static void run_fomod_copy()
 {
     std::cout << "=== fomod_copy ===\n";
@@ -314,6 +342,7 @@ static void run_fomod_copy()
     fomodcopy_testPatchHubMixedEmptyAndContent();
     fomodcopy_testCaseVariantFoldersMerge();
     fomodcopy_testMergeOverlayOverridesMainDownload();
+    fomodcopy_testCopyFileLastWriterWinsAndReports();
     std::cout << "\n";
 }
 
@@ -463,6 +492,31 @@ static void fomodscripts_testWindowsBackslashPathsResolve()
           QFileInfo::exists(installDir + "/scripts/W/w.lua"));
 }
 
+static void fomodscripts_testDeclaredScriptMergesIntoStagedCase()
+{
+    std::cout << "\n[declared script routes through resolveDest, merges case]\n";
+    // A folder= entry already staged a lowercase "scripts/"; the manifest then
+    // declares the same dir miscased ("Scripts\foo.lua"). resolveDest must merge
+    // into the existing casing - the old installDir + "/" + scriptPath concat
+    // this replaced would fork a case-variant "Scripts/" on a case-sensitive FS.
+    QTemporaryDir dir;
+    const QString archive    = dir.filePath("archive");
+    const QString installDir = dir.filePath("install");
+    QDir().mkpath(installDir + "/scripts");        // already staged, lowercase
+
+    const QString manifestSrc = archive + "/00 W/W.omwscripts";
+    writeFile(manifestSrc, "PLAYER: Scripts\\foo.lua\n");
+    writeFile(archive + "/00 W/Scripts/foo.lua", "return {}");
+
+    fomod_scripts::installDeclaredScripts(manifestSrc, archive, installDir);
+
+    check("declared script merges into the staged lowercase scripts/",
+          QFileInfo::exists(installDir + "/scripts/foo.lua"));
+    check("no forked case-variant Scripts/ dir",
+          !QDir(installDir).entryList(QDir::Dirs | QDir::NoDotAndDotDot)
+               .contains(QStringLiteral("Scripts")));
+}
+
 static void run_fomod_scripts()
 {
     std::cout << "=== fomod_scripts::installDeclaredScripts ===\n";
@@ -473,6 +527,7 @@ static void run_fomod_scripts()
     fomodscripts_testMissingDeclaredScriptIsSkipped();
     fomodscripts_testAlreadyInstalledFileIsLeftAlone();
     fomodscripts_testWindowsBackslashPathsResolve();
+    fomodscripts_testDeclaredScriptMergesIntoStagedCase();
     std::cout << "\n";
 }
 

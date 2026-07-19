@@ -10,22 +10,7 @@
 
 using archive_magic::Format;
 
-static int s_passed = 0;
-static int s_failed = 0;
-
-static void check(const char *name, bool ok, const QString &hint = QString())
-{
-    if (ok) {
-        std::cout << "  \033[32m✓\033[0m " << name << "\n";
-        ++s_passed;
-    } else {
-        std::cout << "  \033[31m✗\033[0m " << name;
-        if (!hint.isNull() && !hint.isEmpty())
-            std::cout << " (" << hint.toStdString() << ")";
-        std::cout << "\n";
-        ++s_failed;
-    }
-}
+#include "test_harness.h"
 
 // Build a header from raw bytes.
 static QByteArray hdr(std::initializer_list<unsigned char> bytes)

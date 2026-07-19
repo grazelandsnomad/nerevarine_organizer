@@ -865,10 +865,8 @@ QString FomodWizard::applySelections()
             const QString rel = normalizedDest.isEmpty()
                 ? QFileInfo(src).fileName()
                 : normalizedDest;
-            QString dst = fomod::resolveDest(installDir, rel);
-            QDir().mkpath(QFileInfo(dst).absolutePath());
-            QFile::remove(dst);
-            if (!QFile::copy(src, dst)) failed << f.source;
+            const fomod::ResolvedPath dst = fomod::resolveDest(installDir, rel);
+            if (!fomod_copy::copyFile(src, dst)) failed << f.source;
 
             // Patch-hub rescue: an .omwscripts manifest declares lua bodies the
             // FOMOD often doesn't list as separate <file>/<folder> entries

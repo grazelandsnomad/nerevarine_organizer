@@ -13,7 +13,16 @@
 
 #include <QString>
 
+#include "fomod_path.h"   // fomod::ResolvedPath (copyFile's gated destination)
+
 namespace fomod_copy {
+
+// Copy one file to a resolved destination: creates the parent, then last-writer-
+// wins (removes any existing target first, since QFile::copy won't clobber), and
+// warns + returns false on failure.  The destination is a fomod::ResolvedPath, so
+// a raw unresolved path cannot reach a FOMOD copy - that is a compile error,
+// which is how the case-variant / empty-install data-loss bug is designed out.
+bool copyFile(const QString &src, const fomod::ResolvedPath &dst);
 
 // Copy every entry inside srcDir into dstDir (children, not the dir itself).
 // No-op when srcDir does not exist or is empty.

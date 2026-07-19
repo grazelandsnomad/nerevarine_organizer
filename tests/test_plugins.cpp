@@ -14,24 +14,7 @@
 #include <cstring>
 #include <iostream>
 
-static int s_passed = 0;
-static int s_failed = 0;
-
-static void check(const char *name, bool ok,
-                  const QString &got = {}, const QString &want = {})
-{
-    if (ok) {
-        std::cout << "  \033[32m\xE2\x9C\x93\033[0m " << name << "\n";
-        ++s_passed;
-    } else {
-        std::cout << "  \033[31m\xE2\x9C\x97\033[0m " << name << "\n";
-        if (!want.isEmpty() || !got.isEmpty()) {
-            std::cout << "    --- want ---\n" << want.toStdString() << "\n";
-            std::cout << "    ---  got ---\n" << got.toStdString()  << "\n";
-        }
-        ++s_failed;
-    }
-}
+#include "test_harness.h"
 
 // ===== plugin_parser =====
 

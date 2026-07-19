@@ -27,21 +27,7 @@
 #include <atomic>
 #include <iostream>
 
-static int s_passed = 0;
-static int s_failed = 0;
-
-static void check(const char *name, bool ok, const QString &detail = {})
-{
-    if (ok) {
-        std::cout << "  \033[32m/\033[0m " << name << "\n";
-        ++s_passed;
-    } else {
-        std::cout << "  \033[31mX\033[0m " << name << "\n";
-        if (!detail.isEmpty())
-            std::cout << "    " << detail.toStdString() << "\n";
-        ++s_failed;
-    }
-}
+#include "test_harness.h"
 
 // Plain QObject subclass - no signals/slots, so no moc needed. Only used for
 // thread affinity, QPointer tracking, and as the queued-invocation context.

@@ -24,8 +24,34 @@
 // swallow it).
 
 #include <QString>
+#include <utility>   // std::move (ResolvedPath inline ctor)
 
 namespace fomod {
+
+// A path that has been through resolveDest(): separator-normalized and
+// case-reconciled against whatever is already staged. Move-only and
+// constructible only by resolveDest, so a raw QString can never masquerade as a
+// resolved destination - handing an unresolved path to a copy is a compile
+// error, not silent data loss. The implicit const-QString& conversion is
+// read-only decay and must stay implicit (it is what keeps existing consumers
+// compiling unchanged); never bind a long-lived reference to it - copy into a
+// QString or use it within the full-expression.
+class ResolvedPath {
+public:
+    ResolvedPath(const ResolvedPath &)            = delete;
+    ResolvedPath &operator=(const ResolvedPath &) = delete;
+    ResolvedPath(ResolvedPath &&)                 = default;
+    ResolvedPath &operator=(ResolvedPath &&)      = default;
+
+    bool isEmpty() const { return m_path.isEmpty(); }
+    const QString &str() const { return m_path; }
+    operator const QString &() const { return m_path; }  // read-only decay
+
+private:
+    explicit ResolvedPath(QString p) : m_path(std::move(p)) {}
+    QString m_path;
+    friend ResolvedPath resolveDest(const QString &, const QString &);
+};
 
 QString resolvePath(const QString &root, const QString &relative);
 
@@ -35,8 +61,10 @@ QString resolvePath(const QString &root, const QString &relative);
 // casing, a component that does not keeps the authored casing.  Creates
 // nothing.  Routing FOMOD destinations through this makes case-mismatched
 // options ("Meshes" vs "meshes") merge into one folder instead of forking
-// duplicate case-variant directories on a case-sensitive filesystem.
-QString resolveDest(const QString &root, const QString &relative);
+// duplicate case-variant directories on a case-sensitive filesystem.  The
+// ResolvedPath return type is what makes that routing unbypassable: a copy
+// destination must be one, and only resolveDest can mint one.
+ResolvedPath resolveDest(const QString &root, const QString &relative);
 
 } // namespace fomod
 

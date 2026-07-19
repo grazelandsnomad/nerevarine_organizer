@@ -40,11 +40,11 @@ QString resolvePath(const QString &root, const QString &relativeIn)
     return current;
 }
 
-QString resolveDest(const QString &root, const QString &relativeIn)
+ResolvedPath resolveDest(const QString &root, const QString &relativeIn)
 {
     QString relative = relativeIn;
     relative.replace('\\', '/');
-    if (relative.isEmpty()) return root;
+    if (relative.isEmpty()) return ResolvedPath(root);
 
     QString current = root;
     const QStringList segments = relative.split('/', Qt::SkipEmptyParts);
@@ -52,7 +52,7 @@ QString resolveDest(const QString &root, const QString &relativeIn)
         // Untrusted FOMOD dest: a "../" segment would let copyContents /
         // QFile::copy write outside the staging dir. Return "" so the caller
         // fails the entry instead of escaping root.
-        if (seg == QLatin1String("..")) return {};
+        if (seg == QLatin1String("..")) return ResolvedPath(QString());
         if (seg == QLatin1String(".")) continue;
         QDir d(current);
         // Reuse the casing of an already-staged component (exact match first,
@@ -75,7 +75,7 @@ QString resolveDest(const QString &root, const QString &relativeIn)
         // resolvePath this never fails - a missing dest component is normal.
         current = d.filePath(match.isEmpty() ? seg : match);
     }
-    return current;
+    return ResolvedPath(current);
 }
 
 } // namespace fomod
