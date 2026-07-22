@@ -170,6 +170,7 @@ target_link_libraries(test_settings PRIVATE Qt6::Core Qt6::Widgets)
 add_executable(test_mods
     test_mods.cpp
     ${CMAKE_SOURCE_DIR}/src/mod_naming.cpp
+    ${CMAKE_SOURCE_DIR}/src/mod_cleanup.cpp
     ${CMAKE_SOURCE_DIR}/src/mod_sharing.cpp
     ${CMAKE_SOURCE_DIR}/src/modlist_serializer.cpp
     ${CMAKE_SOURCE_DIR}/src/modlist_summary.cpp

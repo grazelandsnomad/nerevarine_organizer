@@ -144,6 +144,7 @@
 #include "fs_utils.h"
 #include "pluginparser.h"
 #include "mod_naming.h"
+#include "mod_cleanup.h"
 #include "modlist_io.h"
 #include "openmwconfigwriter.h"
 #include "log_triage.h"
@@ -312,6 +313,7 @@ void MainWindow::setupMenuBar()
         m_actUndeployBethesda->setVisible(deployable);
         m_actInspectDeployment->setVisible(deployable);
     }
+    modsMenu->addAction(T("menu_cleanup_folders"), this, &MainWindow::onCleanUpModFolders);
     modsMenu->addAction(T("menu_log_triage"),      this, &MainWindow::onTriageOpenMWLog);
     modsMenu->addAction(T("menu_diag_bundle"),     this, &MainWindow::onCreateDiagnosticBundle);
     modsMenu->addAction(T("menu_edit_load_order"), this, &MainWindow::onEditLoadOrder);
@@ -991,6 +993,155 @@ void MainWindow::onModlistSummary()
     modlist_summary::showDialog(this, view,
         [this] { onMoveModsDir(); },
         [this] { onConsolidateModsIntoActiveProfile(); });
+}
+
+namespace {
+
+// Recursive byte size of a folder. Used only to show the user what they are
+// about to reclaim, so a stat failure just contributes 0 rather than aborting.
+qint64 folderSizeBytes(const QString &path)
+{
+    qint64 total = 0;
+    QDirIterator it(path, QDir::Files | QDir::Hidden | QDir::System,
+                    QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        it.next();
+        total += it.fileInfo().size();
+    }
+    return total;
+}
+
+QString cleanupFmtBytes(qint64 b)
+{
+    const double MB = 1024.0 * 1024.0;
+    const double GB = MB * 1024.0;
+    if (b >= GB) return QString::number(b / GB, 'f', 2) + QStringLiteral(" GB");
+    if (b >= MB) return QString::number(b / MB, 'f', 1) + QStringLiteral(" MB");
+    return QString::number(b / 1024.0, 'f', 0) + QStringLiteral(" KB");
+}
+
+} // namespace
+
+// Clean Up Mod Folders. Upgrades used to leave every previous build on disk
+// (mod_naming::findStaleSiblings only matched a literal re-download of the same
+// file), so libraries accumulated folders nothing points at - one real one had
+// 96 of them holding 8.6 GiB. The install path no longer creates them; this
+// reclaims what already piled up.
+//
+// Deliberately manual and preview-first: it is a recursive delete over the
+// user's mod library, so it never runs on its own and never deletes without an
+// explicit confirm.
+void MainWindow::onCleanUpModFolders()
+{
+    // An in-flight download's extract dir is not in the modlist yet, so it would
+    // read as an orphan. Same for an extraction still running behind a
+    // still-spinning row.
+    if (!m_downloadQueue->isEmpty()) {
+        ui::warn(this, T("cleanup_folders_title"), T("move_mods_err_downloads"));
+        return;
+    }
+    for (int i = 0; i < m_modList->count(); ++i) {
+        if (m_modList->item(i)->data(ModRole::InstallStatus).toInt() == 2) {
+            ui::warn(this, T("cleanup_folders_title"), T("move_mods_err_downloads"));
+            return;
+        }
+    }
+    if (m_modsDir.isEmpty() || !QDir(m_modsDir).exists()) {
+        ui::warn(this, T("cleanup_folders_title"), T("cleanup_folders_no_dir"));
+        return;
+    }
+
+    const QString modsRoot = QFileInfo(m_modsDir).absoluteFilePath();
+
+    // Three independent reference sources, so one unreadable file cannot make
+    // the sweep think the library is empty.
+    QStringList referenced;
+    for (int i = 0; i < m_modList->count(); ++i) {
+        auto *it = m_modList->item(i);
+        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        for (int role : { ModRole::ModPath, ModRole::IntendedModPath,
+                          ModRole::MergeTargetPath, ModRole::PrevModPath }) {
+            const QString p = it->data(role).toString();
+            if (!p.isEmpty()) referenced << p;
+        }
+    }
+    for (const auto &prof : otherProfileModlists())
+        for (const ModEntry &e : prof.second)
+            if (!e.modPath.isEmpty()) referenced << e.modPath;
+    {   // data= lines the game config still points at
+        QFile cfg(QDir::homePath() + QStringLiteral("/.config/openmw/openmw.cfg"));
+        if (cfg.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            QTextStream in(&cfg);
+            while (!in.atEnd()) {
+                const QString line = in.readLine().trimmed();
+                if (!line.startsWith(QStringLiteral("data="))) continue;
+                QString p = line.mid(5).trimmed();
+                if (p.startsWith('"') && p.endsWith('"') && p.size() >= 2)
+                    p = p.mid(1, p.size() - 2);
+                if (!p.isEmpty()) referenced << p;
+            }
+        }
+    }
+
+    QStringList onDisk;
+    {
+        const QDir root(modsRoot);
+        for (const QFileInfo &fi : root.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+            if (fi.isSymLink()) continue;   // never recurse out of the mods dir
+            // Already staged for deletion by removeFoldersAsync.
+            if (fi.fileName().contains(QStringLiteral(".__deleting__"))) continue;
+            onDisk << fi.fileName();
+        }
+    }
+
+    const QStringList orphans =
+        mod_cleanup::unreferencedFolders(modsRoot, onDisk, referenced);
+    if (orphans.isEmpty()) {
+        ui::info(this, T("cleanup_folders_title"), T("cleanup_folders_none"));
+        return;
+    }
+    // A modlist that failed to parse looks exactly like a huge pile-up. Refuse
+    // rather than act on it. (Calibration: the observed real case was 26%.)
+    if (!onDisk.isEmpty() && orphans.size() * 100 / onDisk.size() > 60) {
+        ui::warn(this, T("cleanup_folders_title"),
+                 T("cleanup_folders_suspicious")
+                     .arg(orphans.size()).arg(onDisk.size()));
+        return;
+    }
+
+    QList<QPair<qint64, QString>> sized;
+    qint64 totalBytes = 0;
+    for (const QString &name : orphans) {
+        const qint64 b = folderSizeBytes(QDir(modsRoot).filePath(name));
+        sized.append({ b, name });
+        totalBytes += b;
+    }
+    std::sort(sized.begin(), sized.end(),
+              [](const auto &a, const auto &b) { return a.first > b.first; });
+
+    QString body;
+    for (const auto &e : sized)
+        body += QStringLiteral("%1  %2\n")
+                    .arg(cleanupFmtBytes(e.first), 10).arg(e.second);
+
+    const QString summary = T("cleanup_folders_summary")
+                                .arg(orphans.size())
+                                .arg(cleanupFmtBytes(totalBytes));
+    if (!ui::confirmMonospaceReport(this, T("cleanup_folders_title"), body,
+                                    720, 480, summary,
+                                    T("cleanup_folders_accept").arg(orphans.size())))
+        return;
+
+    QStringList toDelete;
+    for (const auto &e : sized)
+        toDelete << QDir(modsRoot).filePath(e.second);
+    removeModFoldersAsync(toDelete);
+
+    m_scans->scheduleSizeScan();
+    statusBar()->showMessage(
+        T("cleanup_folders_done").arg(QString::number(orphans.size()),
+                                      cleanupFmtBytes(totalBytes)),
+        8000);
 }
 
 // Diagnostic bundle. Zips the modlist + load-order files, openmw.cfg, the tail

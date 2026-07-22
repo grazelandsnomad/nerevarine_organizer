@@ -36,6 +36,28 @@ QStringList findStaleSiblings(const QString     &currentFolderName,
     return stale;
 }
 
+QStringList findOlderVersionSiblings(const QString     &currentFolderName,
+                                     const QStringList &siblings,
+                                     int                modId)
+{
+    if (modId <= 0 || currentFolderName.isEmpty() || siblings.isEmpty())
+        return {};
+
+    // "-<id>" must be followed by a separator or end of name, so mod 5865 never
+    // matches "Foo-58652-1-87-...". The leading "-" keeps a version component
+    // from posing as the id.
+    const QRegularExpression idPat(
+        QLatin1String("-") + QString::number(modId) + QLatin1String("([-_]|$)"));
+
+    QStringList stale;
+    for (const QString &sib : siblings) {
+        if (sib == currentFolderName) continue;
+        if (idPat.match(sib).hasMatch())
+            stale << sib;
+    }
+    return stale;
+}
+
 bool folderNameLooksGeneric(const QString &folderName)
 {
     static const QStringList kGenericFolderNames = {

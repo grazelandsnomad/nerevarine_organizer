@@ -129,6 +129,7 @@ set(SOURCES
     src/installcontroller.cpp
     src/install_layout.cpp
     src/mod_naming.cpp
+    src/mod_cleanup.cpp
     src/modlist_io.cpp
     src/loadordercontroller.cpp
     src/nexusclient.cpp

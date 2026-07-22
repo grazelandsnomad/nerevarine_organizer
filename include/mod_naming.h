@@ -39,6 +39,28 @@ namespace mod_naming {
 QStringList findStaleSiblings(const QString     &currentFolderName,
                               const QStringList &siblings);
 
+// Siblings that are OLDER BUILDS of the same Nexus mod: folder names carrying
+// "-<modId>" followed by a version/timestamp chain.
+//
+// findStaleSiblings above keys on the WHOLE folder name, so it only ever
+// matches a literal re-download of the same file (where InstallController
+// appended "_<ts>" to dodge the path collision). A Nexus folder is
+// "<Name>-<modId>-<version>-<uploadTs>", so an upgrade produces a completely
+// different name and was invisible to it - which is how mods dirs grew nine
+// builds of the same mod. This matcher closes that gap.
+//
+// `modId` must come from the row's NexusUrl (parseNexusModUrl in nxmurl.h), NOT
+// from the folder name: splitting the name on '-' breaks on any mod whose title
+// contains a dash ("OSSC - Oblivion-Style Spell Casting 2.0-58653-..."). Returns
+// {} when modId <= 0, so a row with no Nexus URL keeps today's behaviour.
+//
+// `currentFolderName` is never returned. Callers MUST still check that nothing
+// else references a hit before deleting it: one mod id can legitimately own
+// several installed folders (separate files on one Nexus page).
+QStringList findOlderVersionSiblings(const QString     &currentFolderName,
+                                     const QStringList &siblings,
+                                     int                modId);
+
 // Returns true when `folderName` looks generic enough that the
 // modlist display name should be replaced with the cached Nexus title
 // (or a sibling row's CustomName, or fetched async).  Catches three

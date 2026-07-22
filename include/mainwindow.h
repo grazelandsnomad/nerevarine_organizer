@@ -193,6 +193,11 @@ private slots:
     // move them in to decouple the two profiles. No-op when all mods are already
     // inside m_modsDir. Refuses mid-download or with m_modsDir unset.
     void onConsolidateModsIntoActiveProfile();
+    // Reclaim mod folders nothing points at any more: older builds left behind
+    // by upgrades, extract dirs from installs that never finished, leftovers
+    // from "remove but keep files". Previews everything with sizes and deletes
+    // only on explicit confirm. Refuses mid-download or mid-install.
+    void onCleanUpModFolders();
     void onAddGame();
     // Detect an external (non-OpenMW) game in Steam/Heroic/Lutris, prompt for
     // the exe if not found, create a profile and switch. From pinned-game menu.
@@ -250,6 +255,10 @@ private:
     // True when a non-active profile references this exact (cleaned) mod folder
     // - keeps a disk delete from wiping files a shared-into profile points at.
     bool modPathReferencedByOtherProfile(const QString &cleanPath) const;
+    // Parse the on-disk modlist of every profile except the active one. The
+    // active profile is excluded because callers hold it live in m_modList,
+    // where it may already differ from the file.
+    QList<QPair<QString, QList<ModEntry>>> otherProfileModlists() const;
     // Find an in-flight placeholder by InstallToken: m_modList first, then
     // m_strandedInstalls (parked across profile switches). When found in a
     // stranded bucket, `outProfileKey` (if non-null) gets the bucket key for

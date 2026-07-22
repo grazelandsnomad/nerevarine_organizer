@@ -160,7 +160,6 @@ using fsutils::sanitizeFolderName;
 #include "mainwindow_internal.h"
 
 // Moved file-statics, forward-declared so intra-TU order is irrelevant.
-static void removeFoldersAsync(QStringList paths);
 static QListWidgetItem *findPendingRowForModId(QListWidget *list, int modId, const QString &gameId);
 static int modIdFromArchiveName(const QString &archiveFileName);
 
@@ -430,7 +429,7 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
 // with a same-filesystem rename (metadata-only, fast even on NTFS, and the part
 // that matters for cfg correctness), then defer only the slow byte-delete of
 // the renamed folder. Callers must have dropped every modlist ref to these paths.
-static void removeFoldersAsync(QStringList paths)
+void removeModFoldersAsync(QStringList paths)
 {
     paths.removeIf([](const QString &p) { return p.isEmpty(); });
     QStringList staged;
@@ -494,7 +493,7 @@ QString MainWindow::applyPendingMerge(QListWidgetItem *placeholder,
     if (!discardDir.isEmpty()
         && QDir::cleanPath(discardDir) != cleanTarget
         && QDir(discardDir).exists())
-        removeFoldersAsync({discardDir});
+        removeModFoldersAsync({discardDir});
 
     statusBar()->showMessage(
         T("merge_done_status").arg(QFileInfo(target).fileName()), 5000);
@@ -604,6 +603,33 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
         prevModPath.clear();  // same folder reinstall, nothing to remove
     item->setData(ModRole::PrevModPath, QVariant());
 
+    // Fallback when handleNxmUrl set no PrevModPath (a fresh placeholder rather
+    // than a reused installed row): the folder this row is moving OFF of is
+    // stale too. This is the only rule that catches bare-UUID folders from
+    // extensionless CDN downloads - they carry no mod id, so the sibling
+    // matchers below structurally cannot see them. The removal site downstream
+    // re-checks inside-modsDir and cross-profile sharing before deleting.
+    if (prevModPath.isEmpty()) {
+        const QString outgoing = item->data(ModRole::ModPath).toString();
+        if (!outgoing.isEmpty()
+            && QDir::cleanPath(outgoing) != QDir::cleanPath(dirPath)) {
+            bool referenced = false;
+            for (int r = 0; r < m_modList->count() && !referenced; ++r) {
+                auto *row = m_modList->item(r);
+                if (row == item) continue;
+                if (row->data(ModRole::ItemType).toString() != ItemType::Mod)
+                    continue;
+                for (int role : { ModRole::ModPath, ModRole::IntendedModPath }) {
+                    const QString rmp = row->data(role).toString();
+                    if (!rmp.isEmpty()
+                        && QDir::cleanPath(rmp) == QDir::cleanPath(outgoing))
+                        referenced = true;
+                }
+            }
+            if (!referenced) prevModPath = outgoing;
+        }
+    }
+
     item->setData(ModRole::ItemType,      ItemType::Mod);
     item->setData(ModRole::ModPath,       dirPath);
     item->setData(ModRole::InstallStatus, 1); // installed
@@ -663,9 +689,49 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
                     continue;
                 toDelete << oldPath;
             }
+
+            // Older BUILDS of the same mod. findStaleSiblings above only sees a
+            // literal re-download of the same file; an upgrade lands under a
+            // wholly different "<Name>-<id>-<newVersion>-<newTs>" and was
+            // invisible to it, which is how mods dirs accumulated nine builds of
+            // one mod. The id comes from the row's URL, never from the folder
+            // name (titles contain dashes).
+            const auto ref =
+                parseNexusModUrl(item->data(ModRole::NexusUrl).toString());
+            if (ref) {
+                const QStringList older = mod_naming::findOlderVersionSiblings(
+                    newInfo.fileName(), subs, ref->modId);
+                for (const QString &sub : older) {
+                    const QString oldPath = parent.absoluteFilePath(sub);
+                    if (toDelete.contains(oldPath)) continue;
+                    // One mod id can legitimately own several installed folders
+                    // (separate files on one Nexus page - e.g. mod 53318 ships
+                    // "Dwemer Towers" and "Daedric Beacons" as two mods). So
+                    // unlike the same-file case above, a still-referenced folder
+                    // is a DIFFERENT mod: skip it, never purge its row.
+                    bool referenced = false;
+                    for (int r = 0; r < m_modList->count() && !referenced; ++r) {
+                        auto *row = m_modList->item(r);
+                        if (row == item) continue;
+                        if (row->data(ModRole::ItemType).toString() != ItemType::Mod)
+                            continue;
+                        for (int role : { ModRole::ModPath, ModRole::IntendedModPath }) {
+                            const QString rmp = row->data(role).toString();
+                            if (!rmp.isEmpty()
+                                && QDir::cleanPath(rmp) == QDir::cleanPath(oldPath))
+                                referenced = true;
+                        }
+                    }
+                    if (referenced) continue;
+                    if (modPathReferencedByOtherProfile(
+                            mod_sharing::cleanModPath(oldPath)))
+                        continue;
+                    toDelete << oldPath;
+                }
+            }
             // The actual recursive deletes run off the GUI thread (NTFS mods
             // drive makes them slow); references are already dropped above.
-            removeFoldersAsync(toDelete);
+            removeModFoldersAsync(toDelete);
             if (!toDelete.isEmpty())
                 statusBar()->showMessage(
                     T("mod_cleaned_siblings").arg(toDelete.size()), 5000);
@@ -682,16 +748,17 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
         const QString cleanOld = QDir::cleanPath(prevModPath);
         const QString cleanRoot = m_modsDir.isEmpty()
             ? QString() : QDir::cleanPath(m_modsDir);
+        // Strictly BELOW the root: a row whose path is the mods dir itself
+        // would otherwise hand the whole library to a recursive delete.
         const bool insideMods = !cleanRoot.isEmpty()
-            && (cleanOld == cleanRoot
-                || cleanOld.startsWith(cleanRoot + QLatin1Char('/')));
+            && cleanOld.startsWith(cleanRoot + QLatin1Char('/'));
         // Don't delete the old folder if another profile shares it.
         // (prevModPath is already guaranteed != dirPath above, so deferring the
         // delete can't race-wipe the freshly-installed folder.)
         if (insideMods && QDir(prevModPath).exists()
             && !modPathReferencedByOtherProfile(cleanOld)) {
             m_scans->invalidateDataFoldersCache(prevModPath);
-            removeFoldersAsync({prevModPath});   // off the GUI thread
+            removeModFoldersAsync({prevModPath});   // off the GUI thread
             statusBar()->showMessage(T("mod_cleaned_siblings").arg(1), 5000);
         }
     }

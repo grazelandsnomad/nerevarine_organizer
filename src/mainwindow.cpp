@@ -2832,14 +2832,14 @@ bool MainWindow::shareModIntoProfile(const ModEntry &source,
     return true;
 }
 
-bool MainWindow::modPathReferencedByOtherProfile(const QString &cleanPath) const
+QList<QPair<QString, QList<ModEntry>>> MainWindow::otherProfileModlists() const
 {
-    if (cleanPath.isEmpty() || !m_profiles || m_profiles->isEmpty()) return false;
+    QList<QPair<QString, QList<ModEntry>>> others;
+    if (!m_profiles || m_profiles->isEmpty()) return others;
     const QString activeKey = currentProfileKey();
 
-    // Parse every OTHER profile's modlist file and let the pure scan decide.
-    // Only called on delete paths (cold), so the per-profile file reads are fine.
-    QList<QPair<QString, QList<ModEntry>>> others;
+    // Only called on cold paths (deletes, the cleanup sweep), so the
+    // per-profile file reads are fine.
     for (const GameProfile &gp : m_profiles->games()) {
         for (const ModlistProfile &mp : gp.modlistProfiles) {
             const QString key = gp.id + QStringLiteral("__") + mp.name;
@@ -2852,7 +2852,14 @@ bool MainWindow::modPathReferencedByOtherProfile(const QString &cleanPath) const
                                      QString::fromUtf8(in.readAll())) });
         }
     }
-    return mod_sharing::pathReferencedIn(mod_sharing::cleanModPath(cleanPath), others);
+    return others;
+}
+
+bool MainWindow::modPathReferencedByOtherProfile(const QString &cleanPath) const
+{
+    if (cleanPath.isEmpty() || !m_profiles || m_profiles->isEmpty()) return false;
+    return mod_sharing::pathReferencedIn(mod_sharing::cleanModPath(cleanPath),
+                                         otherProfileModlists());
 }
 
 void MainWindow::strandInflightInstalls()

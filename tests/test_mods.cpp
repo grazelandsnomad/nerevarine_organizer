@@ -1,4 +1,5 @@
 #include "mod_naming.h"
+#include "mod_cleanup.h"
 #include "mod_sharing.h"
 #include "modentry.h"
 #include "modlist_serializer.h"
@@ -66,6 +67,79 @@ static void testFindStaleSiblings_emptyInputs()
           mod_naming::findStaleSiblings(QString(), {"a", "b"}).isEmpty());
     check("empty siblings → empty",
           mod_naming::findStaleSiblings("Foo-12345", {}).isEmpty());
+}
+
+// The gap that let mods dirs grow nine builds of one mod: findStaleSiblings
+// keys on the whole folder name, so an upgrade (different version + upload
+// timestamp) never matched. These names are verbatim from the library where
+// 96 orphaned folders / 8.6 GiB accumulated.
+static void testOlderVersionSiblings_realUpgradeChain()
+{
+    std::cout << "\n[findOlderVersionSiblings: upgrade chain the old matcher missed]\n";
+    const QStringList siblings = {
+        "OpenMW Dynamic Actors-54782-1-31c-1775071654",
+        "OpenMW Dynamic Actors-54782-1-32-1779567443",
+        "OpenMW Dynamic Actors-54782-1-32a-1779743004",
+        "OpenMW Dynamic Actors-54782-1-32b-1779908648",
+        "OpenMW Dynamic Animations-57633-1-12-1779830148",  // different mod
+    };
+    const QString cur = "OpenMW Dynamic Actors-54782-1-33-1784700000";
+
+    check("the OLD matcher is blind to an upgrade (regression pin)",
+          mod_naming::findStaleSiblings(cur, siblings).isEmpty());
+
+    const auto older = mod_naming::findOlderVersionSiblings(cur, siblings, 54782);
+    check("all four older builds are found",
+          older.size() == 4, QString::number(older.size()));
+    check("a different mod id is left alone",
+          !older.contains("OpenMW Dynamic Animations-57633-1-12-1779830148"));
+    check("does NOT return self", !older.contains(cur));
+}
+
+static void testOlderVersionSiblings_namesContainingDashes()
+{
+    std::cout << "\n[findOlderVersionSiblings: titles with dashes and renames]\n";
+    // Splitting the folder name on '-' to find the id fails on both of these,
+    // which is why the id must come from the row's NexusUrl.
+    const QStringList siblings = {
+        "OSSC - Oblivion-Style Spell Casting 2.0-58653-2-0-1778362351",
+        "OSSC - Oblivion-Style Spell Casting 2.1-58653-2-1-1778929629",
+    };
+    const auto older = mod_naming::findOlderVersionSiblings(
+        "OSSC - Oblivion-Style Spell Casting-58653-2-4-1779902217", siblings, 58653);
+    check("dash-bearing titles still match on id", older.size() == 2,
+          QString::number(older.size()));
+
+    // Same mod id, but the author renamed the file between uploads.
+    const QStringList renamed = {
+        "Spell Framework Plus 1.81 (OpenMW)-58652-1-81-1778569344",
+        "Spell Framework Plus 1.83 (OpenMW)-58652-1-83-1778929494",
+    };
+    const auto r = mod_naming::findOlderVersionSiblings(
+        "Spell Framework Plus (OpenMW)-58652-1-87-1779902117", renamed, 58652);
+    check("a renamed file still matches on id", r.size() == 2,
+          QString::number(r.size()));
+}
+
+static void testOlderVersionSiblings_guards()
+{
+    std::cout << "\n[findOlderVersionSiblings: id guards]\n";
+    const QStringList siblings = { "Foo-58652-1-87-1779902117",
+                                   "Foo-586521-1-0-1779902117",
+                                   "Bar-5865-1-0-1779902117" };
+    check("no id (row without a Nexus URL) is a no-op",
+          mod_naming::findOlderVersionSiblings("Foo-58652-1-88-1", siblings, 0).isEmpty());
+    check("negative id is a no-op",
+          mod_naming::findOlderVersionSiblings("Foo-58652-1-88-1", siblings, -1).isEmpty());
+
+    const auto hits = mod_naming::findOlderVersionSiblings("Foo-58652-1-88-1",
+                                                           siblings, 5865);
+    check("id 5865 does not match the longer id 58652 or 586521",
+          hits.size() == 1 && hits.first() == "Bar-5865-1-0-1779902117",
+          hits.join(QStringLiteral(", ")));
+
+    check("empty siblings -> empty",
+          mod_naming::findOlderVersionSiblings("Foo-58652-1-88-1", {}, 58652).isEmpty());
 }
 
 static void testGeneric_exactMatchList()
@@ -192,6 +266,10 @@ static void run_mod_naming()
     testFindStaleSiblings_userNamedFolderProtected();
     testFindStaleSiblings_strippedSuffixHonored();
     testFindStaleSiblings_emptyInputs();
+
+    testOlderVersionSiblings_realUpgradeChain();
+    testOlderVersionSiblings_namesContainingDashes();
+    testOlderVersionSiblings_guards();
 
     testGeneric_exactMatchList();
     testGeneric_genericPrefixes();
@@ -717,11 +795,78 @@ static void run_modlist_summary()
     testCountOutsideModsDir();
 }
 
+// === mod_cleanup ===
+
+static void testUnreferenced_basic()
+{
+    std::cout << "\n[unreferencedFolders: unreferenced folder is returned]\n";
+    const QString root = "/mods";
+    const QStringList onDisk = { "Live-1-0-1", "Orphan-2-0-2" };
+    const auto orphans = mod_cleanup::unreferencedFolders(
+        root, onDisk, { "/mods/Live-1-0-1" });
+    check("exactly the unreferenced folder comes back",
+          orphans == QStringList{ "Orphan-2-0-2" },
+          orphans.join(QStringLiteral(", ")));
+}
+
+static void testUnreferenced_nestedReferenceKeepsWrapper()
+{
+    std::cout << "\n[unreferencedFolders: dive-into-subdir install keeps its wrapper]\n";
+    // install_layout::diveTarget registers the row DEEPER than the wrapper, so
+    // a naive equality test would delete a live mod's folder out from under it.
+    const auto orphans = mod_cleanup::unreferencedFolders(
+        "/mods", { "Wrapper-1-0-1" }, { "/mods/Wrapper-1-0-1/00 Core/Data Files" });
+    check("wrapper is live because a row points inside it", orphans.isEmpty(),
+          orphans.join(QStringLiteral(", ")));
+}
+
+static void testUnreferenced_ignoresOutsideAndUncleanPaths()
+{
+    std::cout << "\n[unreferencedFolders: foreign paths ignored, trailing slash tolerated]\n";
+    const auto orphans = mod_cleanup::unreferencedFolders(
+        "/mods", { "A-1-0-1" }, { "/elsewhere/A-1-0-1" });
+    check("a same-named folder under a DIFFERENT root does not protect it",
+          orphans == QStringList{ "A-1-0-1" }, orphans.join(QStringLiteral(", ")));
+
+    const auto kept = mod_cleanup::unreferencedFolders(
+        "/mods/", { "A-1-0-1" }, { "/mods//A-1-0-1/" });
+    check("unclean root and reference still match", kept.isEmpty(),
+          kept.join(QStringLiteral(", ")));
+
+    check("empty mods dir can never nominate anything for deletion",
+          mod_cleanup::unreferencedFolders(QString(), { "A-1-0-1" }, {}).isEmpty());
+}
+
+static void testUnreferenced_oneModIdTwoLiveFolders()
+{
+    std::cout << "\n[unreferencedFolders: two live folders under one mod id survive]\n";
+    // Mod 53318 ships "Dwemer Towers" and "Daedric Beacons" as separate files.
+    // Both are installed and both are referenced, so neither may be swept.
+    const QStringList onDisk = { "DwemerTowers-53318-1-2-1751731574",
+                                 "DaedricBeacons1.1-53318-1-1-1719088915" };
+    const auto orphans = mod_cleanup::unreferencedFolders(
+        "/mods", onDisk,
+        { "/mods/DwemerTowers-53318-1-2-1751731574",
+          "/mods/DaedricBeacons1.1-53318-1-1-1719088915" });
+    check("both folders sharing one mod id are kept", orphans.isEmpty(),
+          orphans.join(QStringLiteral(", ")));
+}
+
+static void run_mod_cleanup()
+{
+    std::cout << "\n=== mod_cleanup ===\n";
+    testUnreferenced_basic();
+    testUnreferenced_nestedReferenceKeepsWrapper();
+    testUnreferenced_ignoresOutsideAndUncleanPaths();
+    testUnreferenced_oneModIdTwoLiveFolders();
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
 
     run_mod_naming();
+    run_mod_cleanup();
     run_mod_sharing();
     run_install_layout();
     run_post_install();

@@ -17,4 +17,11 @@ void showMonospaceReport(QWidget *parent, const QString &title,
                          const QString &text, int minWidth, int minHeight,
                          const QString &summary = {});
 
+// Same layout, but with `acceptLabel` and Cancel instead of Close. Returns true
+// only when the user picked the accept button. Cancel is the default button:
+// the caller is fronting a destructive action, so Enter must not confirm it.
+bool confirmMonospaceReport(QWidget *parent, const QString &title,
+                            const QString &text, int minWidth, int minHeight,
+                            const QString &summary, const QString &acceptLabel);
+
 } // namespace ui
