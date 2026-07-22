@@ -4,33 +4,6 @@
 
 namespace bethesda_custom_ini {
 
-const QString kStrayArchiveKey = QStringLiteral("sResourceArchiveList2");
-
-namespace {
-
-QStringList parseList(const QString &value)
-{
-    QStringList out;
-    for (const QString &part : value.split(QLatin1Char(','))) {
-        const QString t = part.trimmed();
-        if (!t.isEmpty()) out << t;
-    }
-    return out;
-}
-
-// Append each archive not already present (case-insensitive), preserving order.
-void appendArchives(QStringList &list, const QStringList &ba2s)
-{
-    for (const QString &b : ba2s) {
-        bool have = false;
-        for (const QString &e : list)
-            if (e.compare(b, Qt::CaseInsensitive) == 0) { have = true; break; }
-        if (!have) list << b;
-    }
-}
-
-} // namespace
-
 QStringList strayArchives(const QStringList &deployedBa2s,
                           const QStringList &deployedPlugins)
 {
@@ -45,15 +18,22 @@ QStringList strayArchives(const QStringList &deployedBa2s,
         const QString name = QFileInfo(ba2).fileName();
         bool covered = false;
         for (const QString &stem : stems) {
-            // "<stem>.ba2" and the "<stem> - Main/Textures.ba2" convention.
-            if (name.startsWith(stem, Qt::CaseInsensitive)) { covered = true; break; }
+            // Exactly "<stem>.ba2", or the "<stem> - Main/Textures.ba2"
+            // convention. A bare startsWith() would also swallow
+            // "<stem>Patch - Main.ba2", which the engine does NOT auto-load,
+            // and we would then stay silent about an archive that never loads.
+            if (name.compare(stem + QStringLiteral(".ba2"), Qt::CaseInsensitive) == 0
+                || name.startsWith(stem + QStringLiteral(" - "), Qt::CaseInsensitive)) {
+                covered = true;
+                break;
+            }
         }
         if (!covered) stray << name;
     }
     return stray;
 }
 
-QString configureCustomIni(const QString &iniText, const QStringList &strayBa2s)
+QString configureCustomIni(const QString &iniText)
 {
     QStringList lines = iniText.split(QLatin1Char('\n'));
     // A trailing newline splits into a final empty element. Keeping it would
@@ -63,22 +43,14 @@ QString configureCustomIni(const QString &iniText, const QStringList &strayBa2s)
 
     QStringList out;
     bool inArchive = false, archiveSeen = false;
-    bool sawInvalidate = false, sawDataDirs = false, sawStrayList = false;
-
-    auto strayLine = [&](QStringList existing) {
-        appendArchives(existing, strayBa2s);
-        return kStrayArchiveKey + QStringLiteral("=")
-             + existing.join(QStringLiteral(", "));
-    };
+    bool sawInvalidate = false, sawDataDirs = false;
 
     auto flushArchive = [&]() {
-        // On leaving [Archive], add whatever keys it was missing. The
-        // invalidation pair is unconditional; the stray list is only written
-        // when there is something to put in it, so we never plant an empty key
-        // that could shadow the game's own defaults.
+        // On leaving [Archive], add whatever keys it was missing. Only the
+        // invalidation pair: the archive-list keys are left strictly alone, so
+        // whatever the user or the base ini set there survives untouched.
         if (!sawInvalidate) out << QStringLiteral("bInvalidateOlderFiles=1");
         if (!sawDataDirs)   out << QStringLiteral("sResourceDataDirsFinal=");
-        if (!sawStrayList && !strayBa2s.isEmpty()) out << strayLine({});
     };
 
     for (const QString &raw : lines) {
@@ -91,7 +63,7 @@ QString configureCustomIni(const QString &iniText, const QStringList &strayBa2s)
             inArchive = (t.compare(QStringLiteral("[Archive]"), Qt::CaseInsensitive) == 0);
             if (inArchive) {
                 archiveSeen = true;
-                sawInvalidate = sawDataDirs = sawStrayList = false;
+                sawInvalidate = sawDataDirs = false;
             }
             out << line;
             continue;
@@ -111,11 +83,6 @@ QString configureCustomIni(const QString &iniText, const QStringList &strayBa2s)
                     sawDataDirs = true;
                     continue;
                 }
-                if (key.compare(kStrayArchiveKey, Qt::CaseInsensitive) == 0) {
-                    out << strayLine(parseList(line.mid(eq + 1)));
-                    sawStrayList = true;
-                    continue;
-                }
             }
         }
         out << line;
@@ -128,7 +95,6 @@ QString configureCustomIni(const QString &iniText, const QStringList &strayBa2s)
         out << QStringLiteral("[Archive]");
         out << QStringLiteral("bInvalidateOlderFiles=1");
         out << QStringLiteral("sResourceDataDirsFinal=");
-        if (!strayBa2s.isEmpty()) out << strayLine({});
     }
 
     QString result = out.join(QStringLiteral("\r\n"));

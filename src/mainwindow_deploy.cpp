@@ -167,7 +167,7 @@ using fsutils::sanitizeFolderName;
 static int bethesdaActivate(const QString &id, const GameAdapter *adapter, const QString &dataDir, const bethesda_deploy::Manifest &manifest, const QStringList &loadOrder);
 static QString bethesdaApplyDeploy(const QString &id, const GameAdapter *adapter, const QString &dataDir, const QList<bethesda_deploy::DeploySource> &sources, const QString &modlistFile, const QStringList &loadOrder);
 static QString bethesdaApplyUndeploy(const QString &id, const GameAdapter *adapter, const QString &dataDir, const QString &modlistFile);
-static void bethesdaConfigureArchives(const QString &id, const GameAdapter *adapter, const QString &dataDir, const bethesda_deploy::Manifest &manifest);
+static QStringList bethesdaConfigureArchives(const QString &id, const GameAdapter *adapter, const QString &dataDir, const bethesda_deploy::Manifest &manifest);
 static QStringList bethesdaPrefixUserDirs(const GameAdapter *adapter, const QString &dataDir);
 static QString bethesdaResolveDataDir(QWidget *parent, const QString &id, const GameAdapter *adapter, bool allowPrompt);
 static void bethesdaStatePaths(const QString &modlistFile, QString &manifestPath, QString &backupDir);
@@ -625,21 +625,23 @@ static bool rewriteGameIni(const QString &iniPath, bool createIfMissing,
 //               loose replacers lose to the vanilla BSA without invalidation.
 //   Starfield - loose files in Data/ are ignored outright until archive
 //               invalidation is on; .ba2 matching a plugin name auto-loads.
-static void bethesdaConfigureArchives(const QString &id, const GameAdapter *adapter,
-                                      const QString &dataDir,
-                                      const bethesda_deploy::Manifest &manifest)
+// Returns the deployed archives the engine will NOT load by itself, for the
+// caller to surface. Empty for engines with no archive config.
+static QStringList bethesdaConfigureArchives(const QString &id, const GameAdapter *adapter,
+                                             const QString &dataDir,
+                                             const bethesda_deploy::Manifest &manifest)
 {
-    if (!adapter) return;
+    if (!adapter) return {};
     // Driven entirely by adapter data. It used to be `if (id != "oblivion")
     // return;`, which silently skipped every other engine: Fallout 4 deployed
     // its mods and then loaded none of the loose ones because nothing ever
     // wrote Fallout4Custom.ini.
     using Style = GameAdapter::ArchiveConfig::Style;
     const GameAdapter::ArchiveConfig cfg = adapter->archiveConfig();
-    if (cfg.style == Style::None || cfg.iniName.isEmpty()) return;
+    if (cfg.style == Style::None || cfg.iniName.isEmpty()) return {};
 
     const QString iniDir = resolveBethesdaIniDir(id, adapter, dataDir);
-    if (iniDir.isEmpty()) return;
+    if (iniDir.isEmpty()) return {};
 
     // Plugins and archives load from Data/ root only.
     QStringList archives, plugins;
@@ -657,19 +659,22 @@ static void bethesdaConfigureArchives(const QString &id, const GameAdapter *adap
 
     const QString iniPath = QDir(iniDir).filePath(cfg.iniName);
     bool wrote = false;
+    QStringList stray;
     if (cfg.style == Style::GamebryoArchiveList) {
         wrote = rewriteGameIni(iniPath, cfg.createIfMissing,
             [&archives, &cfg](const QString &t) {
                 return bethesda_archives::configureArchives(t, archives, cfg.vanillaSeed);
             });
     } else {
-        const QStringList stray = bethesda_custom_ini::strayArchives(archives, plugins);
+        // Report archives the engine will not auto-load rather than registering
+        // them: the archive-list keys replace the base value, so writing one
+        // would unload every vanilla archive we failed to re-list.
+        stray = bethesda_custom_ini::strayArchives(archives, plugins);
         wrote = rewriteGameIni(iniPath, cfg.createIfMissing,
-            [&stray](const QString &t) {
-                return bethesda_custom_ini::configureCustomIni(t, stray);
-            });
+            &bethesda_custom_ini::configureCustomIni);
     }
     if (wrote) Settings::setIniDir(id, iniDir);
+    return stray;
 }
 
 // Undeploy the previous manifest, deploy `sources`, persist the new manifest,
@@ -697,12 +702,19 @@ static QString bethesdaApplyDeploy(const QString &id, const GameAdapter *adapter
         outFile.close();
     }
     const int activated = bethesdaActivate(id, adapter, dataDir, res.manifest, loadOrder);
-    bethesdaConfigureArchives(id, adapter, dataDir, res.manifest);
+    const QStringList stray =
+        bethesdaConfigureArchives(id, adapter, dataDir, res.manifest);
 
-    return T("deploy_done").arg(res.filesDeployed)
-                           .arg(res.vanillaBackedUp)
-                           .arg(activated)
-                           .arg(res.errors.size());
+    QString summary = T("deploy_done").arg(res.filesDeployed)
+                                      .arg(res.vanillaBackedUp)
+                                      .arg(activated)
+                                      .arg(res.errors.size());
+    // An archive named after no plugin never loads, and nothing else would say
+    // so: registering it would mean rewriting the engine's whole archive list.
+    if (!stray.isEmpty())
+        summary += QStringLiteral("\n\n")
+                 + T("deploy_stray_archives").arg(stray.join(QStringLiteral(", ")));
+    return summary;
 }
 
 // Experimental: deploy the enabled mods of a Bethesda profile into the game's

@@ -381,7 +381,7 @@ static void run_bethesda_archives()
 }
 
 // -- bethesda_custom_ini -------------------------------------------------------
-namespace starfield_section {
+namespace custom_ini_section {
 
 static QString keyValue(const QString &ini, const QString &key)
 {
@@ -395,80 +395,105 @@ static QString keyValue(const QString &ini, const QString &key)
 
 static void testCreatesFromNothing()
 {
-    std::cout << "\n[StarfieldCustom.ini: created from empty input]\n";
-    // The normal case: Starfield does not ship this file, so the deploy path
-    // hands us empty text and expects a complete, valid ini back.
-    const QString out = bethesda_custom_ini::configureCustomIni(QString(), {});
+    std::cout << "\n[Custom.ini: created from empty input]\n";
+    // The normal case: neither FO4 nor Starfield ships this file, so the deploy
+    // path hands us empty text and expects a complete, valid ini back.
+    const QString out = bethesda_custom_ini::configureCustomIni(QString());
     check("[Archive] section present", out.contains("[Archive]"));
     check("loose files enabled (bInvalidateOlderFiles)",
           out.contains("bInvalidateOlderFiles=1"));
     check("loose files enabled (sResourceDataDirsFinal empty)",
           out.contains("sResourceDataDirsFinal=\r\n"), out);
-    check("no stray-archive key when there are no stray archives",
-          !out.contains(bethesda_custom_ini::kStrayArchiveKey), out);
     check("does not open with a blank line", !out.startsWith("\r\n"), out);
     check("output is CRLF", out.contains("\r\n"));
 }
 
+// The archive-list keys REPLACE the base ini's value instead of extending it,
+// so writing one that holds only the mod's archives unloads every vanilla one.
+// We must never author or rewrite them.
+static void testNeverTouchesArchiveLists()
+{
+    std::cout << "\n[Custom.ini: archive-list keys are never authored or rewritten]\n";
+    const QString fresh = bethesda_custom_ini::configureCustomIni(QString());
+    for (const char *key : {"sResourceIndexFileList", "sResourceArchive2List",
+                            "sResourceArchiveList2", "sResourceArchiveList"}) {
+        check(QString("%1 not invented").arg(key).toUtf8().constData(),
+              !fresh.contains(key, Qt::CaseInsensitive), fresh);
+    }
+
+    // A user's existing list must survive byte-for-byte.
+    const QString userList =
+        "[Archive]\r\n"
+        "sResourceIndexFileList=Starfield - Textures01.ba2, MyMod - Textures.ba2\r\n";
+    const QString out = bethesda_custom_ini::configureCustomIni(userList);
+    check("existing vanilla+mod archive list preserved verbatim",
+          keyValue(out, "sResourceIndexFileList")
+              == "Starfield - Textures01.ba2, MyMod - Textures.ba2",
+          keyValue(out, "sResourceIndexFileList"));
+    check("invalidation still added alongside it",
+          out.contains("bInvalidateOlderFiles=1") && out.contains("sResourceDataDirsFinal="));
+}
+
 static void testExtendsExistingSection()
 {
-    std::cout << "\n[StarfieldCustom.ini: existing [Archive] extended, not replaced]\n";
+    std::cout << "\n[Custom.ini: existing [Archive] extended, not replaced]\n";
     const QString ini =
         "[General]\r\nsTestFile1=MyMod.esm\r\n"
         "[Archive]\r\nbInvalidateOlderFiles=0\r\n";
-    const QString out = bethesda_custom_ini::configureCustomIni(ini, {"Loose - Textures.ba2"});
+    const QString out = bethesda_custom_ini::configureCustomIni(ini);
     check("invalidation flipped on", out.contains("bInvalidateOlderFiles=1"));
     check("old value gone", !out.contains("bInvalidateOlderFiles=0"));
     check("missing data-dirs key added", out.contains("sResourceDataDirsFinal="));
-    check("stray archive registered",
-          keyValue(out, bethesda_custom_ini::kStrayArchiveKey).contains("Loose - Textures.ba2"),
-          out);
     check("unrelated section preserved",
           out.contains("[General]") && out.contains("sTestFile1=MyMod.esm"));
 }
 
-static void testIdempotentAndDedups()
+static void testIdempotent()
 {
-    std::cout << "\n[StarfieldCustom.ini: idempotent, case-insensitive de-dup]\n";
-    const QString once = bethesda_custom_ini::configureCustomIni(QString(), {"Extra.ba2"});
-    const QString twice = bethesda_custom_ini::configureCustomIni(once, {"Extra.ba2"});
-    check("re-running changes nothing", once == twice, twice, once);
-
-    const QString dup = bethesda_custom_ini::configureCustomIni(once, {"extra.ba2", "New.ba2"});
-    const QString list = keyValue(dup, bethesda_custom_ini::kStrayArchiveKey);
-    check("case-variant duplicate not added", !list.contains("extra.ba2"), list);
-    check("only one Extra entry",
-          archives_section::count(list, "extra.ba2", Qt::CaseInsensitive) == 1, list);
-    check("genuinely new archive added", list.contains("New.ba2"), list);
+    std::cout << "\n[Custom.ini: re-running is a no-op]\n";
+    const QString once  = bethesda_custom_ini::configureCustomIni(QString());
+    const QString twice = bethesda_custom_ini::configureCustomIni(once);
+    check("second run changes nothing", once == twice, twice, once);
     check("only one invalidation key",
-          archives_section::count(dup, "bInvalidateOlderFiles", Qt::CaseInsensitive) == 1, dup);
+          archives_section::count(twice, "bInvalidateOlderFiles", Qt::CaseInsensitive) == 1,
+          twice);
+    check("no blank line accumulated",
+          archives_section::count(twice, "\r\n\r\n", Qt::CaseSensitive) == 0, twice);
 }
 
 static void testStrayArchiveDetection()
 {
-    std::cout << "\n[strayArchives: only archives Starfield will not auto-load]\n";
-    // Starfield loads "<Plugin> - Main.ba2" / "- Textures.ba2" by plugin name;
-    // only an archive matching no plugin needs registering by hand.
+    std::cout << "\n[strayArchives: exactly the archives the engine will not auto-load]\n";
+    // "<Plugin> - Main.ba2" / "- Textures.ba2" / "<Plugin>.ba2" auto-load.
     const QStringList ba2s = { "MyMod - Main.ba2", "MyMod - Textures.ba2",
-                               "Orphan.ba2" };
+                               "MyMod.ba2", "Orphan.ba2" };
     const QStringList plugins = { "MyMod.esm" };
-    const QStringList stray = bethesda_custom_ini::strayArchives(ba2s, plugins);
-    check("plugin-matched archives are not listed", stray == QStringList{"Orphan.ba2"},
-          stray.join(", "));
+    check("plugin-matched archives are not reported",
+          bethesda_custom_ini::strayArchives(ba2s, plugins) == QStringList{"Orphan.ba2"},
+          bethesda_custom_ini::strayArchives(ba2s, plugins).join(", "));
+
+    // Regression: a bare startsWith() test called this covered, so an archive
+    // that never loads was silently not reported.
+    const QStringList sneaky = { "MyModPatch - Main.ba2" };
+    check("a name merely PREFIXED by a plugin stem is still stray",
+          bethesda_custom_ini::strayArchives(sneaky, plugins) == sneaky,
+          bethesda_custom_ini::strayArchives(sneaky, plugins).join(", "));
+
     check("no plugins means every archive is stray",
-          bethesda_custom_ini::strayArchives(ba2s, {}).size() == 3);
+          bethesda_custom_ini::strayArchives(ba2s, {}).size() == 4);
     check("no archives means nothing stray",
           bethesda_custom_ini::strayArchives({}, plugins).isEmpty());
 }
-} // namespace starfield_section
+} // namespace custom_ini_section
 
 static void run_bethesda_custom_ini()
 {
     std::cout << "=== bethesda_custom_ini tests ===\n";
-    starfield_section::testCreatesFromNothing();
-    starfield_section::testExtendsExistingSection();
-    starfield_section::testIdempotentAndDedups();
-    starfield_section::testStrayArchiveDetection();
+    custom_ini_section::testCreatesFromNothing();
+    custom_ini_section::testNeverTouchesArchiveLists();
+    custom_ini_section::testExtendsExistingSection();
+    custom_ini_section::testIdempotent();
+    custom_ini_section::testStrayArchiveDetection();
 }
 
 static void run_proton_paths()

@@ -23,25 +23,29 @@
 
 namespace bethesda_custom_ini {
 
-// The ini key used to register archives that Starfield will not pick up by
-// name. UNVERIFIED against a real install: Bethesda has shipped both
-// sResourceArchiveList2 and sResourceIndexFileList across titles, and Starfield
-// was not available to test here. Isolated deliberately so correcting it is a
-// one-line change, and so the invalidation keys above work regardless.
-extern const QString kStrayArchiveKey;
-
-// Return `iniText` with [Archive] configured: bInvalidateOlderFiles=1, an empty
-// sResourceDataDirsFinal=, and kStrayArchiveKey extended with `strayBa2s`
-// (existing entries kept, case-insensitive de-dup, order preserved). A missing
+// Return `iniText` with [Archive] configured for loose files:
+// bInvalidateOlderFiles=1 and an empty sResourceDataDirsFinal=. A missing
 // [Archive] is appended; empty input yields a complete minimal file. Unrelated
 // sections, comments, casing and key order are preserved. Idempotent. Output
 // uses CRLF line endings (Windows ini).
-QString configureCustomIni(const QString &iniText, const QStringList &strayBa2s);
+//
+// It deliberately does NOT register .ba2 archives. The archive-list keys
+// (sResourceIndexFileList for textures, sResourceArchive2List otherwise)
+// REPLACE the base ini's value rather than extending it, so a Custom.ini
+// listing only a mod's archives unloads every vanilla one - a real
+// StarfieldCustom.ini has to re-list "Starfield - Textures01.ba2" and its
+// eleven siblings just to add a single mod archive. That vanilla list varies by
+// game version and DLC, so writing the key at all would mean guessing it, with
+// missing base-game textures as the failure mode. Archives named after their
+// plugin auto-load and need none of this; anything else is reported by
+// strayArchives() so the user can act, rather than silently half-configured.
+QString configureCustomIni(const QString &iniText);
 
-// The subset of `deployedBa2s` Starfield will NOT load on its own: those whose
-// name does not begin with the stem of any plugin in `deployedPlugins`.
-// "Foo - Main.ba2" and "Foo - Textures.ba2" are covered by "Foo.esm";
-// "SomeTextures.ba2" with no matching plugin is not. Inputs are bare file names.
+// The subset of `deployedBa2s` the engine will NOT load on its own, because
+// they are named after no deployed plugin. "Foo.ba2", "Foo - Main.ba2" and
+// "Foo - Textures.ba2" are all covered by a plugin "Foo.esm"; "FooPatch -
+// Main.ba2" is NOT (a bare prefix test would wrongly call it covered).
+// Inputs are bare file names. Caller warns; we never edit the archive lists.
 QStringList strayArchives(const QStringList &deployedBa2s,
                           const QStringList &deployedPlugins);
 
