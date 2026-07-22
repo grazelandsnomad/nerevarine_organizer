@@ -4,6 +4,7 @@
 #include "master_satisfaction.h"
 #include "plugin_collisions.h"
 #include "asset_collisions.h"
+#include "log_triage.h"
 
 #include <QByteArray>
 #include <QCoreApplication>
@@ -924,6 +925,94 @@ static void run_asset_collisions()
     ac_testMultipleHitsInOneRoot();
 }
 
+// -- log_triage ---------------------------------------------------------------
+// The parser had no coverage at all. These pin the shape that mattered in
+// practice: a save-game dependency warning must NOT read as a broken install.
+namespace triage_section {
+using namespace openmw;
+
+static const LogIssue *find(const LogTriageReport &r, LogIssueKind k,
+                            const QString &target)
+{
+    for (const LogIssue &i : r.issues)
+        if (i.kind == k && i.target.compare(target, Qt::CaseInsensitive) == 0)
+            return &i;
+    return nullptr;
+}
+
+static void testSaveGameDependencyIsItsOwnKind()
+{
+    std::cout << "\n[log_triage: 'Saved game dependency' is benign, not an error]\n";
+    // Verbatim from a real openmw.log where all three mods were installed and
+    // loading fine; the save simply predated a plugin rename.
+    const QString log =
+        "[23:50:43.120 I] Loading content file OAAB - Tombs and Towers.esm\n"
+        "[23:50:48.072 W] Warning: Saved game dependency OAAB - Tombs and Towers.ESP is missing.\n"
+        "[23:50:48.072 W] Warning: Saved game dependency Trackless Grazeland OAAB Dwemer Pavements Patch.ESP is missing.\n";
+    const LogTriageReport r = triageOpenMWLog(log, {});
+
+    check("both save dependencies classified",
+          find(r, LogIssueKind::SaveGameDependency, "OAAB - Tombs and Towers.ESP")
+              && find(r, LogIssueKind::SaveGameDependency,
+                      "Trackless Grazeland OAAB Dwemer Pavements Patch.ESP"));
+    check("a name with spaces is captured whole",
+          find(r, LogIssueKind::SaveGameDependency,
+               "Trackless Grazeland OAAB Dwemer Pavements Patch.ESP") != nullptr,
+          r.issues.isEmpty() ? "" : r.issues.first().target);
+
+    // The regression: these used to fall through to OtherError and read as a
+    // broken install, which sent the user reinstalling healthy mods.
+    for (const LogIssue &i : r.issues)
+        check("not misfiled as a generic error",
+              i.kind != LogIssueKind::OtherError, i.target);
+    check("not misfiled as a missing plugin",
+          find(r, LogIssueKind::MissingPlugin, "OAAB - Tombs and Towers.ESP") == nullptr);
+    // The owning mod is usually still installed under the NEW name, so naming
+    // it would accuse a mod that works.
+    for (const LogIssue &i : r.issues)
+        check("no mod is blamed", i.suspectMod.isEmpty(), i.suspectMod);
+}
+
+static void testRealErrorsStillClassified()
+{
+    std::cout << "\n[log_triage: genuine failures keep their own kinds]\n";
+    const QString log =
+        "[10:00:00.000 E] File \"Patch.esp\" asks for parent file \"Base.esm\", "
+        "but it is not available\n"
+        "[10:00:01.000 E] Fatal error: Failed loading Ghost.esp: "
+        "the content file does not exist\n"
+        "[10:00:02.000 W] Warning: Saved game dependency Old.ESP is missing.\n";
+    const LogTriageReport r = triageOpenMWLog(log, {});
+    check("missing master still detected",
+          find(r, LogIssueKind::MissingMaster, "Patch.esp") != nullptr);
+    check("missing plugin still detected",
+          find(r, LogIssueKind::MissingPlugin, "Ghost.esp") != nullptr);
+    check("save dependency detected alongside them",
+          find(r, LogIssueKind::SaveGameDependency, "Old.ESP") != nullptr);
+    check("three distinct issues", r.issues.size() == 3,
+          QString::number(r.issues.size()));
+}
+
+static void testRepeatsCollapse()
+{
+    std::cout << "\n[log_triage: the same save dependency repeated collapses to one]\n";
+    QString log;
+    for (int i = 0; i < 20; ++i)
+        log += "[10:00:00.000 W] Warning: Saved game dependency Old.ESP is missing.\n";
+    const LogTriageReport r = triageOpenMWLog(log, {});
+    check("deduped to a single issue", r.issues.size() == 1,
+          QString::number(r.issues.size()));
+}
+} // namespace triage_section
+
+static void run_log_triage()
+{
+    std::cout << "\n=== log_triage ===\n";
+    triage_section::testSaveGameDependencyIsItsOwnKind();
+    triage_section::testRealErrorsStillClassified();
+    triage_section::testRepeatsCollapse();
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -933,6 +1022,7 @@ int main(int argc, char **argv)
     run_master_satisfaction();
     run_plugin_collisions();
     run_asset_collisions();
+    run_log_triage();
 
     std::cout << "\n"
               << s_passed << " passed, "

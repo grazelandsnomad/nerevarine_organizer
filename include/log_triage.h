@@ -47,6 +47,17 @@ enum class LogIssueKind {
     // Error/Fatal line that didn't fit any known shape.  Kept so the user
     // sees the raw message instead of having it disappear.
     OtherError,
+
+    // "Warning: Saved game dependency X.ESP is missing." - about the SAVE, not
+    // the install. OpenMW records the content list at save time, so this fires
+    // whenever a mod renames a plugin (.ESP -> .esm is common) or an optional
+    // patch is no longer selected. The install can be perfectly healthy and
+    // the same content loading fine under its new name.
+    //
+    // Classified separately because it is benign and unfixable by reinstalling:
+    // left in OtherError it reads as a broken install, which is exactly how it
+    // was misread in practice.
+    SaveGameDependency,
 };
 
 struct LogIssue {

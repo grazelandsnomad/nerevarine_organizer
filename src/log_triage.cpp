@@ -56,6 +56,16 @@ LogTriageReport triageOpenMWLog(const QString          &logText,
         R"rx(Failed loading\s+"?([^"\r\n]+?\.(?:esp|esm|omwaddon|omwscripts))"?\s*:\s*[^\r\n]*(?:does not exist|cannot be found|not found))rx",
         QRegularExpression::CaseInsensitiveOption);
 
+    // 2b. Save-game dependency: "Warning: Saved game dependency X.ESP is
+    //     missing." This is about the SAVE, not the install - it fires when a
+    //     mod renames its plugin (.ESP -> .esm) or an optional patch is no
+    //     longer selected, even though the current content loads fine. Must be
+    //     matched BEFORE the OtherError fallthrough, which otherwise shows it
+    //     as an unexplained error and sends people reinstalling healthy mods.
+    static const QRegularExpression rxSaveDependency(
+        R"rx(Saved game dependency\s+"?([^"\r\n]+?\.(?:esp|esm|omwaddon|omwscripts))"?\s+is missing)rx",
+        QRegularExpression::CaseInsensitiveOption);
+
     // 3a. Missing texture. Matches Can't/Cannot/Can not; phrasing varies by
     //     graphics backend.
     static const QRegularExpression rxMissingTexture(
@@ -141,6 +151,26 @@ LogTriageReport triageOpenMWLog(const QString          &logText,
                     issue.target = plugin;
                     issue.detail = line;
                     issue.suspectMod = pluginOwner.value(plugin.toLower());
+                    report.issues << issue;
+                }
+                continue;
+            }
+        }
+
+        // 2b. Save-game dependency (benign; about the save, not the install).
+        {
+            auto m = rxSaveDependency.match(line);
+            if (m.hasMatch()) {
+                const QString plugin = cleanToken(m.captured(1));
+                if (!plugin.isEmpty()
+                    && !already(LogIssueKind::SaveGameDependency, plugin)) {
+                    LogIssue issue;
+                    issue.kind   = LogIssueKind::SaveGameDependency;
+                    issue.target = plugin;
+                    issue.detail = line;
+                    // Deliberately no suspectMod: the owning mod is usually
+                    // still installed under a NEW plugin name, so naming it
+                    // would point the user at a mod that is working fine.
                     report.issues << issue;
                 }
                 continue;

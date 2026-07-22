@@ -20,16 +20,19 @@ namespace openmw {
 namespace {
 
 // "Most actionable first": the master-order crashes, then plugins that don't
-// exist, then missing assets, then anything we couldn't classify.
+// exist, then missing assets, then anything we couldn't classify. Save-game
+// dependencies sort LAST: they are benign and cannot be fixed by reinstalling,
+// so they must never head a list the user reads as "what is broken".
 int kindRank(LogIssueKind k)
 {
     switch (k) {
-        case LogIssueKind::MissingMaster:  return 0;
-        case LogIssueKind::MissingPlugin:  return 1;
-        case LogIssueKind::MissingAsset:   return 2;
-        case LogIssueKind::OtherError:     return 3;
+        case LogIssueKind::MissingMaster:      return 0;
+        case LogIssueKind::MissingPlugin:      return 1;
+        case LogIssueKind::MissingAsset:       return 2;
+        case LogIssueKind::OtherError:         return 3;
+        case LogIssueKind::SaveGameDependency: return 4;
     }
-    return 4;
+    return 5;
 }
 
 QString kindLabel(LogIssueKind k)
@@ -39,6 +42,7 @@ QString kindLabel(LogIssueKind k)
         case LogIssueKind::MissingPlugin:  return T("log_triage_kind_plugin");
         case LogIssueKind::MissingAsset:   return T("log_triage_kind_asset");
         case LogIssueKind::OtherError:     return T("log_triage_kind_other");
+        case LogIssueKind::SaveGameDependency: return T("log_triage_kind_savedep");
     }
     return QString();
 }
@@ -92,6 +96,17 @@ void showTriageDialog(QWidget *parent, const LogTriageReport &report,
                 body += "      " + i.detail.trimmed() + "\n";
             }
         }
+        // One explanation, appended once, when any save-game dependency was
+        // reported. Without it the entries still read as "my mods are broken",
+        // which is the confusion this classification exists to end.
+        const bool anySaveDep = std::any_of(
+            report.issues.constBegin(), report.issues.constEnd(),
+            [](const LogIssue &i) {
+                return i.kind == LogIssueKind::SaveGameDependency;
+            });
+        if (anySaveDep)
+            body += "\n=== " + T("log_triage_kind_savedep") + " ===\n"
+                  + T("log_triage_savedep_note") + "\n";
     }
 
     QDialog dlg(parent);

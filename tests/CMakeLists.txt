@@ -100,6 +100,7 @@ add_executable(test_plugins
     ${CMAKE_SOURCE_DIR}/src/master_satisfaction.cpp
     ${CMAKE_SOURCE_DIR}/src/plugin_collisions.cpp
     ${CMAKE_SOURCE_DIR}/src/asset_collisions.cpp
+    ${CMAKE_SOURCE_DIR}/src/log_triage.cpp
 )
 target_include_directories(test_plugins PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(test_plugins PRIVATE Qt6::Core)
