@@ -29,10 +29,16 @@ jobs:
         # g++-14 is here for its libstdc++ headers, not to compile: the side
         # build uses clang, but clang picks up the newest installed libstdc++,
         # and the project is C++23.
+        #
+        # clang 19 specifically, not the noble default 18: libstdc++ gates
+        # <expected> on `__cpp_concepts >= 202002L`, which clang only defines
+        # from 19. Under 18 the header includes but declares nothing, so every
+        # TU reaching safe_fs.h dies with "no template named 'expected'". The
+        # script preflights this and says so, but the right version is here.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            clang clang-tidy g++-14 cmake ninja-build qt6-base-dev
+            clang-19 clang-tools-19 g++-14 cmake ninja-build qt6-base-dev
 
       - name: Run the clang-tidy gate
         # Configures its own clang side build under build-tidy/ and walks every
