@@ -101,6 +101,33 @@ public:
     virtual QString localAppDataName() const { return {}; }
     virtual QString myGamesName()      const { return {}; }
 
+    // How this engine has to be told to load the content we deployed, and in
+    // which ini. Getting this wrong is invisible: the mods land in Data/, the
+    // plugin list is right, and nothing happens in game.
+    struct ArchiveConfig {
+        enum class Style {
+            None,                 // nothing to do (Skyrim SE loads loose files
+                                  // and name-matched BSAs by itself)
+            GamebryoArchiveList,  // Oblivion/FO3/FNV: SArchiveList +
+                                  // bInvalidateOlderFiles + empty SInvalidationFile
+            ModernCustomIni,      // FO4/Starfield: bInvalidateOlderFiles +
+                                  // empty sResourceDataDirsFinal
+        };
+        Style   style = Style::None;
+        QString iniName;         // "Oblivion.ini", "Fallout4Custom.ini", ...
+        QString archiveSuffix;   // ".bsa" or ".ba2"
+        // Gamebryo only, and only used when the ini has no SArchiveList at all
+        // (a launcher normally writes one). Empty means "we do not know this
+        // game's vanilla archives" - then we never invent a list, because a
+        // wrong one would leave the base game's own archives unloaded.
+        QStringList vanillaSeed;
+        // The *Custom.ini files are user overrides the game does not ship, so
+        // they have to be created. A missing Oblivion.ini/Fallout.ini instead
+        // means we resolved the wrong directory and must not invent one.
+        bool createIfMissing = false;
+    };
+    virtual ArchiveConfig archiveConfig() const { return {}; }
+
     // Script-extender loaders (OBSE/SKSE/F4SE/...), most-preferred first.
     // When launching an exe directly (not via Steam, where the extender's
     // own loader auto-loads), we run one of these instead of the game exe

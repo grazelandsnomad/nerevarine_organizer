@@ -1,7 +1,7 @@
 #include "bethesda_deploy.h"
 #include "bethesda_loadorder.h"
 #include "bethesda_archives.h"
-#include "starfield_archives.h"
+#include "bethesda_custom_ini.h"
 #include "deployment_report.h"
 #include "proton_paths.h"
 #include "game_adapter.h"
@@ -295,11 +295,17 @@ static void testAppendToExisting()
     check("output is CRLF", out.contains("\r\n"));
 }
 
+static const QStringList kOblivionSeed = {
+    "Oblivion - Meshes.bsa", "Oblivion - Textures - Compressed.bsa",
+    "Oblivion - Sounds.bsa", "Oblivion - Voices1.bsa",
+    "Oblivion - Voices2.bsa", "Oblivion - Misc.bsa",
+};
+
 static void testNoArchiveSection()
 {
     std::cout << "\n[no [Archive] section: append one seeded with vanilla]\n";
     const QString ini = "[General]\r\nSLanguage=ENGLISH\r\n";
-    const QString out = configureArchives(ini, {"CoolMod.bsa"});
+    const QString out = configureArchives(ini, {"CoolMod.bsa"}, kOblivionSeed);
     check("[Archive] section appended", out.contains("[Archive]"));
     check("invalidation keys present",
           out.contains("bInvalidateOlderFiles=1") && out.contains("SInvalidationFile="));
@@ -307,6 +313,25 @@ static void testNoArchiveSection()
     check("seeded with vanilla", list.contains("Oblivion - Meshes.bsa"), list);
     check("mod BSA present", list.contains("CoolMod.bsa"), list);
     check("[General] preserved", out.contains("SLanguage=ENGLISH"));
+}
+
+// An unknown vanilla list must never be guessed at. Writing SArchiveList with
+// only the mod's BSAs would leave the base game's own archives unloaded, which
+// is far worse than leaving the key alone and letting the engine default.
+static void testNoSeedNeverInventsArchiveList()
+{
+    std::cout << "\n[unknown vanilla list: SArchiveList is left absent, not invented]\n";
+    const QString out = configureArchives("[General]\r\nX=1\r\n", {"CoolMod.bsa"}, {});
+    check("invalidation still applied", out.contains("bInvalidateOlderFiles=1"));
+    check("SArchiveList NOT invented",
+          !out.contains("SArchiveList", Qt::CaseInsensitive), out);
+
+    // With the key already present it is safe to append, seed or no seed.
+    const QString existing =
+        configureArchives("[Archive]\r\nSArchiveList=Base.bsa\r\n", {"CoolMod.bsa"}, {});
+    const QString list = archiveListValue(existing);
+    check("existing list still gets the mod BSA appended",
+          list.contains("Base.bsa") && list.contains("CoolMod.bsa"), list);
 }
 
 static void testDedup()
@@ -349,12 +374,13 @@ static void run_bethesda_archives()
     std::cout << "=== bethesda_archives tests ===\n";
     archives_section::testAppendToExisting();
     archives_section::testNoArchiveSection();
+    archives_section::testNoSeedNeverInventsArchiveList();
     archives_section::testDedup();
     archives_section::testAddsMissingInvalidationKeys();
     archives_section::testIdempotent();
 }
 
-// -- starfield_archives -------------------------------------------------------
+// -- bethesda_custom_ini -------------------------------------------------------
 namespace starfield_section {
 
 static QString keyValue(const QString &ini, const QString &key)
@@ -372,14 +398,14 @@ static void testCreatesFromNothing()
     std::cout << "\n[StarfieldCustom.ini: created from empty input]\n";
     // The normal case: Starfield does not ship this file, so the deploy path
     // hands us empty text and expects a complete, valid ini back.
-    const QString out = starfield_archives::configureCustomIni(QString(), {});
+    const QString out = bethesda_custom_ini::configureCustomIni(QString(), {});
     check("[Archive] section present", out.contains("[Archive]"));
     check("loose files enabled (bInvalidateOlderFiles)",
           out.contains("bInvalidateOlderFiles=1"));
     check("loose files enabled (sResourceDataDirsFinal empty)",
           out.contains("sResourceDataDirsFinal=\r\n"), out);
     check("no stray-archive key when there are no stray archives",
-          !out.contains(starfield_archives::kStrayArchiveKey), out);
+          !out.contains(bethesda_custom_ini::kStrayArchiveKey), out);
     check("does not open with a blank line", !out.startsWith("\r\n"), out);
     check("output is CRLF", out.contains("\r\n"));
 }
@@ -390,12 +416,12 @@ static void testExtendsExistingSection()
     const QString ini =
         "[General]\r\nsTestFile1=MyMod.esm\r\n"
         "[Archive]\r\nbInvalidateOlderFiles=0\r\n";
-    const QString out = starfield_archives::configureCustomIni(ini, {"Loose - Textures.ba2"});
+    const QString out = bethesda_custom_ini::configureCustomIni(ini, {"Loose - Textures.ba2"});
     check("invalidation flipped on", out.contains("bInvalidateOlderFiles=1"));
     check("old value gone", !out.contains("bInvalidateOlderFiles=0"));
     check("missing data-dirs key added", out.contains("sResourceDataDirsFinal="));
     check("stray archive registered",
-          keyValue(out, starfield_archives::kStrayArchiveKey).contains("Loose - Textures.ba2"),
+          keyValue(out, bethesda_custom_ini::kStrayArchiveKey).contains("Loose - Textures.ba2"),
           out);
     check("unrelated section preserved",
           out.contains("[General]") && out.contains("sTestFile1=MyMod.esm"));
@@ -404,12 +430,12 @@ static void testExtendsExistingSection()
 static void testIdempotentAndDedups()
 {
     std::cout << "\n[StarfieldCustom.ini: idempotent, case-insensitive de-dup]\n";
-    const QString once = starfield_archives::configureCustomIni(QString(), {"Extra.ba2"});
-    const QString twice = starfield_archives::configureCustomIni(once, {"Extra.ba2"});
+    const QString once = bethesda_custom_ini::configureCustomIni(QString(), {"Extra.ba2"});
+    const QString twice = bethesda_custom_ini::configureCustomIni(once, {"Extra.ba2"});
     check("re-running changes nothing", once == twice, twice, once);
 
-    const QString dup = starfield_archives::configureCustomIni(once, {"extra.ba2", "New.ba2"});
-    const QString list = keyValue(dup, starfield_archives::kStrayArchiveKey);
+    const QString dup = bethesda_custom_ini::configureCustomIni(once, {"extra.ba2", "New.ba2"});
+    const QString list = keyValue(dup, bethesda_custom_ini::kStrayArchiveKey);
     check("case-variant duplicate not added", !list.contains("extra.ba2"), list);
     check("only one Extra entry",
           archives_section::count(list, "extra.ba2", Qt::CaseInsensitive) == 1, list);
@@ -426,19 +452,19 @@ static void testStrayArchiveDetection()
     const QStringList ba2s = { "MyMod - Main.ba2", "MyMod - Textures.ba2",
                                "Orphan.ba2" };
     const QStringList plugins = { "MyMod.esm" };
-    const QStringList stray = starfield_archives::strayArchives(ba2s, plugins);
+    const QStringList stray = bethesda_custom_ini::strayArchives(ba2s, plugins);
     check("plugin-matched archives are not listed", stray == QStringList{"Orphan.ba2"},
           stray.join(", "));
     check("no plugins means every archive is stray",
-          starfield_archives::strayArchives(ba2s, {}).size() == 3);
+          bethesda_custom_ini::strayArchives(ba2s, {}).size() == 3);
     check("no archives means nothing stray",
-          starfield_archives::strayArchives({}, plugins).isEmpty());
+          bethesda_custom_ini::strayArchives({}, plugins).isEmpty());
 }
 } // namespace starfield_section
 
-static void run_starfield_archives()
+static void run_bethesda_custom_ini()
 {
-    std::cout << "=== starfield_archives tests ===\n";
+    std::cout << "=== bethesda_custom_ini tests ===\n";
     starfield_section::testCreatesFromNothing();
     starfield_section::testExtendsExistingSection();
     starfield_section::testIdempotentAndDedups();
@@ -651,6 +677,75 @@ static void testLoadOrderClassification()
           cyber && cyber->scriptExtenderLoaders().isEmpty());
 }
 
+// Archive config used to be `if (id != "oblivion") return;` inside the deploy
+// path, so every other engine deployed its mods and then loaded none of the
+// loose ones. It is adapter data now, and these pin it per engine family so a
+// newly classified game cannot quietly inherit "no archive config".
+static void testArchiveConfigPerEngineFamily()
+{
+    std::cout << "\n[archiveConfig: each classified engine says how to load loose files]\n";
+    using Style = GameAdapter::ArchiveConfig::Style;
+    auto cfg = [](const char *id) {
+        const GameAdapter *a = GameAdapterRegistry::find(id);
+        return a ? a->archiveConfig() : GameAdapter::ArchiveConfig{};
+    };
+
+    // Modern family: a *Custom.ini the game does not ship, so it gets created.
+    for (const char *id : {"fallout4", "starfield"}) {
+        const auto c = cfg(id);
+        check(QString("%1 uses the modern custom-ini style").arg(id).toUtf8().constData(),
+              c.style == Style::ModernCustomIni);
+        check(QString("%1 targets a Custom ini and creates it").arg(id).toUtf8().constData(),
+              c.iniName.endsWith("Custom.ini") && c.createIfMissing, c.iniName);
+        check(QString("%1 looks for .ba2").arg(id).toUtf8().constData(),
+              c.archiveSuffix == ".ba2", c.archiveSuffix);
+    }
+    check("fallout4 writes Fallout4Custom.ini",
+          cfg("fallout4").iniName == "Fallout4Custom.ini", cfg("fallout4").iniName);
+
+    // Gamebryo family: edits an ini the game ships, so never created.
+    for (const char *id : {"oblivion", "falloutnewvegas", "fallout3"}) {
+        const auto c = cfg(id);
+        check(QString("%1 uses the Gamebryo SArchiveList style").arg(id).toUtf8().constData(),
+              c.style == Style::GamebryoArchiveList);
+        check(QString("%1 never creates the ini").arg(id).toUtf8().constData(),
+              !c.createIfMissing);
+        check(QString("%1 looks for .bsa").arg(id).toUtf8().constData(),
+              c.archiveSuffix == ".bsa", c.archiveSuffix);
+    }
+    check("New Vegas edits Fallout.ini",
+          cfg("falloutnewvegas").iniName == "Fallout.ini", cfg("falloutnewvegas").iniName);
+    check("New Vegas carries its own vanilla seed, not Oblivion's",
+          cfg("falloutnewvegas").vanillaSeed.contains("Fallout - Textures.bsa")
+              && !cfg("falloutnewvegas").vanillaSeed.contains("Oblivion - Meshes.bsa"),
+          cfg("falloutnewvegas").vanillaSeed.join(", "));
+    check("Fallout 3 ships no seed rather than a guessed one",
+          cfg("fallout3").vanillaSeed.isEmpty());
+
+    // Skyrim SE genuinely needs nothing: loose files and name-matched BSAs
+    // both load on their own.
+    check("Skyrim SE correctly has no archive config",
+          cfg("skyrimspecialedition").style == Style::None);
+}
+
+static void testFallout4IsDiscoverable()
+{
+    std::cout << "\n[Fallout 4: fully classified AND reachable from the menu]\n";
+    const GameAdapter *fo4 = GameAdapterRegistry::find("fallout4");
+    check("fallout4 adapter exists", fo4 != nullptr);
+    if (!fo4) return;
+    check("deployable (Data/ declared)", fo4->dataSubdir() == "Data");
+    check("'*'-prefixed Plugins.txt style",
+          fo4->loadOrderStyle() == LoadOrderStyle::AsteriskPluginsTxt);
+    check("F4SE loader listed",
+          fo4->scriptExtenderLoaders().contains("f4se_loader.exe"));
+    // It was fully classified but unpinned, so working support sat behind
+    // Settings > Show all games.
+    check("pinned, so it appears without 'Show all games'", fo4->pinned());
+    check("still out of the first-run chooser (unverified on a real install)",
+          !fo4->builtin());
+}
+
 // Starfield was pinned and detectable but left at every "not a managed title"
 // default, so Deploy stayed hidden and no Plugins.txt was ever written. These
 // pin the classification that turns the generic Bethesda machinery on.
@@ -688,6 +783,8 @@ static void run_game_adapters()
     adapters_section::testBuiltinIsSubsetOfAll();
     adapters_section::testLoadOrderClassification();
     adapters_section::testStarfieldIsFullyClassified();
+    adapters_section::testArchiveConfigPerEngineFamily();
+    adapters_section::testFallout4IsDiscoverable();
 }
 
 // -- deployment_report --------------------------------------------------------
@@ -756,7 +853,7 @@ int main(int argc, char **argv)
     run_bethesda_deploy();
     run_bethesda_loadorder();
     run_bethesda_archives();
-    run_starfield_archives();
+    run_bethesda_custom_ini();
     run_deployment_report();
     run_proton_paths();
     run_game_adapters();

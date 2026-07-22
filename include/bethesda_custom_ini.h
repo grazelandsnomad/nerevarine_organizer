@@ -21,7 +21,7 @@
 #include <QString>
 #include <QStringList>
 
-namespace starfield_archives {
+namespace bethesda_custom_ini {
 
 // The ini key used to register archives that Starfield will not pick up by
 // name. UNVERIFIED against a real install: Bethesda has shipped both
@@ -45,4 +45,4 @@ QString configureCustomIni(const QString &iniText, const QStringList &strayBa2s)
 QStringList strayArchives(const QStringList &deployedBa2s,
                           const QStringList &deployedPlugins);
 
-} // namespace starfield_archives
+} // namespace bethesda_custom_ini

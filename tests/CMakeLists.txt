@@ -47,7 +47,7 @@ add_executable(test_bethesda
     ${CMAKE_SOURCE_DIR}/src/bethesda_deploy.cpp
     ${CMAKE_SOURCE_DIR}/src/bethesda_loadorder.cpp
     ${CMAKE_SOURCE_DIR}/src/bethesda_archives.cpp
-    ${CMAKE_SOURCE_DIR}/src/starfield_archives.cpp
+    ${CMAKE_SOURCE_DIR}/src/bethesda_custom_ini.cpp
     ${CMAKE_SOURCE_DIR}/src/proton_paths.cpp
     ${CMAKE_SOURCE_DIR}/src/game_adapters.cpp
     ${CMAKE_SOURCE_DIR}/include/game_adapter.h

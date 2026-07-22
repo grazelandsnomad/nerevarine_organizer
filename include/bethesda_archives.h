@@ -20,6 +20,12 @@ namespace bethesda_archives {
 // entries kept, case-insensitive de-dup, order preserved). A missing [Archive]
 // is appended; a missing SArchiveList is seeded with the vanilla BSAs first.
 // Output uses CRLF line endings (Windows ini).
-QString configureArchives(const QString &iniText, const QStringList &modBsas);
+// `vanillaSeed` is used ONLY when the ini has no SArchiveList at all: the key
+// is then created with the seed followed by modBsas. An EMPTY seed means we do
+// not know this game's vanilla archives, and the key is left absent rather than
+// invented - writing a partial list would leave the base game's own archives
+// unloaded. Per-game seeds live in the adapters (GameAdapter::archiveConfig).
+QString configureArchives(const QString &iniText, const QStringList &modBsas,
+                          const QStringList &vanillaSeed = {});
 
 } // namespace bethesda_archives

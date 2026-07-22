@@ -22,7 +22,7 @@
 #include "bethesda_deploy.h"
 #include "bethesda_loadorder.h"
 #include "bethesda_archives.h"
-#include "starfield_archives.h"
+#include "bethesda_custom_ini.h"
 #include <functional>
 #include "proton_paths.h"
 #include "extract_errors.h"
@@ -629,9 +629,14 @@ static void bethesdaConfigureArchives(const QString &id, const GameAdapter *adap
                                       const QString &dataDir,
                                       const bethesda_deploy::Manifest &manifest)
 {
-    const bool isOblivion  = (id == QLatin1String("oblivion"));
-    const bool isStarfield = (id == QLatin1String("starfield"));
-    if (!isOblivion && !isStarfield) return;
+    if (!adapter) return;
+    // Driven entirely by adapter data. It used to be `if (id != "oblivion")
+    // return;`, which silently skipped every other engine: Fallout 4 deployed
+    // its mods and then loaded none of the loose ones because nothing ever
+    // wrote Fallout4Custom.ini.
+    using Style = GameAdapter::ArchiveConfig::Style;
+    const GameAdapter::ArchiveConfig cfg = adapter->archiveConfig();
+    if (cfg.style == Style::None || cfg.iniName.isEmpty()) return;
 
     const QString iniDir = resolveBethesdaIniDir(id, adapter, dataDir);
     if (iniDir.isEmpty()) return;
@@ -640,8 +645,8 @@ static void bethesdaConfigureArchives(const QString &id, const GameAdapter *adap
     QStringList archives, plugins;
     for (const auto &f : manifest.files) {
         if (f.rel.contains('/')) continue;
-        const QString suffix = isOblivion ? QStringLiteral(".bsa") : QStringLiteral(".ba2");
-        if (f.rel.endsWith(suffix, Qt::CaseInsensitive)) {
+        if (!cfg.archiveSuffix.isEmpty()
+            && f.rel.endsWith(cfg.archiveSuffix, Qt::CaseInsensitive)) {
             archives << f.rel;
         } else if (f.rel.endsWith(QLatin1String(".esp"), Qt::CaseInsensitive)
                 || f.rel.endsWith(QLatin1String(".esm"), Qt::CaseInsensitive)
@@ -650,19 +655,18 @@ static void bethesdaConfigureArchives(const QString &id, const GameAdapter *adap
         }
     }
 
+    const QString iniPath = QDir(iniDir).filePath(cfg.iniName);
     bool wrote = false;
-    if (isOblivion) {
-        wrote = rewriteGameIni(
-            QDir(iniDir).filePath(QStringLiteral("Oblivion.ini")), false,
-            [&archives](const QString &t) {
-                return bethesda_archives::configureArchives(t, archives);
+    if (cfg.style == Style::GamebryoArchiveList) {
+        wrote = rewriteGameIni(iniPath, cfg.createIfMissing,
+            [&archives, &cfg](const QString &t) {
+                return bethesda_archives::configureArchives(t, archives, cfg.vanillaSeed);
             });
     } else {
-        const QStringList stray = starfield_archives::strayArchives(archives, plugins);
-        wrote = rewriteGameIni(
-            QDir(iniDir).filePath(QStringLiteral("StarfieldCustom.ini")), true,
+        const QStringList stray = bethesda_custom_ini::strayArchives(archives, plugins);
+        wrote = rewriteGameIni(iniPath, cfg.createIfMissing,
             [&stray](const QString &t) {
-                return starfield_archives::configureCustomIni(t, stray);
+                return bethesda_custom_ini::configureCustomIni(t, stray);
             });
     }
     if (wrote) Settings::setIniDir(id, iniDir);

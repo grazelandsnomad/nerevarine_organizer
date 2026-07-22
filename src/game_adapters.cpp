@@ -11,6 +11,27 @@
 
 namespace {
 
+// Seeds for SArchiveList, used ONLY when the ini has none (the launcher
+// normally writes one). Wrong entries here would leave the base game's own
+// archives unloaded, so a game we cannot state confidently gets no seed and we
+// simply never invent the key.
+const QStringList kOblivionVanillaBsas = {
+    QStringLiteral("Oblivion - Meshes.bsa"),
+    QStringLiteral("Oblivion - Textures - Compressed.bsa"),
+    QStringLiteral("Oblivion - Sounds.bsa"),
+    QStringLiteral("Oblivion - Voices1.bsa"),
+    QStringLiteral("Oblivion - Voices2.bsa"),
+    QStringLiteral("Oblivion - Misc.bsa"),
+};
+const QStringList kFalloutNVVanillaBsas = {
+    QStringLiteral("Fallout - Textures.bsa"),
+    QStringLiteral("Fallout - Textures2.bsa"),
+    QStringLiteral("Fallout - Meshes.bsa"),
+    QStringLiteral("Fallout - Voices1.bsa"),
+    QStringLiteral("Fallout - Sound.bsa"),
+    QStringLiteral("Fallout - Misc.bsa"),
+};
+
 // -- OpenMW (Morrowind) ------------------------------------------------
 // All the OpenMW-specific paths (openmw.cfg sync, plugin parser, BSA
 // discovery) gate on isMorrowind(). GOG GOTY is the usual install.
@@ -94,6 +115,11 @@ public:
     QString dataSubdir()       const override { return QStringLiteral("Data"); }
     QString localAppDataName() const override { return QStringLiteral("Starfield"); }
     QString myGamesName()      const override { return QStringLiteral("Starfield"); }
+    ArchiveConfig archiveConfig() const override {
+        return { ArchiveConfig::Style::ModernCustomIni,
+                 QStringLiteral("StarfieldCustom.ini"), QStringLiteral(".ba2"),
+                 {}, /*createIfMissing=*/true };
+    }
     QStringList scriptExtenderLoaders() const override { return {QStringLiteral("sfse_loader.exe")}; }
 };
 
@@ -125,6 +151,11 @@ public:
     QStringList scriptExtenderLoaders() const override {
         return {QStringLiteral("xobse_loader.exe"), QStringLiteral("obse_loader.exe")};
     }
+    ArchiveConfig archiveConfig() const override {
+        return { ArchiveConfig::Style::GamebryoArchiveList,
+                 QStringLiteral("Oblivion.ini"), QStringLiteral(".bsa"),
+                 kOblivionVanillaBsas, /*createIfMissing=*/false };
+    }
 };
 
 class OblivionRemasteredAdapter : public GameAdapter {
@@ -154,6 +185,11 @@ public:
     QString dataSubdir()       const override { return QStringLiteral("Data"); }
     QString localAppDataName() const override { return QStringLiteral("Fallout3"); }
     QString myGamesName()      const override { return QStringLiteral("Fallout3"); }
+    ArchiveConfig archiveConfig() const override {
+        return { ArchiveConfig::Style::GamebryoArchiveList,
+                 QStringLiteral("Fallout.ini"), QStringLiteral(".bsa"),
+                 {}, /*createIfMissing=*/false };
+    }
     QStringList scriptExtenderLoaders() const override { return {QStringLiteral("fose_loader.exe")}; }
 };
 
@@ -174,6 +210,14 @@ public:
     QString dataSubdir()       const override { return QStringLiteral("Data"); }
     QString localAppDataName() const override { return QStringLiteral("Fallout4"); }
     QString myGamesName()      const override { return QStringLiteral("Fallout4"); }
+    ArchiveConfig archiveConfig() const override {
+        return { ArchiveConfig::Style::ModernCustomIni,
+                 QStringLiteral("Fallout4Custom.ini"), QStringLiteral(".ba2"),
+                 {}, /*createIfMissing=*/true };
+    }
+    // Pinned: it is fully classified, so hiding it behind "Show all games"
+    // only made working support undiscoverable.
+    bool    pinned()           const override { return true; }
     QStringList scriptExtenderLoaders() const override { return {QStringLiteral("f4se_loader.exe")}; }
 };
 
@@ -196,6 +240,11 @@ public:
     QString dataSubdir()       const override { return QStringLiteral("Data"); }
     QString localAppDataName() const override { return QStringLiteral("FalloutNV"); }
     QString myGamesName()      const override { return QStringLiteral("FalloutNV"); }
+    ArchiveConfig archiveConfig() const override {
+        return { ArchiveConfig::Style::GamebryoArchiveList,
+                 QStringLiteral("Fallout.ini"), QStringLiteral(".bsa"),
+                 kFalloutNVVanillaBsas, /*createIfMissing=*/false };
+    }
     QStringList scriptExtenderLoaders() const override { return {QStringLiteral("nvse_loader.exe")}; }
 };
 

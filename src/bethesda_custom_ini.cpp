@@ -1,8 +1,8 @@
-#include "starfield_archives.h"
+#include "bethesda_custom_ini.h"
 
 #include <QFileInfo>
 
-namespace starfield_archives {
+namespace bethesda_custom_ini {
 
 const QString kStrayArchiveKey = QStringLiteral("sResourceArchiveList2");
 
@@ -136,4 +136,4 @@ QString configureCustomIni(const QString &iniText, const QStringList &strayBa2s)
     return result;
 }
 
-} // namespace starfield_archives
+} // namespace bethesda_custom_ini

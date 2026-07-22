@@ -4,17 +4,6 @@ namespace bethesda_archives {
 
 namespace {
 
-// Seed SArchiveList only when the ini has none (rare; launcher writes one on
-// first run). A real install with DLC already has its own list; we just append.
-const QStringList kVanillaBsas = {
-    QStringLiteral("Oblivion - Meshes.bsa"),
-    QStringLiteral("Oblivion - Textures - Compressed.bsa"),
-    QStringLiteral("Oblivion - Sounds.bsa"),
-    QStringLiteral("Oblivion - Voices1.bsa"),
-    QStringLiteral("Oblivion - Voices2.bsa"),
-    QStringLiteral("Oblivion - Misc.bsa"),
-};
-
 QStringList parseList(const QString &value)
 {
     QStringList out;
@@ -38,7 +27,8 @@ void appendBsas(QStringList &list, const QStringList &bsas)
 
 } // namespace
 
-QString configureArchives(const QString &iniText, const QStringList &modBsas)
+QString configureArchives(const QString &iniText, const QStringList &modBsas,
+                          const QStringList &vanillaSeed)
 {
     QStringList lines = iniText.split(QLatin1Char('\n'));
     // A trailing newline splits into a final empty element. Keeping it would
@@ -54,8 +44,10 @@ QString configureArchives(const QString &iniText, const QStringList &modBsas)
         // On leaving [Archive], add whatever keys it was missing.
         if (!sawInvalidate) out << QStringLiteral("bInvalidateOlderFiles=1");
         if (!sawInvalFile)  out << QStringLiteral("SInvalidationFile=");
-        if (!sawList) {
-            QStringList l = kVanillaBsas;
+        // Only invent SArchiveList when we know what the base game ships;
+        // otherwise leave it absent so the engine keeps its own defaults.
+        if (!sawList && !vanillaSeed.isEmpty()) {
+            QStringList l = vanillaSeed;
             appendBsas(l, modBsas);
             out << QStringLiteral("SArchiveList=") + l.join(QStringLiteral(", "));
         }
@@ -106,12 +98,14 @@ QString configureArchives(const QString &iniText, const QStringList &modBsas)
 
     // No [Archive] section anywhere: append a fresh one.
     if (!archiveSeen) {
-        QStringList l = kVanillaBsas;
-        appendBsas(l, modBsas);
         out << QStringLiteral("[Archive]");
         out << QStringLiteral("bInvalidateOlderFiles=1");
         out << QStringLiteral("SInvalidationFile=");
-        out << QStringLiteral("SArchiveList=") + l.join(QStringLiteral(", "));
+        if (!vanillaSeed.isEmpty()) {
+            QStringList l = vanillaSeed;
+            appendBsas(l, modBsas);
+            out << QStringLiteral("SArchiveList=") + l.join(QStringLiteral(", "));
+        }
     }
 
     QString result = out.join(QStringLiteral("\r\n"));
