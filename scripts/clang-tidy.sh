@@ -62,9 +62,42 @@ cat > "$preflight/probe.cpp" <<'PROBE'
 #include <expected>
 std::expected<int, int> probe() { return 1; }
 PROBE
-if ! "$CLANGXX" -std=c++23 -fsyntax-only "$preflight/probe.cpp" 2>/dev/null; then
+echo "clang-tidy.sh: using $CLANGXX and $CLANG_TIDY"
+
+# Both binaries have to be checked, not just the compiler. They are versioned
+# independently and clang-tidy carries its OWN copy of the frontend, so a run
+# with a new clang++ and a stale clang-tidy looks correctly upgraded and fails
+# identically. (That is exactly how the first attempt at this fix went: the
+# distro splits clang-tidy-19 into its own package, so installing
+# clang-tools-19 upgraded nothing.)
+probe_ok() {
+    case $1 in
+    compiler) "$CLANGXX" -std=c++23 -fsyntax-only "$preflight/probe.cpp" 2>/dev/null ;;
+    # Two traps here, both of which silently turned this check into a no-op
+    # while it looked correct:
+    #   --checks is mandatory. The probe sits outside the repo, so no
+    #   .clang-tidy is found and clang-tidy exits with "no checks enabled"
+    #   WITHOUT compiling anything, and there is no error to find.
+    #   The output must be captured, not piped to grep. clang-tidy exits
+    #   non-zero when it reports the error, and under `set -o pipefail` that
+    #   status wins the pipeline, so `! tidy | grep -q` reports success exactly
+    #   when the problem IS present.
+    tidy)
+        local out
+        out=$("$CLANG_TIDY" --quiet --checks='-*,bugprone-assert-side-effect' \
+                  "$preflight/probe.cpp" -- -std=c++23 2>&1 || true)
+        case $out in
+            *"no template named 'expected'"*) return 1 ;;
+            *)                                return 0 ;;
+        esac
+        ;;
+    esac
+}
+
+if ! probe_ok compiler || ! probe_ok tidy; then
+    failed=$(probe_ok compiler && echo "$CLANG_TIDY" || echo "$CLANGXX")
     cat >&2 <<EOF
-clang-tidy.sh: $CLANGXX cannot compile std::expected, so every TU that includes
+clang-tidy.sh: $failed cannot handle std::expected, so every TU that includes
 safe_fs.h would fail with a misleading "no template named 'expected'".
 
 libstdc++ gates <expected> on BOTH __cplusplus >= 202100L and
@@ -72,7 +105,8 @@ __cpp_concepts >= 202002L (bits/version.h). This compiler reports:
   __cplusplus     = $(probe_macro __cplusplus)
   __cpp_concepts  = $(probe_macro __cpp_concepts)
 Clang did not raise __cpp_concepts to 202002L until 19. Install clang 19 or
-newer (Ubuntu: clang-19 clang-tools-19), or point CLANGXX / CLANG_TIDY at one.
+newer (Ubuntu: clang-19 AND clang-tidy-19, which are separate packages), or
+point CLANGXX / CLANG_TIDY at one.
 EOF
     exit 1
 fi

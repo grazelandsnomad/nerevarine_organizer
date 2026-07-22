@@ -35,10 +35,15 @@ jobs:
         # from 19. Under 18 the header includes but declares nothing, so every
         # TU reaching safe_fs.h dies with "no template named 'expected'". The
         # script preflights this and says so, but the right version is here.
+        #
+        # clang-tidy-19 is its OWN package. clang-tools-19 ships scan-build /
+        # clang-cl and NOT clang-tidy, so asking for it leaves the runner
+        # image's unversioned clang-tidy 18 in place and the gate fails exactly
+        # as before while the compiler looks correctly upgraded.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            clang-19 clang-tools-19 g++-14 cmake ninja-build qt6-base-dev
+            clang-19 clang-tidy-19 g++-14 cmake ninja-build qt6-base-dev
 
       - name: Run the clang-tidy gate
         # Configures its own clang side build under build-tidy/ and walks every
