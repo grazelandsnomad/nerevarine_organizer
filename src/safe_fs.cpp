@@ -61,6 +61,33 @@ bool forceRemoveRecursively(const QString &path)
     return QDir(path).removeRecursively();
 }
 
+QString writableFilePath(const QString &dir, const QString &filename)
+{
+    const QDir d(dir);
+    QString candidate = d.filePath(filename);
+
+    QFileInfo fi(candidate);
+    if (!fi.exists() || fi.isFile())
+        return candidate;
+
+    // Something non-regular (a directory left by a prior extract) owns the
+    // name. Suffix until free. Keep the extension only when there is one - an
+    // extensionless CDN id would otherwise become "name_2." with a dangling dot.
+    const QFileInfo src(filename);
+    const QString base = src.completeBaseName();
+    const QString ext  = src.suffix();
+    for (int n = 2; n < 10000; ++n) {
+        const QString rebuilt = ext.isEmpty()
+            ? QStringLiteral("%1_%2").arg(base).arg(n)
+            : QStringLiteral("%1_%2.%3").arg(base).arg(n).arg(ext);
+        candidate = d.filePath(rebuilt);
+        fi = QFileInfo(candidate);
+        if (!fi.exists() || fi.isFile())
+            return candidate;
+    }
+    return candidate;   // pathological; caller reports the open failure
+}
+
 std::expected<void, QString>
 copyTreeVerified(const QString &src, const QString &dst,
                  std::function<bool()> isCancelled)

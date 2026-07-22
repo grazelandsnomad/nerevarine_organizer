@@ -8,6 +8,7 @@
 #include "subprocess.h"
 #include "translator.h"
 #include "prompts.h"
+#include "safe_fs.h"
 
 #include <QAbstractButton>
 #include <QAction>
@@ -418,6 +419,21 @@ void DownloadQueue::updateQueueRowProgress(QListWidgetItem *placeholder,
     updateQueueTotals();
 }
 
+void DownloadQueue::resetPlaceholderToIdle(QListWidgetItem *placeholder)
+{
+    if (!placeholder) return;
+    if (!m_modList->indexFromItem(placeholder).isValid()) return;
+    placeholder->setData(ModRole::InstallStatus,    0);
+    placeholder->setData(ModRole::DownloadProgress, QVariant());
+    placeholder->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
+                          Qt::ItemIsDragEnabled | Qt::ItemIsUserCheckable);
+    QString name = placeholder->data(ModRole::CustomName).toString();
+    if (name.isEmpty())
+        name = QFileInfo(placeholder->data(ModRole::ModPath).toString()).fileName();
+    if (!name.isEmpty()) placeholder->setText(name);
+    emit saveRequested();
+}
+
 void DownloadQueue::removeQueueRow(QListWidgetItem *placeholder)
 {
     for (int i = 0; i < m_queue.size(); ++i) {
@@ -532,12 +548,25 @@ void DownloadQueue::downloadFile(const QUrl    &downloadUrl,
                                   const QString &filename,
                                   QListWidgetItem *placeholder)
 {
-    QString savePath = QDir(m_modsDir).filePath(filename);
+    // Never take QDir(m_modsDir).filePath(filename) at face value: an earlier
+    // install of this very file may have left a DIRECTORY sitting on that name
+    // (bare-UUID CDN downloads extract into a same-named folder), and opening a
+    // directory for writing fails forever no matter how much space is freed.
+    QString savePath = safefs::writableFilePath(m_modsDir, filename);
 
     QFile *file = new QFile(savePath, this);
     if (!file->open(QIODevice::WriteOnly)) {
-        ui::warn(m_parentWidget, T("file_error_title"), T("file_error_write").arg(savePath));
+        writeDiag(QStringLiteral("open-failed %1 path=%2 err=%3")
+                      .arg(filename, savePath, file->errorString()));
         delete file;
+        // Full failure cleanup, exactly as the other bail-outs below: free the
+        // queue slot and let the next item start, or the queue stalls silently.
+        removeQueueRow(placeholder);
+        m_dlAttempts.remove(placeholder);
+        resetPlaceholderToIdle(placeholder);
+        ui::warn(m_parentWidget, T("file_error_title"), T("file_error_write").arg(savePath));
+        emit statusMessage(T("status_download_failed"), 4000);
+        processDownloadQueue();
         return;
     }
 
@@ -606,28 +635,44 @@ void DownloadQueue::downloadFile(const QUrl    &downloadUrl,
     });
 
     connect(reply, &QNetworkReply::readyRead, [reply, file]() {
-        file->write(reply->readAll());
+        const QByteArray chunk = reply->readAll();
+        // A short write is the disk filling up. QFile latches the error, which
+        // the finished handler below reads - without that check ENOSPC is
+        // silent and a truncated archive goes on to the extractor as "corrupt".
+        if (file->write(chunk) != chunk.size())
+            reply->abort();
     });
 
     connect(reply, &QNetworkReply::finished, this,
             [this, reply, file, savePath, filename, placeholder, downloadUrl]() {
         file->close();
+        const QFileDevice::FileError writeErr = file->error();
+        const QString               writeErrStr = file->errorString();
         file->deleteLater();
         m_active.remove(placeholder);
         m_startTime.remove(placeholder);
         reply->deleteLater();
         removeQueueRow(placeholder);
 
+        // Disk-side failure first: the readyRead handler aborts the reply on a
+        // short write, so this must be tested BEFORE the cancel branch or a
+        // full disk is silently reported as "Download cancelled".
+        if (writeErr != QFileDevice::NoError) {
+            QFile::remove(savePath);
+            m_dlAttempts.remove(placeholder);
+            resetPlaceholderToIdle(placeholder);
+            writeDiag(QStringLiteral("write-failed %1 path=%2 err=%3")
+                          .arg(filename, savePath, writeErrStr));
+            ui::warn(m_parentWidget, T("download_write_failed_title"),
+                     T("download_write_failed_body").arg(filename, writeErrStr));
+            emit statusMessage(T("status_download_failed"), 4000);
+            processDownloadQueue();
+            return;
+        }
+
         if (reply->error() == QNetworkReply::OperationCanceledError) {
             QFile::remove(savePath);
-            if (m_modList->indexFromItem(placeholder).isValid()) {
-                placeholder->setData(ModRole::InstallStatus, 0);
-                placeholder->setData(ModRole::DownloadProgress, QVariant());
-                placeholder->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
-                                      Qt::ItemIsDragEnabled |
-                                      Qt::ItemIsUserCheckable);
-                emit saveRequested();
-            }
+            resetPlaceholderToIdle(placeholder);
             m_dlAttempts.remove(placeholder);
             emit statusMessage(T("status_download_cancelled"), 3000);
             processDownloadQueue();
@@ -636,14 +681,7 @@ void DownloadQueue::downloadFile(const QUrl    &downloadUrl,
         if (reply->error() != QNetworkReply::NoError) {
             QFile::remove(savePath);
             m_dlAttempts.remove(placeholder);
-            if (m_modList->indexFromItem(placeholder).isValid()) {
-                placeholder->setData(ModRole::InstallStatus, 0);
-                placeholder->setData(ModRole::DownloadProgress, QVariant());
-                placeholder->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
-                                      Qt::ItemIsDragEnabled |
-                                      Qt::ItemIsUserCheckable);
-                emit saveRequested();
-            }
+            resetPlaceholderToIdle(placeholder);
             emit statusMessage(T("status_download_failed"), 4000);
             processDownloadQueue();
             return;
@@ -662,13 +700,7 @@ void DownloadQueue::downloadFile(const QUrl    &downloadUrl,
         if (declared > 0 && onDisk < declared) {
             QFile::remove(savePath);
             m_dlAttempts.remove(placeholder);
-            if (m_modList->indexFromItem(placeholder).isValid()) {
-                placeholder->setData(ModRole::InstallStatus, 0);
-                placeholder->setData(ModRole::DownloadProgress, QVariant());
-                placeholder->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
-                                      Qt::ItemIsDragEnabled | Qt::ItemIsUserCheckable);
-                emit saveRequested();
-            }
+            resetPlaceholderToIdle(placeholder);
             ui::warn(m_parentWidget, T("download_incomplete_title"),
                      T("download_incomplete_body").arg(filename)
                          .arg(onDisk).arg(declared));
@@ -713,13 +745,7 @@ void DownloadQueue::downloadFile(const QUrl    &downloadUrl,
                           .arg(filename, problem,
                                QString::fromLatin1(magic.toHex()),
                                kept ? keptPath : QStringLiteral("(rename failed)")));
-            if (m_modList->indexFromItem(placeholder).isValid()) {
-                placeholder->setData(ModRole::InstallStatus, 0);
-                placeholder->setData(ModRole::DownloadProgress, QVariant());
-                placeholder->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
-                                      Qt::ItemIsDragEnabled | Qt::ItemIsUserCheckable);
-                emit saveRequested();
-            }
+            resetPlaceholderToIdle(placeholder);
             ui::warn(m_parentWidget, T("download_corrupt_title"),
                      T("download_corrupt_body").arg(filename, problem,
                          kept ? keptPath : QStringLiteral("-")));

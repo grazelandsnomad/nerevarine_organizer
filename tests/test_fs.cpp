@@ -339,8 +339,68 @@ static void testForceRemoveReadOnlyDirs()
           !QFileInfo::exists(tree));
 }
 
+// writableFilePath - the guard for the "Cannot write to <mods dir>/<uuid>"
+// wedge: a bare-UUID CDN download extracts into a same-named FOLDER, so the
+// next download of that same (stable) UUID resolved onto a directory and
+// QFile::open(WriteOnly) failed forever, no matter how much space was freed.
+static void testWritablePathFreeName()
+{
+    QTemporaryDir tmp;
+    std::cout << "testWritablePathFreeName\n";
+    const QString got = safefs::writableFilePath(tmp.path(), "Mod-123-1-0.7z");
+    check("free name is returned unchanged",
+          got == QDir(tmp.path()).filePath("Mod-123-1-0.7z"), got);
+}
+
+static void testWritablePathOverwritesExistingFile()
+{
+    QTemporaryDir tmp;
+    std::cout << "testWritablePathOverwritesExistingFile\n";
+    const QString live = QDir(tmp.path()).filePath("Mod-123-1-0.7z");
+    writeFile(live, "old");
+    const QString got = safefs::writableFilePath(tmp.path(), "Mod-123-1-0.7z");
+    check("an existing regular file is reused (re-download overwrites)",
+          got == live, got);
+}
+
+static void testWritablePathDivertsAroundDirectory()
+{
+    QTemporaryDir tmp;
+    std::cout << "testWritablePathDivertsAroundDirectory\n";
+    const QString uuid = "486264d1-8e9a-4882-9d8e-2d64d17906fc";
+    QDir().mkpath(QDir(tmp.path()).filePath(uuid));
+
+    const QString got = safefs::writableFilePath(tmp.path(), uuid);
+    check("directory collision does not return the directory path",
+          got != QDir(tmp.path()).filePath(uuid), got);
+    check("extensionless name gets a bare _2 suffix, no dangling dot",
+          got == QDir(tmp.path()).filePath(uuid + "_2"), got);
+
+    QFile f(got);
+    check("the diverted path is actually openable for writing",
+          f.open(QIODevice::WriteOnly));
+    f.close();
+}
+
+static void testWritablePathKeepsExtensionAndWalksSuffixes()
+{
+    QTemporaryDir tmp;
+    std::cout << "testWritablePathKeepsExtensionAndWalksSuffixes\n";
+    QDir().mkpath(QDir(tmp.path()).filePath("Mod-123-1-0.7z"));
+    QDir().mkpath(QDir(tmp.path()).filePath("Mod-123-1-0_2.7z"));
+
+    const QString got = safefs::writableFilePath(tmp.path(), "Mod-123-1-0.7z");
+    check("suffix lands before the extension and skips taken names",
+          got == QDir(tmp.path()).filePath("Mod-123-1-0_3.7z"), got);
+}
+
 static void run_safe_fs()
 {
+    testWritablePathFreeName();
+    testWritablePathOverwritesExistingFile();
+    testWritablePathDivertsAroundDirectory();
+    testWritablePathKeepsExtensionAndWalksSuffixes();
+
     testSnapshotMissingFile();
     testSnapshotHappyPath();
     testSnapshotRotation();

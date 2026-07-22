@@ -102,9 +102,13 @@ static void testVoidWorkEpilogue()
 static void testDeadObjectDropsThen()
 {
     std::cout << "testDeadObjectDropsThen\n";
-    // Heap-owned so they outlive the (possibly still-running) worker.
-    auto *gate    = new std::atomic<bool>(false);
-    auto *thenRan = new std::atomic<bool>(false);
+    // Function-local statics, not heap: they must outlive the (possibly still
+    // running) detached worker, and a `new` that is deliberately never freed
+    // trips LeakSanitizer in the sanitizer CI build.
+    static std::atomic<bool> gateStore{false};
+    static std::atomic<bool> thenRanStore{false};
+    auto *gate    = &gateStore;
+    auto *thenRan = &thenRanStore;
     auto *q       = new Probe;
 
     async::guarded(q,

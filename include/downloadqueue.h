@@ -153,6 +153,14 @@ private:
     void removeQueueRow(QListWidgetItem *placeholder);
     void updateQueueTotals();
 
+    // Put a row back to "not installed" after a failed download: clears the
+    // spinner state so the user can retry, and emits saveRequested(). Every
+    // failure exit from downloadFile() must go through this - a path that skips
+    // it leaves the row spinning forever, and because processDownloadQueue()
+    // marks the entry active *before* starting it, the (single) concurrency
+    // slot stays occupied and the whole queue wedges.
+    void resetPlaceholderToIdle(QListWidgetItem *placeholder);
+
     // -- Injected (owned by MainWindow, outlive us) ---
     QListWidget           *m_modList;
     QNetworkAccessManager *m_net;

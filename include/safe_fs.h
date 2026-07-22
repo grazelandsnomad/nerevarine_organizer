@@ -58,6 +58,21 @@ copyTreeVerified(const QString &src, const QString &dst,
 // Returns true iff `path` is gone when the call returns.
 bool forceRemoveRecursively(const QString &path);
 
+// Pick a path inside `dir` that a download can actually be opened for writing.
+//
+// Returns `dir/filename` when that path is free or already a regular file (an
+// overwrite is the wanted behaviour for a re-download). When something else
+// sits there - in practice a DIRECTORY - it suffixes "_2", "_3", ... before
+// the extension until the name is free.
+//
+// This is not hypothetical tidiness. Nexus CDN links for the free-tier flow
+// land under a bare, extensionless UUID, and that UUID is stable per file. The
+// installer extracts such an archive into a directory of the same name inside
+// the mods dir, so re-downloading an already-installed mod resolves to a save
+// path that is now a directory: QFile::open(WriteOnly) fails, and freeing disk
+// space does nothing because space was never the problem.
+QString writableFilePath(const QString &dir, const QString &filename);
+
 } // namespace safefs
 
 #endif // SAFE_FS_H
