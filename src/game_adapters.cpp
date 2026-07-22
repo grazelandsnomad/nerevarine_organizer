@@ -70,6 +70,15 @@ public:
     QString lootSlug()         const override { return QStringLiteral("Skyrim"); }
 };
 
+// Starfield shares Skyrim SE / FO4's load-order model: Plugins.txt order IS the
+// load order, active entries '*'-prefixed. So classifying it is enough - the
+// deploy path, the Plugins.txt writer and the Proton prefix resolvers are all
+// generic over the fields below.
+//
+// Not done, and not a blocker: pluginparser only understands TES3 headers, so
+// Starfield plugins carry no master metadata. Master satisfaction and
+// missing-master suppression are gated on isMorrowind(), and mastersFirst()
+// orders by file extension, so nothing downstream needs the parse.
 class StarfieldAdapter : public GameAdapter {
 public:
     QString id()          const override { return QStringLiteral("starfield"); }
@@ -81,6 +90,11 @@ public:
     QStringList lutrisTokens() const override { return {"starfield"}; }
     QString lootSlug()         const override { return QStringLiteral("Starfield"); }
     bool    pinned()           const override { return true; }
+    LoadOrderStyle loadOrderStyle() const override { return LoadOrderStyle::AsteriskPluginsTxt; }
+    QString dataSubdir()       const override { return QStringLiteral("Data"); }
+    QString localAppDataName() const override { return QStringLiteral("Starfield"); }
+    QString myGamesName()      const override { return QStringLiteral("Starfield"); }
+    QStringList scriptExtenderLoaders() const override { return {QStringLiteral("sfse_loader.exe")}; }
 };
 
 class OblivionAdapter : public GameAdapter {

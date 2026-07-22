@@ -110,6 +110,7 @@ set(SOURCES
     src/bethesda_deploy.cpp
     src/bethesda_loadorder.cpp
     src/bethesda_archives.cpp
+    src/starfield_archives.cpp
     src/extract_errors.cpp
     src/archive_magic.cpp
     src/log_triage.cpp

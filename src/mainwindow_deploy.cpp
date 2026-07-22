@@ -22,6 +22,8 @@
 #include "bethesda_deploy.h"
 #include "bethesda_loadorder.h"
 #include "bethesda_archives.h"
+#include "starfield_archives.h"
+#include <functional>
 #include "proton_paths.h"
 #include "extract_errors.h"
 #include "archive_magic.h"
@@ -584,39 +586,86 @@ static int bethesdaActivate(const QString &id, const GameAdapter *adapter,
     return activated;
 }
 
-// Oblivion: register deployed BSAs in Oblivion.ini SArchiveList + turn on
-// archive invalidation.  Only ever edits an existing ini (backed up once).
+// Rewrite one game ini through `transform`, backing the original up once.
+//
+// `createIfMissing` is the difference between the two games: Oblivion.ini ships
+// with the game, so a missing one means we resolved the wrong directory and
+// must not invent it. StarfieldCustom.ini is a user override file Starfield
+// does NOT ship, so the common case is that we have to create it.
+static bool rewriteGameIni(const QString &iniPath, bool createIfMissing,
+                           const std::function<QString(const QString &)> &transform)
+{
+    if (iniPath.isEmpty()) return false;
+    const bool exists = QFileInfo::exists(iniPath);
+    if (!exists && !createIfMissing) return false;
+
+    QString iniText;
+    if (exists) {
+        QFile inf(iniPath);
+        if (inf.open(QIODevice::ReadOnly)) {
+            iniText = QString::fromUtf8(inf.readAll());
+            inf.close();
+        }
+        const QString iniBak = iniPath + ".nerevarine-bak";
+        if (!QFileInfo::exists(iniBak)) QFile::copy(iniPath, iniBak);
+    } else {
+        QDir().mkpath(QFileInfo(iniPath).absolutePath());
+    }
+
+    QFile outf(iniPath);
+    if (!outf.open(QIODevice::WriteOnly)) return false;   // binary: keep CRLFs verbatim
+    outf.write(transform(iniText).toUtf8());
+    outf.close();
+    return true;
+}
+
+// Make the deployed mods' assets actually load. Both supported engines need an
+// ini nudge, for different reasons:
+//   Oblivion  - a .bsa is invisible until it is listed in SArchiveList, and
+//               loose replacers lose to the vanilla BSA without invalidation.
+//   Starfield - loose files in Data/ are ignored outright until archive
+//               invalidation is on; .ba2 matching a plugin name auto-loads.
 static void bethesdaConfigureArchives(const QString &id, const GameAdapter *adapter,
                                       const QString &dataDir,
                                       const bethesda_deploy::Manifest &manifest)
 {
-    if (id != QLatin1String("oblivion")) return;
-    QStringList modBsas;
-    for (const auto &f : manifest.files)
-        if (!f.rel.contains('/')
-            && f.rel.endsWith(QLatin1String(".bsa"), Qt::CaseInsensitive))
-            modBsas << f.rel;
+    const bool isOblivion  = (id == QLatin1String("oblivion"));
+    const bool isStarfield = (id == QLatin1String("starfield"));
+    if (!isOblivion && !isStarfield) return;
 
     const QString iniDir = resolveBethesdaIniDir(id, adapter, dataDir);
-    const QString iniPath = iniDir.isEmpty()
-        ? QString() : QDir(iniDir).filePath("Oblivion.ini");
-    if (iniPath.isEmpty() || !QFileInfo::exists(iniPath)) return;
+    if (iniDir.isEmpty()) return;
 
-    QString iniText;
-    QFile inf(iniPath);
-    if (inf.open(QIODevice::ReadOnly)) {
-        iniText = QString::fromUtf8(inf.readAll());
-        inf.close();
+    // Plugins and archives load from Data/ root only.
+    QStringList archives, plugins;
+    for (const auto &f : manifest.files) {
+        if (f.rel.contains('/')) continue;
+        const QString suffix = isOblivion ? QStringLiteral(".bsa") : QStringLiteral(".ba2");
+        if (f.rel.endsWith(suffix, Qt::CaseInsensitive)) {
+            archives << f.rel;
+        } else if (f.rel.endsWith(QLatin1String(".esp"), Qt::CaseInsensitive)
+                || f.rel.endsWith(QLatin1String(".esm"), Qt::CaseInsensitive)
+                || f.rel.endsWith(QLatin1String(".esl"), Qt::CaseInsensitive)) {
+            plugins << f.rel;
+        }
     }
-    const QString iniBak = iniPath + ".nerevarine-bak";
-    if (!QFileInfo::exists(iniBak)) QFile::copy(iniPath, iniBak);
-    const QString updated = bethesda_archives::configureArchives(iniText, modBsas);
-    QFile outf(iniPath);
-    if (outf.open(QIODevice::WriteOnly)) {   // binary: keep CRLFs verbatim
-        outf.write(updated.toUtf8());
-        outf.close();
-        Settings::setIniDir(id, iniDir);
+
+    bool wrote = false;
+    if (isOblivion) {
+        wrote = rewriteGameIni(
+            QDir(iniDir).filePath(QStringLiteral("Oblivion.ini")), false,
+            [&archives](const QString &t) {
+                return bethesda_archives::configureArchives(t, archives);
+            });
+    } else {
+        const QStringList stray = starfield_archives::strayArchives(archives, plugins);
+        wrote = rewriteGameIni(
+            QDir(iniDir).filePath(QStringLiteral("StarfieldCustom.ini")), true,
+            [&stray](const QString &t) {
+                return starfield_archives::configureCustomIni(t, stray);
+            });
     }
+    if (wrote) Settings::setIniDir(id, iniDir);
 }
 
 // Undeploy the previous manifest, deploy `sources`, persist the new manifest,

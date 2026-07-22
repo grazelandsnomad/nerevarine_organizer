@@ -1,6 +1,7 @@
 #include "bethesda_deploy.h"
 #include "bethesda_loadorder.h"
 #include "bethesda_archives.h"
+#include "starfield_archives.h"
 #include "deployment_report.h"
 #include "proton_paths.h"
 #include "game_adapter.h"
@@ -331,6 +332,16 @@ static void testAddsMissingInvalidationKeys()
     check("no spurious second SArchiveList",
           count(out, "SArchiveList=", Qt::CaseInsensitive) == 1);
 }
+
+static void testIdempotent()
+{
+    std::cout << "\n[re-running is a no-op: the ini must not grow per deploy]\n";
+    const QString once  = configureArchives("[Archive]\r\nSArchiveList=A.bsa\r\n", {"Mod.bsa"});
+    const QString twice = configureArchives(once, {"Mod.bsa"});
+    check("second run changes nothing", once == twice, twice, once);
+    check("no blank line accumulated",
+          count(twice, "\r\n\r\n", Qt::CaseSensitive) == 0, twice);
+}
 } // namespace archives_section
 
 static void run_bethesda_archives()
@@ -340,6 +351,98 @@ static void run_bethesda_archives()
     archives_section::testNoArchiveSection();
     archives_section::testDedup();
     archives_section::testAddsMissingInvalidationKeys();
+    archives_section::testIdempotent();
+}
+
+// -- starfield_archives -------------------------------------------------------
+namespace starfield_section {
+
+static QString keyValue(const QString &ini, const QString &key)
+{
+    for (const QString &raw : ini.split('\n')) {
+        QString l = raw; if (l.endsWith('\r')) l.chop(1);
+        if (l.trimmed().startsWith(key + "=", Qt::CaseInsensitive))
+            return l.mid(l.indexOf('=') + 1);
+    }
+    return {};
+}
+
+static void testCreatesFromNothing()
+{
+    std::cout << "\n[StarfieldCustom.ini: created from empty input]\n";
+    // The normal case: Starfield does not ship this file, so the deploy path
+    // hands us empty text and expects a complete, valid ini back.
+    const QString out = starfield_archives::configureCustomIni(QString(), {});
+    check("[Archive] section present", out.contains("[Archive]"));
+    check("loose files enabled (bInvalidateOlderFiles)",
+          out.contains("bInvalidateOlderFiles=1"));
+    check("loose files enabled (sResourceDataDirsFinal empty)",
+          out.contains("sResourceDataDirsFinal=\r\n"), out);
+    check("no stray-archive key when there are no stray archives",
+          !out.contains(starfield_archives::kStrayArchiveKey), out);
+    check("does not open with a blank line", !out.startsWith("\r\n"), out);
+    check("output is CRLF", out.contains("\r\n"));
+}
+
+static void testExtendsExistingSection()
+{
+    std::cout << "\n[StarfieldCustom.ini: existing [Archive] extended, not replaced]\n";
+    const QString ini =
+        "[General]\r\nsTestFile1=MyMod.esm\r\n"
+        "[Archive]\r\nbInvalidateOlderFiles=0\r\n";
+    const QString out = starfield_archives::configureCustomIni(ini, {"Loose - Textures.ba2"});
+    check("invalidation flipped on", out.contains("bInvalidateOlderFiles=1"));
+    check("old value gone", !out.contains("bInvalidateOlderFiles=0"));
+    check("missing data-dirs key added", out.contains("sResourceDataDirsFinal="));
+    check("stray archive registered",
+          keyValue(out, starfield_archives::kStrayArchiveKey).contains("Loose - Textures.ba2"),
+          out);
+    check("unrelated section preserved",
+          out.contains("[General]") && out.contains("sTestFile1=MyMod.esm"));
+}
+
+static void testIdempotentAndDedups()
+{
+    std::cout << "\n[StarfieldCustom.ini: idempotent, case-insensitive de-dup]\n";
+    const QString once = starfield_archives::configureCustomIni(QString(), {"Extra.ba2"});
+    const QString twice = starfield_archives::configureCustomIni(once, {"Extra.ba2"});
+    check("re-running changes nothing", once == twice, twice, once);
+
+    const QString dup = starfield_archives::configureCustomIni(once, {"extra.ba2", "New.ba2"});
+    const QString list = keyValue(dup, starfield_archives::kStrayArchiveKey);
+    check("case-variant duplicate not added", !list.contains("extra.ba2"), list);
+    check("only one Extra entry",
+          archives_section::count(list, "extra.ba2", Qt::CaseInsensitive) == 1, list);
+    check("genuinely new archive added", list.contains("New.ba2"), list);
+    check("only one invalidation key",
+          archives_section::count(dup, "bInvalidateOlderFiles", Qt::CaseInsensitive) == 1, dup);
+}
+
+static void testStrayArchiveDetection()
+{
+    std::cout << "\n[strayArchives: only archives Starfield will not auto-load]\n";
+    // Starfield loads "<Plugin> - Main.ba2" / "- Textures.ba2" by plugin name;
+    // only an archive matching no plugin needs registering by hand.
+    const QStringList ba2s = { "MyMod - Main.ba2", "MyMod - Textures.ba2",
+                               "Orphan.ba2" };
+    const QStringList plugins = { "MyMod.esm" };
+    const QStringList stray = starfield_archives::strayArchives(ba2s, plugins);
+    check("plugin-matched archives are not listed", stray == QStringList{"Orphan.ba2"},
+          stray.join(", "));
+    check("no plugins means every archive is stray",
+          starfield_archives::strayArchives(ba2s, {}).size() == 3);
+    check("no archives means nothing stray",
+          starfield_archives::strayArchives({}, plugins).isEmpty());
+}
+} // namespace starfield_section
+
+static void run_starfield_archives()
+{
+    std::cout << "=== starfield_archives tests ===\n";
+    starfield_section::testCreatesFromNothing();
+    starfield_section::testExtendsExistingSection();
+    starfield_section::testIdempotentAndDedups();
+    starfield_section::testStrayArchiveDetection();
 }
 
 static void run_proton_paths()
@@ -547,6 +650,30 @@ static void testLoadOrderClassification()
     check("unclassified game has no script extender",
           cyber && cyber->scriptExtenderLoaders().isEmpty());
 }
+
+// Starfield was pinned and detectable but left at every "not a managed title"
+// default, so Deploy stayed hidden and no Plugins.txt was ever written. These
+// pin the classification that turns the generic Bethesda machinery on.
+static void testStarfieldIsFullyClassified()
+{
+    std::cout << "\n[Starfield: classified for deploy + Plugins.txt]\n";
+    const GameAdapter *sf = GameAdapterRegistry::find("starfield");
+    check("starfield adapter exists", sf != nullptr);
+    if (!sf) return;
+    check("uses the '*'-prefixed Plugins.txt style (as Skyrim SE / FO4)",
+          sf->loadOrderStyle() == LoadOrderStyle::AsteriskPluginsTxt);
+    check("declares Data/ so the deploy actions are visible",
+          sf->dataSubdir() == QStringLiteral("Data"), sf->dataSubdir());
+    check("AppData/Local folder set (Plugins.txt lives there)",
+          sf->localAppDataName() == QStringLiteral("Starfield"), sf->localAppDataName());
+    check("My Games folder set (StarfieldCustom.ini lives there)",
+          sf->myGamesName() == QStringLiteral("Starfield"), sf->myGamesName());
+    check("SFSE loader listed",
+          sf->scriptExtenderLoaders().contains(QStringLiteral("sfse_loader.exe")),
+          sf->scriptExtenderLoaders().join(", "));
+    check("stays out of the first-run chooser until verified on a real install",
+          !sf->builtin());
+}
 } // namespace adapters_section
 
 static void run_game_adapters()
@@ -560,6 +687,7 @@ static void run_game_adapters()
     adapters_section::testPinnedContainsOpenMW();
     adapters_section::testBuiltinIsSubsetOfAll();
     adapters_section::testLoadOrderClassification();
+    adapters_section::testStarfieldIsFullyClassified();
 }
 
 // -- deployment_report --------------------------------------------------------
@@ -628,6 +756,7 @@ int main(int argc, char **argv)
     run_bethesda_deploy();
     run_bethesda_loadorder();
     run_bethesda_archives();
+    run_starfield_archives();
     run_deployment_report();
     run_proton_paths();
     run_game_adapters();

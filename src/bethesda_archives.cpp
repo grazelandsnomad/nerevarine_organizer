@@ -40,7 +40,11 @@ void appendBsas(QStringList &list, const QStringList &bsas)
 
 QString configureArchives(const QString &iniText, const QStringList &modBsas)
 {
-    const QStringList lines = iniText.split(QLatin1Char('\n'));
+    QStringList lines = iniText.split(QLatin1Char('\n'));
+    // A trailing newline splits into a final empty element. Keeping it would
+    // re-emit a blank line every run, so Oblivion.ini grew by a line on each
+    // deploy and the transform was not idempotent.
+    if (!lines.isEmpty() && lines.last().trimmed().isEmpty()) lines.removeLast();
 
     QStringList out;
     bool inArchive = false, archiveSeen = false;

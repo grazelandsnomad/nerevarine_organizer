@@ -342,8 +342,10 @@ void MainWindow::setupMenuBar()
     });
     settingsMenu->addSeparator();
 
-    // 0.4 pins OpenMW + FNV + Starfield in the dropdown - the tested games this
-    // release. This toggle surfaces the untested legacy game list. Off by default.
+    // Pins OpenMW + FNV + Starfield in the dropdown. OpenMW and FNV are the
+    // exercised ones; Starfield is classified for deploy + Plugins.txt but the
+    // real-install pass has not been run, so treat it as experimental. This
+    // toggle surfaces the rest of the legacy game list. Off by default.
     {
         auto *act = settingsMenu->addAction(T("menu_show_all_games"));
         act->setCheckable(true);
