@@ -1,11 +1,23 @@
 name: sanitizers
 
 # The Linux sanitizer job scripts/sanitize.sh mirrors: the unit suite under
-# ASan + UBSan. Nightly rather than per-push because it rebuilds the whole app
-# at -O1 with instrumentation; use "Run workflow" to trigger it on demand
-# before a release or after touching the install/placeholder lifetime code.
-
+# ASan + UBSan.
+#
+# On push to main as well as nightly. It used to be nightly-only, on the
+# grounds that it rebuilds the whole app at -O1 with instrumentation - but a
+# scheduled run reports against no commit, shows up on no commit's status, and
+# is only ever seen by whoever goes looking. Runs 48-51 failed four nights
+# running (2026-07-19 to 07-22, across 1485195 and 8520f8a) and nobody noticed
+# until the gate was audited; by then it had gone green on its own and the logs
+# had aged out, so what broke is still unknown. Public repos get unlimited
+# minutes on standard runners, so the cost this was avoiding was never real.
+#
+# The nightly stays on top of the push trigger, and earns its keep: it re-runs
+# an unchanged main, which is the only thing here that can surface a flaky
+# failure in the off-thread save paths rather than a reproducible one.
 on:
+  push:
+    branches: [main]
   schedule:
     # 03:00 UTC daily.
     - cron: "0 3 * * *"
