@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh auth *)",
+      "Bash(date -Iseconds)",
+      "Bash(date -Iseconds -d '13 hours ago')",
+      "Bash(git rev-list *)"
+    ]
+  }
+}
