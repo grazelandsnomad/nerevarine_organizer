@@ -23,7 +23,7 @@ jobs:
     name: clang-tidy (bugprone + clang-analyzer)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install clang-tidy, GCC 14 headers and Qt 6
         # g++-14 is here for its libstdc++ headers, not to compile: the side

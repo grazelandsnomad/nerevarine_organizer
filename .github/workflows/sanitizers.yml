@@ -28,7 +28,7 @@ jobs:
       CXX: g++-14
       QT_QPA_PLATFORM: offscreen
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install toolchain and Qt 6
         run: |

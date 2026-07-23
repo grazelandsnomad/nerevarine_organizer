@@ -56,8 +56,14 @@ probe_macro() {
         | awk -v m="$1" '$2 == m {print $3; found=1} END {if (!found) print "undefined"}'
 }
 
-preflight=$(mktemp -d)
-trap 'rm -rf "$preflight"' EXIT
+# One temp root for everything this run needs.  Bash traps are not additive:
+# a second `trap ... EXIT` for the per-TU logs below would silently replace
+# this one and leak the preflight dir.
+tmproot=$(mktemp -d)
+trap 'rm -rf "$tmproot"' EXIT
+preflight=$tmproot/preflight
+tidy_logs=$tmproot/logs
+mkdir -p "$preflight" "$tidy_logs"
 cat > "$preflight/probe.cpp" <<'PROBE'
 #include <expected>
 std::expected<int, int> probe() { return 1; }
@@ -136,6 +142,139 @@ cmake --build "$BUILD_DIR" --target nerevarine_organizer_autogen
 # backlog to an error and fails the gate on the first TU.  Letting the
 # config file govern keeps bugprone-*/clang-analyzer-* fatal and
 # include-cleaner advisory, which is what .clang-tidy documents.
+#
+# Each TU's output goes to its own file rather than to a stdout shared with
+# the other N-1 running processes.  Writing straight through under `xargs -P`
+# interleaves the diagnostics line by line, and --quiet drops the per-file
+# "N warnings generated" markers that would otherwise delimit them, so a
+# failing gate used to be tens of thousands of unattributable lines behind
+# xargs' exit 123 ("some invocation failed") and nothing else.
+tidy_one() {
+    local src=$1 out rc=0
+    out=$("$CLANG_TIDY" -p "$BUILD_DIR" --quiet "$src" 2>&1) || rc=$?
+    # compile_commands.json carries one entry per (source, target) pair, and
+    # 47 of our 88 sources are compiled into a test target as well as the app
+    # - 148 entries in all, which is most of why this job takes ten minutes.
+    # clang-tidy runs the file once per entry and prints "[1/1] (2/4)
+    # Processing file ..." to stderr for each; --quiet does not cover it. Drop
+    # those so that "this TU produced a block" means "it produced diagnostics".
+    # (The findings themselves need no de-duplication: clang-tidy already
+    # collapses identical diagnostics across the entries within one run.)
+    out=$(printf '%s\n' "$out" | grep -vE \
+        '^\[[0-9]+/[0-9]+\] \([0-9]+/[0-9]+\) Processing file .*\.$' || true)
+    # `if`, not `[[ ... ]] && printf`: as the last command in a function the
+    # && form returns 1 whenever the condition is false, which would report
+    # every clean TU as a failure.
+    if [[ $rc -ne 0 ]]; then
+        # One short path appended to an O_APPEND file is atomic under
+        # PIPE_BUF, so the parallel writers here need no lock.
+        printf '%s\n' "$src" >> "$tidy_logs/failed"
+    fi
+    if [[ -n $out ]]; then
+        { printf '===== %s =====\n' "$src"; printf '%s\n' "$out"; } \
+            > "$tidy_logs/$(printf '%s' "$src" | tr -c 'A-Za-z0-9._-' '_').out"
+    fi
+}
+# `bash -c` starts a fresh shell, which does not inherit set -euo pipefail:
+# tidy_one must not depend on it.
+export -f tidy_one
+export CLANG_TIDY BUILD_DIR tidy_logs
+
+total=$(find src -name "*.cpp" | wc -l)
+walk_rc=0
 find src -name "*.cpp" -print0 \
-    | xargs -0 -P"$(nproc)" -I{} \
-        "$CLANG_TIDY" -p "$BUILD_DIR" --quiet {}
+    | xargs -0 -P"$(nproc)" -I{} bash -c 'tidy_one "$@"' _ {} || walk_rc=$?
+
+shopt -s nullglob
+tidy_out=("$tidy_logs"/*.out)
+shopt -u nullglob
+
+# Replay, one contiguous block per TU.  Clean-but-noisy TUs are printed too:
+# misc-include-cleaner is advisory (see .clang-tidy) and its backlog is meant
+# to stay visible.  Under Actions each block becomes a collapsed log group.
+for out in "${tidy_out[@]}"; do
+    src=$(head -n1 "$out"); src=${src#===== }; src=${src% =====}
+    if [[ -n ${GITHUB_ACTIONS:-} ]]; then
+        printf '::group::%s\n' "$src"
+        tail -n +2 "$out"
+        printf '::endgroup::\n'
+    else
+        cat "$out"
+    fi
+done
+
+# Tally by the [check-name] suffix every clang-tidy diagnostic carries, so a
+# failure says which checks fired and not just that something did.  The
+# trailing ",-warnings-as-errors" clang-tidy appends to a diagnostic it
+# promoted has to come off, or a check is tallied under two different names
+# depending on whether WarningsAsErrors covers it.
+tally=
+if ((${#tidy_out[@]})); then
+    tally=$(sed -n \
+        's/^.*:[0-9]\+:[0-9]\+: \(warning\|error\): .*\[\([A-Za-z0-9_.,-]\+\)\]$/\2/p' \
+        "${tidy_out[@]}" \
+        | sed 's/,-warnings-as-errors$//' | sort | uniq -c | sort -rn)
+fi
+
+failed=()
+if [[ -f $tidy_logs/failed ]]; then
+    mapfile -t failed < <(sort -u "$tidy_logs/failed")
+fi
+
+printf '\nclang-tidy.sh: %d translation units, %d with errors\n' \
+       "$total" "${#failed[@]}"
+if [[ -n $tally ]]; then
+    printf '%s\n' "$tally"
+fi
+if ((${#failed[@]})); then
+    printf 'failing translation units:\n'
+    printf '   %s\n' "${failed[@]}"
+fi
+
+# Put the same verdict on the run page.  The step log is 88 collapsed groups
+# deep by this point, and "Process completed with exit code 123" on its own is
+# what made previous failures of this gate take a push cycle to read.
+if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
+    {
+        printf '## clang-tidy\n\n'
+        printf '%d translation units, **%d** with errors.\n\n' \
+               "$total" "${#failed[@]}"
+        if [[ -n $tally ]]; then
+            printf '| count | check |\n|---:|:---|\n'
+            printf '%s\n' "$tally" | awk '{printf "| %s | `%s` |\n", $1, $2}'
+        fi
+        if ((${#failed[@]})); then
+            printf '\n### Failing translation units\n\n'
+            printf -- '- `%s`\n' "${failed[@]}"
+        fi
+    } >> "$GITHUB_STEP_SUMMARY"
+fi
+
+# Inline annotations for the fatal diagnostics.  GitHub renders only the first
+# handful per step, so cap deliberately and say what was dropped - a silent
+# truncation would read as "that was all of them".
+if [[ -n ${GITHUB_ACTIONS:-} ]] && ((${#tidy_out[@]})); then
+    annotated=0
+    while IFS=$'\t' read -r file line col msg; do
+        annotated=$((annotated + 1))
+        ((annotated > 20)) && continue
+        printf '::error file=%s,line=%s,col=%s::%s\n' \
+               "${file#"$PWD/"}" "$line" "$col" "${msg//\%/%25}"
+    done < <(sed -n \
+        's/^\(.*\):\([0-9]\+\):\([0-9]\+\): error: \(.*\)$/\1\t\2\t\3\t\4/p' \
+        "${tidy_out[@]}" | sort -u)
+    if ((annotated > 20)); then
+        printf '::notice::%d further clang-tidy errors are not annotated; see the step log\n' \
+               "$((annotated - 20))"
+    fi
+fi
+
+if ((${#failed[@]})); then
+    exit 1
+fi
+# xargs failing for some other reason (bash missing, 127) must not pass
+# silently just because no TU recorded a diagnostic.
+if [[ $walk_rc -ne 0 ]]; then
+    echo "clang-tidy.sh: the TU walk exited $walk_rc with no per-TU failure recorded" >&2
+    exit "$walk_rc"
+fi
