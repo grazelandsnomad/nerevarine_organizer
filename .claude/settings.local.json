@@ -4,7 +4,17 @@
       "Bash(gh auth *)",
       "Bash(date -Iseconds)",
       "Bash(date -Iseconds -d '13 hours ago')",
-      "Bash(git rev-list *)"
+      "Bash(git rev-list *)",
+      "Bash(curl -sS -m 25 -H 'Accept: application/vnd.github+json' 'https://api.github.com/repos/grazelandsnomad/nerevarine_organizer/actions/workflows/clang-tidy.yml/runs?per_page=8')",
+      "Bash(curl -sS -m 30 -H 'Accept: application/vnd.github+json' 'https://api.github.com/repos/grazelandsnomad/nerevarine_organizer/actions/workflows/clang-tidy.yml/runs?per_page=14')",
+      "Bash(python3 -c ' *)",
+      "Bash(curl -sS -m 20 -I https://api.github.com)",
+      "Bash(:)",
+      "Bash(curl -sS -m 20 -H 'Accept: application/vnd.github+json' 'https://api.github.com/repos/grazelandsnomad/nerevarine_organizer/commits/main')",
+      "Bash(curl -sS -m 20 -H 'Accept: application/vnd.github+json' 'https://api.github.com/repos/grazelandsnomad/nerevarine_organizer/commits/3e55601d0ed467c55de5472de5294e926dce0566')",
+      "Bash(curl -sS -m 20 -H 'Accept: application/vnd.github+json' 'https://api.github.com/repos/actions/checkout/releases?per_page=5')",
+      "Bash(curl -sS -m 20 -H 'Accept: application/vnd.github+json' 'https://api.github.com/repos/actions/checkout/git/matching-refs/tags/v')",
+      "Bash(curl -sS -m 25 -H 'Accept: application/vnd.github+json' 'https://api.github.com/repos/actions/checkout/releases?per_page=12')"
     ]
   }
 }
