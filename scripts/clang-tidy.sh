@@ -131,8 +131,46 @@ fi
 cmake --build "$BUILD_DIR" --target translation_keys_header
 cmake --build "$BUILD_DIR" --target nerevarine_organizer_autogen
 
-# Walk every project source.  -P0 lets xargs use one process per CPU;
-# -I{} prevents word-splitting on paths with spaces.  We don't use
+# clang-tidy analyses a file once per compile_commands.json entry, and CMake
+# emits one entry per (source, target) pair.  47 of our 88 sources are
+# compiled into a test target as well as the app - 148 entries - so most of
+# them are analysed two to four times for no new findings (clang-tidy even
+# collapses the duplicate diagnostics before printing).  It is just run time.
+#
+# So point -p at a filtered database holding one entry per source.  The app
+# target's entry specifically, not merely the first one seen: each test target
+# carries its own include dirs and not all of them add <build>/generated, so a
+# test entry can fail to compile a TU that the app entry handles.  Every
+# src/*.cpp is in CMakeLists' SOURCES, so an app entry always exists.
+#
+# Written beside the real database rather than over it - CMake owns that file,
+# regenerates it on reconfigure, and .clangd reads it for the editor.
+TIDY_DB=$BUILD_DIR/tidy-db
+mkdir -p "$TIDY_DB"
+if command -v python3 >/dev/null 2>&1; then
+    python3 - "$BUILD_DIR/compile_commands.json" "$TIDY_DB/compile_commands.json" <<'FILTER'
+import json, sys
+
+source, dest = sys.argv[1], sys.argv[2]
+best = {}
+for entry in json.load(open(source)):
+    # CMake's "output" is <build>/[tests/]CMakeFiles/<target>.dir/<path>.o
+    is_app = "/CMakeFiles/nerevarine_organizer.dir/" in entry.get("output", "")
+    keep, seen = best.get(entry["file"], (False, None))
+    if seen is None or (is_app and not keep):
+        best[entry["file"]] = (is_app, entry)
+json.dump([entry for _, entry in best.values()], open(dest, "w"))
+FILTER
+else
+    # Not fatal: the gate still reports the same findings, just slower.
+    echo "clang-tidy.sh: no python3, so every compile_commands.json entry is" \
+         "analysed and the shared TUs are walked more than once" >&2
+    cp "$BUILD_DIR/compile_commands.json" "$TIDY_DB/compile_commands.json"
+fi
+
+# Walk every project source.  -P"$(nproc)" gives one process per CPU (-P0
+# would be unlimited); -I{} prevents word-splitting on paths with spaces.
+# We don't use
 # run-clang-tidy because its prefix-matching of source files trips on
 # our tests/ subdir layout.
 #
@@ -151,15 +189,13 @@ cmake --build "$BUILD_DIR" --target nerevarine_organizer_autogen
 # xargs' exit 123 ("some invocation failed") and nothing else.
 tidy_one() {
     local src=$1 out rc=0
-    out=$("$CLANG_TIDY" -p "$BUILD_DIR" --quiet "$src" 2>&1) || rc=$?
-    # compile_commands.json carries one entry per (source, target) pair, and
-    # 47 of our 88 sources are compiled into a test target as well as the app
-    # - 148 entries in all, which is most of why this job takes ten minutes.
-    # clang-tidy runs the file once per entry and prints "[1/1] (2/4)
-    # Processing file ..." to stderr for each; --quiet does not cover it. Drop
-    # those so that "this TU produced a block" means "it produced diagnostics".
-    # (The findings themselves need no de-duplication: clang-tidy already
-    # collapses identical diagnostics across the entries within one run.)
+    out=$("$CLANG_TIDY" -p "$TIDY_DB" --quiet "$src" 2>&1) || rc=$?
+    # clang-tidy prints "[1/1] (2/4) Processing file ..." to stderr for every
+    # compile-database entry a source has, and --quiet does not cover it.  The
+    # filtered database above leaves one entry per source so this should now
+    # be silent, but it still fires on the no-python3 fallback path, and it
+    # made three otherwise-clean TUs look like they had findings.  Drop it, so
+    # that "this TU produced a block" means "it produced diagnostics".
     out=$(printf '%s\n' "$out" | grep -vE \
         '^\[[0-9]+/[0-9]+\] \([0-9]+/[0-9]+\) Processing file .*\.$' || true)
     # `if`, not `[[ ... ]] && printf`: as the last command in a function the
@@ -178,7 +214,7 @@ tidy_one() {
 # `bash -c` starts a fresh shell, which does not inherit set -euo pipefail:
 # tidy_one must not depend on it.
 export -f tidy_one
-export CLANG_TIDY BUILD_DIR tidy_logs
+export CLANG_TIDY TIDY_DB tidy_logs
 
 total=$(find src -name "*.cpp" | wc -l)
 walk_rc=0
