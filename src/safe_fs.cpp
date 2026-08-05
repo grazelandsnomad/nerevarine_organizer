@@ -1,0 +1,140 @@
+#include "safe_fs.h"
+
+#include <QDateTime>
+#include <QDir>
+#include <QDirIterator>
+#include <QFile>
+#include <QFileInfo>
+
+namespace safefs {
+
+std::expected<QString, QString>
+snapshotBackup(const QString &liveFile, int keep)
+{
+    QFileInfo fi(liveFile);
+    if (!fi.exists() || !fi.isFile())
+        return std::unexpected(QStringLiteral("no source file"));
+    if (keep < 0) keep = 0;
+
+    const QString stamp  = QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss");
+    const QString backup = liveFile + ".bak." + stamp;
+    const bool copied    = QFile::copy(liveFile, backup);
+
+    QDir dir(fi.absolutePath());
+    QStringList olds = dir.entryList({fi.fileName() + ".bak.*"},
+                                      QDir::Files, QDir::Name);
+    while (olds.size() > keep)
+        QFile::remove(dir.absoluteFilePath(olds.takeFirst()));
+
+    if (!copied) return std::unexpected(QStringLiteral("copy failed"));
+    return backup;
+}
+
+bool forceRemoveRecursively(const QString &path)
+{
+    QFileInfo rootFi(path);
+    if (!rootFi.exists())
+        return true;
+
+    auto ensureWritable = [](const QString &p) -> bool {
+        const QFile::Permissions perms = QFile::permissions(p);
+        if (perms == 0)
+            return true;
+        if (perms & QFile::WriteUser)
+            return true;
+        return QFile::setPermissions(p, perms | QFile::WriteUser);
+    };
+
+    if (!ensureWritable(path))
+        return false;
+
+    QDirIterator it(path,
+                    QDir::AllEntries | QDir::NoDotAndDotDot
+                        | QDir::Hidden | QDir::System,
+                    QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        it.next();
+        if (!ensureWritable(it.filePath()))
+            return false;
+    }
+
+    return QDir(path).removeRecursively();
+}
+
+QString writableFilePath(const QString &dir, const QString &filename)
+{
+    const QDir d(dir);
+    QString candidate = d.filePath(filename);
+
+    QFileInfo fi(candidate);
+    if (!fi.exists() || fi.isFile())
+        return candidate;
+
+    // Something non-regular (a directory left by a prior extract) owns the
+    // name. Suffix until free. Keep the extension only when there is one - an
+    // extensionless CDN id would otherwise become "name_2." with a dangling dot.
+    const QFileInfo src(filename);
+    const QString base = src.completeBaseName();
+    const QString ext  = src.suffix();
+    for (int n = 2; n < 10000; ++n) {
+        const QString rebuilt = ext.isEmpty()
+            ? QStringLiteral("%1_%2").arg(base).arg(n)
+            : QStringLiteral("%1_%2.%3").arg(base).arg(n).arg(ext);
+        candidate = d.filePath(rebuilt);
+        fi = QFileInfo(candidate);
+        if (!fi.exists() || fi.isFile())
+            return candidate;
+    }
+    return candidate;   // pathological; caller reports the open failure
+}
+
+std::expected<void, QString>
+copyTreeVerified(const QString &src, const QString &dst,
+                 std::function<bool()> isCancelled)
+{
+    auto fail = [&](QString reason) -> std::expected<void, QString> {
+        QDir(dst).removeRecursively();
+        return std::unexpected(std::move(reason));
+    };
+
+    if (!QDir().mkpath(dst))
+        return std::unexpected(QStringLiteral("could not create destination"));
+
+    auto cancelled = [&]() {
+        return isCancelled && isCancelled();
+    };
+
+    const int srcPrefixLen = src.length() + 1;
+    QDirIterator it(src, QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot,
+                    QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        if (cancelled())
+            return fail(QStringLiteral("cancelled"));
+        it.next();
+        const QFileInfo fi = it.fileInfo();
+        const QString rel  = fi.absoluteFilePath().mid(srcPrefixLen);
+        const QString target = QDir(dst).filePath(rel);
+
+        if (fi.isDir()) {
+            if (!QDir().mkpath(target))
+                return fail(QStringLiteral("mkpath failed: ") + rel);
+            continue;
+        }
+
+        // QDirIterator can visit a file before its parent dir on some FSes.
+        QDir().mkpath(QFileInfo(target).absolutePath());
+        if (!QFile::copy(fi.absoluteFilePath(), target))
+            return fail(QStringLiteral("copy failed: ") + rel);
+        if (QFileInfo(target).size() != fi.size())
+            return fail(QStringLiteral("size mismatch after copy: ") + rel);
+        // Deliberately NO processEvents() here: this is a Qt-Core helper with no
+        // event loop of its own, and pumping the *caller's* loop mid-copy would
+        // re-enter arbitrary UI slots (the debounced save / conflict-scan
+        // timers) over a half-copied tree during a data-destructive move.
+        // Cancellation is delivered out-of-band via isCancelled(), checked at
+        // the top of the loop; the caller keeps the UI responsive itself.
+    }
+    return {};
+}
+
+} // namespace safefs

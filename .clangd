@@ -1,0 +1,10 @@
+# clangd config.
+#
+# Arch/CachyOS Qt6 bakes -mno-direct-extern-access into its mkspecs;
+# GCC accepts it, clangd warns "Unknown argument" on every file. Strip
+# it here. The real build still passes it through.
+CompileFlags:
+  Remove:
+    - -mno-direct-extern-access
+  Add:
+    - -Wno-unknown-warning-option

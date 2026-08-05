@@ -1,0 +1,66 @@
+# Maintainer: jalcazo <see GitHub>
+#
+# Rename this file to `PKGBUILD` when submitting to the AUR as
+# nerevarine-organizer-git.
+#
+# This tracks the main branch of the upstream repo.  For a stable-release
+# variant see PKGBUILD (in this same directory) once tagged releases exist.
+
+pkgname=nerevarine-organizer-git
+pkgver=r1.0000000
+pkgrel=1
+pkgdesc="Native Qt6 mod manager for OpenMW / Morrowind / Skyrim / Fallout / Cyberpunk / etc."
+arch=('x86_64')
+url="https://github.com/jalcazo/nerevarine_organizer"
+license=('MIT')
+depends=(
+    'qt6-base'
+    'qt6-networkauth'
+    'qt6-svg'
+    'qtkeychain-qt6'
+    'p7zip'
+)
+optdepends=(
+    'unzip: fallback extractor for .zip archives (p7zip also works)'
+    'unrar: .rar extractor (p7zip-full covers this on most distros, but the'
+    '      dedicated binary is more reliable)'
+    'openmw: run the Morrowind game from the launch toolbar button'
+    'loot: community-curated plugin load-order sorting'
+)
+makedepends=(
+    'cmake'
+    'ninja'
+    'git'
+)
+provides=("${pkgname%-git}")
+conflicts=("${pkgname%-git}")
+source=("${pkgname%-git}::git+https://github.com/jalcazo/nerevarine_organizer.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "${pkgname%-git}"
+    printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+build() {
+    cd "${pkgname%-git}"
+    cmake -B build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr
+    cmake --build build
+}
+
+check() {
+    cd "${pkgname%-git}"
+    ./build/tests/test_annotation_codec
+    ./build/tests/test_plugin_parser
+    ./build/tests/test_fs_utils
+    # test_nxm hits the network; skip in CI-like environments.
+    # Uncomment to run: ./build/tests/test_nxm
+}
+
+package() {
+    cd "${pkgname%-git}"
+    DESTDIR="$pkgdir" cmake --install build
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE" 2>/dev/null || true
+}

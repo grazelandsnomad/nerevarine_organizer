@@ -1,0 +1,101 @@
+name: release
+
+# Fires when a v* tag is pushed: smoke-tests the Release binary, builds the
+# portable AppImage and the plain Linux zip, and publishes a GitHub release
+# whose body is docs/release-notes/<version>.md. A manual workflow_dispatch
+# runs the same build as a dry run and publishes nothing, so the pipeline can
+# be exercised without cutting a real release.
+#
+# The version is single-sourced from CMakeLists.txt (project(... VERSION)) - the
+# same place build-release.sh and build-appimage.sh read it. A tag whose version
+# disagrees fails the run instead of shipping mislabelled binaries.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # create the GitHub release and upload its assets
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build + publish release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install build + packaging dependencies
+        # g++-14 for C++23; the Qt6 dev packages plus qt6-base-dev-tools (qmake6,
+        # which linuxdeploy's qt plugin needs); imagemagick (convert), binutils
+        # (readelf/strip) and curl for build-appimage; and the emoji font so the
+        # AppImage can bundle it. Recommends are left in: the Release smoke test
+        # launches the app and needs the Qt platform plugins pulled in with them.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            g++-14 cmake ninja-build \
+            qt6-base-dev qt6-base-dev-tools libqt6svg6-dev libqt6keychain-dev \
+            imagemagick binutils curl python3 zip file fonts-noto-color-emoji
+
+      - name: Resolve and check the version
+        id: ver
+        # On a tag the version must match CMakeLists exactly; a manual dispatch
+        # just reads CMakeLists (dry run - nothing is published).
+        run: |
+          proj=$(grep -m1 'project(NerevarineOrganizer VERSION' CMakeLists.txt \
+                 | grep -oP '\d+\.\d+(?:\.\d+)?')
+          [ -n "$proj" ] || { echo "::error::could not read version from CMakeLists.txt"; exit 1; }
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            tag="${GITHUB_REF_NAME#v}"
+            echo "tag v$tag vs CMakeLists $proj"
+            if [ "$tag" != "$proj" ]; then
+              echo "::error::tag v$tag does not match CMakeLists version $proj"
+              exit 1
+            fi
+          fi
+          test -f "docs/release-notes/$proj.md" \
+            || { echo "::error::docs/release-notes/$proj.md is missing"; exit 1; }
+          echo "ver=$proj" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke-test the Release build (headless launch)
+        # Builds Release into build/ and launches it with -platform offscreen,
+        # scraping for missing resources, missing translation keys and Qt
+        # fatals. The plain-zip step below reuses this build/ tree.
+        env:
+          CC: gcc-14
+          CXX: g++-14
+        run: scripts/release-smoke.sh
+
+      - name: Package the plain Linux zip
+        # --no-build: reuse the build/ tree the smoke test just produced.
+        run: ./build-release.sh --no-build
+
+      - name: Build the portable AppImage
+        # Bundles Qt + deps and patches ELFs down to glibc 2.17 so it runs on
+        # Steam Deck / older distros. Emits the .AppImage at the repo root and a
+        # zipped copy under dist/.
+        env:
+          CC: gcc-14
+          CXX: g++-14
+        run: ./build-appimage.sh
+
+      - name: Publish the GitHub release
+        # Only on a real tag. On a dispatch dry run the artifacts are built above
+        # but nothing is published.
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VER: ${{ steps.ver.outputs.ver }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Nerevarine Organizer $VER" \
+            --notes-file "docs/release-notes/$VER.md" \
+            --verify-tag \
+            "NerevarineOrganizer-$VER-x86_64.AppImage#AppImage - portable, runs on most Linux (incl. Steam Deck)" \
+            "dist/Nerevarine_Organizer-$VER-x86_64.zip#Plain Linux binary - needs a system Qt6"

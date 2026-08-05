@@ -1,0 +1,54 @@
+name: sanitizers
+
+# The Linux sanitizer job scripts/sanitize.sh mirrors: the unit suite under
+# ASan + UBSan.
+#
+# On push to main as well as nightly. It used to be nightly-only, on the
+# grounds that it rebuilds the whole app at -O1 with instrumentation - but a
+# scheduled run reports against no commit, shows up on no commit's status, and
+# is only ever seen by whoever goes looking. Runs 48-51 failed four nights
+# running (2026-07-19 to 07-22, across 1485195 and 8520f8a) and nobody noticed
+# until the gate was audited; by then it had gone green on its own and the logs
+# had aged out, so what broke is still unknown. Public repos get unlimited
+# minutes on standard runners, so the cost this was avoiding was never real.
+#
+# The nightly stays on top of the push trigger, and earns its keep: it re-runs
+# an unchanged main, which is the only thing here that can surface a flaky
+# failure in the off-thread save paths rather than a reproducible one.
+on:
+  push:
+    branches: [main]
+  schedule:
+    # 03:00 UTC daily.
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sanitizers-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  asan-ubsan:
+    name: ASan + UBSan (unit suite)
+    runs-on: ubuntu-24.04
+    env:
+      # sanitize.sh honours CC/CXX; pin the same GCC 14 the build gate uses.
+      CC: gcc-14
+      CXX: g++-14
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install toolchain and Qt 6
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            g++-14 cmake ninja-build qt6-base-dev
+
+      - name: Run the sanitizer suite
+        # ASAN_OPTIONS / UBSAN_OPTIONS and the -fno-sanitize-recover=all policy
+        # live in the script so a local run reproduces CI exactly.
+        run: scripts/sanitize.sh
