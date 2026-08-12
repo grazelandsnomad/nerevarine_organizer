@@ -1,0 +1,27 @@
+# bugprone-* and clang-analyzer-* as errors. The disabled sub-checks below
+# are noisy on Qt's int/qsizetype boundary or just stylistic, not real bugs.
+Checks: >
+  -*,
+  bugprone-*,
+  clang-analyzer-*,
+  misc-include-cleaner,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-narrowing-conversions,
+  -bugprone-switch-missing-default-case,
+  -bugprone-throwing-static-initialization,
+  -clang-analyzer-cplusplus.NewDeleteLeaks,
+  -clang-analyzer-optin.performance.Padding,
+
+# misc-include-cleaner still trips on a legacy backlog, so it runs as a
+# warning only. Flip to '*' once that's cleaned up.
+WarningsAsErrors: '*,-misc-include-cleaner'
+
+# Project headers only. A plain 'include/.*\.h$' substring also matched
+# Qt's bundled headers and leaked their findings into our count.
+HeaderFilterRegex: 'nerevarine_organizer/include/.*\.h$'
+
+CheckOptions:
+  # (void)foo() is how the code marks an intentionally-ignored result.
+  - key: bugprone-unused-return-value.AllowCastToVoid
+    value: true

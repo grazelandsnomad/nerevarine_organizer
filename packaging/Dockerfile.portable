@@ -1,0 +1,53 @@
+# Portable build environment for Nerevarine Organizer.
+#
+# WHY THIS EXISTS
+#   Releases built on the maintainer's bleeding-edge distro (CachyOS/Arch,
+#   glibc 2.43+) fail on ordinary systems with
+#       "version `GLIBC_2.43' not found"
+#   on Fedora 42, Steam Deck, etc. - because a binary built against a newer
+#   glibc records symbol-version requirements the older target cannot satisfy.
+#   build-appimage.sh tries to patch this back down after the fact
+#   (patch_glibc.py + an LD_PRELOAD shim), but that is fragile and silently
+#   regressed in a hotfix - which is exactly how this bug reached users.
+#
+#   The durable fix is to build in an OLD-glibc environment so EVERY artifact -
+#   the AppImage *and* the plain release binary - targets that old glibc
+#   natively, with nothing to patch. Ubuntu 24.04 ships glibc 2.39, which is
+#   <= Fedora 42 (2.39 < 2.42) and <= current SteamOS, so the output runs on
+#   them and on every newer desktop distro.
+#
+#   (Want even broader reach - Ubuntu 20.04 / Debian 11 / RHEL 8, glibc 2.31?
+#   Switch FROM to ubuntu:22.04 (glibc 2.35) and add ppa:ubuntu-toolchain-r/test
+#   for gcc-14; the trade-off is a few more apt-pinning headaches.)
+#
+# USAGE
+#   ../build-portable.sh        # wrapper builds this image and runs the build
+#   # or by hand:
+#   docker build -f packaging/Dockerfile.portable -t nrv-portable-build .
+#   docker run --rm -v "$PWD":/src -w /src nrv-portable-build ./build-appimage.sh
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Build toolchain + everything build-appimage.sh / build-release.sh shell out
+# to. Qt deps mirror README "Build from source" (Ubuntu/Debian). gcc-14 gives
+# C++23 std::expected / std::println (CMake links stdc++exp on GCC >= 14).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl git \
+        gcc-14 g++-14 \
+        cmake ninja-build make pkg-config \
+        qt6-base-dev qt6-base-dev-tools \
+        qt6-networkauth-dev \
+        libqt6keychain-dev \
+        p7zip-full unzip \
+        imagemagick \
+        file binutils patchelf desktop-file-utils \
+        python3 \
+        libfuse2t64 fuse \
+    && rm -rf /var/lib/apt/lists/*
+
+# Make gcc-14 the default compiler so CMake (and build-appimage.sh's
+# CC/CXX -> -DCMAKE_*_COMPILER passthrough) pick it up with no extra flags.
+ENV CC=gcc-14 CXX=g++-14
+
+WORKDIR /src

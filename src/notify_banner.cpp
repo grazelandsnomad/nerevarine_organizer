@@ -1,0 +1,105 @@
+#include "notify_banner.h"
+
+#include <QDesktopServices>
+#include <QEvent>
+#include <QLabel>
+#include <QMouseEvent>
+#include <QTimer>
+#include <QUrl>
+#include <QVariant>
+#include <Qt>
+
+#include "settings.h"
+#include "translator.h"
+
+NotifyBanner::NotifyBanner(QWidget *parent)
+    : QObject(parent)
+{
+    m_label = new QLabel(parent);
+    m_label->setAlignment(Qt::AlignCenter);
+    m_label->setContentsMargins(12, 6, 12, 6);
+    m_label->setWordWrap(false);
+    m_label->hide();
+    m_label->installEventFilter(this);
+
+    m_hideTimer = new QTimer(this);
+    m_hideTimer->setSingleShot(true);
+    m_hideTimer->setInterval(7000);
+    connect(m_hideTimer, &QTimer::timeout, m_label, &QLabel::hide);
+}
+
+void NotifyBanner::show(const QString &msg, const QString &bgColor)
+{
+    m_label->setText(msg);
+    m_label->setStyleSheet(
+        QString("background-color: %1; color: white;"
+                " font-weight: bold; font-size: 10pt;"
+                " padding: 6px 12px; border-radius: 0px;")
+            .arg(bgColor));
+    m_label->setCursor(Qt::PointingHandCursor);
+    m_label->setProperty("nerev_banner_url",  QVariant());
+    m_label->setProperty("nerev_banner_kind", QVariant());
+    m_label->show();
+    m_hideTimer->start();   // restarts, so the newest message gets the full 7s
+}
+
+void NotifyBanner::showWithLink(const QString &msg, const QString &bgColor,
+                                 const QString &url, const QString &kind)
+{
+    show(msg, bgColor);
+    m_label->setProperty("nerev_banner_url",  url);
+    m_label->setProperty("nerev_banner_kind", kind);
+}
+
+void NotifyBanner::showSticky(const QString &msg, const QString &bgColor)
+{
+    // Same look as show() but NO auto-dismiss timer: the banner reflects an
+    // ongoing state (a temporary view sort) and must persist until reset.
+    m_label->setText(msg);
+    m_label->setStyleSheet(
+        QString("background-color: %1; color: white;"
+                " font-weight: bold; font-size: 10pt;"
+                " padding: 6px 12px; border-radius: 0px;")
+            .arg(bgColor));
+    m_label->setCursor(Qt::PointingHandCursor);
+    m_label->setProperty("nerev_banner_url",  QVariant());
+    m_label->setProperty("nerev_banner_kind", QStringLiteral("sticky"));
+    m_label->show();
+    // A transient banner shown moments ago has a live timer that would hide
+    // this one; sticky means sticky.
+    m_hideTimer->stop();
+}
+
+void NotifyBanner::hideSticky()
+{
+    if (m_label->property("nerev_banner_kind").toString() == QStringLiteral("sticky"))
+        m_label->hide();
+}
+
+void NotifyBanner::dismiss()
+{
+    m_hideTimer->stop();
+    m_label->hide();
+    m_label->setProperty("nerev_banner_url",  QVariant());
+    m_label->setProperty("nerev_banner_kind", QVariant());
+}
+
+bool NotifyBanner::eventFilter(QObject *obj, QEvent *event)
+{
+    if (obj == m_label && event->type() == QEvent::MouseButtonRelease) {
+        auto *me = static_cast<QMouseEvent *>(event);
+        QVariant urlVar  = m_label->property("nerev_banner_url");
+        QVariant kindVar = m_label->property("nerev_banner_kind");
+        if (kindVar.toString() == "sticky") {
+            emit stickyClicked();
+        } else if (me->button() == Qt::RightButton && kindVar.toString() == "loot_missing") {
+            Settings::setLootBannerDisabled(true);
+            emit statusMessage(T("loot_banner_suppressed"), 4000);
+        } else if (urlVar.isValid() && !urlVar.toString().isEmpty()) {
+            QDesktopServices::openUrl(QUrl(urlVar.toString()));
+        }
+        m_label->hide();
+        return true;
+    }
+    return QObject::eventFilter(obj, event);
+}

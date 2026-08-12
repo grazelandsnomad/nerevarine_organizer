@@ -1,0 +1,222 @@
+#include "forbidden_mods.h"
+
+#include <QAbstractItemView>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFile>
+#include <QFormLayout>
+#include <QHBoxLayout>
+#include <QHeaderView>
+#include <QLabel>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QStringList>
+#include <QTableWidget>
+#include <QTableWidgetItem>
+#include <QTextStream>
+#include <QUrl>
+#include <QVBoxLayout>
+
+#include "settings.h"
+#include "translator.h"
+
+ForbiddenModsRegistry::ForbiddenModsRegistry(QObject *parent)
+    : QObject(parent)
+{
+}
+
+void ForbiddenModsRegistry::reload(const QString &filePath, const QString &gameId,
+                                   const QString &legacyPath)
+{
+    m_filePath   = filePath;
+    m_gameId     = gameId;
+    m_legacyPath = legacyPath;
+    load();
+}
+
+void ForbiddenModsRegistry::load()
+{
+    m_list.clear();
+
+    // One-time migration to the per-game layout. Old single forbidden_mods.txt
+    // held only Morrowind/OpenMW mods, so fold it into morrowind's list once;
+    // other games must not inherit it, they start empty.
+    if (m_gameId == QLatin1String("morrowind")
+        && !QFile::exists(m_filePath)
+        && !m_legacyPath.isEmpty() && m_legacyPath != m_filePath
+        && QFile::exists(m_legacyPath)) {
+        QFile::rename(m_legacyPath, m_filePath);
+    }
+
+    // Per-game file (syncs between machines).
+    QFile f(m_filePath);
+    if (f.exists() && f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QTextStream in(&f);
+        while (!in.atEnd()) {
+            const QString line = in.readLine();
+            if (line.trimmed().isEmpty() || line.startsWith('#')) continue;
+            const QStringList parts = line.split('\t');
+            ForbiddenMod fm;
+            fm.name       = parts.value(0);
+            fm.url        = parts.value(1);
+            fm.annotation = parts.value(2);
+            if (!fm.name.isEmpty() || !fm.url.isEmpty())
+                m_list.append(fm);
+        }
+        f.close();
+        return;
+    }
+
+    // No file yet. Only Morrowind has the legacy QSettings entries and the
+    // built-in seed; other games begin empty.
+    if (m_gameId == QLatin1String("morrowind")) {
+        const int n = Settings::forbiddenCount();
+        for (int i = 0; i < n; ++i) {
+            ForbiddenMod fm;
+            fm.name       = Settings::forbiddenName(i);
+            fm.url        = Settings::forbiddenUrl(i);
+            fm.annotation = Settings::forbiddenAnnotation(i);
+            m_list.append(fm);
+        }
+
+        if (!Settings::forbiddenSeededV1()) {
+            m_list.prepend({
+                "The Wabbajack",
+                "https://www.nexusmods.com/morrowind/mods/44653",
+                "Very important -> THIS MOD REQUIRES MWSE 0.9.5-alpha.20151016 "
+                "<- it is not yet openMW compatible!"
+            });
+            Settings::setForbiddenSeededV1(true);
+        }
+    }
+
+    save();
+}
+
+void ForbiddenModsRegistry::save()
+{
+    QFile f(m_filePath);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) return;
+    QTextStream out(&f);
+    for (const auto &fm : m_list)
+        out << fm.name << '\t' << fm.url << '\t' << fm.annotation << '\n';
+}
+
+const ForbiddenMod *ForbiddenModsRegistry::find(const QString &game, int modId) const
+{
+    for (const auto &f : m_list) {
+        QStringList p = QUrl(f.url).path().split('/', Qt::SkipEmptyParts);
+        // Nexus URL path: {game}/mods/{modId}
+        if (p.size() >= 3
+                && p[0].compare(game, Qt::CaseInsensitive) == 0
+                && p[2] == QString::number(modId))
+            return &f;
+    }
+    return nullptr;
+}
+
+void ForbiddenModsRegistry::showManageDialog(QWidget *parent)
+{
+    QDialog dlg(parent);
+    dlg.setWindowTitle(T("forbidden_dlg_title"));
+    dlg.setMinimumWidth(720);
+    dlg.setMinimumHeight(380);
+
+    auto *vlay  = new QVBoxLayout(&dlg);
+    auto *table = new QTableWidget(0, 3, &dlg);
+    table->setHorizontalHeaderLabels({
+        T("forbidden_col_name"), T("forbidden_col_url"), T("forbidden_col_reason")});
+    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+    table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table->setSelectionMode(QAbstractItemView::SingleSelection);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->verticalHeader()->setVisible(false);
+    table->setAlternatingRowColors(true);
+    vlay->addWidget(table);
+
+    auto *countLabel = new QLabel(&dlg);
+    countLabel->setStyleSheet("color: #666; padding: 4px 2px;");
+    auto populate = [&]() {
+        table->setRowCount(0);
+        for (const auto &f : m_list) {
+            int row = table->rowCount();
+            table->insertRow(row);
+            table->setItem(row, 0, new QTableWidgetItem(f.name));
+            table->setItem(row, 1, new QTableWidgetItem(f.url));
+            table->setItem(row, 2, new QTableWidgetItem(f.annotation));
+        }
+        countLabel->setText(T("forbidden_count").arg(m_list.size()));
+    };
+    populate();
+    vlay->addWidget(countLabel);
+
+    auto *btnRow  = new QHBoxLayout;
+    auto *addBtn  = new QPushButton(T("forbidden_add"));
+    auto *editBtn = new QPushButton(T("forbidden_edit"));
+    auto *rmBtn   = new QPushButton(T("forbidden_remove"));
+    rmBtn->setStyleSheet("color: #cc2222;");
+    btnRow->addWidget(addBtn);
+    btnRow->addWidget(editBtn);
+    btnRow->addWidget(rmBtn);
+    btnRow->addStretch();
+    vlay->addLayout(btnRow);
+
+    auto *closeBtns = new QDialogButtonBox(QDialogButtonBox::Close);
+    vlay->addWidget(closeBtns);
+    connect(closeBtns, &QDialogButtonBox::rejected, &dlg, &QDialog::accept);
+
+    auto openEntry = [&](int idx) {
+        QDialog entry(&dlg);
+        entry.setWindowTitle(idx < 0 ? T("forbidden_entry_title_add")
+                                     : T("forbidden_entry_title_edit"));
+        entry.setMinimumWidth(520);
+        auto *evlay  = new QVBoxLayout(&entry);
+        auto *form   = new QFormLayout;
+        auto *nameE  = new QLineEdit; nameE->setPlaceholderText(T("forbidden_ph_name"));
+        auto *urlE   = new QLineEdit; urlE->setPlaceholderText(T("forbidden_ph_url"));
+        auto *annotE = new QLineEdit; annotE->setPlaceholderText(T("forbidden_ph_reason"));
+        if (idx >= 0) {
+            nameE->setText(m_list[idx].name);
+            urlE->setText(m_list[idx].url);
+            annotE->setText(m_list[idx].annotation);
+        }
+        form->addRow(T("forbidden_label_name"),   nameE);
+        form->addRow(T("forbidden_label_url"),    urlE);
+        form->addRow(T("forbidden_label_reason"), annotE);
+        evlay->addLayout(form);
+        auto *ebtns = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+        evlay->addWidget(ebtns);
+        connect(ebtns, &QDialogButtonBox::accepted, &entry, &QDialog::accept);
+        connect(ebtns, &QDialogButtonBox::rejected, &entry, &QDialog::reject);
+        if (entry.exec() != QDialog::Accepted) return;
+        ForbiddenMod f{ nameE->text().trimmed(), urlE->text().trimmed(),
+                        annotE->text().trimmed() };
+        if (idx < 0)
+            m_list.append(f);
+        else
+            m_list[idx] = f;
+        save();
+        populate();
+    };
+
+    connect(addBtn,  &QPushButton::clicked, &dlg, [&]{ openEntry(-1); });
+    connect(editBtn, &QPushButton::clicked, &dlg, [&]{
+        int row = table->currentRow();
+        if (row >= 0 && row < m_list.size()) openEntry(row);
+    });
+    connect(rmBtn, &QPushButton::clicked, &dlg, [&]{
+        int row = table->currentRow();
+        if (row < 0 || row >= m_list.size()) return;
+        m_list.removeAt(row);
+        save();
+        populate();
+    });
+    connect(table, &QTableWidget::cellDoubleClicked, &dlg,
+            [&](int row, int /*col*/){
+        if (row >= 0 && row < m_list.size()) openEntry(row);
+    });
+
+    dlg.exec();
+}
