@@ -76,11 +76,13 @@ FomodWizard::run(const QString &archiveRoot,
                  const QString &priorChoices,
                  QString *outChoices,
                  QWidget *parent,
-                 const QStringList &installedModNames)
+                 const QStringList &installedModNames,
+                 const QString &gameId)
 {
     FomodWizard dlg(archiveRoot, parent);
     dlg.m_priorChoices      = priorChoices;
     dlg.m_installedModNames = installedModNames;
+    dlg.m_gameId            = gameId;
 
     if (!dlg.parse()) {
         // Bad XML: offer a raw install
@@ -115,12 +117,14 @@ void FomodWizard::showAsync(
     const QString &priorChoices,
     QWidget *parent,
     const QStringList &installedModNames,
-    std::function<void(const QString &, const QString &)> onDone)
+    std::function<void(const QString &, const QString &)> onDone,
+    const QString &gameId)
 {
     auto *dlg = new FomodWizard(archiveRoot, parent);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->m_priorChoices      = priorChoices;
     dlg->m_installedModNames = installedModNames;
+    dlg->m_gameId            = gameId;
 
     if (!dlg->parse()) {
         auto ans = QMessageBox::warning(
@@ -589,6 +593,41 @@ void FomodWizard::buildUi()
                             }
                             openMwOverriddenGroups.insert(groupKey);
                             continue;  // skip Pass B for this group
+                        }
+                    }
+
+                    // Pass A3: game-runtime pairs - an SKSE-plugin FOMOD
+                    // offering its DLL per runtime ("SSE v1.6.629+
+                    // ('Anniversary Edition')" vs "SSE v1.5.97 ('Special
+                    // Edition')"). Which one is right is not a preference, it
+                    // is a fact the manager already holds: the AE/SE split IS
+                    // the game profile. Only fires when the group contains
+                    // both kinds, so a stray "AE" in an unrelated option name
+                    // never draws a tick.
+                    {
+                        const auto pref = fomod::runtimePreferenceForGame(m_gameId);
+                        if (pref != fomod::SkyrimRuntime::None) {
+                            bool haveAe = false, haveSe = false;
+                            int prefIdx = -1;
+                            for (int pi = 0; pi < group.plugins.size(); ++pi) {
+                                const auto v = fomod::classifyRuntimeVariant(
+                                    group.plugins[pi].name);
+                                haveAe |= (v == fomod::SkyrimRuntime::AE);
+                                haveSe |= (v == fomod::SkyrimRuntime::SE);
+                                if (v == pref && prefIdx == -1) prefIdx = pi;
+                            }
+                            if (haveAe && haveSe && prefIdx != -1) {
+                                QAbstractButton *btn =
+                                    m_buttons[si][gi].value(prefIdx);
+                                if (btn && btn->isEnabled()) {
+                                    btn->setChecked(true);
+                                    btn->setText(btn->text() + QStringLiteral(
+                                        " ✅ Recommended - matches "
+                                        "your game version."));
+                                }
+                                openMwOverriddenGroups.insert(groupKey);
+                                continue;  // settled; skip Pass B
+                            }
                         }
                     }
 

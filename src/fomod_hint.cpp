@@ -48,4 +48,46 @@ bool asksAboutAnotherMod(const QString &stepName, const QString &groupName)
         && !kAboutToInstall.match(question).hasMatch();
 }
 
+SkyrimRuntime classifyRuntimeVariant(const QString &optionName)
+{
+    const QString n = optionName.toLower();
+
+    bool ae = false, se = false;
+
+    // Version numbers first: "v1.6.629+", "1.6.xxx", "1.6.1170" / "1.5.97",
+    // "1.5.x". Word-bounded so "11.6" or a date can't match.
+    static const QRegularExpression k16(QStringLiteral("\\b1[._]6\\b|\\b1[._]6[._]"));
+    static const QRegularExpression k15(QStringLiteral("\\b1[._]5\\b|\\b1[._]5[._]"));
+    if (k16.match(n).hasMatch()) ae = true;
+    if (k15.match(n).hasMatch()) se = true;
+
+    // Then the words. "special edition" as a phrase only: "SSE" alone names
+    // the game, not a runtime, and appears on both sides of every pair.
+    if (n.contains(QLatin1String("anniversary")))     ae = true;
+    if (n.contains(QLatin1String("special edition"))) se = true;
+
+    // Bare AE/SE word-tokens last. \b keeps "SSE", "USE", "BASE" out.
+    static const QRegularExpression kAeTok(QStringLiteral("\\bae\\b"));
+    static const QRegularExpression kSeTok(QStringLiteral("\\bse\\b"));
+    if (!ae && !se) {
+        if (kAeTok.match(n).hasMatch()) ae = true;
+        if (kSeTok.match(n).hasMatch()) se = true;
+    }
+
+    // A name carrying both signals ("1.5.97 - 1.6.317 bridge build") is not a
+    // side of a pair; say nothing rather than guess.
+    if (ae == se) return SkyrimRuntime::None;
+    return ae ? SkyrimRuntime::AE : SkyrimRuntime::SE;
+}
+
+SkyrimRuntime runtimePreferenceForGame(const QString &gameId)
+{
+    if (gameId == QLatin1String("skyrimanniversaryedition"))
+        return SkyrimRuntime::AE;
+    if (gameId == QLatin1String("skyrimspecialedition")
+        || gameId == QLatin1String("enderalspecialedition"))
+        return SkyrimRuntime::SE;
+    return SkyrimRuntime::None;
+}
+
 } // namespace fomod

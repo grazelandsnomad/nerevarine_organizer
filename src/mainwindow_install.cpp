@@ -331,7 +331,10 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
                 }
             }
             QFile::remove(archivePath);
-        });
+        },
+        // Game id, so runtime-pair DLL groups ("SSE v1.6.629+" vs "v1.5.97")
+        // pre-select the side matching this profile.
+        m_profiles->isEmpty() ? QString() : currentProfile().id);
         return; // wizard is now shown; callback drives the rest
     }
 

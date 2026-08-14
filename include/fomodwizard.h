@@ -78,7 +78,8 @@ public:
         const QString &priorChoices = {},
         QString *outChoices = nullptr,
         QWidget *parent = nullptr,
-        const QStringList &installedModNames = {});
+        const QStringList &installedModNames = {},
+        const QString &gameId = {});
 
     // Non-modal: shows as an independent window, calls onDone(fomodPath,
     // choices) on finish/cancel. fomodPath empty on cancel. Self-deletes on close.
@@ -88,7 +89,8 @@ public:
         QWidget *parent,
         const QStringList &installedModNames,
         std::function<void(const QString &fomodPath,
-                           const QString &choices)> onDone);
+                           const QString &choices)> onDone,
+        const QString &gameId = {});
 
     // True when archiveRoot has fomod/ModuleConfig.xml (case-insensitive).
     static bool hasFomod(const QString &archiveRoot);
@@ -121,6 +123,7 @@ private:
     QString              m_modName;
     QString              m_priorChoices;      // serialized prior choices, set before buildUi()
     QStringList          m_installedModNames; // display names of all mods in the modlist
+    QString              m_gameId;            // active game profile id, for runtime-pair hints
     QList<FomodFile>     m_requiredFiles;
     QList<FomodFile>     m_requiredFolders;
     QList<FomodStep>     m_steps;

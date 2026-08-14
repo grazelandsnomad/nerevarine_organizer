@@ -886,6 +886,52 @@ static void run_fomod_hint()
               got == c.wanted, label);
     }
     std::cout << "\n";
+
+    // -- classifyRuntimeVariant: which Skyrim runtime an option is built for --
+    std::cout << "[runtime-pair options classify by version, words, then tokens]\n";
+    using RT = fomod::SkyrimRuntime;
+    struct RtCase { const char *name; RT wanted; };
+    static const RtCase kRt[] = {
+        // The Spell Perk Item Distributor pair this was built from.
+        {"SSE v1.6.629+ (\"Anniversary Edition\")",  RT::AE},
+        {"SSE v1.5.97 (\"Special Edition\")",        RT::SE},
+        // Version number alone is enough, in either spelling.
+        {"1.6.1170",                                 RT::AE},
+        {"DLL for 1.6.xxx",                          RT::AE},
+        {"1.5.97 build",                             RT::SE},
+        {"1_6_640",                                  RT::AE},
+        // Words without a version.
+        {"Anniversary Edition DLL",                  RT::AE},
+        {"Special Edition (pre-AE update)",          RT::SE},   // version words beat the AE aside
+        // Bare tokens, word-bounded: SSE must never read as SE.
+        {"AE",                                       RT::AE},
+        {"SE",                                       RT::SE},
+        {"SSE",                                      RT::None},
+        {"Base install",                             RT::None},
+        // Both signals at once is not a side of a pair.
+        {"1.5.97 - 1.6.317 bridge",                  RT::None},
+        // Ordinary option names stay silent.
+        {"2K Textures",                              RT::None},
+        {"Yes",                                      RT::None},
+    };
+    for (const RtCase &c : kRt) {
+        const auto got = fomod::classifyRuntimeVariant(QString::fromUtf8(c.name));
+        check(c.wanted == RT::AE ? "reads as AE"
+            : c.wanted == RT::SE ? "reads as SE" : "stays unclassified",
+              got == c.wanted, QString::fromUtf8(c.name));
+    }
+
+    std::cout << "\n[profile id decides the preferred runtime]\n";
+    check("skyrimanniversaryedition prefers AE",
+          fomod::runtimePreferenceForGame("skyrimanniversaryedition") == RT::AE);
+    check("skyrimspecialedition prefers SE",
+          fomod::runtimePreferenceForGame("skyrimspecialedition") == RT::SE);
+    check("Enderal SE runs the 1.5.97 engine",
+          fomod::runtimePreferenceForGame("enderalspecialedition") == RT::SE);
+    check("other games disable the pass",
+          fomod::runtimePreferenceForGame("morrowind") == RT::None
+          && fomod::runtimePreferenceForGame("skyrim") == RT::None);
+    std::cout << "\n";
 }
 
 // Friend hook into buildUi() and the private button tree.
