@@ -2,6 +2,7 @@
 // dropping it causes "Unknown protocol: nxms" in KDE.
 
 #include "nxmurl.h"
+#include "game_match.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -152,6 +153,68 @@ static void testNexusApiReachable()
         std::cout << "    (request timed out after 8 s)\n";
 }
 
+// The wrong-game guard. A Starfield nxm:// link clicked while a Skyrim profile
+// is active used to install into Skyrim without a word; classify() is what now
+// sees it coming. The interesting cases are the two that must NOT fire: the
+// silent match, and Skyrim SE/AE, which are separate profiles here but one
+// domain on Nexus.
+static void testGameMatch()
+{
+    std::cout << "\n[wrong-game guard]\n";
+
+    using namespace game_match;
+    // Registry order: AE (domain skyrimspecialedition), Morrowind, Starfield.
+    const QStringList domains{"skyrimspecialedition", "morrowind", "starfield"};
+
+    // The reported bug: Starfield mod, Skyrim AE profile active.
+    auto r = classify("starfield", domains, 0);
+    check("foreign game routed elsewhere", r.verdict == Verdict::Elsewhere);
+    check("names the Starfield profile",
+          r.candidates == QList<int>{2});
+
+    // The common case has to cost nothing and say nothing.
+    check("matching profile is silent",
+          classify("skyrimspecialedition", domains, 0).verdict == Verdict::Match);
+    check("matching profile offers no switch",
+          classify("morrowind", domains, 1).candidates.isEmpty());
+
+    // Slugs are case-insensitive on Nexus.
+    check("domain compare ignores case",
+          classify("Starfield", domains, 0).verdict == Verdict::Elsewhere);
+
+    // No profile serves it - there is nowhere to switch to.
+    check("unconfigured game is Unknown",
+          classify("fallout4", domains, 0).verdict == Verdict::Unknown);
+    check("Unknown offers no candidates",
+          classify("fallout4", domains, 0).candidates.isEmpty());
+
+    // Skyrim SE and AE are separate profiles by runtime, but Nexus files both
+    // under skyrimspecialedition. From an LE profile the link fits either, and
+    // only the user knows which - both must be offered, not one picked.
+    const QStringList both{"skyrim", "skyrimspecialedition", "skyrimspecialedition"};
+    auto pair = classify("skyrimspecialedition", both, 0);
+    check("SE/AE both offered", pair.candidates == (QList<int>{1, 2}));
+    // ...and from inside either of them, nothing is asked at all.
+    check("SE profile takes an SE link silently",
+          classify("skyrimspecialedition", both, 1).verdict == Verdict::Match);
+    check("AE profile takes an SE link silently",
+          classify("skyrimspecialedition", both, 2).verdict == Verdict::Match);
+    check("an LE link still flags from AE",
+          classify("skyrim", both, 2).candidates == (QList<int>{0}));
+
+    // Silence beats a guess when the inputs cannot support a verdict.
+    check("empty URL domain says nothing",
+          classify("", domains, 0).verdict == Verdict::Match);
+    check("out-of-range current index says nothing",
+          classify("starfield", domains, 9).verdict == Verdict::Match);
+    check("empty profile list says nothing",
+          classify("starfield", {}, 0).verdict == Verdict::Match);
+    // A profile with no resolvable domain must not collide with an empty slug.
+    const QStringList blank{"morrowind", ""};
+    check("blank profile domain is not a candidate",
+          classify("starfield", blank, 0).verdict == Verdict::Unknown);
+}
+
 int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
@@ -164,6 +227,7 @@ int main(int argc, char *argv[])
     testInvalidUrls();
     testNexusModUrlParsing();
     testNexusModUrlBuild();
+    testGameMatch();
 
     // integration tests need KIO protocol files + outbound HTTPS; skip in
     // CI/sandbox via the env var

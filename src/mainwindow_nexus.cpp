@@ -262,6 +262,12 @@ void MainWindow::handleNxmUrl(const QString &url)
     const QString &key     = parsed->key;
     const QString &expires = parsed->expires;
 
+    // Wrong-game check FIRST: the URL names its game, and everything below
+    // this line is scoped to the active profile - the forbidden list, the
+    // duplicate-row scan, the mods dir. Switching afterwards would leave a
+    // Starfield placeholder sitting in the Skyrim list.
+    if (!confirmGameForDownload(game)) return;
+
     // Forbidden mod check - hard block, no install-anyway escape.
     if (!confirmNotForbidden(game, modId)) return;
 

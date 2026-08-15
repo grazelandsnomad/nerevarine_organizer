@@ -397,6 +397,22 @@ private:
     // blocked. Call as `if (!confirmNotForbidden(...)) return;`. No
     // install-anyway escape.
     bool confirmNotForbidden(const QString &game, int modId);
+    // Guards against a download landing in the wrong game's profile: an
+    // nxm:// link names its game, so a Starfield mod clicked while a Skyrim
+    // profile is active is a mistake the manager can see coming. Returns true
+    // when the install should proceed - either because the active profile
+    // already serves that game (the silent path), because the user let us
+    // switchToGame() the right one first, or because they chose to install it
+    // here anyway. False means cancel. See game_match.h for the lookup.
+    //
+    // Wired to handleNxmUrl only, and deliberately: it is the one entry point
+    // that starts from a URL rather than from a row. Every other download
+    // path (updates, dependency resolution, Search-on-Nexus) is handed a
+    // QListWidgetItem that lives in m_modList, and switchToGame() clears
+    // m_modList - so calling this there would hand the caller a dangling item.
+    // Those paths take their game from a row that is already in this profile,
+    // so there is nothing for them to mismatch against anyway.
+    bool confirmGameForDownload(const QString &game);
     void checkModDependencies(const QString &game, int modId, QListWidgetItem *item);
     // Fetch the Nexus file list for (game, modId). autoPickMain=true skips the
     // per-mod picker and takes the first MAIN/UPDATE file; used by batch update,

@@ -30,6 +30,7 @@
 #include "forbidden_mods.h"
 #include "game_profiles.h"
 #include "game_adapter.h"
+#include "game_match.h"
 #include "conflict_inspector.h"
 #include "report_dialog.h"
 #include "conflict_scan.h"
@@ -1059,6 +1060,79 @@ bool MainWindow::confirmNotForbidden(const QString &game, int modId)
     if (warn.clickedButton() == manageBtn)
         m_forbidden->showManageDialog(this);
     return false;          // forbidden - hard block, no install-anyway escape
+}
+
+bool MainWindow::confirmGameForDownload(const QString &game)
+{
+    if (!m_profiles || m_profiles->isEmpty()) return true;
+
+    // Resolve every configured profile to the Nexus domain it actually buys
+    // from, so the comparison survives Skyrim AE (id skyrimanniversaryedition,
+    // domain skyrimspecialedition) rather than reading it as a foreign game.
+    QStringList domains;
+    domains.reserve(m_profiles->size());
+    for (const GameProfile &gp : m_profiles->games())
+        domains << nexusDomainFor(gp.id);
+
+    const auto verdict =
+        game_match::classify(game, domains, m_profiles->currentIndex());
+    if (verdict.verdict == game_match::Verdict::Match) return true;
+
+    // Name the incoming game the way the user would recognise it. The domain
+    // is a slug; an adapter registered under it knows the real title.
+    QString incoming = game;
+    if (const GameAdapter *a = GameAdapterRegistry::find(game))
+        incoming = a->displayName();
+    const QString here = m_profiles->current().displayName;
+
+    // Custom button set and clickedButton inspection - raw QMessageBox, same
+    // reasoning as confirmNotForbidden (see prompts.h scope).
+    QMessageBox box(this);
+    box.setWindowTitle(T("wrong_game_title"));
+    box.setIcon(QMessageBox::Warning);
+
+    if (verdict.verdict == game_match::Verdict::Unknown) {
+        // Nowhere to send it. Offer the escape hatch, but default to Cancel:
+        // installing a foreign game's files into this list is almost never
+        // what was meant, and undoing it means hunting the folder down.
+        box.setText(T("wrong_game_body_unknown").arg(incoming, here));
+        auto *anyway = box.addButton(T("wrong_game_install_anyway"),
+                                     QMessageBox::AcceptRole);
+        auto *cancel = box.addButton(QMessageBox::Cancel);
+        box.setDefaultButton(cancel);
+        box.exec();
+        return box.clickedButton() == anyway;
+    }
+
+    // One button per profile that serves this game. Usually exactly one; two
+    // when the user keeps both a Skyrim SE and a Skyrim AE profile, which
+    // Nexus files under a single domain - only they know which runtime the
+    // download is built for, so ask rather than pick.
+    box.setText(T("wrong_game_body").arg(incoming, here));
+    QList<QPushButton *> switchBtns;
+    for (int idx : verdict.candidates) {
+        switchBtns << box.addButton(
+            T("wrong_game_switch").arg(m_profiles->games()[idx].displayName),
+            QMessageBox::AcceptRole);
+    }
+    auto *anyway = box.addButton(T("wrong_game_install_anyway"),
+                                 QMessageBox::DestructiveRole);
+    auto *cancel = box.addButton(QMessageBox::Cancel);
+    // Elsewhere guarantees at least one candidate, so first() is safe.
+    box.setDefaultButton(switchBtns.first());
+    box.exec();
+
+    QAbstractButton *clicked = box.clickedButton();
+    if (clicked == cancel || clicked == nullptr) return false;
+    if (clicked == anyway) return true;
+
+    const int pick = switchBtns.indexOf(static_cast<QPushButton *>(clicked));
+    if (pick < 0) return false;
+    // switchToGame saves the current list, strands any in-flight installs and
+    // rebinds the forbidden list, so everything downstream of here - the
+    // forbidden check, the placeholder row, the mods dir - sees the new game.
+    switchToGame(verdict.candidates[pick]);
+    return true;
 }
 
 MainWindow::ReinstallChoice

@@ -5,6 +5,7 @@ find_package(Qt6 REQUIRED COMPONENTS Core Concurrent Gui Network Test Widgets)
 add_executable(test_nxm
     test_nxm.cpp
     ${CMAKE_SOURCE_DIR}/src/nxmurl.cpp
+    ${CMAKE_SOURCE_DIR}/src/game_match.cpp
 )
 target_include_directories(test_nxm PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(test_nxm PRIVATE Qt6::Core Qt6::Network)

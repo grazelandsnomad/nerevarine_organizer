@@ -155,6 +155,7 @@ set(SOURCES
     src/nexus_name.cpp
     src/conflict_scan.cpp
     src/conflict_direction.cpp
+    src/game_match.cpp
     src/conflict_inspector.cpp
     src/deployment_report.cpp
     src/report_dialog.cpp
@@ -184,6 +185,7 @@ set(SOURCES
     include/nexus_name.h
     include/conflict_scan.h
     include/conflict_direction.h
+    include/game_match.h
     include/plugin_records.h
     include/plugin_strings.h
     include/scan_overlay.h
