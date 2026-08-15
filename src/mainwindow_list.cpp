@@ -3,6 +3,11 @@
 
 #include "mainwindow.h"
 #include "variant_picker.h"
+#include "plugin_strings.h"
+#include "translate_dialog.h"
+#include "translation_mod.h"
+#include "translation_store.h"
+#include "mainwindow_internal.h"
 #include "settings.h"
 #include "theme.h"
 #include "separatordialog.h"
@@ -799,6 +804,26 @@ void MainWindow::onContextMenu(const QPoint &pos)
                     subprocess::startDetached("xdg-open", {path});
                 });
 
+                // A mod the scan flagged red carries text nothing translates -
+                // so the fix is offered on the spot, named for the language it
+                // would fix it in, bold so it reads as the answer to the red
+                // caption directly above the cursor. The generic entry stays
+                // for every other installed mod (state 1 = no translation).
+                if (item->data(ModRole::TranslationState).toInt() == 1) {
+                    QString lang = Settings::uiLanguage().trimmed();
+                    if (!lang.isEmpty()) lang[0] = lang[0].toUpper();
+                    QAction *act = menu.addAction(
+                        T("translate_create_here").arg(lang),
+                        this, [this, item]{ onTranslateMod(item); });
+                    QFont f = act->font();
+                    f.setBold(true);
+                    act->setFont(f);
+                } else {
+                    menu.addAction(T("translate_menu"), this, [this, item]{
+                        onTranslateMod(item);
+                    });
+                }
+
                 // Undeclared variant chooser (Main Menu Redone's
                 // mainmenuwallpapers/ shape): the mod ships N alternatives and
                 // its readme says "copy the one you want" - no FOMOD, no BAIN,
@@ -1499,4 +1524,103 @@ void MainWindow::onSortByDate()
     if (m_notify) m_notify->showSticky(T("viewsort_banner"), QStringLiteral("#7a5c17"));
     statusBar()->showMessage(
         m_dateSortAsc ? T("status_sorted_asc") : T("status_sorted_desc"), 3000);
+}
+
+void MainWindow::onTranslateMod(QListWidgetItem *item)
+{
+    if (!item) return;
+    const QString modPath = item->data(ModRole::ModPath).toString();
+    const QString modName = item->text().trimmed();
+    if (modPath.isEmpty() || !QDir(modPath).exists()) return;
+
+    // Target the same language the untranslated scan judges against, so what
+    // the toggle marks red is what this dialog offers to fix.
+    const QString language = Settings::uiLanguage().trimmed().toLower();
+
+    // Collect every string, core and secondary alike. The tier split exists to
+    // keep a RATIO honest (plugin_strings.h); for editing, an NPC_ name is
+    // exactly as translatable as a book title - it is the Bandit Chief case.
+    QList<TranslatableString> strings;
+    bool sawPlugin = false;
+    QDirIterator dit(modPath, QDir::Files | QDir::NoDotAndDotDot,
+                     QDirIterator::Subdirectories);
+    while (dit.hasNext()) {
+        dit.next();
+        const QString lower = dit.fileName().toLower();
+        if (!lower.endsWith(QLatin1String(".esp"))
+         && !lower.endsWith(QLatin1String(".esm"))
+         && !lower.endsWith(QLatin1String(".esl"))) continue;
+        sawPlugin = true;
+
+        const auto set = plugin_strings::extract(dit.filePath());
+        if (!set.valid || set.localized) continue;
+        const QString rel = QDir(modPath).relativeFilePath(dit.filePath());
+        for (auto it = set.byKey.cbegin(); it != set.byKey.cend(); ++it)
+            strings.append({rel, it.key(), it.value(), false});
+        for (auto it = set.auxByKey.cbegin(); it != set.auxByKey.cend(); ++it)
+            strings.append({rel, it.key(), it.value(), true});
+    }
+
+    if (!sawPlugin) {
+        ui::info(this, T("translate_title").arg(modName),
+                 T("translate_no_plugin").arg(modName));
+        return;
+    }
+    if (strings.isEmpty()) {
+        ui::info(this, T("translate_title").arg(modName),
+                 T("translate_no_strings").arg(modName));
+        return;
+    }
+
+    // One memory per language, shared across every game and mod - the point is
+    // that "Bandit Chief" is answered once, not once per modlist.
+    const QString memPath = resolveUserStatePath(
+        QStringLiteral("translation_memory_%1.json").arg(
+            language.isEmpty() ? QStringLiteral("default") : language));
+    translation_store::Memory memory;
+    memory.load(memPath);
+
+    TranslateDialog dlg(modName, strings, language, &memory, this);
+    if (dlg.exec() != QDialog::Accepted) {
+        // Even a cancelled edit may have taught the memory nothing; only save
+        // on accept, so a cancel really is a cancel.
+        return;
+    }
+    if (dlg.memoryChanged()) memory.save(memPath);
+
+    const QString modsDir = m_profiles->isEmpty()
+        ? QString() : m_profiles->current().modsDir;
+    const auto built = translation_mod::build(modPath, modName, modsDir,
+                                              language, dlg.replacements());
+    if (!built.ok) {
+        ui::warn(this, T("translate_title").arg(modName),
+                 T("translate_failed").arg(built.error));
+        return;
+    }
+
+    // Insert directly BELOW the original: later wins the file conflict, which
+    // is the whole mechanism by which the translation reaches the game.
+    m_undoStack->pushUndo();
+    dropViewSortKeepingOrder();
+    auto *tr = new QListWidgetItem(built.modName);
+    tr->setData(ModRole::ItemType,      ItemType::Mod);
+    tr->setData(ModRole::ModPath,       built.modPath);
+    tr->setData(ModRole::InstallStatus, 1);
+    tr->setData(ModRole::DateAdded,     QDateTime::currentDateTime());
+    tr->setCheckState(Qt::Checked);
+    tr->setToolTip(built.modPath);
+    m_modList->insertItem(m_modList->row(item) + 1, tr);
+    m_modList->setCurrentItem(tr);
+
+    saveModList();
+    syncOpenMWConfig();
+    scheduleConflictScan();
+
+    QString body = T("translate_done")
+                       .arg(built.modName)
+                       .arg(built.strings)
+                       .arg(built.plugins);
+    if (!built.warnings.isEmpty())
+        body += QLatin1String("\n\n") + built.warnings.join(QLatin1Char('\n'));
+    ui::info(this, T("translate_title").arg(modName), body);
 }

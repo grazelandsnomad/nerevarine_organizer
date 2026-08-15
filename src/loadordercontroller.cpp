@@ -167,7 +167,11 @@ protected:
 
                 const auto st = cachedExtract(dit.filePath());
                 if (!st.valid) continue;
-                if (st.byKey.isEmpty() && !st.localized) continue;  // nothing to say
+                // Nothing to say only when BOTH tiers are empty - the real
+                // mesh/texture case. A plugin whose only text is secondary
+                // (an NPC_ name, a location) used to be dropped here, and the
+                // silence read as "nothing to translate"; see plugin_strings.h.
+                if (st.empty() && !st.localized) continue;
                 entries.append({i, lower, st});
             }
         }
@@ -194,16 +198,39 @@ protected:
                 continue;
             }
 
+            // Core text drives the verdict whenever there is any, so nothing
+            // about the existing results moves. Only when a plugin has none
+            // does the secondary tier take over - and then it may answer the
+            // pairing question but never the percentage (plugin_strings.h).
+            const bool secondaryOnly = ea.strings.byKey.isEmpty();
+            const auto tier = secondaryOnly ? plugin_strings::Tier::Secondary
+                                            : plugin_strings::Tier::Core;
+            const auto keysOf = [tier](const plugin_strings::StringSet &s) {
+                return tier == plugin_strings::Tier::Core ? s.byKey.size()
+                                                          : s.auxByKey.size();
+            };
+
             int bestShared = 0, bestIdx = -1;
             plugin_strings::Comparison best;
             for (int b = 0; b < entries.size(); ++b) {
                 if (b == a || entries[b].modIdx == ea.modIdx) continue;
                 if (entries[b].strings.localized) continue;
-                const auto cmp = plugin_strings::compare(ea.strings, entries[b].strings);
-                const int smaller = qMin(ea.strings.byKey.size(),
-                                         entries[b].strings.byKey.size());
+                const auto cmp = plugin_strings::compare(
+                    ea.strings, entries[b].strings, /*maxSamples=*/8, tier);
+                const int smaller = qMin(keysOf(ea.strings),
+                                         keysOf(entries[b].strings));
                 if (smaller <= 0) continue;
                 if (double(cmp.common) < kPairRatio * double(smaller)) continue;
+                // TES3 has no amber verdict to absorb this case (below), so a
+                // candidate that is a near-verbatim COPY - a compatibility
+                // patch or an edited duplicate of the same English plugin -
+                // must not count as a translation partner at all. Measured on
+                // the live Morrowind list: every such pair sits at ~100%
+                // identical, while a real translation measured 1.4% (USSEP-ES),
+                // so 90% cannot misfire on one.
+                if (ea.strings.tes3 && cmp.common >= 10
+                    && double(cmp.identical) >= 0.9 * double(cmp.common))
+                    continue;
                 if (cmp.common > bestShared) {
                     bestShared = cmp.common;
                     bestIdx    = b;
@@ -211,13 +238,26 @@ protected:
                 }
             }
 
-            const int translatable = ea.strings.byKey.size();
+            const int translatable = keysOf(ea.strings);
             if (bestIdx < 0) {
+                // No partner supplies alternative text. This is a pairing
+                // result with no threshold in it, so it is as trustworthy for
+                // secondary text as for core - the Varuun case.
                 noteCoverage(ea.modIdx, ea.pluginName, translatable,
                              TranslationCoverage::State::NoTranslation, {}, {});
                 continue;
             }
-            const bool partial = best.ratio() >= plugin_strings::kPartialRatio
+            // kPartialRatio/kPartialCount were measured on core types only.
+            // Proper-noun-heavy secondary text sits far above that floor while
+            // being perfectly translated, so a partial verdict there would cry
+            // wolf: a covered secondary-only plugin reports Ok until the
+            // threshold has been measured on a real translated pair.
+            // TES3 additionally reports red/Ok only: kPartialRatio/kPartialCount
+            // were calibrated on a TES4 pair (USSEP-ES), and the live Morrowind
+            // list holds no translated pair to measure a TES3 floor against.
+            // Revisit when one exists.
+            const bool partial = !secondaryOnly && !ea.strings.tes3
+                              && best.ratio() >= plugin_strings::kPartialRatio
                               && best.identical >= plugin_strings::kPartialCount;
             noteCoverage(ea.modIdx, ea.pluginName, translatable,
                          partial ? TranslationCoverage::State::Partial

@@ -1,6 +1,9 @@
 #include "conflict_direction.h"
 #include "plugin_records.h"
 #include "plugin_strings.h"
+#include "plugin_writer.h"
+#include "translation_mod.h"
+#include "translation_store.h"
 #include "load_order_merge.h"
 #include "scan_coordinator.h"
 #include "pluginparser.h"
@@ -965,6 +968,102 @@ static void testOnlyPlayerFacingTypesAreRead()
           !s.byKey.values().contains(QStringLiteral("DialogueMarkarth")));
     check("a non-text subrecord is ignored",
           !s.byKey.values().contains(QStringLiteral("weapons\\sword.nif")));
+
+    // Kept OUT of the ratio, but not thrown away: they are what tells us the
+    // mod has something to translate at all.
+    check("NPC_ and QUST land in the secondary tier", s.auxByKey.size() == 2,
+          QString::number(s.auxByKey.size()));
+    check("the NPC_ name is retained there",
+          s.auxByKey.values().contains(QStringLiteral("Addvar")));
+    check("the tiers do not overlap",
+          s.byKey.size() == 3 && s.auxByKey.size() == 2);
+}
+
+// The reported bug. Varuun DLC items in base game (Starfield 11860) carries
+// exactly one string - an NPC_ FULL - and a French translation exists for it.
+// With NPC_ merely excluded, the string set came back empty, the scan dropped
+// the plugin as having nothing to say, and the silence read as "already
+// translated". The record shape here is that plugin's, minus the stringless
+// LVLI/OTFT records.
+static void testSecondaryOnlyPluginIsNotDropped()
+{
+    std::cout << "\n[a plugin whose only text is an NPC_ name still counts]\n";
+    QTemporaryDir d;
+    QByteArray recs;
+    recs.append(makeRecord("NPC_", 0x01000001, {{"FULL", "Va'ruun Zealot"}}));
+    const auto s = plugin_strings::extract(
+        writePlugin(d, "varuun.esm", makeStringPlugin(recs)));
+
+    check("plugin is recognised", s.valid);
+    check("no core strings", s.byKey.isEmpty());
+    check("but it is not empty", !s.empty());
+    check("the string is there to be translated", s.auxByKey.size() == 1);
+    // empty() is exactly the collection filter's test: this is what stopped
+    // the plugin from being dropped before it could ever get a verdict.
+    check("secondary-only is the tier the worker switches on",
+          s.byKey.isEmpty() && !s.empty());
+
+    // A genuine mesh replacer still says nothing - the silence that must stay.
+    QByteArray meshOnly;
+    meshOnly.append(makeRecord("WEAP", 0x01000002,
+                               {{"MODL", "weapons\\sword.nif"}}));
+    const auto m = plugin_strings::extract(
+        writePlugin(d, "meshes.esp", makeStringPlugin(meshOnly)));
+    check("a plugin with no text in either tier is still empty", m.empty());
+}
+
+// Geography stays put across languages. Traverse the Ulvenwald's only text is
+// seven worldspace names and two tree names; flagging it would be crying wolf,
+// so WRLD and TREE are in neither tier.
+static void testGeographyStaysSilent()
+{
+    std::cout << "\n[worldspace and tree names are not translatable text]\n";
+    QTemporaryDir d;
+    QByteArray recs;
+    recs.append(makeRecord("WRLD", 0x01000001, {{"FULL", "Ulvenwald"}}));
+    recs.append(makeRecord("TREE", 0x01000002, {{"FULL", "Pine"}}));
+    const auto s = plugin_strings::extract(
+        writePlugin(d, "trees.esp", makeStringPlugin(recs)));
+    check("plugin is recognised", s.valid);
+    check("WRLD/TREE reach neither tier", s.empty(),
+          QString::number(s.byKey.size() + s.auxByKey.size()));
+}
+
+// The tier a comparison runs on decides which numbers come out, and secondary
+// text must never move a core ratio.
+static void testComparisonIsPerTier()
+{
+    std::cout << "\n[comparison runs on one tier at a time]\n";
+    QTemporaryDir d;
+
+    // Both plugins: core text translated, secondary text (a personal name)
+    // identical - the shape that made NPC_ look like 55.9% noise.
+    QByteArray ra, rb;
+    ra.append(makeRecord("WEAP", 0x01000001, {{"FULL", "Iron Sword"}}));
+    ra.append(makeRecord("NPC_", 0x01000002, {{"FULL", "Addvar"}}));
+    rb.append(makeRecord("WEAP", 0x01000001, {{"FULL", "Espada de hierro"}}));
+    rb.append(makeRecord("NPC_", 0x01000002, {{"FULL", "Addvar"}}));
+
+    const auto a = plugin_strings::extract(
+        writePlugin(d, "en.esp", makeStringPlugin(ra)));
+    const auto b = plugin_strings::extract(
+        writePlugin(d, "es.esp", makeStringPlugin(rb)));
+
+    const auto core = plugin_strings::compare(a, b);
+    check("core pairs the weapon", core.common == 1);
+    check("core sees it translated", core.identical == 0);
+    check("an identical NPC_ name cannot inflate the core ratio",
+          core.ratio() == 0.0);
+
+    const auto sec = plugin_strings::compare(a, b, 8,
+                                             plugin_strings::Tier::Secondary);
+    check("secondary pairs the NPC_ name", sec.common == 1);
+    check("and reports it identical", sec.identical == 1);
+    // 100% identical here is not evidence of a missing translation - it is a
+    // personal name. This is why the worker never derives a partial verdict
+    // from secondary text.
+    check("secondary ratio is exactly the figure not to be trusted",
+          sec.ratio() == 1.0);
 }
 
 // Skyrim compresses most sizeable records; missing this would silently read a
@@ -998,13 +1097,17 @@ static void testLocalizedPluginReportsNoStrings()
 
 static void testMorrowindPluginRejected()
 {
-    std::cout << "\n[a Morrowind plugin is not a TES4-family plugin]\n";
+    // Historical name: this used to assert TES3 was rejected. TES3 is now a
+    // supported family (see the t3_test suite); what this file writes here is
+    // TES3 magic over TES4-shaped framing - i.e. a corrupt TES3 plugin - so
+    // the assertion becomes robustness: recognised, walked, nothing invented.
+    std::cout << "\n[TES3 magic over TES4 framing reads as an empty TES3 plugin]\n";
     QTemporaryDir d;
     const QByteArray rec = makeRecord("WEAP", 0x01000001, {{"FULL", "Iron Sword"}});
     const auto s = plugin_strings::extract(
         writePlugin(d, "m.esp", makeStringPlugin(rec, false, "TES3")));
-    check("rejected on the magic", !s.valid);
-    check("nothing collected", s.byKey.isEmpty());
+    check("recognised as TES3 now", s.valid && s.tes3);
+    check("garbage framing yields no strings", s.empty());
 }
 
 static void testComparisonSeparatesTranslatedFromNot()
@@ -1087,6 +1190,158 @@ static void run_plugin_records()
     std::cout << "\n";
 }
 
+
+// ---- plugin_writer ----
+//
+// The scan says "Bandit Chief is still English"; the writer is what turns it
+// into "Lider Bandido". Every test here exists because getting a size wrong
+// corrupts a real mod: a subrecord's 2-byte size, the record's 4-byte
+// dataSize and every enclosing GRUP's size all have to move together.
+namespace pw_test {
+
+using pr_test::writePlugin;
+using ps_test::makeRecord;
+using ps_test::makeStringPlugin;
+
+// The property the whole design is held to. Verified separately against all 24
+// plugins on the live Skyrim AE and Starfield lists, USSEP included.
+static void testEmptyReplacementIsByteIdentical()
+{
+    std::cout << "\n[applying nothing reproduces the file exactly]\n";
+    QTemporaryDir d;
+    QByteArray recs;
+    recs.append(makeRecord("WEAP", 0x01000001, {{"FULL", "Iron Sword"}}));
+    recs.append(makeRecord("BOOK", 0x01000002, {{"FULL", "A Dance in Fire"},
+                                                {"DESC", "Chapter one."}}));
+    recs.append(makeRecord("NPC_", 0x01000003, {{"FULL", "Bandit Chief"}}));
+    recs.append(makeRecord("BOOK", 0x01000004, {{"FULL", "Compressed"}},
+                           /*compressed=*/true));
+    const QString src = writePlugin(d, "src.esp", makeStringPlugin(recs));
+    const QString dst = d.filePath("out.esp");
+
+    const auto r = plugin_writer::apply(src, dst, {});
+    check("round trip succeeds", r.ok, r.error);
+    check("nothing was applied", r.applied == 0);
+
+    QFile a(src), b(dst);
+    check("both files open", a.open(QIODevice::ReadOnly) && b.open(QIODevice::ReadOnly));
+    check("output is byte-identical to input", a.readAll() == b.readAll());
+}
+
+static void testReplacementLandsAndSizesFollow()
+{
+    std::cout << "\n[a replaced string reads back, and the file still parses]\n";
+    QTemporaryDir d;
+    QByteArray recs;
+    recs.append(makeRecord("NPC_", 0x01000001, {{"FULL", "Bandit Chief"}}));
+    recs.append(makeRecord("WEAP", 0x01000002, {{"FULL", "Iron Sword"}}));
+    const QString src = writePlugin(d, "src.esp", makeStringPlugin(recs));
+    const QString dst = d.filePath("out.esp");
+
+    plugin_writer::Replacements repl;
+    // Longer than the original AND non-ASCII: the two things that break a
+    // naive in-place patch.
+    repl.insert("NPC_:1000001:FULL:0", QString::fromUtf8("Líder Bandido"));
+
+    const auto r = plugin_writer::apply(src, dst, repl);
+    check("apply succeeds", r.ok, r.error);
+    check("one replacement landed", r.applied == 1);
+    check("nothing was missed", r.missed.isEmpty());
+
+    const auto out = plugin_strings::extract(dst);
+    check("patched plugin still parses", out.valid);
+    check("the new text is there",
+          out.auxByKey.value("NPC_:1000001:FULL:0")
+              == QString::fromUtf8("Líder Bandido"),
+          out.auxByKey.value("NPC_:1000001:FULL:0"));
+    check("the untouched record is unharmed",
+          out.byKey.value("WEAP:1000002:FULL:0") == QStringLiteral("Iron Sword"));
+    check("accented text survives as UTF-8",
+          out.auxByKey.value("NPC_:1000001:FULL:0").contains(QChar(0x00ed)));
+}
+
+// Skyrim compresses most sizeable records. A replacement inside one has to be
+// decompressed, patched and recompressed, and the record's dataSize then
+// describes the NEW compressed length - not the old one, and not the raw one.
+static void testReplacementInsideCompressedRecord()
+{
+    std::cout << "\n[a string inside a compressed record can be replaced]\n";
+    QTemporaryDir d;
+    const QByteArray rec = makeRecord("BOOK", 0x01000009,
+        {{"FULL", "The Lusty Argonian Maid"}, {"DESC", "Chapter one."}},
+        /*compressed=*/true);
+    const QString src = writePlugin(d, "src.esp", makeStringPlugin(rec));
+    const QString dst = d.filePath("out.esp");
+
+    plugin_writer::Replacements repl;
+    repl.insert("BOOK:1000009:FULL:0",
+                QString::fromUtf8("La doncella argoniana lasciva"));
+
+    const auto r = plugin_writer::apply(src, dst, repl);
+    check("apply succeeds", r.ok, r.error);
+    check("the compressed record was patched", r.applied == 1);
+
+    const auto out = plugin_strings::extract(dst);
+    check("it recompressed to something readable", out.valid);
+    check("the new text is there",
+          out.byKey.value("BOOK:1000009:FULL:0")
+              == QString::fromUtf8("La doncella argoniana lasciva"));
+    check("the sibling subrecord survived recompression",
+          out.byKey.value("BOOK:1000009:DESC:0") == QStringLiteral("Chapter one."));
+}
+
+// Writing text over a 4-byte string ID would corrupt the Strings/ lookup, so
+// the whole file is refused rather than half-written.
+static void testLocalizedPluginIsRefused()
+{
+    std::cout << "\n[a localized plugin is refused, not half-written]\n";
+    QTemporaryDir d;
+    const QByteArray rec = makeRecord("BOOK", 0x01000001, {{"FULL", "\1\0\0\0"}});
+    const QString src = writePlugin(d, "loc.esp",
+                                    makeStringPlugin(rec, /*localized=*/true));
+    const QString dst = d.filePath("out.esp");
+
+    plugin_writer::Replacements repl;
+    repl.insert("BOOK:1000001:FULL:0", QStringLiteral("Libro"));
+    const auto r = plugin_writer::apply(src, dst, repl);
+    check("refused", !r.ok);
+    check("and says why", r.error.contains(QStringLiteral("localized")), r.error);
+    check("no output file was left behind", !QFile::exists(dst));
+}
+
+static void testUnknownKeyIsReportedNotSilentlyDropped()
+{
+    std::cout << "\n[a key that matches nothing is reported]\n";
+    QTemporaryDir d;
+    const QByteArray rec = makeRecord("WEAP", 0x01000001, {{"FULL", "Iron Sword"}});
+    const QString src = writePlugin(d, "src.esp", makeStringPlugin(rec));
+    const QString dst = d.filePath("out.esp");
+
+    plugin_writer::Replacements repl;
+    repl.insert("WEAP:1000001:FULL:0", QStringLiteral("Espada de hierro"));
+    repl.insert("BOOK:9999999:FULL:0", QStringLiteral("Nunca"));
+
+    const auto r = plugin_writer::apply(src, dst, repl);
+    check("the real one still lands", r.ok && r.applied == 1, r.error);
+    check("the stale one is reported back",
+          r.missed == QStringList{QStringLiteral("BOOK:9999999:FULL:0")},
+          r.missed.join(QLatin1Char(',')));
+}
+
+static void testNonPluginIsRefused()
+{
+    std::cout << "\n[a non-plugin is refused]\n";
+    QTemporaryDir d;
+    // TES3 is a supported family now, so the refusal case needs a magic that
+    // belongs to neither family.
+    const QString src = writePlugin(d, "x.esm",
+        makeStringPlugin(makeRecord("BOOK", 1, {{"FULL", "x"}}), false, "XXXX"));
+    const auto r = plugin_writer::apply(src, d.filePath("out.esp"), {});
+    check("foreign magic is rejected", !r.ok);
+}
+
+} // namespace pw_test
+
 static void run_plugin_strings()
 {
     std::cout << "=== plugin_strings ===\n";
@@ -1096,6 +1351,430 @@ static void run_plugin_strings()
     ps_test::testMorrowindPluginRejected();
     ps_test::testComparisonSeparatesTranslatedFromNot();
     ps_test::testReplacerPluginHasNothingToTranslate();
+    ps_test::testSecondaryOnlyPluginIsNotDropped();
+    ps_test::testGeographyStaysSilent();
+    ps_test::testComparisonIsPerTier();
+    std::cout << "\n";
+}
+
+
+// ---- TES3 (Morrowind) ----
+//
+// The other family: flat records, 16-byte headers, 4-byte subrecord sizes,
+// CP1252 text, editor-id identity. Ported from what Nerevarine Scribe learned
+// and verified against real plugins (Cyr_Main.esm: INFO's text is NAME with
+// INAM identity; NPC_ display names are FNAM, their CNAM/RNAM are references).
+namespace t3_test {
+
+using pr_test::writePlugin;
+
+static void putU32(QByteArray &b, quint32 v)
+{
+    b.append(char(v & 0xff));
+    b.append(char((v >> 8) & 0xff));
+    b.append(char((v >> 16) & 0xff));
+    b.append(char((v >> 24) & 0xff));
+}
+
+static QByteArray sub(const QByteArray &type, const QByteArray &data)
+{
+    QByteArray out;
+    out.append(type);
+    putU32(out, quint32(data.size()));
+    out.append(data);
+    return out;
+}
+
+static QByteArray rec(const QByteArray &type, const QByteArray &subs)
+{
+    QByteArray out;
+    out.append(type);
+    putU32(out, quint32(subs.size()));
+    putU32(out, 0);   // header1
+    putU32(out, 0);   // flags
+    out.append(subs);
+    return out;
+}
+
+static QByteArray tes3Plugin(const QByteArray &records)
+{
+    QByteArray hedr;
+    hedr.append(QByteArray(300, '\0'));   // version/author/desc blob, unread
+    QByteArray out = rec("TES3", sub("HEDR", hedr));
+    out.append(records);
+    return out;
+}
+
+static void testExtractionTiers()
+{
+    std::cout << "\n[TES3: the right subrecords, in the right tiers]\n";
+    QTemporaryDir d;
+
+    QByteArray rs;
+    // Core: an item name, a book with name + text, dialogue, a faction with
+    // description and two rank names.
+    rs.append(rec("WEAP", sub("NAME", "iron_sword\0") + sub("FNAM", "Iron Sword\0")
+                        + sub("MODL", "w\\sword.nif\0")));
+    rs.append(rec("BOOK", sub("NAME", "bk_maid\0") + sub("FNAM", "The Lusty Argonian Maid\0")
+                        + sub("TEXT", "Chapter one.\0")));
+    rs.append(rec("INFO", sub("INAM", "1234567890\0") + sub("ONAM", "fargoth\0")
+                        + sub("NAME", "Greetings, outlander.")
+                        + sub("BNAM", "Journal \"x\" 10\0")));
+    rs.append(rec("FACT", sub("NAME", "fighters_guild\0") + sub("FNAM", "Fighters Guild\0")
+                        + sub("RNAM", "Apprentice\0") + sub("RNAM", "Journeyman\0")
+                        + sub("DESC", "Hired blades.\0")));
+    rs.append(rec("GMST", sub("NAME", "sYes\0") + sub("STRV", "Yes\0")));
+    // Secondary: NPC and creature display names. CNAM/RNAM here are class and
+    // race REFERENCES and must never surface.
+    rs.append(rec("NPC_", sub("NAME", "guard_hlaalu\0") + sub("FNAM", "Guard\0")
+                        + sub("RNAM", "Dark Elf\0") + sub("CNAM", "Guard\0")));
+    // Neither: DIAL topic and CELL name are identities; a script's text is a
+    // desync hazard.
+    rs.append(rec("DIAL", sub("NAME", "latest rumors\0")));
+    rs.append(rec("CELL", sub("NAME", "Balmora, Guild of Mages\0")));
+    rs.append(rec("SCPT", sub("SCHD", QByteArray(52, '\0')) + sub("SCTX", "Begin foo\0")));
+
+    const auto s = plugin_strings::extract(
+        writePlugin(d, "a.esp", tes3Plugin(rs)));
+    check("recognised as TES3", s.valid && s.tes3);
+    // WEAP FNAM, BOOK FNAM+TEXT, INFO NAME, FACT FNAM+RNAMx2+DESC, GMST STRV.
+    check("core count", s.byKey.size() == 9, QString::number(s.byKey.size()));
+    check("item name in core",
+          s.byKey.value("WEAP:iron_sword:FNAM:0") == "Iron Sword");
+    check("book text in core",
+          s.byKey.value("BOOK:bk_maid:TEXT:0") == "Chapter one.");
+    check("dialogue text keyed by INAM, not by its own content",
+          s.byKey.value("INFO:1234567890:NAME:0") == "Greetings, outlander.");
+    check("faction ranks get indices",
+          s.byKey.value("FACT:fighters_guild:RNAM:0") == "Apprentice"
+              && s.byKey.value("FACT:fighters_guild:RNAM:1") == "Journeyman");
+    check("GMST string in core", s.byKey.value("GMST:sYes:STRV:0") == "Yes");
+    check("NPC display name in secondary",
+          s.auxByKey.value("NPC_:guard_hlaalu:FNAM:0") == "Guard");
+    check("NPC race/class references never surface",
+          !s.byKey.values().contains("Dark Elf")
+              && !s.auxByKey.values().contains("Dark Elf"));
+    check("DIAL topic is untouchable",
+          !s.byKey.values().contains("latest rumors")
+              && !s.auxByKey.values().contains("latest rumors"));
+    check("CELL name is untouchable",
+          !s.byKey.values().contains("Balmora, Guild of Mages")
+              && !s.auxByKey.values().contains("Balmora, Guild of Mages"));
+    check("script text is untouchable",
+          !s.byKey.values().contains("Begin foo")
+              && !s.auxByKey.values().contains("Begin foo"));
+    check("INFO actor reference (ONAM) never surfaces",
+          !s.byKey.values().contains("fargoth"));
+}
+
+static void testCp1252ReadsAccents()
+{
+    std::cout << "\n[TES3 text is CP1252, not UTF-8]\n";
+    QTemporaryDir d;
+    // "Cantina de Fenicio" with an accented o: byte 0xF3, invalid as UTF-8.
+    QByteArray name("Cantina de Fenicio\0", 19);
+    QByteArray accented;
+    accented.append("Poci");
+    accented.append(char(0xF3));
+    accented.append("n de salud");
+    accented.append('\0');
+    const auto s = plugin_strings::extract(writePlugin(d, "es.esp",
+        tes3Plugin(rec("ALCH", sub("NAME", "p_health\0") + sub("FNAM", accented)))));
+    check("plugin read", s.valid && s.tes3);
+    check("0xF3 decodes as an accented o",
+          s.byKey.value("ALCH:p_health:FNAM:0") == QString::fromUtf8("Poción de salud"),
+          s.byKey.value("ALCH:p_health:FNAM:0"));
+}
+
+static void testWriterRoundTripAndPatch()
+{
+    std::cout << "\n[TES3 writer: byte-identical round trip, CP1252 patch]\n";
+    QTemporaryDir d;
+    QByteArray rs;
+    rs.append(rec("NPC_", sub("NAME", "bandit1\0") + sub("FNAM", "Bandit Chief\0")));
+    rs.append(rec("WEAP", sub("NAME", "iron_sword\0") + sub("FNAM", "Iron Sword\0")));
+    const QString src = writePlugin(d, "src.esp", tes3Plugin(rs));
+    const QString dst = d.filePath("out.esp");
+
+    // The property everything is held to, on this family too.
+    const auto rt = plugin_writer::apply(src, dst, {});
+    check("empty apply succeeds", rt.ok, rt.error);
+    QFile a(src), b(dst);
+    check("files open", a.open(QIODevice::ReadOnly) && b.open(QIODevice::ReadOnly));
+    check("round trip is byte-identical", a.readAll() == b.readAll());
+
+    // The user's own example, accents included.
+    plugin_writer::Replacements repl;
+    repl.insert("NPC_:bandit1:FNAM:0", QString::fromUtf8("Líder Bandido"));
+    const auto w = plugin_writer::apply(src, dst, repl);
+    check("patch succeeds", w.ok && w.applied == 1, w.error);
+
+    const auto out = plugin_strings::extract(dst);
+    check("patched plugin still parses", out.valid && out.tes3);
+    check("the translation reads back",
+          out.auxByKey.value("NPC_:bandit1:FNAM:0")
+              == QString::fromUtf8("Líder Bandido"),
+          out.auxByKey.value("NPC_:bandit1:FNAM:0"));
+    check("the untouched record is unharmed",
+          out.byKey.value("WEAP:iron_sword:FNAM:0") == "Iron Sword");
+
+    // On disk the accent must be ONE CP1252 byte (0xED), not two UTF-8 bytes.
+    QFile f(dst);
+    check("output opens", f.open(QIODevice::ReadOnly));
+    const QByteArray bytes = f.readAll();
+    QByteArray cp1252("L");
+    cp1252.append(char(0xED));
+    cp1252.append("der Bandido");
+    check("accent written as a single CP1252 byte", bytes.contains(cp1252));
+    check("no UTF-8 sequence leaked in", !bytes.contains(QByteArray("L\xC3\xAD")));
+}
+
+static void testWriterCannotTouchIdentity()
+{
+    std::cout << "\n[TES3 identities are unwritable by construction]\n";
+    QTemporaryDir d;
+    const QString src = writePlugin(d, "src.esp", tes3Plugin(
+        rec("DIAL", sub("NAME", "latest rumors\0"))));
+    const QString dst = d.filePath("out.esp");
+
+    // Even a hand-forged key aimed at the topic name must miss: the shared
+    // admission table says DIAL NAME is not text, so no key ever matches it.
+    plugin_writer::Replacements repl;
+    repl.insert("DIAL:latest rumors:NAME:0", QStringLiteral("ultimos rumores"));
+    const auto w = plugin_writer::apply(src, dst, repl);
+    check("apply succeeds", w.ok, w.error);
+    check("nothing landed", w.applied == 0);
+    check("the forged key is reported missed", w.missed.size() == 1);
+    QFile a(src), b(dst);
+    check("files open", a.open(QIODevice::ReadOnly) && b.open(QIODevice::ReadOnly));
+    check("file is untouched", a.readAll() == b.readAll());
+}
+
+} // namespace t3_test
+
+
+// ---- translation_store + translation_mod ----
+namespace tm_test {
+
+using pr_test::writePlugin;
+using ps_test::makeRecord;
+using ps_test::makeStringPlugin;
+
+// "Bandit Chief" is in dozens of mods. The memory is what stops the user
+// retyping it in every one of them.
+static void testMemoryRemembersAcrossMods()
+{
+    std::cout << "\n[a translation typed once is offered everywhere]\n";
+    QTemporaryDir d;
+    const QString path = d.filePath("tm.json");
+
+    translation_store::Memory m;
+    check("a missing file is an empty memory, not an error", m.load(path));
+    check("and it is empty", m.empty());
+
+    m.remember(QStringLiteral("Bandit Chief"), QString::fromUtf8("Líder Bandido"));
+    check("saved", m.save(path));
+
+    translation_store::Memory again;
+    check("reloaded", again.load(path));
+    check("the translation survived the round trip",
+          again.lookup(QStringLiteral("Bandit Chief"))
+              == QString::fromUtf8("Líder Bandido"));
+
+    // The same words in another mod arrive spelled differently.
+    check("lookup ignores case",
+          again.lookup(QStringLiteral("BANDIT CHIEF"))
+              == QString::fromUtf8("Líder Bandido"));
+    check("lookup ignores surrounding whitespace",
+          again.lookup(QStringLiteral("  Bandit Chief "))
+              == QString::fromUtf8("Líder Bandido"));
+
+    // Deliberately exact otherwise: a near-miss must not answer, because a
+    // wrong translation written into a plugin is worse than an empty field.
+    check("a longer string is NOT answered by a prefix match",
+          again.lookup(QStringLiteral("Bandit Chief's Key")).isEmpty());
+    check("an unknown string has no answer",
+          again.lookup(QStringLiteral("Iron Sword")).isEmpty());
+    check("empty in, empty out", again.lookup(QString()).isEmpty());
+}
+
+static void testClearingAnEntryForgetsIt()
+{
+    std::cout << "\n[clearing a field un-remembers it]\n";
+    translation_store::Memory m;
+    m.remember(QStringLiteral("Guard"), QStringLiteral("Guardia"));
+    check("stored", m.size() == 1);
+    m.remember(QStringLiteral("Guard"), QStringLiteral("   "));
+    check("a blank translation removes the entry rather than storing a blank",
+          m.empty());
+}
+
+// The output has to be a mod in its own right: same plugin filename as the
+// original so it wins the file conflict, in its own folder so unticking it
+// reverts and the download is never touched.
+static void testTranslationModShape()
+{
+    std::cout << "\n[the translation is built as a separate mod]\n";
+    QTemporaryDir d;
+    const QString srcMod = d.filePath("Varuun");
+    const QString modsDir = d.filePath("mods");
+    check("dirs created", QDir().mkpath(srcMod) && QDir().mkpath(modsDir));
+
+    QByteArray recs;
+    recs.append(makeRecord("NPC_", 0x01000001, {{"FULL", "Bandit Chief"}}));
+    const QString plugin = srcMod + "/Varuun.esm";
+    QFile f(plugin);
+    check("source plugin written", f.open(QIODevice::WriteOnly));
+    f.write(makeStringPlugin(recs));
+    f.close();
+
+    translation_mod::ByPlugin repl;
+    repl[QStringLiteral("Varuun.esm")].insert(
+        QStringLiteral("NPC_:1000001:FULL:0"), QString::fromUtf8("Líder Bandido"));
+
+    const auto r = translation_mod::build(srcMod, QStringLiteral("Varuun"),
+                                          modsDir, QStringLiteral("spanish"), repl);
+    check("build succeeds", r.ok, r.error);
+    check("named for the source mod and language",
+          r.modName == QStringLiteral("Varuun - Spanish (Nerevarine)"), r.modName);
+    check("one plugin, one string", r.plugins == 1 && r.strings == 1);
+
+    // Same filename is the entire mechanism: later in the load order wins the
+    // file, exactly as a Nexus translation does.
+    const QString out = r.modPath + "/Varuun.esm";
+    check("the plugin keeps the original's filename", QFile::exists(out));
+    check("the original was not modified",
+          plugin_strings::extract(plugin).auxByKey.value(
+              QStringLiteral("NPC_:1000001:FULL:0")) == QStringLiteral("Bandit Chief"));
+    check("the copy carries the translation",
+          plugin_strings::extract(out).auxByKey.value(
+              QStringLiteral("NPC_:1000001:FULL:0")) == QString::fromUtf8("Líder Bandido"));
+
+    // Re-running the editor must update in place, not pile up "(2)" folders.
+    translation_mod::ByPlugin again;
+    again[QStringLiteral("Varuun.esm")].insert(
+        QStringLiteral("NPC_:1000001:FULL:0"), QString::fromUtf8("Jefe Bandido"));
+    const auto r2 = translation_mod::build(srcMod, QStringLiteral("Varuun"),
+                                           modsDir, QStringLiteral("spanish"), again);
+    check("rebuilding reuses the same folder", r2.ok && r2.modPath == r.modPath);
+    check("and overwrites the translation",
+          plugin_strings::extract(out).auxByKey.value(
+              QStringLiteral("NPC_:1000001:FULL:0")) == QString::fromUtf8("Jefe Bandido"));
+    check("only one translation folder exists",
+          QDir(modsDir).entryList(QDir::Dirs | QDir::NoDotAndDotDot).size() == 1);
+}
+
+// A mod update can renumber a FormID. Writing the file anyway but saying
+// nothing would leave the string silently English.
+static void testStaleKeyIsReported()
+{
+    std::cout << "\n[a key the plugin no longer has is reported]\n";
+    QTemporaryDir d;
+    const QString srcMod = d.filePath("M"), modsDir = d.filePath("mods");
+    QDir().mkpath(srcMod); QDir().mkpath(modsDir);
+    QFile f(srcMod + "/M.esp");
+    (void)f.open(QIODevice::WriteOnly);
+    f.write(makeStringPlugin(makeRecord("WEAP", 0x01000001, {{"FULL", "Iron Sword"}})));
+    f.close();
+
+    translation_mod::ByPlugin repl;
+    repl[QStringLiteral("M.esp")].insert(QStringLiteral("WEAP:1000001:FULL:0"),
+                                         QStringLiteral("Espada"));
+    repl[QStringLiteral("M.esp")].insert(QStringLiteral("WEAP:9999999:FULL:0"),
+                                         QStringLiteral("Fantasma"));
+    const auto r = translation_mod::build(srcMod, QStringLiteral("M"), modsDir,
+                                          QStringLiteral("spanish"), repl);
+    check("the real string still lands", r.ok && r.strings == 1, r.error);
+    check("the stale one is warned about, not swallowed",
+          r.warnings.size() == 1
+              && r.warnings.first().contains(QStringLiteral("no longer exists")),
+          r.warnings.join(QLatin1Char('|')));
+}
+
+static void testNothingToTranslateLeavesNoFolder()
+{
+    std::cout << "\n[a failed build leaves no empty folder behind]\n";
+    QTemporaryDir d;
+    const QString srcMod = d.filePath("M"), modsDir = d.filePath("mods");
+    QDir().mkpath(srcMod); QDir().mkpath(modsDir);
+
+    translation_mod::ByPlugin repl;
+    repl[QStringLiteral("gone.esp")].insert(QStringLiteral("WEAP:1:FULL:0"),
+                                            QStringLiteral("x"));
+    const auto r = translation_mod::build(srcMod, QStringLiteral("M"), modsDir,
+                                          QStringLiteral("spanish"), repl);
+    check("build fails when no plugin could be written", !r.ok);
+    check("and the mods dir is left clean",
+          QDir(modsDir).entryList(QDir::Dirs | QDir::NoDotAndDotDot).isEmpty());
+}
+
+// Scribe's database format, reused so years of its translations carry over.
+static void testScribeDbImport()
+{
+    std::cout << "\n[a Nerevarine Scribe database imports into the memory]\n";
+    QTemporaryDir d;
+    const QString db = d.filePath("scribe.ini");
+    {
+        QFile f(db);
+        (void)f.open(QIODevice::WriteOnly);
+        f.write("# Nerevarine Scribe Translation Database\n"
+                "# Format: source=text\n\n"
+                "Bandit Chief=L\xc3\xad" "der Bandido\n"
+                "Guard=Guardia\n"
+                "A = B=Un = Dos\n"          // '=' in the value survives
+                "Empty One=\n"              // blank translation skipped
+                "=orphan\n");               // no source skipped
+    }
+
+    translation_store::Memory m;
+    m.remember(QStringLiteral("Guard"), QStringLiteral("Vigilante"));  // refined here
+
+    const auto r = m.importScribeDb(db);
+    check("three usable entries read", r.read == 3, QString::number(r.read));
+    check("two added (the refined one kept)", r.added == 2, QString::number(r.added));
+    check("imported accents survive",
+          m.lookup(QStringLiteral("Bandit Chief")) == QString::fromUtf8("Líder Bandido"));
+    check("the memory's own entry wins",
+          m.lookup(QStringLiteral("Guard")) == QStringLiteral("Vigilante"));
+    check("'=' in the translation is kept",
+          m.lookup(QStringLiteral("A")) == QStringLiteral("B=Un = Dos"));
+    check("a missing file reports failure",
+          m.importScribeDb(d.filePath("nope.ini")).read == -1);
+}
+
+} // namespace tm_test
+
+static void run_plugin_writer()
+{
+    std::cout << "=== plugin_writer ===\n";
+    pw_test::testEmptyReplacementIsByteIdentical();
+    pw_test::testReplacementLandsAndSizesFollow();
+    pw_test::testReplacementInsideCompressedRecord();
+    pw_test::testLocalizedPluginIsRefused();
+    pw_test::testUnknownKeyIsReportedNotSilentlyDropped();
+    pw_test::testNonPluginIsRefused();
+    std::cout << "\n";
+}
+
+static void run_tes3()
+{
+    std::cout << "=== TES3 (Morrowind) ===\n";
+    t3_test::testExtractionTiers();
+    t3_test::testCp1252ReadsAccents();
+    t3_test::testWriterRoundTripAndPatch();
+    t3_test::testWriterCannotTouchIdentity();
+    std::cout << "\n";
+}
+
+static void run_translation()
+{
+    std::cout << "=== translation store + mod ===\n";
+    tm_test::testMemoryRemembersAcrossMods();
+    tm_test::testClearingAnEntryForgetsIt();
+    tm_test::testTranslationModShape();
+    tm_test::testStaleKeyIsReported();
+    tm_test::testNothingToTranslateLeavesNoFolder();
+    tm_test::testScribeDbImport();
     std::cout << "\n";
 }
 
@@ -1108,6 +1787,9 @@ int main(int argc, char **argv)
     run_conflict_direction();
     run_plugin_records();
     run_plugin_strings();
+    run_plugin_writer();
+    run_tes3();
+    run_translation();
 
     std::cout << "\n" << s_passed << " passed, " << s_failed << " failed\n";
     return s_failed == 0 ? 0 : 1;

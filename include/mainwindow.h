@@ -413,6 +413,12 @@ private:
     // Those paths take their game from a row that is already in this profile,
     // so there is nothing for them to mismatch against anyway.
     bool confirmGameForDownload(const QString &game);
+    // "Translate mod...": collects every player-visible string the mod's
+    // plugins carry, opens the editor, and turns what the user types into a
+    // separate translation mod inserted directly below this one. The original
+    // mod folder is never written to - see translation_mod.h for why that
+    // shape was chosen over patching the plugin in place.
+    void onTranslateMod(QListWidgetItem *item);
     void checkModDependencies(const QString &game, int modId, QListWidgetItem *item);
     // Fetch the Nexus file list for (game, modId). autoPickMain=true skips the
     // per-mod picker and takes the first MAIN/UPDATE file; used by batch update,

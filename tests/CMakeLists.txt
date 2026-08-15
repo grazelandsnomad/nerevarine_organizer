@@ -28,6 +28,7 @@ add_executable(test_fomod
     ${CMAKE_SOURCE_DIR}/src/fomod_path.cpp
     ${CMAKE_SOURCE_DIR}/src/fomod_copy.cpp
     ${CMAKE_SOURCE_DIR}/src/fomod_hint.cpp
+    ${CMAKE_SOURCE_DIR}/src/nxmurl.cpp
     ${CMAKE_SOURCE_DIR}/src/fomod_scripts.cpp
     ${CMAKE_SOURCE_DIR}/src/fomod_install.cpp
     ${CMAKE_SOURCE_DIR}/src/bain.cpp
@@ -116,6 +117,10 @@ add_executable(test_load_order
     ${CMAKE_SOURCE_DIR}/src/conflict_direction.cpp
     ${CMAKE_SOURCE_DIR}/src/plugin_records.cpp
     ${CMAKE_SOURCE_DIR}/src/plugin_strings.cpp
+    ${CMAKE_SOURCE_DIR}/src/plugin_writer.cpp
+    ${CMAKE_SOURCE_DIR}/src/tes3_encoding.cpp
+    ${CMAKE_SOURCE_DIR}/src/translation_store.cpp
+    ${CMAKE_SOURCE_DIR}/src/translation_mod.cpp
     ${CMAKE_SOURCE_DIR}/src/pluginparser.cpp
     ${CMAKE_SOURCE_DIR}/include/scan_coordinator.h
 )

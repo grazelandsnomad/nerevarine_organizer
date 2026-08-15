@@ -156,6 +156,11 @@ set(SOURCES
     src/conflict_scan.cpp
     src/conflict_direction.cpp
     src/game_match.cpp
+    src/plugin_writer.cpp
+    src/tes3_encoding.cpp
+    src/translation_store.cpp
+    src/translation_mod.cpp
+    src/translate_dialog.cpp
     src/conflict_inspector.cpp
     src/deployment_report.cpp
     src/report_dialog.cpp
@@ -188,6 +193,11 @@ set(SOURCES
     include/game_match.h
     include/plugin_records.h
     include/plugin_strings.h
+    include/plugin_writer.h
+    include/tes3_encoding.h
+    include/translation_store.h
+    include/translation_mod.h
+    include/translate_dialog.h
     include/scan_overlay.h
     include/variant_picker.h
     include/log_triage_dialog.h
