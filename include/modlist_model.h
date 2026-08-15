@@ -64,6 +64,12 @@ public:
     QStringList modDisplayNames() const;
     QStringList installedModDisplayNames() const;
 
+    // Nexus mod-page URLs of every INSTALLED mod, for "does the user have mod
+    // X?" checks that can match by id instead of by name. Rows with no stored
+    // URL (hand-added folders, MO2 imports without one) are skipped, so an
+    // absent id means "not found by URL", not "definitely not installed".
+    QStringList installedNexusUrls() const;
+
     // Counts for the status bar. Mods only (separators excluded); `active` is
     // checked mods, `total` is all mods.
     struct ModCounts { int total = 0; int active = 0; };

@@ -18,7 +18,11 @@
 // about what the user would like is about this one. No phrasing match means no
 // verdict - silence rather than a guess.
 
+#include "nxmurl.h"
+
+#include <QList>
 #include <QString>
+#include <QStringList>
 
 namespace fomod {
 
@@ -26,6 +30,43 @@ namespace fomod {
 // than about an option of the mod being installed. Case- and
 // whitespace-insensitive; the two strings are matched as one question.
 bool asksAboutAnotherMod(const QString &stepName, const QString &groupName);
+
+// -- Compatibility options for mods the user does not have ------------
+//
+// Plenty of installers offer "compatibility" options whose whole purpose is
+// another mod: An Addendum to Tamrielic Lore Data ships Ashfall-compatible
+// meshes, and pre-ticks a Glass Glowset option too. Tick those without the
+// target mod and you install meshes nothing will ever load, on top of files
+// that other mods may want - a silent mess.
+//
+// The wording heuristic above cannot help here: the group is called "Ashfall"
+// or "Compatibility Options", and a name that matches nothing in the modlist
+// is no evidence at all - "Normal Maps" matches nothing either, and is not a
+// mod. What IS evidence is a citation. These installers routinely link the
+// mod they are for, right in the option description:
+//
+//   "Installs Ashfall (https://www.nexusmods.com/morrowind/mods/49057)
+//    compatible meshes. Use the HD version for the HD meshes."
+//
+// A Nexus mod-page URL names one specific mod page and nothing else, so it
+// can be matched against the modlist by id - no name matching, no variant
+// expansion, no false hits. Options that cite nothing get no verdict, which
+// is what keeps "Normal Maps" and every ordinary option quiet.
+
+// Every Nexus mod page cited in a block of text (an option description), in
+// order of appearance, deduplicated by (game, modId). Empty for the common
+// case of a description that cites nothing - and an empty result must be read
+// as "no evidence", never as "no dependency".
+QList<NexusModRef> citedMods(const QString &text);
+
+// The best name to call a missing mod, given the names of the options that
+// cite it and the name of the group holding them. Installers split the same
+// mod across options in two shapes, and one rule covers both: the longest
+// common prefix of the option names ("Ashfall" + "Ashfall (HD)" -> "Ashfall"),
+// falling back to the group name when the options share nothing worth showing
+// ("Core" + "HD" under a group called "Ashfall"). Empty when neither yields
+// anything usable, and the caller should then word the warning without a name.
+QString missingModLabel(const QStringList &optionNames, const QString &groupName);
 
 // -- Skyrim runtime pairs ---------------------------------------------
 //

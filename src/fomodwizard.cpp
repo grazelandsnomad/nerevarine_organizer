@@ -71,18 +71,33 @@ bool FomodWizard::hasFomod(const QString &archiveRoot)
     return !findFomodRoot(archiveRoot).isEmpty();
 }
 
+// Installed Nexus URLs -> "game/modId" keys, the form fomod::citedMods
+// results are looked up in. Unparseable URLs are dropped rather than stored
+// raw: a key nothing can ever match is worse than no key.
+static QSet<QString> nexusKeys(const QStringList &urls)
+{
+    QSet<QString> keys;
+    for (const QString &u : urls) {
+        const auto ref = parseNexusModUrl(u);
+        if (ref) keys.insert(ref->game.toLower() + u'/' + QString::number(ref->modId));
+    }
+    return keys;
+}
+
 std::expected<QString, QString>
 FomodWizard::run(const QString &archiveRoot,
                  const QString &priorChoices,
                  QString *outChoices,
                  QWidget *parent,
                  const QStringList &installedModNames,
-                 const QString &gameId)
+                 const QString &gameId,
+                 const QStringList &installedNexusUrls)
 {
     FomodWizard dlg(archiveRoot, parent);
     dlg.m_priorChoices      = priorChoices;
     dlg.m_installedModNames = installedModNames;
     dlg.m_gameId            = gameId;
+    dlg.m_installedNexusKeys = nexusKeys(installedNexusUrls);
 
     if (!dlg.parse()) {
         // Bad XML: offer a raw install
@@ -118,13 +133,15 @@ void FomodWizard::showAsync(
     QWidget *parent,
     const QStringList &installedModNames,
     std::function<void(const QString &, const QString &)> onDone,
-    const QString &gameId)
+    const QString &gameId,
+    const QStringList &installedNexusUrls)
 {
     auto *dlg = new FomodWizard(archiveRoot, parent);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->m_priorChoices      = priorChoices;
     dlg->m_installedModNames = installedModNames;
     dlg->m_gameId            = gameId;
+    dlg->m_installedNexusKeys = nexusKeys(installedNexusUrls);
 
     if (!dlg->parse()) {
         auto ans = QMessageBox::warning(
@@ -760,6 +777,75 @@ void FomodWizard::buildUi()
                     btn->setText(btn->text() +
                         QStringLiteral(" \u2705 Patch hub - default ON. "
                                        "Untick if you don't want this patch."));
+                }
+            }
+        }
+
+        // Pass E: compatibility options for mods the user does not have.
+        // An Addendum to Tamrielic Lore Data offers Ashfall-compatible meshes
+        // and pre-ticks a Glass Glowset option; with neither mod installed,
+        // both quietly deliver meshes nothing will load. The option
+        // descriptions link the mod they are for, and a Nexus mod-page URL
+        // names exactly one page, so this matches by id - no name guessing,
+        // and options that cite nothing stay silent. See fomod_hint.h.
+        //
+        // Warn only. The selection is left exactly as the author set it: this
+        // pass reads a citation, not a dependency declaration, and an option
+        // may still be wanted (the target mod installed outside the manager,
+        // or arriving later). Saying so beats deciding for the user.
+        for (int si = 0; si < m_steps.size(); ++si) {
+            const FomodStep &step = m_steps[si];
+            for (int gi = 0; gi < step.groups.size(); ++gi) {
+                const FomodGroup &group = step.groups[gi];
+
+                // Collect, per cited mod page, the options citing it - the
+                // option names are what name the mod when the group does not.
+                QHash<QString, QStringList> citers;
+                QList<QList<NexusModRef>>   perPlugin;
+                perPlugin.reserve(group.plugins.size());
+                for (const FomodPlugin &plugin : group.plugins) {
+                    const auto cited = fomod::citedMods(plugin.description);
+                    perPlugin.append(cited);
+                    for (const NexusModRef &ref : cited) {
+                        const QString key = ref.game.toLower() + u'/'
+                                          + QString::number(ref.modId);
+                        citers[key] << plugin.name;
+                    }
+                }
+
+                for (int pi = 0; pi < group.plugins.size() &&
+                                 pi < m_buttons[si][gi].size(); ++pi) {
+                    const QList<NexusModRef> &cited = perPlugin[pi];
+                    if (cited.isEmpty()) continue;   // no citation, no verdict
+
+                    // An option citing several mods is only a problem when it
+                    // has none of them; one present mod is reason enough for
+                    // the option to exist.
+                    QStringList missing;
+                    for (const NexusModRef &ref : cited) {
+                        const QString key = ref.game.toLower() + u'/'
+                                          + QString::number(ref.modId);
+                        if (m_installedNexusKeys.contains(key)) {
+                            missing.clear();
+                            break;
+                        }
+                        missing << fomod::missingModLabel(citers.value(key),
+                                                          group.name);
+                    }
+                    if (missing.isEmpty()) continue;
+
+                    missing.removeDuplicates();
+                    missing.removeAll(QString());
+
+                    QAbstractButton *btn = m_buttons[si][gi][pi];
+                    if (!btn) continue;
+                    btn->setText(btn->text() + (missing.isEmpty()
+                        ? QStringLiteral(" ⚠️ Warning: this option is "
+                                         "for another mod that is not installed "
+                                         "in this modlist.")
+                        : QStringLiteral(" ⚠️ Warning: %1 is not "
+                                         "installed in this modlist.")
+                              .arg(missing.join(QStringLiteral(", ")))));
                 }
             }
         }

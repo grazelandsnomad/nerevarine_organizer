@@ -931,6 +931,89 @@ static void run_fomod_hint()
     check("other games disable the pass",
           fomod::runtimePreferenceForGame("morrowind") == RT::None
           && fomod::runtimePreferenceForGame("skyrim") == RT::None);
+
+    std::cout << "\n[cited mods: the evidence for a missing-mod warning]\n";
+    {
+        // Verbatim from An Addendum to Tamrielic Lore Data's ModuleConfig.xml -
+        // the install that prompted this, where neither cited mod was present.
+        const auto ash = fomod::citedMods(
+            "Installs Ashfall (https://www.nexusmods.com/morrowind/mods/49057) "
+            "compatible meshes. Use the HD version for the HD meshes.");
+        check("finds the cited mod page", ash.size() == 1);
+        check("closing paren is not swallowed into the id",
+              !ash.isEmpty() && ash[0].modId == 49057);
+        check("carries the game slug",
+              !ash.isEmpty() && ash[0].game == QLatin1String("morrowind"));
+
+        // The option in the same group that cites a different mod.
+        const auto glow = fomod::citedMods(
+            "Installs Glass Glowset (https://www.nexusmods.com/morrowind/mods/42762) "
+            "Compatible Meshes (courtesy of 3deadgods).");
+        check("a second option cites its own mod",
+              glow.size() == 1 && glow[0].modId == 42762);
+
+        // The quiet case, and the whole reason this is safe: an ordinary
+        // option cites nothing, so it can never draw a warning. "Normal Maps"
+        // matches no mod in the modlist either, and must stay silent.
+        check("ordinary option cites nothing", fomod::citedMods(
+            "1K Normals for new textures. For OpenMW support "
+            "(still requires Materials set for OpenMW)").isEmpty());
+        check("empty description cites nothing",
+              fomod::citedMods(QString()).isEmpty());
+        check("prose naming a mod without linking it cites nothing",
+              fomod::citedMods("Patch for Ashfall users.").isEmpty());
+
+        // URL shapes seen in the wild.
+        check("bare host with no scheme still parses",
+              fomod::citedMods("see www.nexusmods.com/morrowind/mods/49057")
+                  .size() == 1);
+        check("trailing sentence period is stripped",
+              fomod::citedMods("https://www.nexusmods.com/morrowind/mods/123.")
+                  .size() == 1);
+        check("a file link is still the mod page",
+              fomod::citedMods("https://www.nexusmods.com/skyrim/mods/3863?tab=files")
+                  .size() == 1);
+        // A page that is not a mod page carries no mod id.
+        check("non-mod nexus link is not a citation",
+              fomod::citedMods("https://www.nexusmods.com/about/terms").isEmpty());
+
+        // Two mods cited by one option: both are reported, deduplicated.
+        const auto two = fomod::citedMods(
+            "Needs https://www.nexusmods.com/morrowind/mods/49057 and "
+            "https://www.nexusmods.com/morrowind/mods/42762 "
+            "(again https://www.nexusmods.com/morrowind/mods/49057).");
+        check("multiple citations are all reported", two.size() == 2);
+    }
+
+    std::cout << "\n[naming the missing mod]\n";
+    {
+        // Shape one: the options are named after the mod, the group is not.
+        check("common prefix of option names names the mod",
+              fomod::missingModLabel({"Ashfall", "Ashfall (HD)"},
+                                     "Compatibility Options")
+              == QLatin1String("Ashfall"));
+        check("a lone option name is used as-is",
+              fomod::missingModLabel({"Glass Glowset"}, "Compatibility Options")
+              == QLatin1String("Glass Glowset"));
+
+        // Shape two: the options are bare variants, so the group carries the
+        // name. This is the shape in the screenshot that prompted the change.
+        check("variant options fall back to the group name",
+              fomod::missingModLabel({"Core", "HD"}, "Ashfall")
+              == QLatin1String("Ashfall"));
+        check("a two-letter shared prefix is not a mod name",
+              fomod::missingModLabel({"HD", "HQ"}, "Ashfall")
+              == QLatin1String("Ashfall"));
+
+        // Separator debris must not survive the truncation.
+        check("trailing separators are trimmed off the prefix",
+              fomod::missingModLabel({"OAAB_Data - Core", "OAAB_Data - Extra"},
+                                     "Group")
+              == QLatin1String("OAAB_Data"));
+        check("no usable name anywhere yields empty",
+              fomod::missingModLabel({"HD", "HQ"}, QString()).isEmpty());
+    }
+
     std::cout << "\n";
 }
 
@@ -938,12 +1021,18 @@ static void run_fomod_hint()
 struct FomodWizardTestHook {
     static FomodWizard *build(const QList<FomodStep> &steps,
                               const QString &prior = {},
-                              const QStringList &installed = {})
+                              const QStringList &installed = {},
+                              const QStringList &installedUrls = {})
     {
         auto *w = new FomodWizard(QStringLiteral("/tmp/nrv_fomod_ui_test"));
         w->m_steps            = steps;
         w->m_priorChoices     = prior;
         w->m_installedModNames = installed;
+        for (const QString &u : installedUrls) {
+            const auto ref = parseNexusModUrl(u);
+            if (ref) w->m_installedNexusKeys.insert(
+                ref->game.toLower() + u'/' + QString::number(ref->modId));
+        }
         w->buildUi();
         return w;
     }
@@ -1104,12 +1193,122 @@ static void wizardui_testModlistVerdict()
     }
 }
 
+// The install that prompted this: An Addendum to Tamrielic Lore Data offers
+// Ashfall-compatible meshes and pre-ticks a Glass Glowset option, with neither
+// mod in the 412-mod list. Descriptions and mod ids are verbatim from its
+// ModuleConfig.xml.
+static void wizardui_testMissingCitedMod()
+{
+    const QString kAshfall =
+        "Installs Ashfall (https://www.nexusmods.com/morrowind/mods/49057) "
+        "compatible meshes. Use the HD version for the HD meshes.";
+    const QString kGlowset =
+        "Installs Glass Glowset (https://www.nexusmods.com/morrowind/mods/42762) "
+        "Compatible Meshes (courtesy of 3deadgods).";
+    const QString kNormals =
+        "1K Normals for new textures. For OpenMW support "
+        "(still requires Materials set for OpenMW)";
+
+    auto withDesc = [](const QString &name, const QString &desc) {
+        FomodPlugin p = wizardui_mkPlugin(name);
+        p.description = desc;
+        return p;
+    };
+
+    std::cout << "\n[compatibility option for a mod that is not installed]\n";
+    {
+        FomodGroup g = wizardui_mkGroup("SelectAny", {
+            withDesc("Ashfall",       kAshfall),
+            withDesc("Ashfall (HD)",  kAshfall),
+            withDesc("Glass Glowset", kGlowset),
+        });
+        g.name = QStringLiteral("Compatibility Options");
+        FomodStep st;
+        st.name   = QStringLiteral("Compatibility Options");
+        st.groups = { g };
+        auto *w = FomodWizardTestHook::build({ st });
+
+        const QString ash = FomodWizardTestHook::btn(w, 0, 0, 0)->text();
+        check("warns on the option", ash.contains(QString::fromUtf8("⚠")), ash);
+        check("names the missing mod", ash.contains("Ashfall is not installed"), ash);
+        check("the HD variant warns too",
+              FomodWizardTestHook::btn(w, 0, 0, 1)->text().contains("Ashfall is not installed"));
+        check("each option names its own mod",
+              FomodWizardTestHook::btn(w, 0, 0, 2)->text()
+                  .contains("Glass Glowset is not installed"));
+        // Warn, don't decide: the author's defaults are left alone.
+        check("selection is not changed",
+              !FomodWizardTestHook::btn(w, 0, 0, 0)->isChecked());
+        delete w;
+    }
+
+    std::cout << "\n[the same options once the mod IS installed]\n";
+    {
+        FomodGroup g = wizardui_mkGroup("SelectAny", {
+            withDesc("Ashfall",       kAshfall),
+            withDesc("Glass Glowset", kGlowset),
+        });
+        g.name = QStringLiteral("Compatibility Options");
+        FomodStep st;
+        st.name   = QStringLiteral("Compatibility Options");
+        st.groups = { g };
+        auto *w = FomodWizardTestHook::build({ st }, {}, {},
+            { "https://www.nexusmods.com/morrowind/mods/49057" });
+
+        check("no warning once the cited mod is installed",
+              !FomodWizardTestHook::btn(w, 0, 0, 0)->text()
+                  .contains(QString::fromUtf8("⚠")));
+        check("the option for the other absent mod still warns",
+              FomodWizardTestHook::btn(w, 0, 0, 1)->text()
+                  .contains("Glass Glowset is not installed"));
+        delete w;
+    }
+
+    std::cout << "\n[options that cite nothing stay silent]\n";
+    {
+        // "Normal Maps" matches no mod in the modlist either. Without a
+        // citation there is no evidence, so it must draw nothing - this is
+        // the guard against the warning becoming noise on ordinary options.
+        FomodGroup g = wizardui_mkGroup("SelectAny", { withDesc("1K", kNormals) });
+        g.name = QStringLiteral("Normal Maps");
+        FomodStep st;
+        st.name   = QStringLiteral("Compatibility Options");
+        st.groups = { g };
+        auto *w = FomodWizardTestHook::build({ st });
+        check("no warning without a citation",
+              !FomodWizardTestHook::btn(w, 0, 0, 0)->text()
+                  .contains(QString::fromUtf8("⚠")));
+        delete w;
+    }
+
+    std::cout << "\n[variant options take the group's name]\n";
+    {
+        // The shape in the screenshot: a group called "Ashfall" whose options
+        // are bare variants, so the mod name comes from the group.
+        FomodGroup g = wizardui_mkGroup("SelectExactlyOne", {
+            withDesc("Core", kAshfall),
+            withDesc("HD",   kAshfall),
+        });
+        g.name = QStringLiteral("Ashfall");
+        FomodStep st;
+        st.name   = QStringLiteral("Compatibility Options");
+        st.groups = { g };
+        auto *w = FomodWizardTestHook::build({ st });
+        check("group name names the mod",
+              FomodWizardTestHook::btn(w, 0, 0, 0)->text()
+                  .contains("Ashfall is not installed"),
+              FomodWizardTestHook::btn(w, 0, 0, 0)->text());
+        delete w;
+    }
+}
+
 static void run_fomod_wizard_ui()
 {
     std::cout << "=== fomod_wizard_ui (buildUi) tests ===\n";
 
     wizardui_testFindFomodRoot();
     wizardui_testModlistVerdict();
+    wizardui_testMissingCitedMod();
 
     // SelectAtMostOne, nothing required: starts on None
     {

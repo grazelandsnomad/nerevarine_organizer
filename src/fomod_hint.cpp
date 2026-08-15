@@ -3,6 +3,9 @@
 #include <QRegularExpression>
 #include <QStringList>
 
+#include <algorithm>
+#include <utility>
+
 namespace fomod {
 
 bool asksAboutAnotherMod(const QString &stepName, const QString &groupName)
@@ -46,6 +49,80 @@ bool asksAboutAnotherMod(const QString &stepName, const QString &groupName)
         QStringLiteral("\\b(?:be|been|being|get|gets|getting)\\s+installed\\b"));
     return kAlreadyInstalled.match(question).hasMatch()
         && !kAboutToInstall.match(question).hasMatch();
+}
+
+QList<NexusModRef> citedMods(const QString &text)
+{
+    QList<NexusModRef> out;
+    if (text.isEmpty()) return out;
+
+    // Pull out candidate URLs and hand each to the shared parser rather than
+    // re-deriving the game/modId split here (nxmurl.h is the one home for it).
+    // Trailing ")" and "." are stripped by the character class: descriptions
+    // wrap these in parentheses and end sentences on them.
+    // Delimited raw string: the pattern contains )" , which would end a plain
+    // R"(...)" early and silently truncate the character class.
+    static const QRegularExpression kUrl(
+        QStringLiteral(R"RX((?:https?://)?(?:www\.)?nexusmods\.com/[^\s)\]<>"']+)RX"),
+        QRegularExpression::CaseInsensitiveOption);
+
+    auto it = kUrl.globalMatch(text);
+    while (it.hasNext()) {
+        QString url = it.next().captured();
+        // Sentence punctuation that survived the character class.
+        while (!url.isEmpty()
+               && (url.endsWith(u'.') || url.endsWith(u',') || url.endsWith(u';')))
+            url.chop(1);
+
+        // Descriptions often drop the scheme ("see www.nexusmods.com/..."),
+        // and without one QUrl reads the host as the first path segment. Add
+        // it here rather than loosening the shared parser, which reads stored
+        // modlist URLs that always carry one.
+        if (!url.contains(QLatin1String("://")))
+            url.prepend(QLatin1String("https://"));
+
+        const auto ref = parseNexusModUrl(url);
+        if (!ref) continue;
+        bool dup = false;
+        for (const NexusModRef &seen : std::as_const(out)) {
+            if (seen.modId == ref->modId
+                && seen.game.compare(ref->game, Qt::CaseInsensitive) == 0) {
+                dup = true;
+                break;
+            }
+        }
+        if (!dup) out.append(*ref);
+    }
+    return out;
+}
+
+QString missingModLabel(const QStringList &optionNames, const QString &groupName)
+{
+    // Longest common prefix of the option names, cut back to a word boundary
+    // so "Ashfall" + "Ashfall (HD)" gives "Ashfall" rather than "Ashfall (".
+    QString prefix;
+    bool first = true;
+    for (const QString &name : optionNames) {
+        const QString trimmed = name.trimmed();
+        if (trimmed.isEmpty()) continue;
+        if (first) { prefix = trimmed; first = false; continue; }
+        int i = 0;
+        const int lim = std::min(prefix.size(), trimmed.size());
+        while (i < lim && prefix[i].toLower() == trimmed[i].toLower()) ++i;
+        prefix.truncate(i);
+        if (prefix.isEmpty()) break;
+    }
+    // Strip the separator debris a truncated prefix leaves behind, then
+    // require something long enough to read as a name: "HD"/"1K"-length
+    // fragments are variant labels, not mods.
+    while (!prefix.isEmpty()
+           && (prefix.back().isSpace() || prefix.back() == u'('
+               || prefix.back() == u'-' || prefix.back() == u'_'))
+        prefix.chop(1);
+    if (prefix.size() >= 4) return prefix;
+
+    // The options share nothing usable, so the group is carrying the name.
+    return groupName.trimmed();
 }
 
 SkyrimRuntime classifyRuntimeVariant(const QString &optionName)

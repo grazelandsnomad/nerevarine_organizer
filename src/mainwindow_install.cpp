@@ -274,6 +274,11 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
         // read; see confirmReinstallIfInstalled for the migration rationale).
         const QStringList installedModNames =
             m_model ? m_model->modDisplayNames() : QStringList();
+        // Nexus URLs of what's installed, so the wizard can warn about
+        // compatibility options whose target mod the user doesn't have
+        // (Pass E). Matched by mod id, hence URLs rather than names.
+        const QStringList installedNexusUrls =
+            m_model ? m_model->installedNexusUrls() : QStringList();
         const QString archiveFileName = fi.fileName();
         const QString title = placeholder->data(ModRole::NexusTitle).toString().trimmed();
         const QString sanitizedTitle  = sanitizeFolderName(title);
@@ -334,7 +339,8 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
         },
         // Game id, so runtime-pair DLL groups ("SSE v1.6.629+" vs "v1.5.97")
         // pre-select the side matching this profile.
-        m_profiles->isEmpty() ? QString() : currentProfile().id);
+        m_profiles->isEmpty() ? QString() : currentProfile().id,
+        installedNexusUrls);
         return; // wizard is now shown; callback drives the rest
     }
 

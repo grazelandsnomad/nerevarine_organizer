@@ -120,6 +120,16 @@ QStringList ModlistModel::installedModDisplayNames() const
     return out;
 }
 
+QStringList ModlistModel::installedNexusUrls() const
+{
+    QStringList out;
+    for (const ModEntry &e : m_entries) {
+        if (!e.isMod() || e.installStatus != 1 || e.nexusUrl.isEmpty()) continue;
+        out.append(e.nexusUrl);
+    }
+    return out;
+}
+
 ModlistModel::ModCounts ModlistModel::modCounts() const
 {
     ModCounts c;
