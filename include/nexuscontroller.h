@@ -76,6 +76,11 @@ signals:
     void updateFoundForItem(QListWidgetItem *item);
     void checkUpdatesFinished(int foundCount);
     void titleFetched(QListWidgetItem *item, const QString &name);
+    // Every file on the same mod page as the one being downloaded. Emitted
+    // from the checksum fetch, which already parses the whole list, so the
+    // window can notice a wrong-runtime download without a second API call.
+    void modFileSiblings(QListWidgetItem *item, const QString &chosenName,
+                         const QStringList &siblingNames);
     void expectedChecksumFetched(QListWidgetItem *item, const QString &fileName,
                                  const QString &md5, qint64 sizeBytes);
     void fileListFetched(QListWidgetItem *item, const QString &game, int modId,

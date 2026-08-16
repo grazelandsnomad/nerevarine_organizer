@@ -4,6 +4,7 @@
 #include "fomod_path.h"
 #include "fomod_copy.h"
 #include "fomod_hint.h"
+#include "mod_aliases.h"
 #include "fomod_scripts.h"
 #include "fomod_install.h"
 #include "bain.h"
@@ -921,6 +922,179 @@ static void run_fomod_hint()
               got == c.wanted, QString::fromUtf8(c.name));
     }
 
+
+    std::cout << "\n[options that require another mod]\n";
+    {
+        // Grand Solitude's SMIM Rotor - ships ticked, and installs a mesh
+        // nothing loads correctly when SMIM is absent.
+        const auto smim = fomod::requiredMods(
+            "SMIM Rotor for Solitude Windmill. "
+            "Required Static Mesh Improvement Mod - SMIM by Brumbek.");
+        check("the required mod is found",
+              smim.contains(QStringLiteral("Static Mesh Improvement Mod")),
+              smim.join(QLatin1Char('|')));
+        check("and so is its acronym",
+              smim.contains(QStringLiteral("SMIM")), smim.join(QLatin1Char('|')));
+
+        // Every OTHER requirement sentence in the author's mod corpus is about
+        // the mod being installed, not another one. A keyword rule fires on
+        // all three; these are the regression guards.
+        check("\"Required for the mod to function\" names no mod",
+              fomod::requiredMods(
+                  "The core files for Voices of Vvardenfell. "
+                  "Required for the mod to function.").isEmpty());
+        check("\"only required file in the installer\" names no mod",
+              fomod::requiredMods(
+                  "Core Files for AATL_Data. Full package included, "
+                  "only required file in the installer.").isEmpty());
+        check("\"requires Materials set for OpenMW\" names no mod",
+              fomod::requiredMods(
+                  "1K Normals for new textures. For OpenMW support "
+                  "(still requires Materials set for OpenMW)").isEmpty());
+
+        // Other real phrasings.
+        check("an article is skipped",
+              fomod::requiredMods("Requires the Unofficial Skyrim Special Edition Patch to work.")
+                  .contains(QStringLiteral("Unofficial Skyrim Special Edition Patch")));
+        check("\"needs\" counts too",
+              fomod::requiredMods("Needs JK's Skyrim installed first.")
+                  .contains(QStringLiteral("JK's Skyrim")));
+        check("a description with no requirement says nothing",
+              fomod::requiredMods("Installs Ashfall compatible meshes.").isEmpty());
+        check("empty in, empty out", fomod::requiredMods(QString()).isEmpty());
+    }
+
+
+
+    std::cout << "\n[downloading the build for the wrong game version]\n";
+    {
+        // The real Scrambled Bugs mod page.
+        const QStringList page{
+            QStringLiteral("Scrambled Bugs - Anniversary Edition (1.6.629.0 and later)"),
+            QStringLiteral("Scrambled Bugs - Anniversary Edition (1.6.318.0 to 1.6.353.0)"),
+            QStringLiteral("Scrambled Bugs - Special Edition (1.5.97.0 and earlier)"),
+            QStringLiteral("Vendor Respawn Fix"),
+            QStringLiteral("Script Effect Archetype Crash Fix")};
+
+        // On an AE profile, grabbing the 1.5.97 build is the mistake to catch.
+        check("the Special Edition build is flagged on an AE profile",
+              fomod::betterRuntimeFile(page[2], page, RT::AE)
+                  == page[0], fomod::betterRuntimeFile(page[2], page, RT::AE));
+        check("and the newest AE build is the one offered",
+              fomod::betterRuntimeFile(page[2], page, RT::AE)
+                  .contains(QStringLiteral("1.6.629")));
+
+        // The right build says nothing at all.
+        check("the AE build on an AE profile is fine",
+              fomod::betterRuntimeFile(page[0], page, RT::AE).isEmpty());
+        check("the older AE build is also fine - still 1.6.x",
+              fomod::betterRuntimeFile(page[1], page, RT::AE).isEmpty());
+
+        // Mirrored for an SE profile.
+        check("the AE build is flagged on an SE profile",
+              fomod::betterRuntimeFile(page[0], page, RT::SE) == page[2]);
+
+        // A file whose name carries no version marking is not a verdict.
+        check("an unmarked optional file says nothing",
+              fomod::betterRuntimeFile(page[3], page, RT::AE).isEmpty());
+        // Neither is a page that offers only one kind.
+        check("nothing to switch to means silence",
+              fomod::betterRuntimeFile(
+                  page[2], {page[2], page[3]}, RT::AE).isEmpty());
+        // And a profile with no runtime (Morrowind, Oldrim) never fires.
+        check("a game with no runtime split is unaffected",
+              fomod::betterRuntimeFile(page[2], page, RT::None).isEmpty());
+        check("empty inputs are safe",
+              fomod::betterRuntimeFile(QString(), page, RT::AE).isEmpty()
+                  && fomod::betterRuntimeFile(page[2], {}, RT::AE).isEmpty());
+    }
+
+    std::cout << "\n[an option that is a patch FOR another mod]\n";
+    {
+        // Verbatim from Lively Farms' "Patches" group, where every entry is
+        // one of these and none uses the word "required".
+        const auto caco = fomod::requiredMods(
+            "A integration patch for Complete Alchemy and Cooking Overhaul.");
+        check("the patched mod is found",
+              caco.contains(QStringLiteral("Complete Alchemy and Cooking Overhaul")),
+              caco.join(QLatin1Char('|')));
+
+        check("a short name works",
+              fomod::requiredMods("An integration patch for Last Seed.")
+                  .contains(QStringLiteral("Last Seed")));
+        check("an apostrophe survives",
+              fomod::requiredMods("A patch for Ryn's Farms.")
+                  .contains(QStringLiteral("Ryn's Farms")));
+        check("\"compatibility with\" counts too",
+              fomod::requiredMods("Adds compatibility with Patch for Purists.")
+                  .contains(QStringLiteral("Patch for Purists")));
+
+        // A name must not run past a full stop into the next sentence. This
+        // is what produced "Favor Jobs Overhaul Use" and would have warned
+        // about a mod of that name.
+        const auto favor = fomod::requiredMods(
+            "An integration patch for Favor Jobs Overhaul. Use it only if you "
+            "have chosen the \"Standard version\" of Lively Farms.");
+        check("the name stops at the full stop",
+              favor.contains(QStringLiteral("Favor Jobs Overhaul")),
+              favor.join(QLatin1Char('|')));
+        check("and nothing from the next sentence leaks in",
+              !favor.join(QLatin1Char('|')).contains(QStringLiteral("Use")),
+              favor.join(QLatin1Char('|')));
+
+        // Two mods joined by "and" are genuinely ambiguous, so both the long
+        // reading and the part before the connector are offered and either may
+        // match the modlist.
+        const auto combo = fomod::requiredMods(
+            "A integration patch for CACO and SunHelm Survival and Needs. "
+            "Select only this patch if you have both CACO and SunHelm installed.");
+        check("the connector form is kept whole",
+              combo.contains(QStringLiteral("CACO and SunHelm Survival and Needs")),
+              combo.join(QLatin1Char('|')));
+        check("and the leading name alone is offered",
+              combo.contains(QStringLiteral("CACO")), combo.join(QLatin1Char('|')));
+
+        // Ordinary prose about this mod's own files must stay quiet, "for"
+        // and all.
+        check("a texture description is not a patch requirement",
+              fomod::requiredMods(
+                  "New textures for the corkbulb plant; replaces "
+                  "tx_cork_bulb_01 and tx_cork_bulb_02").isEmpty());
+
+        check("CACO resolves to its full name",
+              mod_aliases::aliasesFor("CACO")
+                  .contains(QStringLiteral("Complete Alchemy and Cooking Overhaul")));
+    }
+
+    std::cout << "\n[scene acronyms]\n";
+    {
+        check("an acronym finds the full name",
+              mod_aliases::aliasesFor("SMIM")
+                  .contains(QStringLiteral("Static Mesh Improvement Mod")));
+        check("and the full name finds the acronym",
+              mod_aliases::aliasesFor("Static Mesh Improvement Mod")
+                  .contains(QStringLiteral("SMIM")));
+        check("lookup ignores case", !mod_aliases::aliasesFor("smim").isEmpty());
+        check("an unknown mod has no aliases",
+              mod_aliases::aliasesFor("Forfeoranna Heim SSE").isEmpty());
+
+        // Game acronyms are excluded on purpose: "SSE" is the game and appears
+        // in half the mod names on that Nexus page.
+        check("the game's own acronym is not a mod alias",
+              mod_aliases::aliasesFor("SSE").isEmpty()
+                  && mod_aliases::aliasesFor("AE").isEmpty());
+
+        const auto ex = mod_aliases::expand({QStringLiteral("SMIM")});
+        check("expand keeps the original first",
+              !ex.isEmpty() && ex.first() == QStringLiteral("SMIM"));
+        check("and adds the other spelling",
+              ex.contains(QStringLiteral("Static Mesh Improvement Mod")));
+        check("expand does not duplicate",
+              mod_aliases::expand({QStringLiteral("SMIM"),
+                                   QStringLiteral("Static Mesh Improvement Mod")})
+                  .size() == 2);
+    }
+
     std::cout << "\n[profile id decides the preferred runtime]\n";
     check("skyrimanniversaryedition prefers AE",
           fomod::runtimePreferenceForGame("skyrimanniversaryedition") == RT::AE);
@@ -1302,6 +1476,78 @@ static void wizardui_testMissingCitedMod()
     }
 }
 
+
+// The reported case, end to end through the wizard: Grand Solitude's SMIM
+// Rotor ships TICKED and needs a mod the user may not have.
+static void wizardui_testRequiredModTogglesTheOption()
+{
+    const QString kDesc =
+        "SMIM Rotor for Solitude Windmill. "
+        "Required Static Mesh Improvement Mod - SMIM by Brumbek.";
+
+    auto build = [&](const QStringList &installed) {
+        FomodPlugin p = wizardui_mkPlugin("SMIM Rotor");
+        p.description = kDesc;
+        FomodGroup g = wizardui_mkGroup("SelectAny", { p });
+        g.name = QStringLiteral("SMIM Rotor");
+        FomodStep st;
+        st.name   = QStringLiteral("Step 1 of 1");
+        st.groups = { g };
+        return FomodWizardTestHook::build({ st }, {}, installed);
+    };
+
+    std::cout << "\n[an option whose required mod is missing is unticked]\n";
+    {
+        auto *w = build({QStringLiteral("Alternate Start - Live Another Life"),
+                         QStringLiteral("JK's Whiterun Outskirts")});
+        auto *btn = FomodWizardTestHook::btn(w, 0, 0, 0);
+        check("unticked", !btn->isChecked());
+        check("and says which mod is missing",
+              btn->text().contains(QStringLiteral("Static Mesh Improvement Mod")),
+              btn->text());
+        check("with a warning, not a recommendation",
+              btn->text().contains(QString::fromUtf8("⚠")), btn->text());
+        delete w;
+    }
+
+    std::cout << "\n[and ticked when it is installed]\n";
+    {
+        auto *w = build({QStringLiteral("Static Mesh Improvement Mod SE")});
+        auto *btn = FomodWizardTestHook::btn(w, 0, 0, 0);
+        check("ticked", btn->isChecked());
+        check("and says so", btn->text().contains(QStringLiteral("is installed")),
+              btn->text());
+        delete w;
+    }
+
+    std::cout << "\n[the scene's acronym counts as the same mod]\n";
+    {
+        // Installed under its acronym only - the lookup has to bridge the two
+        // spellings or it reports a dependency the user actually has.
+        auto *w = build({QStringLiteral("SMIM")});
+        check("ticked from the acronym alone",
+              FomodWizardTestHook::btn(w, 0, 0, 0)->isChecked());
+        delete w;
+    }
+
+    std::cout << "\n[an option with no stated requirement is left alone]\n";
+    {
+        FomodPlugin p = wizardui_mkPlugin("Parallax meshes");
+        p.description = QStringLiteral("Optional parallax meshes for the walls.");
+        FomodGroup g = wizardui_mkGroup("SelectAny", { p });
+        g.name = QStringLiteral("Optional");
+        FomodStep st;
+        st.name = QStringLiteral("Step 1 of 1");
+        st.groups = { g };
+        auto *w = FomodWizardTestHook::build({ st });
+        const QString text = FomodWizardTestHook::btn(w, 0, 0, 0)->text();
+        check("no verdict of any kind",
+              !text.contains(QString::fromUtf8("⚠"))
+                  && !text.contains(QStringLiteral("is installed")), text);
+        delete w;
+    }
+}
+
 static void run_fomod_wizard_ui()
 {
     std::cout << "=== fomod_wizard_ui (buildUi) tests ===\n";
@@ -1309,6 +1555,7 @@ static void run_fomod_wizard_ui()
     wizardui_testFindFomodRoot();
     wizardui_testModlistVerdict();
     wizardui_testMissingCitedMod();
+    wizardui_testRequiredModTogglesTheOption();
 
     // SelectAtMostOne, nothing required: starts on None
     {

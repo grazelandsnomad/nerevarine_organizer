@@ -68,6 +68,40 @@ QList<NexusModRef> citedMods(const QString &text);
 // anything usable, and the caller should then word the warning without a name.
 QString missingModLabel(const QStringList &optionNames, const QString &groupName);
 
+// -- Options that require another mod ---------------------------------
+//
+// Grand Solitude offers an "SMIM Rotor" option whose description reads
+// "SMIM Rotor for Solitude Windmill. Required Static Mesh Improvement Mod -
+// SMIM by Brumbek." It ships ticked. With SMIM absent, that installs a mesh
+// nothing will load correctly, and no URL is cited so citedMods cannot see it.
+//
+// The requirement is stated in prose, so the prose is read - but carefully.
+// Every OTHER requirement sentence in the author's whole mod corpus is about
+// the mod being installed, not another one:
+//
+//   "The core files for Voices of Vvardenfell. Required for the mod to
+//    function."
+//   "Core Files for AATL_Data. ... only required file in the installer."
+//   "1K Normals ... (still requires Materials set for OpenMW)"
+//
+// A keyword rule fires on all three and extracts "for the mod to function",
+// "file in the installer", "Materials set for OpenMW". So the keyword alone is
+// not the evidence: what follows it has to LOOK like a mod name. Title-cased
+// words run together, or an all-caps acronym - "Static Mesh Improvement Mod",
+// "SMIM". The three sentences above continue in lower case ("for", "file") or
+// with a single capitalised word, and yield nothing.
+//
+// Absence only becomes meaningful once a name-shaped candidate exists. That is
+// the same rule asksAboutAnotherMod is built on, applied to a different kind
+// of evidence: a failed lookup means nothing until you know you looked up a
+// mod name.
+
+// Mods an option's description says it requires, best candidate first (the
+// full name, then any acronym). Empty when the description states no
+// requirement, or states one that is not about another mod - which is the
+// common case and the reason this is safe.
+QStringList requiredMods(const QString &description);
+
 // -- Skyrim runtime pairs ---------------------------------------------
 //
 // SKSE-plugin mods routinely offer their DLL per game runtime: "SSE v1.6.629+
@@ -91,6 +125,24 @@ SkyrimRuntime classifyRuntimeVariant(const QString &optionName);
 // skyrimspecialedition 1.5.97, and Enderal SE ships pinned to 1.5.97 too.
 // None for everything else, which disables the pass entirely.
 SkyrimRuntime runtimePreferenceForGame(const QString &gameId);
+
+// Also used by the DOWNLOAD path, not just the wizard: a mod page routinely
+// carries one file per runtime, and the names say which is which -
+//
+//   Scrambled Bugs - Anniversary Edition (1.6.629.0 and later)
+//   Scrambled Bugs - Anniversary Edition (1.6.318.0 to 1.6.353.0)
+//   Scrambled Bugs - Special Edition (1.5.97.0 and earlier)
+//
+// Downloading the 1.5.97 build onto a 1.6.x game gives an SKSE plugin that
+// simply refuses to load, with nothing in the manager saying why.
+//
+// Returns the candidate that suits `pref` when `chosen` does not, or an empty
+// string when there is nothing to say: `chosen` already matches, either side
+// is unclassifiable, or no candidate matches. Never guesses - a page whose
+// files carry no version marking produces silence, exactly as the wizard pass
+// does.
+QString betterRuntimeFile(const QString &chosen, const QStringList &candidates,
+                          SkyrimRuntime pref);
 
 } // namespace fomod
 

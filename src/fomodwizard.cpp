@@ -1,6 +1,7 @@
 #include "fomodwizard.h"
 #include "fomod_copy.h"
 #include "fomod_hint.h"
+#include "mod_aliases.h"
 #include "fomod_path.h"
 #include "fomod_scripts.h"
 #include "translator.h"
@@ -846,6 +847,73 @@ void FomodWizard::buildUi()
                         : QStringLiteral(" ⚠️ Warning: %1 is not "
                                          "installed in this modlist.")
                               .arg(missing.join(QStringLiteral(", ")))));
+                }
+            }
+        }
+
+        // Pass F: options whose description names a mod they REQUIRE.
+        //
+        // Grand Solitude's "SMIM Rotor" ships ticked and reads "Required
+        // Static Mesh Improvement Mod - SMIM by Brumbek". With SMIM absent
+        // that installs a mesh nothing loads correctly, and no URL is cited
+        // so Pass E cannot see it. fomod::requiredMods reads the prose, and
+        // only when what follows the keyword is shaped like a mod name - see
+        // fomod_hint.h for the three corpus sentences that must stay quiet.
+        //
+        // This decides the tick in BOTH directions and overrides a stored
+        // prior choice, unlike the passes above. Whether the required mod is
+        // in the list right now is a fact about the modlist, not a
+        // preference, and the same argument settles the Skyrim runtime pass.
+        for (int si = 0; si < m_steps.size(); ++si) {
+            const FomodStep &step = m_steps[si];
+            for (int gi = 0; gi < step.groups.size(); ++gi) {
+                const FomodGroup &group = step.groups[gi];
+                // Only where a tick is independently settable. In an
+                // exclusive group unticking means picking something else,
+                // which is not ours to decide, so those are annotated only.
+                const bool tickable = group.type == QLatin1String("SelectAny")
+                                   || group.type == QLatin1String("SelectAtLeastOne");
+
+                for (int pi = 0; pi < group.plugins.size() &&
+                                 pi < m_buttons[si][gi].size(); ++pi) {
+                    const QStringList needed =
+                        fomod::requiredMods(group.plugins[pi].description);
+                    if (needed.isEmpty()) continue;
+
+                    // Widen by the scene's acronyms, so "SMIM" finds a mod
+                    // installed as "Static Mesh Improvement Mod" and back.
+                    bool present = false;
+                    QString firstName;
+                    for (const QString &cand : mod_aliases::expand(needed)) {
+                        if (firstName.isEmpty()) firstName = cand;
+                        for (const QString &needle : needlesFor(cand)) {
+                            const bool shortNeedle = (needle.length() < 8);
+                            const QString pat = shortNeedle
+                                ? (QLatin1String("^") + QRegularExpression::escape(needle) + QLatin1String("\\b"))
+                                : (QLatin1String("\\b") + QRegularExpression::escape(needle) + QLatin1String("\\b"));
+                            const QRegularExpression re(pat, QRegularExpression::CaseInsensitiveOption);
+                            for (const QString &modName : std::as_const(m_installedModNames))
+                                if (re.match(modName).hasMatch()) { present = true; break; }
+                            if (present) break;
+                        }
+                        if (present) break;
+                    }
+
+                    QAbstractButton *btn = m_buttons[si][gi][pi];
+                    if (!btn || !btn->isEnabled()) continue;
+
+                    if (present) {
+                        if (tickable) btn->setChecked(true);
+                        btn->setText(btn->text() + QStringLiteral(
+                            " \u2705 %1 is installed, so this option works.")
+                                .arg(firstName));
+                    } else {
+                        if (tickable) btn->setChecked(false);
+                        btn->setText(btn->text() + QStringLiteral(
+                            " \u26A0\uFE0F Warning: this option requires %1, "
+                            "which is not installed in this modlist.")
+                                .arg(firstName));
+                    }
                 }
             }
         }

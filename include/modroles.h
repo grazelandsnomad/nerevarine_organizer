@@ -121,6 +121,10 @@ namespace ModRole {
     // publish your own work and has no business appearing on someone else's
     // mod. Persisted, so it survives a restart.
     constexpr int IsGeneratedTranslation = Qt::UserRole + 49; // bool
+    // bool: already told the user this download is for the other Skyrim
+    // runtime. Session-only (not persisted): the warning is about one
+    // download, not a property of the mod.
+    constexpr int RuntimeMismatchWarned = Qt::UserRole + 50; // bool
 }
 
 namespace ItemType {

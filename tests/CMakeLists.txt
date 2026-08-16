@@ -28,6 +28,7 @@ add_executable(test_fomod
     ${CMAKE_SOURCE_DIR}/src/fomod_path.cpp
     ${CMAKE_SOURCE_DIR}/src/fomod_copy.cpp
     ${CMAKE_SOURCE_DIR}/src/fomod_hint.cpp
+    ${CMAKE_SOURCE_DIR}/src/mod_aliases.cpp
     ${CMAKE_SOURCE_DIR}/src/nxmurl.cpp
     ${CMAKE_SOURCE_DIR}/src/fomod_scripts.cpp
     ${CMAKE_SOURCE_DIR}/src/fomod_install.cpp

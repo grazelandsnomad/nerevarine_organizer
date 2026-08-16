@@ -216,6 +216,8 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::onCheckUpdatesFinished);
     connect(m_nexusCtl, &NexusController::titleFetched,
             this, &MainWindow::onTitleFetched);
+    connect(m_nexusCtl, &NexusController::modFileSiblings,
+            this, &MainWindow::onModFileSiblings);
     connect(m_nexusCtl, &NexusController::expectedChecksumFetched,
             this, &MainWindow::onExpectedChecksumFetched);
     connect(m_nexusCtl, &NexusController::fileListFetched,

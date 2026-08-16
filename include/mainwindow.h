@@ -79,6 +79,10 @@ private slots:
     void onCheckUpdates();
     void onCheckUpdatesFinished(int foundCount);
     void onTitleFetched(QListWidgetItem *item, const QString &name);
+    // A download is under way for a file whose name says it is built for the
+    // other Skyrim runtime. Warns and names the file that fits this profile.
+    void onModFileSiblings(QListWidgetItem *item, const QString &chosenName,
+                           const QStringList &siblingNames);
     void onExpectedChecksumFetched(QListWidgetItem *item, const QString &fileName,
                                    const QString &md5, qint64 sizeBytes);
     void onFileListFetched(QListWidgetItem *item,

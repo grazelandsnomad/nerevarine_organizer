@@ -1,6 +1,7 @@
 #include "fomod_hint.h"
 
 #include <QRegularExpression>
+#include <QSet>
 #include <QStringList>
 
 #include <algorithm>
@@ -125,6 +126,158 @@ QString missingModLabel(const QStringList &optionNames, const QString &groupName
     return groupName.trimmed();
 }
 
+namespace {
+
+// A run of consecutive Title-Case words, e.g. "Static Mesh Improvement Mod".
+// Stops at the first lower-case word, which is what makes "Required for the
+// mod to function" yield nothing at all.
+// Lower-case words that sit INSIDE a mod name rather than ending it:
+// "Complete Alchemy and Cooking Overhaul", "Patch for Purists", "Legacy of
+// the Dragonborn". Anything else in lower case ends the name.
+bool isConnector(const QString &w)
+{
+    static const QSet<QString> kJoin = {"and", "of", "the", "for", "a", "an", "in"};
+    return kJoin.contains(w.toLower());
+}
+
+// A run of Title-Case words, allowing the connectors above between them.
+// `stopAtConnector` returns only the part before the first connector.
+//
+// Both are wanted, because a connector is genuinely ambiguous: in "Complete
+// Alchemy and Cooking Overhaul" the "and" is inside ONE name, while in
+// "Gourmet and Eating Animations and Sounds SE" it separates TWO. Taking the
+// long form alone invents a mod nobody has; taking the short form alone loses
+// the real name. So the caller gets both and matches on either.
+// One word of a description with its punctuation stripped, plus whether that
+// punctuation ENDED A SENTENCE. Stripping without recording it let a name run
+// straight into the next sentence: "...Favor Jobs Overhaul. Use it only if..."
+// yielded "Favor Jobs Overhaul Use".
+struct Word {
+    QString text;
+    bool    endsSentence = false;
+};
+
+QString titleRun(const QList<Word> &words, int from, bool stopAtConnector)
+{
+    QStringList run;
+    for (int i = from; i < words.size(); ++i) {
+        const QString w = words[i].text;
+        if (w.isEmpty()) break;
+        if (!w.front().isUpper()) {
+            if (stopAtConnector || !isConnector(w)) break;
+            // A connector only stays if a title-cased word follows it, and
+            // never across a sentence end.
+            if (words[i].endsSentence) break;
+            if (i + 1 >= words.size() || words[i + 1].text.isEmpty()
+                || !words[i + 1].text.front().isUpper()) break;
+            run << w;
+            continue;
+        }
+        run << w;
+        if (words[i].endsSentence) break;   // the name cannot span a full stop
+    }
+    // Never end on a connector.
+    while (!run.isEmpty() && isConnector(run.last())) run.removeLast();
+    return run.join(QLatin1Char(' '));
+}
+
+// Does this read as a mod name rather than a sentence fragment? Either several
+// title-cased words, or an acronym - "Materials" on its own does not qualify,
+// which is what keeps "requires Materials set for OpenMW" quiet.
+bool looksLikeModName(const QString &phrase)
+{
+    const QStringList words = phrase.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (words.size() >= 2) return true;
+    return words.size() == 1 && words[0].size() >= 3
+        && words[0] == words[0].toUpper();
+}
+
+} // namespace
+
+QStringList requiredMods(const QString &description)
+{
+    if (description.isEmpty()) return {};
+
+    // Split on whitespace but keep punctuation attached, so a sentence end can
+    // be detected and a trailing "." trimmed off the name.
+    const QStringList raw = description.simplified()
+                                .split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    static const QRegularExpression kKeyword(
+        QStringLiteral("^\\(?(?:requires?|required|requiring|needs?)$"),
+        QRegularExpression::CaseInsensitiveOption);
+    // "a patch for X", "an integration patch for X", "compatibility with X".
+    // An option that exists only to patch another mod is as dependent on it as
+    // one that says so outright, and this phrasing is how a patch group
+    // actually reads: every entry under Lively Farms' "Patches" heading is one
+    // of these.
+    static const QRegularExpression kPatchWord(
+        QStringLiteral("^\\(?(?:patch|patches|compatibility|compatible)$"),
+        QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression kPatchJoin(
+        QStringLiteral("^(?:for|with)$"), QRegularExpression::CaseInsensitiveOption);
+
+    QStringList out;
+    for (int i = 0; i < raw.size(); ++i) {
+        const bool plainKeyword = kKeyword.match(raw[i]).hasMatch();
+        const bool patchPhrase  = kPatchWord.match(raw[i]).hasMatch()
+                               && i + 1 < raw.size()
+                               && kPatchJoin.match(raw[i + 1]).hasMatch();
+        if (!plainKeyword && !patchPhrase) continue;
+        if (patchPhrase) ++i;   // step over the "for" / "with"
+
+        // Skip an article: "requires the Static Mesh Improvement Mod".
+        int start = i + 1;
+        if (start < raw.size()) {
+            const QString a = raw[start].toLower();
+            if (a == QLatin1String("the") || a == QLatin1String("a")
+                || a == QLatin1String("an"))
+                ++start;
+        }
+
+        // Strip punctuation from the tail of each word so "Mod -" and "Mod."
+        // do not become part of a name, but REMEMBER a sentence end: without
+        // that the name runs on into the next sentence.
+        QList<Word> words;
+        for (int j = start; j < raw.size(); ++j) {
+            QString w = raw[j];
+            bool ends = false;
+            while (!w.isEmpty() && !w.back().isLetterOrNumber()) {
+                const QChar c = w.back();
+                if (c == u'.' || c == u'!' || c == u'?' || c == u';'
+                    || c == u':' || c == u',')
+                    ends = true;
+                w.chop(1);
+            }
+            words.append({w, ends});
+        }
+
+        // The long form first - it is the one worth showing the user - then
+        // the part before any connector, which is what actually matches when
+        // the long form spanned two mods.
+        const QString name  = titleRun(words, 0, /*stopAtConnector=*/false);
+        const QString short_ = titleRun(words, 0, /*stopAtConnector=*/true);
+        if (name.isEmpty() || !looksLikeModName(name)) continue;
+        if (!out.contains(name)) out << name;
+        if (!short_.isEmpty() && short_ != name && looksLikeModName(short_)
+            && !out.contains(short_))
+            out << short_;
+
+        // Authors routinely follow the full name with its acronym:
+        // "Static Mesh Improvement Mod - SMIM by Brumbek". Take that too - it
+        // is often what the mod is actually called in a modlist.
+        const int after = name.split(QLatin1Char(' ')).size();
+        for (int j = after; j < words.size() && j < after + 3; ++j) {
+            const QString w = words[j].text;
+            if (w.size() >= 3 && w == w.toUpper() && !out.contains(w)) {
+                out << w;
+                break;
+            }
+            if (words[j].endsSentence) break;
+        }
+    }
+    return out;
+}
+
 SkyrimRuntime classifyRuntimeVariant(const QString &optionName)
 {
     const QString n = optionName.toLower();
@@ -155,6 +308,27 @@ SkyrimRuntime classifyRuntimeVariant(const QString &optionName)
     // side of a pair; say nothing rather than guess.
     if (ae == se) return SkyrimRuntime::None;
     return ae ? SkyrimRuntime::AE : SkyrimRuntime::SE;
+}
+
+QString betterRuntimeFile(const QString &chosen, const QStringList &candidates,
+                          SkyrimRuntime pref)
+{
+    if (pref == SkyrimRuntime::None) return {};
+
+    const SkyrimRuntime got = classifyRuntimeVariant(chosen);
+    // Unclassifiable, or already right: nothing to say. Silence when the file
+    // name carries no runtime marking is the whole reason this is safe to run
+    // on every download.
+    if (got == SkyrimRuntime::None || got == pref) return {};
+
+    // Among the siblings, the first that suits the profile. First rather than
+    // best: Nexus lists newest first, and for a runtime that is the build a
+    // user wants.
+    for (const QString &c : candidates) {
+        if (c == chosen) continue;
+        if (classifyRuntimeVariant(c) == pref) return c;
+    }
+    return {};
 }
 
 SkyrimRuntime runtimePreferenceForGame(const QString &gameId)

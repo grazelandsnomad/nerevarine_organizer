@@ -17,6 +17,7 @@ static constexpr const char *kKeychainKey     = "nexus_api_key";
 #include "translator.h"
 #include "placeholder_state.h"
 #include "fomodwizard.h"
+#include "fomod_hint.h"
 #include "bainwizard.h"
 #include "install_layout.h"
 #include "modlist_model.h"
@@ -618,6 +619,33 @@ void MainWindow::onFileListFetched(QListWidgetItem *item,
         }
     }
 
+    // Runtime-variant recommendation, same shape as the OAAB one above. A
+    // Skyrim mod page routinely carries one file per game version - Scrambled
+    // Bugs ships an Anniversary Edition build and a Special Edition one - and
+    // the wrong build is an SKSE plugin that silently refuses to load. Only
+    // fires when the page offers BOTH kinds, so a page with a single
+    // unmarked file never draws a recommendation.
+    {
+        const auto pref = fomod::runtimePreferenceForGame(
+            m_profiles->isEmpty() ? QString() : currentProfile().id);
+        if (pref != fomod::SkyrimRuntime::None) {
+            bool haveAe = false, haveSe = false;
+            int  wantIdx = -1;
+            for (int i = 0; i < files.size(); ++i) {
+                const auto v = fomod::classifyRuntimeVariant(files[i].name);
+                haveAe |= (v == fomod::SkyrimRuntime::AE);
+                haveSe |= (v == fomod::SkyrimRuntime::SE);
+                if (v == pref && wantIdx < 0) wantIdx = i;
+            }
+            if (haveAe && haveSe && wantIdx >= 0) {
+                bestIdx       = wantIdx;
+                recommendIdx  = wantIdx;
+                recommendNote = QStringLiteral("  ")
+                              + T("install_pick_recommended_runtime");
+            }
+        }
+    }
+
     // Single main file - skip the picker.  Batch-update flow passes
     // autoPickMain=true to skip the picker even with multiple files, since
     // iterating 20 pickers for "Update All" is worse UX than just taking
@@ -824,4 +852,30 @@ void MainWindow::validateApiKeyAndReport()
                                               : T("status_api_key_verified_free"),
                                  6000);
     });
+}
+
+void MainWindow::onModFileSiblings(QListWidgetItem *item,
+                                   const QString &chosenName,
+                                   const QStringList &siblingNames)
+{
+    if (!item || m_profiles->isEmpty()) return;
+
+    const auto pref = fomod::runtimePreferenceForGame(currentProfile().id);
+    const QString better =
+        fomod::betterRuntimeFile(chosenName, siblingNames, pref);
+    if (better.isEmpty()) return;   // matches, or nothing to say
+
+    // Only once per row. This fires from the checksum fetch, which can run
+    // again on a retry, and a second identical warning about a download the
+    // user already decided about is noise.
+    if (item->data(ModRole::RuntimeMismatchWarned).toBool()) return;
+    item->setData(ModRole::RuntimeMismatchWarned, true);
+
+    // The download is already in flight by the time the file list lands, so
+    // this reports rather than blocks - the point is that the user finds out
+    // now, from the manager, instead of from a plugin that silently fails to
+    // load in game.
+    ui::warn(this, T("runtime_mismatch_title"),
+             T("runtime_mismatch_body")
+                 .arg(chosenName, currentProfile().displayName, better));
 }
