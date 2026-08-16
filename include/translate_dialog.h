@@ -20,6 +20,7 @@
 
 #include "translation_mod.h"
 #include "translation_store.h"
+#include "translation_rules.h"
 
 class QLineEdit;
 class QNetworkAccessManager;
@@ -44,6 +45,7 @@ public:
                     const QList<TranslatableString> &strings,
                     const QString &language,
                     translation_store::Memory *memory,
+                    const QString &rulesPath = {},
                     QWidget *parent = nullptr);
 
     // Valid after exec() returns Accepted. Only strings the user actually
@@ -58,6 +60,9 @@ private slots:
     void onAccept();
     void onMachineTranslate();
     void onImportDatabase();
+    void onEditRules();
+    // A linked term was edited: re-expand every row that uses it.
+    void onCellChanged(int row, int column);
 
 private:
     // Drains m_mtQueue while fewer than kMaxInFlight requests are outstanding;
@@ -66,6 +71,13 @@ private:
 
 private:
     void buildUi(const QString &modName);
+    // Which name (index into m_mtNames) a row's SOURCE is entirely, or -1.
+    int  nameRowIndex(int row) const;
+    // Re-render one row from its stored masked template.
+    void expandRow(int row);
+    // Tint the rows that carry a linked name, and drop the tint from rows the
+    // user has hand-edited away from their template.
+    void restyleLinkedRows();
     void fillFromMemory();
 
     QList<TranslatableString> m_strings;
@@ -81,6 +93,24 @@ private:
     QProgressBar *m_mtBar   = nullptr;
     QNetworkAccessManager *m_net = nullptr;
     QList<int>    m_mtQueue;        // rows still waiting to be sent
+    // The mod's proper nouns, masked out of every request so they come back
+    // identical in every row (term_protect.h).
+    QStringList   m_mtNames;
+    // Rendering chosen for each name in m_mtNames - the translation carried
+    // into every row that mentions it. Index-parallel with m_mtNames; an
+    // empty entry means "not decided yet".
+    QStringList   m_nameRendering;
+    // Rows still queued for the SECOND pass, which cannot start until every
+    // name has a rendering to substitute.
+    QList<int>    m_mtPending;
+    bool          m_mtNamePhase = false;
+    // Guards the programmatic writes that re-expand linked rows, so they do
+    // not read as user edits and detach the row they just updated.
+    bool          m_expanding = false;
+    // The user's own English->target rules, reloaded every time the editor
+    // opens so tuning the file is a save-and-reopen away.
+    translation_rules::Rules m_rules;
+    QString                  m_rulesPath;
     int           m_mtInFlight = 0;
     int           m_mtDone     = 0;
     int           m_mtTotal    = 0;

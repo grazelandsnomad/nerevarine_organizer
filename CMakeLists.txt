@@ -162,6 +162,8 @@ set(SOURCES
     src/language_guess.cpp
     src/lore_overrides.cpp
     src/mod_package.cpp
+    src/term_protect.cpp
+    src/translation_rules.cpp
     src/google_translate.cpp
     src/translation_store.cpp
     src/translation_mod.cpp
@@ -204,6 +206,8 @@ set(SOURCES
     include/language_guess.h
     include/lore_overrides.h
     include/mod_package.h
+    include/term_protect.h
+    include/translation_rules.h
     include/google_translate.h
     include/translation_store.h
     include/translation_mod.h

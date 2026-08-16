@@ -1594,7 +1594,13 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
     translation_store::Memory memory;
     memory.load(memPath);
 
-    TranslateDialog dlg(modName, strings, language, &memory, this);
+    // Rules live beside the memory and are per language, since a rule is a
+    // decision about English -> that language, not about this mod.
+    const QString rulesPath = resolveUserStatePath(
+        QStringLiteral("translation_rules_%1.txt").arg(
+            language.isEmpty() ? QStringLiteral("default") : language));
+
+    TranslateDialog dlg(modName, strings, language, &memory, rulesPath, this);
     if (dlg.exec() != QDialog::Accepted) {
         // Even a cancelled edit may have taught the memory nothing; only save
         // on accept, so a cancel really is a cancel.

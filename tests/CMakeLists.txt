@@ -84,6 +84,8 @@ add_executable(test_profiles
     ${CMAKE_SOURCE_DIR}/src/language_guess.cpp
     ${CMAKE_SOURCE_DIR}/src/lore_overrides.cpp
     ${CMAKE_SOURCE_DIR}/src/mod_package.cpp
+    ${CMAKE_SOURCE_DIR}/src/term_protect.cpp
+    ${CMAKE_SOURCE_DIR}/src/translation_rules.cpp
     ${CMAKE_SOURCE_DIR}/src/subprocess.cpp
     ${CMAKE_SOURCE_DIR}/include/modlist_model.h
     ${CMAKE_SOURCE_DIR}/include/game_profiles.h
@@ -128,6 +130,8 @@ add_executable(test_load_order
     ${CMAKE_SOURCE_DIR}/src/language_guess.cpp
     ${CMAKE_SOURCE_DIR}/src/lore_overrides.cpp
     ${CMAKE_SOURCE_DIR}/src/mod_package.cpp
+    ${CMAKE_SOURCE_DIR}/src/term_protect.cpp
+    ${CMAKE_SOURCE_DIR}/src/translation_rules.cpp
     ${CMAKE_SOURCE_DIR}/src/subprocess.cpp
     ${CMAKE_SOURCE_DIR}/src/google_translate.cpp
     ${CMAKE_SOURCE_DIR}/src/translation_store.cpp

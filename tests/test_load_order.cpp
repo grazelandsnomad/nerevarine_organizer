@@ -9,9 +9,12 @@
 #include "language_guess.h"
 #include "lore_overrides.h"
 #include "mod_package.h"
+#include "term_protect.h"
+#include "translation_rules.h"
 #include "plugin_text.h"
 
 #include <QUrlQuery>
+#include <QRegularExpression>
 #include "load_order_merge.h"
 #include "scan_coordinator.h"
 #include "pluginparser.h"
@@ -1994,6 +1997,258 @@ static void testRefusesBadInput()
 } // namespace mp_test
 
 
+// ---- term_protect ----
+//
+// Forfeoranna Heim SSE is a dungeon mod. Handed its nine strings, Google
+// translated the dungeon's name in two rows and kept it in three, so the map,
+// the key and the door disagreed about what the place was called.
+namespace tp_test {
+
+// Verbatim from that mod.
+static QStringList dungeonMod()
+{
+    return {"Ancient Nord Helmet of Health", "Chest", "Forfeoranna Heim",
+            "Forfeoranna Heim Catacombs", "Forfeoranna Heim Depths",
+            "Forfeoranna Heim Key", "Forfeoranna Heim Lair",
+            "Greatsword of the Succubi", "Wardrobe"};
+}
+
+static void testFindsTheName()
+{
+    std::cout << "\n[the repeated name is the one to protect]\n";
+    const QStringList names = term_protect::findNames(dungeonMod());
+    check("exactly one name found", names.size() == 1,
+          names.join(QLatin1Char('|')));
+    check("and it is the whole phrase, not a word of it",
+          !names.isEmpty() && names.first() == QStringLiteral("Forfeoranna Heim"),
+          names.value(0));
+
+    // Everything that appears once is left translatable - those are
+    // descriptions, and Google renders them fine.
+    check("a one-off phrase is not protected",
+          !names.contains(QStringLiteral("Ancient Nord Helmet")));
+    check("nor is a lone word", !names.contains(QStringLiteral("Chest")));
+}
+
+static void testOrdinaryWordsStayTranslatable()
+{
+    std::cout << "\n[a repeated description is not a name]\n";
+    // "Key" repeats three times, but a phrase of ordinary English words is
+    // describing a thing. Protecting it would leave "Llave" untranslated.
+    check("repeated ordinary words are not protected",
+          term_protect::findNames({"Iron Key", "Gold Key", "Steel Key"}).isEmpty());
+    // One unusual word in the phrase makes it a name again.
+    const auto dwemer = term_protect::findNames({"Dwemer Key", "Dwemer Chest"});
+    check("an unusual word makes it a name",
+          dwemer == QStringList{QStringLiteral("Dwemer")}, dwemer.join('|'));
+    check("nothing repeats, nothing protected",
+          term_protect::findNames({"Iron Sword", "Health Potion"}).isEmpty());
+}
+
+static void testMaskRoundTrip()
+{
+    std::cout << "\n[mask and unmask are inverses]\n";
+    const QStringList names{QStringLiteral("Forfeoranna Heim")};
+    const QString masked = term_protect::mask("Forfeoranna Heim Catacombs", names);
+    check("the name is replaced by a token",
+          masked == QStringLiteral("Nrvaa Catacombs"), masked);
+    check("and comes back",
+          term_protect::unmask(masked, names)
+              == QStringLiteral("Forfeoranna Heim Catacombs"));
+
+    // The token has to survive the translator MOVING it, which is the whole
+    // reason it is word-shaped rather than bracketed.
+    check("a reordered token still unmasks",
+          term_protect::unmask("Catacumbas de Nrvaa", names)
+              == QString::fromUtf8("Catacumbas de Forfeoranna Heim"));
+
+    // Handed "Nrvaa" alone, Google returned "Nrvaá" - it gave a bare unknown
+    // word Spanish orthography. Matching the token literally missed that and
+    // left it in the finished translation.
+    check("an accented token still unmasks",
+          term_protect::unmask(QString::fromUtf8("Nrvaá"), names)
+              == QStringLiteral("Forfeoranna Heim"));
+    check("a case-changed token still unmasks",
+          term_protect::unmask("NRVAA Catacumbas", names)
+              == QStringLiteral("Forfeoranna Heim Catacumbas"));
+
+    // Never a digit: measured live, a token carrying one is read as a code and
+    // both the word order and the sense of "Key" suffer.
+    check("tokens carry no digits",
+          !term_protect::tokenFor(0).contains(QRegularExpression("\\d"))
+              && !term_protect::tokenFor(31).contains(QRegularExpression("\\d")));
+    check("tokens are distinct",
+          term_protect::tokenFor(0) != term_protect::tokenFor(1)
+              && term_protect::tokenFor(0) != term_protect::tokenFor(26));
+}
+
+static void testPureNameIsNeverSent()
+{
+    std::cout << "\n[a string that is only a name has nothing to translate]\n";
+    const QStringList names{QStringLiteral("Forfeoranna Heim")};
+    check("a bare name masks to nothing but a token",
+          term_protect::isOnlyNames(
+              term_protect::mask("Forfeoranna Heim", names), 1));
+    check("punctuation around it does not change that",
+          term_protect::isOnlyNames(
+              term_protect::mask("Forfeoranna Heim!", names), 1));
+    check("but a name plus a word does",
+          !term_protect::isOnlyNames(
+              term_protect::mask("Forfeoranna Heim Depths", names), 1));
+    check("and an unprotected string does not",
+          !term_protect::isOnlyNames(term_protect::mask("Chest", names), 1));
+}
+
+// Two names in one mod must not be confused with each other.
+static void testSeveralNames()
+{
+    std::cout << "\n[several names at once]\n";
+    const QStringList src{"Forfeoranna Heim Key", "Forfeoranna Heim Depths",
+                          "Zanthar Blade", "Zanthar Shield"};
+    const QStringList names = term_protect::findNames(src);
+    check("both names found", names.size() == 2, names.join('|'));
+
+    const QString masked = term_protect::mask("Forfeoranna Heim and Zanthar", names);
+    check("each gets its own token",
+          masked.count(QStringLiteral("Nrv")) == 2, masked);
+    check("and each comes back to the right name",
+          term_protect::unmask(masked, names)
+              == QStringLiteral("Forfeoranna Heim and Zanthar"),
+          term_protect::unmask(masked, names));
+}
+
+// The mechanic behind "edit the name once and every row follows": unmask is
+// handed the CHOSEN RENDERING, not the original name. The masked answer is
+// kept per row so it can be re-rendered whenever that choice changes.
+static void testRenderingIsSubstituted()
+{
+    std::cout << "\n[a name's chosen translation is carried into every row]\n";
+    const QStringList names{QStringLiteral("Forfeoranna Heim")};
+
+    // What Google returned for each row, with the name masked out.
+    const QStringList templates{
+        QStringLiteral("Catacumbas de Nrvaa"),
+        QStringLiteral("Profundidades de Nrvaa"),
+        QStringLiteral("Llave Nrvaa"),
+        QStringLiteral("Guarida de Nrvaa")};
+
+    // The name's own translation, which Google gave for it alone.
+    const QStringList chosen{QString::fromUtf8("Hogar de los precursores")};
+    check("the chosen rendering replaces the token, not the English name",
+          term_protect::unmask(templates[0], chosen)
+              == QString::fromUtf8("Catacumbas de Hogar de los precursores"));
+    check("every row uses the same rendering",
+          term_protect::unmask(templates[2], chosen)
+              == QString::fromUtf8("Llave Hogar de los precursores"));
+
+    // The user shortens it; the same templates re-render.
+    const QStringList edited{QStringLiteral("Hogar Precursor")};
+    check("editing the name re-renders the other rows",
+          term_protect::unmask(templates[1], edited)
+              == QStringLiteral("Profundidades de Hogar Precursor")
+          && term_protect::unmask(templates[3], edited)
+              == QStringLiteral("Guarida de Hogar Precursor"));
+
+    // Undecided falls back to the original rather than leaving a token on
+    // screen.
+    check("an undecided name falls back to itself",
+          term_protect::unmask(templates[0], names)
+              == QStringLiteral("Catacumbas de Forfeoranna Heim"));
+}
+
+} // namespace tp_test
+
+
+// ---- translation_rules ----
+//
+// The knobs the user turns without a rebuild. "Chest" came back from the
+// machine translator as "Pecho", the body part, where a Skyrim container is a
+// "Cofre" - a rule that needs a recompile to fix is a rule that never gets
+// fixed.
+namespace tr_test {
+
+static void testRoundTrip()
+{
+    std::cout << "\n[rules are read from a file the user can edit]\n";
+    QTemporaryDir d;
+    const QString path = d.filePath("rules.txt");
+    {
+        QFile f(path);
+        (void)f.open(QIODevice::WriteOnly | QIODevice::Text);
+        f.write("# a comment\n"
+                "\n"
+                "[terms]\n"
+                "Chest=Cofre\n"
+                "Greatsword of the Succubi=Mandoble de las Succubi\n"
+                "\n"
+                "[protect]\n"
+                "Forfeoranna Heim\n"
+                "\n"
+                "[ordinary]\n"
+                "Blade\n"
+                "\n"
+                "[after]\n"
+                "Gran espada=>Mandoble\n");
+    }
+
+    const auto r = translation_rules::load(path);
+    check("terms load", r.terms.value("chest") == QStringLiteral("Cofre"));
+    check("a multi-word term loads",
+          r.terms.value("greatsword of the succubi")
+              == QStringLiteral("Mandoble de las Succubi"));
+    check("protect loads", r.protect == QStringList{QStringLiteral("Forfeoranna Heim")});
+    check("ordinary is lowercased", r.ordinary.contains(QStringLiteral("blade")));
+    check("after loads", r.after.size() == 1);
+    check("after is applied",
+          translation_rules::applyAfter("Gran espada de los succubi", r)
+              == QStringLiteral("Mandoble de los succubi"));
+
+    check("a missing file is an empty rule set, not an error",
+          translation_rules::load(d.filePath("nope.txt")).isEmpty());
+}
+
+static void testTemplateAndProtection()
+{
+    std::cout << "\n[the template explains itself, and rules reach protection]\n";
+    QTemporaryDir d;
+    const QString path = d.filePath("new.txt");
+    check("template written", translation_rules::ensureTemplate(path, "spanish"));
+    check("and it exists", QFile::exists(path));
+    const auto blank = translation_rules::load(path);
+    check("a fresh template is all comments, so it changes nothing",
+          blank.isEmpty());
+    // Never clobber what the user wrote.
+    {
+        QFile f(path);
+        (void)f.open(QIODevice::WriteOnly | QIODevice::Text);
+        f.write("[terms]\nChest=Cofre\n");
+    }
+    check("an existing file is left alone",
+          translation_rules::ensureTemplate(path, "spanish")
+              && translation_rules::load(path).terms.value("chest")
+                     == QStringLiteral("Cofre"));
+
+    // A name that appears only ONCE cannot be found by repetition; this is
+    // the whole reason [protect] exists.
+    const QStringList src{"Forfeoranna Heim Depths", "Iron Sword"};
+    check("repetition alone misses a one-off name",
+          !term_protect::findNames(src).contains(QStringLiteral("Forfeoranna Heim")));
+    check("a user rule protects it anyway",
+          term_protect::findNames(src, {QStringLiteral("Forfeoranna Heim")}, {})
+              .contains(QStringLiteral("Forfeoranna Heim")));
+
+    // And the opposite escape hatch: stop protection freezing something.
+    const QStringList blades{"Dwemer Blade", "Dwemer Shield"};
+    check("a repeated unusual word is protected by default",
+          term_protect::findNames(blades).contains(QStringLiteral("Dwemer")));
+    check("declaring it ordinary releases it",
+          !term_protect::findNames(blades, {}, {QStringLiteral("dwemer")})
+               .contains(QStringLiteral("Dwemer")));
+}
+
+} // namespace tr_test
+
+
 // ---- translation_store + translation_mod ----
 namespace tm_test {
 
@@ -2233,6 +2488,14 @@ static void run_text_and_language()
     pt_test::testRoundTrip();
     mp_test::testNaming();
     mp_test::testRefusesBadInput();
+    tp_test::testFindsTheName();
+    tp_test::testOrdinaryWordsStayTranslatable();
+    tp_test::testMaskRoundTrip();
+    tp_test::testPureNameIsNeverSent();
+    tp_test::testSeveralNames();
+    tp_test::testRenderingIsSubstituted();
+    tr_test::testRoundTrip();
+    tr_test::testTemplateAndProtection();
     lg_test::testSpotsAlreadyTranslated();
     lg_test::testEnglishIsNeverSilenced();
     lg_test::testMojibakedCyrillicIsNotSpanish();

@@ -5,6 +5,8 @@
 #include "target_language.h"
 #include "google_translate.h"
 #include "lore_overrides.h"
+#include "term_protect.h"
+#include "subprocess.h"
 
 #include <QDialogButtonBox>
 #include <QHBoxLayout>
@@ -37,18 +39,27 @@ QString isoFor(const QString &language)
 
 enum Col { ColSource = 0, ColTranslation = 1, ColCount = 2 };
 
+// The masked translation a row came back with ("Catacumbas de Nrvaa"), kept so
+// the row can be re-rendered when the name's translation changes. Cleared when
+// the user edits the row by hand, which detaches it.
+constexpr int TemplateRole = Qt::UserRole + 1;
+
 } // namespace
 
 TranslateDialog::TranslateDialog(const QString &modName,
                                  const QList<TranslatableString> &strings,
                                  const QString &language,
                                  translation_store::Memory *memory,
+                                 const QString &rulesPath,
                                  QWidget *parent)
     : QDialog(parent)
     , m_strings(strings)
     , m_language(language)
     , m_memory(memory)
+    , m_rulesPath(rulesPath)
 {
+    if (!m_rulesPath.isEmpty()) m_rules = translation_rules::load(m_rulesPath);
+
     // Group by source text: one row per distinct string, however many records
     // carry it. This is the whole point - twenty "Bandit Chief" records are one
     // question, not twenty.
@@ -94,6 +105,8 @@ void TranslateDialog::buildUi(const QString &modName)
         m_table->setItem(i, ColSource, src);
         m_table->setItem(i, ColTranslation, new QTableWidgetItem(QString()));
     }
+    connect(m_table, &QTableWidget::cellChanged,
+            this, &TranslateDialog::onCellChanged);
     lay->addWidget(m_table, 1);
 
     auto *row = new QHBoxLayout;
@@ -102,6 +115,12 @@ void TranslateDialog::buildUi(const QString &modName)
     m_mtBtn->setEnabled(!isoFor(m_language).isEmpty());
     connect(m_mtBtn, &QPushButton::clicked, this, &TranslateDialog::onMachineTranslate);
     row->addWidget(m_mtBtn);
+
+    auto *rulesBtn = new QPushButton(T("translate_edit_rules"), this);
+    rulesBtn->setToolTip(T("translate_edit_rules_tip"));
+    rulesBtn->setEnabled(!m_rulesPath.isEmpty());
+    connect(rulesBtn, &QPushButton::clicked, this, &TranslateDialog::onEditRules);
+    row->addWidget(rulesBtn);
 
     auto *importBtn = new QPushButton(T("translate_import_db"), this);
     importBtn->setToolTip(T("translate_import_db_tip"));
@@ -139,46 +158,83 @@ void TranslateDialog::onMachineTranslate()
     const QString iso = isoFor(m_language);
     if (iso.isEmpty()) return;
 
-    // Only the rows still empty: never overwrite something the user typed or
-    // the memory supplied.
-    // Lore terms first: a published name beats a machine guess, and one that
-    // is answered here never reaches Google at all. "Shadowscales" comes back
-    // from a translator as "escamas de sombra", which translates the words and
-    // loses the name. See lore_overrides.h.
-    m_mtQueue.clear();
+    // Rows already answered are left alone; a lore term or a user rule is a
+    // decision and never goes to a machine translator.
+    QList<int> todo;
     int lore = 0;
     for (int i = 0; i < m_rowSource.size(); ++i) {
         if (!m_table->item(i, ColTranslation)->text().trimmed().isEmpty())
             continue;
-        const QString canonical =
-            lore_overrides::lookup(m_rowSource[i], m_language);
+        // The user's file first, then the built-in lore table: a rule the
+        // user wrote is a decision, the table is a default.
+        QString canonical = m_rules.terms.value(m_rowSource[i].trimmed().toLower());
+        if (canonical.isEmpty())
+            canonical = lore_overrides::lookup(m_rowSource[i], m_language);
         if (!canonical.isEmpty()) {
             m_table->item(i, ColTranslation)->setText(canonical);
             ++lore;
             continue;
         }
-        m_mtQueue << i;
+        todo << i;
     }
 
-    if (m_mtQueue.isEmpty()) {
-        if (lore > 0) {
-            ui::info(this, T("translate_machine"),
-                     T("translate_lore_only").arg(lore));
-            return;
-        }
-        ui::info(this, T("translate_machine"), T("translate_machine_nothing"));
+    if (todo.isEmpty()) {
+        ui::info(this, T("translate_machine"),
+                 lore > 0 ? T("translate_lore_only").arg(lore)
+                          : T("translate_machine_nothing"));
         return;
     }
     if (!ui::confirm(this, T("translate_machine"),
-                     T("translate_machine_confirm").arg(m_mtQueue.size())))
+                     T("translate_machine_confirm").arg(todo.size())))
         return;
+
+    // The mod's recurring proper nouns. They are not frozen - they are
+    // translated ONCE and that one answer is carried into every row that
+    // mentions them, which is what stopped Forfeoranna Heim SSE from calling
+    // its dungeon three different things.
+    m_mtNames = term_protect::findNames(m_rowSource, m_rules.protect,
+                                        m_rules.ordinary);
+    m_nameRendering = QStringList();
+    for (int i = 0; i < m_mtNames.size(); ++i) {
+        // A name the user has already decided about keeps that decision.
+        QString known = m_memory ? m_memory->lookup(m_mtNames[i]) : QString();
+        if (known.isEmpty())
+            known = m_rules.terms.value(m_mtNames[i].trimmed().toLower());
+        if (known.isEmpty())
+            known = lore_overrides::lookup(m_mtNames[i], m_language);
+        m_nameRendering << known;
+    }
+
+    // Split the work in two passes. The names have to be answered FIRST,
+    // because every other row needs their rendering to substitute back in.
+    m_mtQueue.clear();
+    m_mtPending.clear();
+    for (int rowIdx : todo) {
+        const QString masked = term_protect::mask(m_rowSource[rowIdx], m_mtNames);
+        if (term_protect::isOnlyNames(masked, int(m_mtNames.size())))
+            m_mtQueue << rowIdx;      // the row IS a name: pass one
+        else
+            m_mtPending << rowIdx;    // pass two
+    }
+    // Any name without a row of its own still needs answering, so it rides
+    // pass one as a negative index (-1 - nameIndex).
+    for (int i = 0; i < m_mtNames.size(); ++i) {
+        if (!m_nameRendering[i].isEmpty()) continue;
+        bool hasRow = false;
+        for (int rowIdx : m_mtQueue)
+            if (nameRowIndex(rowIdx) == i) { hasRow = true; break; }
+        if (!hasRow) m_mtQueue << (-1 - i);
+    }
+
+    m_mtNamePhase = !m_mtQueue.isEmpty();
+    if (!m_mtNamePhase) { m_mtQueue = m_mtPending; m_mtPending.clear(); }
 
     if (!m_net) m_net = new QNetworkAccessManager(this);
     m_mtBtn->setEnabled(false);
     m_mtBar->setVisible(true);
-    m_mtBar->setRange(0, m_mtQueue.size());
+    m_mtTotal  = int(m_mtQueue.size()) + int(m_mtPending.size());
+    m_mtBar->setRange(0, m_mtTotal);
     m_mtBar->setValue(0);
-    m_mtTotal  = int(m_mtQueue.size());
     m_mtDone   = 0;
     m_mtFailed = 0;
     m_mtInFlight = 0;
@@ -193,31 +249,52 @@ void TranslateDialog::pumpMachineTranslate()
     // ordinary size here.
     while (!m_mtQueue.isEmpty()
            && m_mtInFlight < google_translate::kMaxInFlight) {
-        const int rowIdx = m_mtQueue.takeFirst();
+        const int item = m_mtQueue.takeFirst();
         ++m_mtInFlight;
 
-        QNetworkRequest req(
-            google_translate::requestUrl(m_rowSource[rowIdx], isoFor(m_language)));
+        // Negative encodes "this is a bare name with no row of its own".
+        const int nameIdx = item < 0 ? (-1 - item) : nameRowIndex(item);
+        const bool isName = m_mtNamePhase;
+        const QString source = item < 0 ? m_mtNames[nameIdx] : m_rowSource[item];
+
+        // A name is sent as itself: masking it would leave nothing to
+        // translate, and asking about a bare token is what came back "Nrvaá".
+        const QString sent = isName ? source
+                                    : term_protect::mask(source, m_mtNames);
+
+        QNetworkRequest req(google_translate::requestUrl(sent, isoFor(m_language)));
         req.setRawHeader("Accept", "application/json");
-        // Google's edge 403s the bare Qt user agent - see google_translate.h.
         req.setRawHeader("User-Agent", google_translate::userAgent());
 
         QNetworkReply *reply = m_net->get(req);
-        connect(reply, &QNetworkReply::finished, this, [this, reply, rowIdx]() {
+        connect(reply, &QNetworkReply::finished, this,
+                [this, reply, item, nameIdx, isName]() {
             reply->deleteLater();
 
             QString text;
             if (reply->error() == QNetworkReply::NoError)
                 text = google_translate::parseResponse(reply->readAll());
+            if (!text.isEmpty())
+                text = translation_rules::applyAfter(text, m_rules);
 
             if (text.isEmpty()) {
                 ++m_mtFailed;
-            } else if (rowIdx < m_table->rowCount()
-                       && m_table->item(rowIdx, ColTranslation)
+            } else if (isName) {
+                // The answer for this name, reused everywhere from here on.
+                if (nameIdx >= 0 && nameIdx < m_nameRendering.size())
+                    m_nameRendering[nameIdx] = text;
+                if (item >= 0 && item < m_table->rowCount()) {
+                    m_expanding = true;
+                    m_table->item(item, ColTranslation)->setText(text);
+                    m_expanding = false;
+                }
+            } else if (item >= 0 && item < m_table->rowCount()
+                       && m_table->item(item, ColTranslation)
                               ->text().trimmed().isEmpty()) {
-                // Only fill if still empty: the user may have typed into the
-                // row while the request was in flight, and they win.
-                m_table->item(rowIdx, ColTranslation)->setText(text);
+                // Keep the masked form: it is what lets this row follow the
+                // name if the user changes their mind about it.
+                m_table->item(item, ColTranslation)->setData(TemplateRole, text);
+                expandRow(item);
             }
 
             --m_mtInFlight;
@@ -226,17 +303,128 @@ void TranslateDialog::pumpMachineTranslate()
             if (!m_mtQueue.isEmpty()) { pumpMachineTranslate(); return; }
             if (m_mtInFlight > 0) return;
 
+            // Names are in; now the rows that need them.
+            if (m_mtNamePhase && !m_mtPending.isEmpty()) {
+                m_mtNamePhase = false;
+                m_mtQueue = m_mtPending;
+                m_mtPending.clear();
+                pumpMachineTranslate();
+                return;
+            }
+            m_mtNamePhase = false;
+
             m_mtBar->setVisible(false);
             m_mtBtn->setEnabled(true);
-            // Say when nothing came back. Google's free endpoint is
-            // undocumented and can start refusing traffic outright; silence
-            // would look identical to "these words have no translation".
+            restyleLinkedRows();
             if (m_mtFailed > 0)
                 ui::warn(this, T("translate_machine"),
                          T("translate_machine_failed")
                              .arg(m_mtTotal - m_mtFailed).arg(m_mtFailed));
         });
     }
+}
+
+int TranslateDialog::nameRowIndex(int row) const
+{
+    if (row < 0 || row >= m_rowSource.size()) return -1;
+    const QString src = m_rowSource[row].trimmed();
+    for (int i = 0; i < m_mtNames.size(); ++i)
+        if (src.compare(m_mtNames[i].trimmed(), Qt::CaseInsensitive) == 0)
+            return i;
+    return -1;
+}
+
+void TranslateDialog::expandRow(int row)
+{
+    auto *cell = m_table->item(row, ColTranslation);
+    if (!cell) return;
+    const QString tmpl = cell->data(TemplateRole).toString();
+    if (tmpl.isEmpty()) return;
+
+    // Substitute each name's CURRENT rendering; a name still undecided falls
+    // back to its original text rather than leaving a token on screen.
+    QStringList subs;
+    subs.reserve(m_mtNames.size());
+    for (int i = 0; i < m_mtNames.size(); ++i)
+        subs << (m_nameRendering.value(i).isEmpty() ? m_mtNames[i]
+                                                    : m_nameRendering[i]);
+
+    m_expanding = true;
+    cell->setText(term_protect::unmask(tmpl, subs));
+    m_expanding = false;
+}
+
+void TranslateDialog::restyleLinkedRows()
+{
+    // A tint drawn from the palette so it survives both themes, and light
+    // enough to read through.
+    QColor tint = palette().color(QPalette::Highlight);
+    tint.setAlpha(48);
+    const QBrush none(Qt::NoBrush);
+
+    m_expanding = true;
+    for (int row = 0; row < m_table->rowCount(); ++row) {
+        auto *cell = m_table->item(row, ColTranslation);
+        auto *srcCell = m_table->item(row, ColSource);
+        if (!cell || !srcCell) continue;
+
+        const bool isName = nameRowIndex(row) >= 0;
+        const bool linked = isName || !cell->data(TemplateRole).toString().isEmpty();
+
+        cell->setBackground(linked ? QBrush(tint) : none);
+        srcCell->setBackground(linked ? QBrush(tint) : none);
+
+        if (isName) {
+            srcCell->setToolTip(T("translate_linked_name_tip"));
+            cell->setToolTip(T("translate_linked_name_tip"));
+        } else if (linked) {
+            srcCell->setToolTip(T("translate_linked_row_tip"));
+            cell->setToolTip(T("translate_linked_row_tip"));
+        } else {
+            srcCell->setToolTip(QString());
+            cell->setToolTip(QString());
+        }
+    }
+    m_expanding = false;
+}
+
+void TranslateDialog::onCellChanged(int row, int column)
+{
+    if (m_expanding || column != ColTranslation) return;
+
+    const int nameIdx = nameRowIndex(row);
+    if (nameIdx >= 0) {
+        // Editing the name here is editing it everywhere - that is the point
+        // of the tint.
+        m_nameRendering[nameIdx] = m_table->item(row, ColTranslation)->text().trimmed();
+        for (int r = 0; r < m_table->rowCount(); ++r)
+            if (r != row) expandRow(r);
+        return;
+    }
+
+    // A hand-edited row stops following the name: the user has said what this
+    // row should read, and quietly overwriting that later would be worse than
+    // losing the link.
+    auto *cell = m_table->item(row, ColTranslation);
+    if (cell && !cell->data(TemplateRole).toString().isEmpty()) {
+        cell->setData(TemplateRole, QString());
+        restyleLinkedRows();
+    }
+}
+
+void TranslateDialog::onEditRules()
+{
+    if (m_rulesPath.isEmpty()) return;
+    // Written on demand rather than at startup, so a user who never opens it
+    // never gets a file they did not ask for. The template explains itself.
+    if (!translation_rules::ensureTemplate(m_rulesPath, m_language)) {
+        ui::warn(this, T("translate_edit_rules"),
+                 T("translate_edit_rules_failed").arg(m_rulesPath));
+        return;
+    }
+    subprocess::startDetached(QStringLiteral("xdg-open"), {m_rulesPath});
+    ui::info(this, T("translate_edit_rules"),
+             T("translate_edit_rules_opened").arg(QDir::toNativeSeparators(m_rulesPath)));
 }
 
 void TranslateDialog::onImportDatabase()
