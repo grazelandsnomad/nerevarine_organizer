@@ -1,6 +1,6 @@
 #include "plugin_strings.h"
 
-#include "tes3_encoding.h"
+#include "plugin_text.h"
 
 #include <QByteArray>
 #include <QFile>
@@ -151,8 +151,9 @@ constexpr int kTes3Header = 16;
 
 void extractTes3(const char *data, qint64 fileEnd, StringSet &out)
 {
-    out.valid = true;   // magic already checked by the caller
-    out.tes3  = true;
+    out.valid    = true;   // magic already checked by the caller
+    out.tes3     = true;
+    out.encoding = plugin_text::Encoding::Cp1252;   // TES3 is never anything else
 
     qint64 off = 0;
     while (off + kTes3Header <= fileEnd) {
@@ -176,7 +177,8 @@ void extractTes3(const char *data, qint64 fileEnd, StringSet &out)
 
             const Tes3Tier tier = tes3TierFor(hdr, p);
             if (tier != Tes3Tier::No && ss > 0) {
-                const QString text = tes3_encoding::fromCp1252(p + 8, int(ss))
+                const QString text = plugin_text::decode(p + 8, int(ss),
+                                                        plugin_text::Encoding::Cp1252)
                                          .remove(QChar(u'\0')).trimmed();
                 if (!text.isEmpty()) {
                     const QString kind = QString::fromLatin1(p, 4);
@@ -193,10 +195,23 @@ void extractTes3(const char *data, qint64 fileEnd, StringSet &out)
     }
 }
 
-// Pull the text subrecords out of one record body. Subrecord framing is
-// type[4] size[2] data[size], flat, no nesting.
+// One string as it sits in the file, before an encoding has been decided.
+struct RawEntry {
+    QString    key;
+    QByteArray bytes;
+    bool       core = false;
+};
+
+// Pull the text subrecords out of one record body, WITHOUT decoding them.
+// Subrecord framing is type[4] size[2] data[size], flat, no nesting.
+//
+// Decoding is deferred because the encoding is a property of the whole file
+// (plugin_text.h) and the deciding byte may live in the last record. Decoding
+// eagerly would mean either a second pass - which for a compressed plugin
+// means inflating all of it twice - or decoding early strings with a verdict
+// that later evidence overturns.
 void collectFrom(const char *body, int bodySize, const char *type, quint32 formId,
-                 QHash<QString, QString> &out)
+                 QList<RawEntry> &out, bool core, plugin_text::Encoding &enc)
 {
     const QString prefix = QString::fromLatin1(type, 4) + QLatin1Char(':')
                          + QString::number(formId, 16) + QLatin1Char(':');
@@ -212,12 +227,12 @@ void collectFrom(const char *body, int bodySize, const char *type, quint32 formI
             QByteArray raw(p + 6, size);
             const int nul = raw.indexOf('\0');
             if (nul >= 0) raw.truncate(nul);
-            const QString text = QString::fromUtf8(raw).trimmed();
-            if (!text.isEmpty()) {
+            if (!raw.isEmpty()) {
+                plugin_text::observe(enc, raw.constData(), raw.size());
                 const QString kind = QString::fromLatin1(p, 4);
-                out.insert(prefix + kind + QLatin1Char(':')
-                               + QString::number(seen[kind]++),
-                           text);
+                out.append({prefix + kind + QLatin1Char(':')
+                                + QString::number(seen[kind]++),
+                            raw, core});
             }
         }
         off += 6 + size;
@@ -247,7 +262,8 @@ QString tes3Identity(const char *rec, const char *body, quint32 bodySize)
             return QString::number(le32(p + 8));
         if (!byIndx
             && qstrncmp(p, isInfo ? "INAM" : "NAME", 4) == 0 && ss > 0)
-            return tes3_encoding::fromCp1252(p + 8, int(ss))
+            return plugin_text::decode(p + 8, int(ss),
+                                       plugin_text::Encoding::Cp1252)
                        .remove(QChar(u'\0')).trimmed();
         so += 8 + int(ss);
     }
@@ -302,6 +318,10 @@ StringSet extract(const QString &path)
     // Strings/<base>_<language>.*. The caller answers coverage from those.
     if (out.localized) return out;
 
+    // Collected undecoded, then decoded once the whole file has voted on an
+    // encoding - see collectFrom.
+    QList<RawEntry> raw;
+
     // Iterative walk with an explicit stack of group extents, so a deeply
     // nested worldspace cannot recurse as deep as its nesting.
     QList<qint64> ends;
@@ -327,15 +347,15 @@ StringSet extract(const QString &path)
                 const quint32 flags  = le32(hdr + 8);
                 const quint32 formId = le32(hdr + 12);
                 const char *bodyPtr  = hdr + kHeader;
-                QHash<QString, QString> &into = core ? out.byKey : out.auxByKey;
                 if (flags & kFlagCompressed) {
                     const QByteArray body =
                         inflateRecord(QByteArray::fromRawData(bodyPtr, int(size)));
                     if (!body.isEmpty())
                         collectFrom(body.constData(), body.size(), hdr, formId,
-                                    into);
+                                    raw, core, out.encoding);
                 } else {
-                    collectFrom(bodyPtr, int(size), hdr, formId, into);
+                    collectFrom(bodyPtr, int(size), hdr, formId,
+                                raw, core, out.encoding);
                 }
             }
             off += qint64(kHeader) + qint64(size);
@@ -344,6 +364,15 @@ StringSet extract(const QString &path)
         // Leaving a group, possibly several at once when they end together.
         while (off >= stop && !ends.isEmpty())
             stop = ends.takeLast();
+    }
+
+    // Every string was measured on the way past, so out.encoding is settled.
+    for (const RawEntry &e : raw) {
+        const QString text =
+            plugin_text::decode(e.bytes.constData(), e.bytes.size(),
+                                out.encoding).trimmed();
+        if (text.isEmpty()) continue;
+        (e.core ? out.byKey : out.auxByKey).insert(e.key, text);
     }
 
     return out;

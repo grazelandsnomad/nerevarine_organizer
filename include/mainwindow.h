@@ -419,6 +419,25 @@ private:
     // mod folder is never written to - see translation_mod.h for why that
     // shape was chosen over patching the plugin in place.
     void onTranslateMod(QListWidgetItem *item);
+    // "Package as archive...": zips the mod's folder contents ready for a mod
+    // page. Runs off the UI thread - a texture mod is gigabytes.
+    void onPackageMod(QListWidgetItem *item);
+    // The language mods should be in for the ACTIVE modlist profile: its own
+    // override when it has one, else the shared default. Empty means the user
+    // has never been asked - callers must not read that as English, which is
+    // the bug this replaced (see target_language.h).
+    QString translationLanguage() const;
+    // Same, but asks once and stores the answer as the shared default, so no
+    // other game or profile is ever asked again. Empty return means the user
+    // cancelled and the caller must abort.
+    QString ensureTranslationLanguage();
+    // Rebuilds Settings > Mod translation language for the active profile.
+    // The Settings menu is built once and never rebuilt, so the checkmark has
+    // to be re-pointed whenever the profile changes.
+    void refreshTranslationLanguageMenu();
+    // Sets (or clears, on empty) the ACTIVE profile's override, persists it,
+    // and re-runs the scan when the notices are on.
+    void setProfileTranslationLanguage(const QString &token);
     void checkModDependencies(const QString &game, int modId, QListWidgetItem *item);
     // Fetch the Nexus file list for (game, modId). autoPickMain=true skips the
     // per-mod picker and takes the first MAIN/UPDATE file; used by batch update,
@@ -633,6 +652,10 @@ private:
     QToolButton           *m_themeBtn                = nullptr;  // light/dark toggle
     QToolButton           *m_conflictNoticesBtn      = nullptr;  // show/hide overwrite notices
     QToolButton           *m_untranslatedBtn         = nullptr;  // show/hide untranslated notices
+    // Settings > Mod translation language. Held because the Settings menu is
+    // built once in setupMenuBar() and never rebuilt, while the checkmark it
+    // shows belongs to whichever modlist profile is active.
+    QMenu                 *m_translationLangMenu     = nullptr;
     QLabel                *m_profileLbl              = nullptr;  // "Profile:" prefix
     QAction               *m_actLaunchOpenMW          = nullptr;
     QAction               *m_actLaunchLauncher        = nullptr;

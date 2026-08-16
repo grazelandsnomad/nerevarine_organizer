@@ -4,6 +4,14 @@
 #include "plugin_writer.h"
 #include "translation_mod.h"
 #include "translation_store.h"
+#include "target_language.h"
+#include "google_translate.h"
+#include "language_guess.h"
+#include "lore_overrides.h"
+#include "mod_package.h"
+#include "plugin_text.h"
+
+#include <QUrlQuery>
 #include "load_order_merge.h"
 #include "scan_coordinator.h"
 #include "pluginparser.h"
@@ -1553,6 +1561,439 @@ static void testWriterCannotTouchIdentity()
 } // namespace t3_test
 
 
+// ---- target_language ----
+//
+// The language mods should be in, which for a while was silently the language
+// the app's own menus were in. A user reading the app in English while
+// translating to Spanish got "Create English translation", a memory file named
+// translation_memory_english.json, and MyMemory asked to turn English into
+// English.
+namespace tl_test {
+
+static void testLookups()
+{
+    std::cout << "\n[token -> name and ISO]\n";
+    check("a language resolves to its name",
+          target_language::displayName("spanish") == QStringLiteral("Spanish"));
+    check("and to its ISO code",
+          target_language::isoCode("spanish") == QStringLiteral("es"));
+    check("lookup ignores case and whitespace",
+          target_language::displayName("  SPANISH ") == QStringLiteral("Spanish"));
+    check("isKnown agrees", target_language::isKnown("Spanish"));
+
+    // The bug the old private table had: it spelled Chinese as the app's own
+    // translation FILENAME, which would never match Bethesda's
+    // Strings/<plugin>_chinese.* nor give MyMemory a usable code.
+    check("chinese is the Bethesda token, not the app's filename",
+          target_language::isKnown("chinese")
+              && !target_language::isKnown("chinese_simplified"));
+    check("and it still has an ISO code",
+          target_language::isoCode("chinese") == QStringLiteral("zh"));
+
+    // Languages Bethesda ships that the app has no interface translation for.
+    check("polish is offerable",     target_language::isKnown("polish"));
+    check("portuguese is offerable", target_language::isKnown("portuguese"));
+    check("czech is offerable",      target_language::isKnown("czech"));
+    check("korean is offerable",     target_language::isKnown("korean"));
+
+    // An unknown token yields empty rather than echoing itself back: a caller
+    // showing a name wants to know when it has nothing to show.
+    check("unknown token has no name",
+          target_language::displayName("klingon").isEmpty());
+    check("unknown token has no ISO",
+          target_language::isoCode("klingon").isEmpty());
+    check("empty in, empty out",
+          target_language::displayName(QString()).isEmpty()
+              && !target_language::isKnown(QString()));
+}
+
+static void testTableIsWellFormed()
+{
+    std::cout << "\n[the table itself]\n";
+    const QStringList toks = target_language::tokens();
+    check("the table is not empty", !toks.isEmpty());
+
+    QSet<QString> seen;
+    bool dupes = false, badCase = false, missing = false;
+    for (const QString &t : toks) {
+        if (seen.contains(t)) dupes = true;
+        seen.insert(t);
+        if (t != t.toLower()) badCase = true;
+        if (target_language::displayName(t).isEmpty()
+            || target_language::isoCode(t).isEmpty()) missing = true;
+    }
+    check("no duplicate tokens", !dupes);
+    check("every token is lowercase", !badCase);
+    check("every token has a name and an ISO code", !missing);
+    check("English is offerable too (translating INTO English is legitimate)",
+          toks.contains(QStringLiteral("english")));
+}
+
+static void testResolution()
+{
+    std::cout << "\n[profile override beats the shared default]\n";
+    check("the override wins",
+          target_language::resolve("french", "spanish") == QStringLiteral("french"));
+    check("an empty override falls back",
+          target_language::resolve("", "spanish") == QStringLiteral("spanish"));
+    check("whitespace counts as empty",
+          target_language::resolve("   ", "spanish") == QStringLiteral("spanish"));
+    // Both empty is the "never been asked" state. It must stay empty - the
+    // caller has to be able to tell it apart from a real answer, and defaulting
+    // to English here would put the original bug straight back.
+    check("both empty stays empty",
+          target_language::resolve(QString(), QString()).isEmpty());
+    check("resolution normalises case",
+          target_language::resolve("SPANISH", "") == QStringLiteral("spanish"));
+}
+
+static void testLocaleGuess()
+{
+    std::cout << "\n[the locale is only a first guess]\n";
+    check("a full locale name maps",
+          target_language::fromLocale("es_ES.UTF-8") == QStringLiteral("spanish"));
+    check("a bare code maps",
+          target_language::fromLocale("fr") == QStringLiteral("french"));
+    // This machine's own locale, which is not the language its owner
+    // translates into - the reason the guess is only ever a pre-selection.
+    check("catalan is reachable from a locale",
+          target_language::fromLocale("ca_ES") == QStringLiteral("catalan"));
+    check("an unmapped locale guesses nothing",
+          target_language::fromLocale("xx_XX").isEmpty());
+    check("an empty locale guesses nothing",
+          target_language::fromLocale(QString()).isEmpty());
+}
+
+} // namespace tl_test
+
+
+// ---- google_translate ----
+//
+// The detail ported from Nerevarine Scribe that fails silently when got wrong:
+// the response arrives SPLIT into segments. Measured live, a book-length
+// description came back in five, the first holding 44 of 541 characters - so
+// sampling instead of joining drops most of a book while still returning
+// something that reads like a translation.
+namespace gt_test {
+
+static void testParsesSegments()
+{
+    std::cout << "\n[the response is joined, not sampled]\n";
+
+    // One segment, the ordinary short-string case.
+    check("a single segment comes through",
+          google_translate::parseResponse(
+              R"([[["Espada de hierro","Iron Sword",null,null,1]],null,"en"])")
+              == QString::fromUtf8("Espada de hierro"));
+
+    // Several segments: a long description Google chose to split. Every one
+    // has to be concatenated in order - the bug this test exists to catch is
+    // returning only "Chapter one. " and dropping the rest of the book.
+    check("multiple segments are joined in order",
+          google_translate::parseResponse(
+              R"([[["Capitulo uno. ","Chapter one. ",null,null,1],)"
+              R"(["El heroe partio.","The hero left.",null,null,1]],null,"en"])")
+              == QString::fromUtf8("Capitulo uno. El heroe partio."));
+
+    check("accented text survives",
+          google_translate::parseResponse(
+              "[[[\"Poci\xc3\xb3n de salud\",\"Health Potion\",null,null,1]],null,\"en\"]")
+              == QString::fromUtf8("Poción de salud"));
+}
+
+static void testFailsSoft()
+{
+    std::cout << "\n[an unusable response yields nothing, never a guess]\n";
+    // Every one of these must come back empty so the caller leaves the row for
+    // the user instead of writing rubbish into a plugin.
+    check("empty input",        google_translate::parseResponse({}).isEmpty());
+    check("not JSON",           google_translate::parseResponse("<html>403</html>").isEmpty());
+    check("JSON but an object", google_translate::parseResponse(R"({"error":"quota"})").isEmpty());
+    check("empty array",        google_translate::parseResponse("[]").isEmpty());
+    check("no segments",        google_translate::parseResponse("[[],null,\"en\"]").isEmpty());
+    check("truncated payload",  google_translate::parseResponse(R"([[["only)").isEmpty());
+}
+
+static void testRequestShape()
+{
+    std::cout << "\n[request shape]\n";
+    const QUrl url = google_translate::requestUrl(QStringLiteral("Bandit Chief"),
+                                                  QStringLiteral("es"));
+    const QString s = url.toString(QUrl::FullyDecoded);
+    check("hits the free endpoint",
+          url.host() == QLatin1String("translate.googleapis.com"), url.host());
+    check("carries the target language", s.contains(QStringLiteral("tl=es")), s);
+    check("lets Google detect the source",
+          s.contains(QStringLiteral("sl=auto")), s);
+    check("carries the text", s.contains(QStringLiteral("Bandit Chief")), s);
+
+    // A string with URL metacharacters must survive as a query VALUE, not
+    // break the query apart.
+    const QUrl tricky = google_translate::requestUrl(
+        QStringLiteral("Ring of Fire & Ice?"), QStringLiteral("fr"));
+    check("special characters are encoded",
+          !tricky.toString(QUrl::FullyEncoded).contains(QStringLiteral(" ")));
+    check("and decode back to the original text",
+          QUrlQuery(tricky).queryItemValue(QStringLiteral("q"),
+                                           QUrl::FullyDecoded)
+              == QStringLiteral("Ring of Fire & Ice?"));
+
+    // Insurance rather than a proven requirement - see google_translate.h.
+    check("a browser user agent is sent",
+          google_translate::userAgent().contains("Mozilla/5.0"));
+    // A whole mod goes through a queue, not a fan-out.
+    check("concurrency is bounded",
+          google_translate::kMaxInFlight > 0
+              && google_translate::kMaxInFlight <= 8);
+}
+
+} // namespace gt_test
+
+
+// ---- plugin_text ----
+namespace pt_test {
+
+static void testEncodingDetection()
+{
+    std::cout << "\n[UTF-8 or CP1252, decided per file]\n";
+    QByteArray cp("T"); cp.append(char(0xE9)); cp.append("cnico");   // CP1252 e-acute
+    const QByteArray u8  = QByteArray("Poci") + "\xc3\xb3" + "n";     // UTF-8 o-acute
+    const QByteArray ascii("Iron Sword");
+
+    // The bug this exists to prevent: QStringDecoder::decode() returns a LAZY
+    // proxy, so discarding the result left hasError() false for every input.
+    // Detection then said "UTF-8" for everything and put a replacement glyph
+    // through "Técnico" in the editor.
+    check("a CP1252 byte is not valid UTF-8",
+          !plugin_text::isValidUtf8(cp.constData(), cp.size()));
+    check("real UTF-8 is",
+          plugin_text::isValidUtf8(u8.constData(), u8.size()));
+    check("ASCII is (it is valid as both)",
+          plugin_text::isValidUtf8(ascii.constData(), ascii.size()));
+
+    // observe() is one-way: evidence accumulates and cannot be argued back.
+    auto e = plugin_text::Encoding::Utf8;
+    plugin_text::observe(e, ascii.constData(), ascii.size());
+    check("ASCII leaves the verdict alone", e == plugin_text::Encoding::Utf8);
+    plugin_text::observe(e, cp.constData(), cp.size());
+    check("one CP1252 string settles the file", e == plugin_text::Encoding::Cp1252);
+    plugin_text::observe(e, u8.constData(), u8.size());
+    check("later UTF-8 cannot argue it back", e == plugin_text::Encoding::Cp1252);
+}
+
+static void testRoundTrip()
+{
+    std::cout << "\n[decode and encode agree]\n";
+    QByteArray cp("T"); cp.append(char(0xE9)); cp.append("cnico");
+    check("CP1252 decodes",
+          plugin_text::decode(cp.constData(), cp.size(),
+                              plugin_text::Encoding::Cp1252)
+              == QString::fromUtf8("Técnico"));
+    check("and re-encodes to the same single byte",
+          plugin_text::encode(QString::fromUtf8("Técnico"),
+                              plugin_text::Encoding::Cp1252) == cp);
+    check("UTF-8 round-trips too",
+          plugin_text::encode(QString::fromUtf8("Técnico"),
+                              plugin_text::Encoding::Utf8)
+              == QByteArray("T\xc3\xa9" "cnico"));
+    // Reading CP1252 as UTF-8 is what produced the broken glyph on screen.
+    check("reading CP1252 as UTF-8 mangles it",
+          plugin_text::decode(cp.constData(), cp.size(),
+                              plugin_text::Encoding::Utf8)
+              != QString::fromUtf8("Técnico"));
+    check("a character CP1252 cannot hold becomes '?'",
+          plugin_text::encode(QString::fromUtf8("日本"),
+                              plugin_text::Encoding::Cp1252) == QByteArray("??"));
+}
+
+} // namespace pt_test
+
+// ---- language_guess ----
+//
+// A mod can have no translation partner because it IS the translation. Better
+// Crowd Citizens Spanish ships only the Spanish version - its page says
+// "ENGLISH MOD IS NOT NEEDED" - so nothing paired with it and it was flagged
+// red, offering to translate "Ciudadana" into Spanish.
+namespace lg_test {
+
+// Verbatim from that mod.
+static QStringList spanishMod()
+{
+    return {"Ciudadana", "Ciudadano", "Cliente", "Empleada de Ryujin",
+            "Empleado de Ryujin", "Estudiante", "Trabajador de Generdyne",
+            "Trabajador de Xenofresh", "Trabajadora de Generdyne",
+            "Trabajadora de Xenofresh", QString::fromUtf8("Técnico")};
+}
+
+static void testSpotsAlreadyTranslated()
+{
+    std::cout << "\n[a mod that is already the translation]\n";
+    check("Spanish text reads as Spanish",
+          language_guess::textLooksLike(spanishMod(), "spanish"));
+    check("and the whole test agrees",
+          language_guess::alreadyInLanguage(
+              "Better Crowd Citizens Spanish (ENGLISH MOD IS NOT NEEDED)",
+              spanishMod(), "spanish"));
+    check("the name alone is recognised",
+          language_guess::nameSuggestsLanguage(
+              "Better Crowd Citizens Spanish", "spanish"));
+}
+
+static void testEnglishIsNeverSilenced()
+{
+    std::cout << "\n[English mods keep their warning]\n";
+    const QStringList english{"Iron Sword", "Bandit Chief", "The Lusty Argonian Maid",
+                              "Guard", "A Dance in Fire", "Health Potion",
+                              "Ring of Fire", "Steel Helmet", "Ancient Nord Axe",
+                              "Chapter one of the tale"};
+    check("English text does not read as Spanish",
+          !language_guess::textLooksLike(english, "spanish"));
+    check("nor is it silenced", !language_guess::alreadyInLanguage(
+              "Weapons of the Third Era", english, "spanish"));
+
+    // One Spanish-looking proper noun must not flip an English mod.
+    QStringList sprinkled = english;
+    sprinkled << "Casa de Vivec";
+    check("a lone Spanish place name is not enough",
+          !language_guess::textLooksLike(sprinkled, "spanish"));
+}
+
+// The regression this rule was rewritten for. Bonemold weapons is a RUSSIAN
+// Morrowind mod storing Cyrillic in CP1251; read as CP1252 it becomes
+// "Ñóíäóê" - full of characters that are also Spanish. Judging on accented
+// letters scored it 74% Spanish while the real Spanish mod scored 3%, so the
+// rule went to function words only.
+static void testMojibakedCyrillicIsNotSpanish()
+{
+    std::cout << "\n[CP1251 Cyrillic read as CP1252 is not Spanish]\n";
+    const QStringList russian{
+        QString::fromUtf8("Ñóíäóê"), QString::fromUtf8("Ñòðàæíèê Òåëâàííè"),
+        QString::fromUtf8("Ñêåëåò"), QString::fromUtf8("Õåéôíèð"),
+        QString::fromUtf8("Âûñîõøèé òðóï"), QString::fromUtf8("Àðíñêàð"),
+        QString::fromUtf8("Ñòðàæíèê Ðåäîðàíà"), QString::fromUtf8("Òåðèñ Ðàëåäðàí"),
+        QString::fromUtf8("Àäìèðàë Ðîëñòîí"), QString::fromUtf8("Êàìàñ")};
+    check("accent-heavy mojibake does not read as Spanish",
+          !language_guess::textLooksLike(russian, "spanish"));
+    check("and the mod keeps its warning",
+          !language_guess::alreadyInLanguage("Bonemold Weapons", russian, "spanish"));
+}
+
+static void testSilenceWhenUnsure()
+{
+    std::cout << "\n[no marker data means no verdict]\n";
+    check("a language with no word list cannot decide",
+          !language_guess::textLooksLike(spanishMod(), "korean"));
+    check("English is never 'already translated'",
+          !language_guess::textLooksLike({"the sword of the north"}, "english"));
+    check("an empty sample decides nothing",
+          !language_guess::alreadyInLanguage("Whatever Spanish", {}, "spanish"));
+    // A name naming the language still needs the text to back it up, or a mod
+    // named for what it translates FROM would silence itself.
+    check("the name alone does not silence a mod",
+          !language_guess::alreadyInLanguage(
+              "Spanish Voices Restored",
+              {"Iron Sword", "Bandit Chief", "Guard"}, "spanish"));
+}
+
+} // namespace lg_test
+
+// ---- lore_overrides ----
+namespace lo_test {
+
+static void testCanonicalNames()
+{
+    std::cout << "\n[a published name beats a machine guess]\n";
+    // The case Scribe added the table for: Google renders this literally as
+    // "escamas de sombra", translating the words and losing the name.
+    check("Shadowscales has a canonical name",
+          lore_overrides::lookup("Shadowscales", "spanish")
+              == QString::fromUtf8("Escamas Sombrías"));
+    check("lookup ignores case and whitespace",
+          lore_overrides::lookup("  DARK BROTHERHOOD ", "spanish")
+              == QString::fromUtf8("Hermandad Oscura"));
+
+    // Identity entries protect a proper noun from being translated at all.
+    check("a proper noun maps to itself",
+          lore_overrides::lookup("Skooma", "spanish") == QStringLiteral("Skooma"));
+
+    check("an unknown term has no entry",
+          lore_overrides::lookup("Iron Sword", "spanish").isEmpty());
+    check("a language with no table has no entry",
+          lore_overrides::lookup("Shadowscales", "korean").isEmpty());
+    check("empty in, empty out",
+          lore_overrides::lookup(QString(), "spanish").isEmpty());
+
+    // Whole-cell only: inside a sentence the machine translator is needed for
+    // the surrounding grammar.
+    check("a term inside a sentence is not matched",
+          lore_overrides::lookup("Join the Dark Brotherhood today", "spanish")
+              .isEmpty());
+
+    check("the table has Spanish entries",
+          !lore_overrides::termsFor("spanish").isEmpty());
+}
+
+} // namespace lo_test
+
+
+// ---- mod_package ----
+//
+// The layout is the whole point: a mod archive holds the mod's files at its
+// ROOT, not inside a folder named after the mod. A wrapper folder is what
+// forces every installer downstream - this one included - to guess whether the
+// top-level directory is part of the mod or packaging noise.
+namespace mp_test {
+
+static void testNaming()
+{
+    std::cout << "\n[archive naming]\n";
+    check("keeps the mod name and adds a suffix",
+          mod_package::suggestedFileName("Varuun DLC items - Spanish (Nerevarine)",
+                                         mod_package::Format::Zip)
+              == QStringLiteral("Varuun DLC items - Spanish (Nerevarine).zip"));
+    check("7z gets its own suffix",
+          mod_package::suggestedFileName("Foo", mod_package::Format::SevenZip)
+              == QStringLiteral("Foo.7z"));
+    // Mod names really do carry these, and the file has to survive being
+    // downloaded onto Windows.
+    check("path separators and Windows-hostile characters are replaced",
+          !mod_package::suggestedFileName("JK's Whiterun/Outskirts: v2?",
+                                          mod_package::Format::Zip)
+               .contains(QLatin1Char('/')));
+    check("spaces are kept - they are ordinary in a mod filename",
+          mod_package::suggestedFileName("Better Crowd Citizens",
+                                         mod_package::Format::Zip)
+              == QStringLiteral("Better Crowd Citizens.zip"));
+    check("an empty name still yields a usable filename",
+          mod_package::suggestedFileName("   ", mod_package::Format::Zip)
+              == QStringLiteral("mod.zip"));
+
+    check("format follows the suffix",
+          mod_package::formatForPath("/tmp/a.7z") == mod_package::Format::SevenZip
+              && mod_package::formatForPath("/tmp/a.zip") == mod_package::Format::Zip);
+    check("an unknown suffix defaults to zip, the safer one",
+          mod_package::formatForPath("/tmp/a.tar") == mod_package::Format::Zip
+              && mod_package::formatForPath("/tmp/a") == mod_package::Format::Zip);
+}
+
+static void testRefusesBadInput()
+{
+    std::cout << "\n[nothing is packaged from nothing]\n";
+    QTemporaryDir d;
+    check("a missing folder is refused",
+          !mod_package::create(d.filePath("nope"), d.filePath("out.zip")).ok);
+    check("an empty folder is refused",
+          QDir().mkpath(d.filePath("empty"))
+              && !mod_package::create(d.filePath("empty"), d.filePath("out.zip")).ok);
+    check("no destination is refused",
+          !mod_package::create(d.path(), QString()).ok);
+    check("and no archive is left behind",
+          !QFile::exists(d.filePath("out.zip")));
+}
+
+} // namespace mp_test
+
+
 // ---- translation_store + translation_mod ----
 namespace tm_test {
 
@@ -1766,6 +2207,40 @@ static void run_tes3()
     std::cout << "\n";
 }
 
+static void run_target_language()
+{
+    std::cout << "=== target_language ===\n";
+    tl_test::testLookups();
+    tl_test::testTableIsWellFormed();
+    tl_test::testResolution();
+    tl_test::testLocaleGuess();
+    std::cout << "\n";
+}
+
+static void run_google_translate()
+{
+    std::cout << "=== google_translate ===\n";
+    gt_test::testParsesSegments();
+    gt_test::testFailsSoft();
+    gt_test::testRequestShape();
+    std::cout << "\n";
+}
+
+static void run_text_and_language()
+{
+    std::cout << "=== plugin_text / language_guess / lore_overrides ===\n";
+    pt_test::testEncodingDetection();
+    pt_test::testRoundTrip();
+    mp_test::testNaming();
+    mp_test::testRefusesBadInput();
+    lg_test::testSpotsAlreadyTranslated();
+    lg_test::testEnglishIsNeverSilenced();
+    lg_test::testMojibakedCyrillicIsNotSpanish();
+    lg_test::testSilenceWhenUnsure();
+    lo_test::testCanonicalNames();
+    std::cout << "\n";
+}
+
 static void run_translation()
 {
     std::cout << "=== translation store + mod ===\n";
@@ -1787,6 +2262,9 @@ int main(int argc, char **argv)
     run_conflict_direction();
     run_plugin_records();
     run_plugin_strings();
+    run_target_language();
+    run_google_translate();
+    run_text_and_language();
     run_plugin_writer();
     run_tes3();
     run_translation();

@@ -245,6 +245,8 @@ void GameProfileRegistry::load()
                 if (lord.isEmpty())    lord  = loadOrderFilenameFor(gp.id, pn);
                 mp.modlistFilename   = mlist;
                 mp.loadOrderFilename = lord;
+                mp.translationLanguage =
+                    Settings::modlistTranslationLanguage(gp.id, pn);
                 gp.modlistProfiles.append(mp);
             }
             QString activeName = Settings::activeModlistProfileName(gp.id);
@@ -288,6 +290,8 @@ void GameProfileRegistry::save()
             Settings::setModlistProfileModsDir(gp.id, mp.name, mp.modsDir);
             Settings::setModlistFilename(gp.id, mp.name, mp.modlistFilename);
             Settings::setLoadOrderFilename(gp.id, mp.name, mp.loadOrderFilename);
+            Settings::setModlistTranslationLanguage(gp.id, mp.name,
+                                                    mp.translationLanguage);
         }
         Settings::setModlistProfileNames(gp.id, profileNames);
         Settings::setActiveModlistProfileName(gp.id,

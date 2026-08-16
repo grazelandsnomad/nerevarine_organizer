@@ -21,6 +21,7 @@
 #include <QString>
 #include <QStringList>
 
+#include "plugin_text.h"
 #include "plugin_writer.h"
 
 namespace translation_mod {
@@ -29,6 +30,11 @@ namespace translation_mod {
 // folder ("Varuun DLC items in base game.esm", "Data/Foo.esp"), so the output
 // can mirror the source layout and the plugin lands where the game expects it.
 using ByPlugin = QHash<QString, plugin_writer::Replacements>;
+
+// Per-plugin text encoding, keyed the same way. A plugin absent from the map
+// is written as UTF-8. Carried from plugin_strings::extract rather than
+// re-detected: writing the wrong one mojibakes every accent in game.
+using EncodingByPlugin = QHash<QString, plugin_text::Encoding>;
 
 struct Result {
     bool        ok = false;
@@ -56,7 +62,8 @@ Result build(const QString &sourceModPath,
              const QString &sourceModName,
              const QString &modsDir,
              const QString &language,
-             const ByPlugin &replacements);
+             const ByPlugin &replacements,
+             const EncodingByPlugin &encodings = {});
 
 } // namespace translation_mod
 

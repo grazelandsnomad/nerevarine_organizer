@@ -1,5 +1,7 @@
 #include "loadordercontroller.h"
 
+#include "language_guess.h"
+
 #include "async_guarded.h"
 #include "pluginparser.h"
 
@@ -240,9 +242,21 @@ protected:
 
             const int translatable = keysOf(ea.strings);
             if (bestIdx < 0) {
-                // No partner supplies alternative text. This is a pairing
-                // result with no threshold in it, so it is as trustworthy for
-                // secondary text as for core - the Varuun case.
+                // No partner supplies alternative text - but that has two
+                // causes, and only one of them is a problem. A mod can also
+                // have no partner because it IS the translation: Better Crowd
+                // Citizens Spanish ships only the Spanish version, so nothing
+                // pairs with it and it was flagged red while offering to
+                // translate "Ciudadana" into Spanish. Ask whether there is
+                // anything left to translate before saying there is.
+                if (!m_language.isEmpty()
+                    && language_guess::alreadyInLanguage(
+                           m_mods[ea.modIdx].name, sampleText(ea.strings),
+                           m_language)) {
+                    noteCoverage(ea.modIdx, ea.pluginName, translatable,
+                                 TranslationCoverage::State::Ok, {}, {});
+                    continue;
+                }
                 noteCoverage(ea.modIdx, ea.pluginName, translatable,
                              TranslationCoverage::State::NoTranslation, {}, {});
                 continue;
@@ -278,6 +292,26 @@ private:
     // Merge one plugin's verdict into its mod's. A mod with several plugins
     // takes the worst of them: one untranslated plugin is one untranslated
     // plugin, however many of its siblings are fine.
+    // Strings to judge the language on: both tiers, since an NPC-name-only
+    // mod is exactly the case this has to answer. Capped because the test is
+    // a proportion, not a census, and a 5000-string plugin decides itself long
+    // before the end.
+    static QStringList sampleText(const plugin_strings::StringSet &s)
+    {
+        constexpr int kMax = 300;
+        QStringList out;
+        out.reserve(qMin(kMax, int(s.byKey.size() + s.auxByKey.size())));
+        for (auto it = s.byKey.cbegin(); it != s.byKey.cend(); ++it) {
+            if (out.size() >= kMax) return out;
+            out << it.value();
+        }
+        for (auto it = s.auxByKey.cbegin(); it != s.auxByKey.cend(); ++it) {
+            if (out.size() >= kMax) return out;
+            out << it.value();
+        }
+        return out;
+    }
+
     void noteCoverage(int modIdx, const QString &pluginName, int translatable,
                       TranslationCoverage::State state, const QString &partner,
                       const QStringList &samples, int common = 0, int identical = 0)

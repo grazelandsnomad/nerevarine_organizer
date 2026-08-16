@@ -21,6 +21,9 @@ constexpr auto kWindowMaximized = "window/maximized";
 constexpr auto kUiZoomPt              = "ui/zoom_pt";
 constexpr auto kUiScaleFactor         = "ui/scale_factor";
 constexpr auto kUiLanguage            = "ui/language";
+// The language MODS should be in, which is not the language the app is drawn
+// in (kUiLanguage). Shared default; a modlist profile may override it.
+constexpr auto kTranslationLanguage   = "ui/translation_language";
 constexpr auto kUiUtilityExplainer    = "ui/utility_explainer_seen";
 constexpr auto kUiDarkMode            = "ui/dark_mode";
 constexpr auto kUiConflictNotices     = "ui/conflict_notices";
@@ -238,6 +241,17 @@ void Settings::setModlistFilename(const QString &gameId, const QString &profile,
     QSettings().setValue(modlistKey(gameId, profile, "modlist_filename"), name);
 }
 
+QString Settings::modlistTranslationLanguage(const QString &gameId, const QString &profile)
+{
+    return QSettings().value(modlistKey(gameId, profile, "translation_language")).toString();
+}
+
+void Settings::setModlistTranslationLanguage(const QString &gameId, const QString &profile,
+                                             const QString &lang)
+{
+    QSettings().setValue(modlistKey(gameId, profile, "translation_language"), lang);
+}
+
 QString Settings::loadOrderFilename(const QString &gameId, const QString &profile)
 {
     return QSettings().value(modlistKey(gameId, profile, "loadorder_filename")).toString();
@@ -314,6 +328,19 @@ double Settings::uiScaleFactor()
 void Settings::setUiScaleFactor(double factor)
 {
     QSettings().setValue(kUiScaleFactor, factor);
+}
+
+QString Settings::translationLanguage()
+{
+    // No default on purpose: empty means "never asked", which the caller has
+    // to tell apart from a real choice. Defaulting to English here would
+    // reintroduce exactly the bug this setting exists to fix.
+    return QSettings().value(kTranslationLanguage).toString();
+}
+
+void Settings::setTranslationLanguage(const QString &lang)
+{
+    QSettings().setValue(kTranslationLanguage, lang);
 }
 
 QString Settings::uiLanguage()

@@ -33,10 +33,13 @@
 // FULL there would overwrite an ID with text and corrupt the lookup, so those
 // are refused outright rather than half-handled.
 //
-// Text is written as UTF-8. Measured on the user's installed Spanish plugins
-// (JK's Whiterun's Outskirts: "La facci\xc3\xb3n del caballo danzante"), which
-// is what Skyrim SE/AE and Starfield read - not the Windows-1252 that classic
-// Skyrim LE used.
+// Text is written in the encoding the SOURCE plugin already uses, which is not
+// always UTF-8: of the plugins on the author's live lists, seven are UTF-8 and
+// one (Better Crowd Citizens ES, "T\xe9cnico") is CP1252. Writing UTF-8 into
+// that one would have handed the game bytes it reads as CP1252 and mojibaked
+// every accent. TES3 is always CP1252. See plugin_text.h for the detection.
+
+#include "plugin_text.h"
 
 #include <QHash>
 #include <QString>
@@ -61,8 +64,14 @@ struct Result {
 // srcPath and dstPath may name the same file.
 //
 // An empty `repl` is the round-trip case and must reproduce the source exactly.
+// `encoding` is how to write the replacement text. Pass the value
+// plugin_strings::extract() reported for this same file - it is detected
+// there, from the whole file, and re-detecting it here would mean inflating a
+// compressed plugin a second time. The default suits an all-ASCII source,
+// where the two encodings agree anyway.
 Result apply(const QString &srcPath, const QString &dstPath,
-             const Replacements &repl);
+             const Replacements &repl,
+             plugin_text::Encoding encoding = plugin_text::Encoding::Utf8);
 
 } // namespace plugin_writer
 

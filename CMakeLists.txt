@@ -157,7 +157,12 @@ set(SOURCES
     src/conflict_direction.cpp
     src/game_match.cpp
     src/plugin_writer.cpp
-    src/tes3_encoding.cpp
+    src/plugin_text.cpp
+    src/target_language.cpp
+    src/language_guess.cpp
+    src/lore_overrides.cpp
+    src/mod_package.cpp
+    src/google_translate.cpp
     src/translation_store.cpp
     src/translation_mod.cpp
     src/translate_dialog.cpp
@@ -194,7 +199,12 @@ set(SOURCES
     include/plugin_records.h
     include/plugin_strings.h
     include/plugin_writer.h
-    include/tes3_encoding.h
+    include/plugin_text.h
+    include/target_language.h
+    include/language_guess.h
+    include/lore_overrides.h
+    include/mod_package.h
+    include/google_translate.h
     include/translation_store.h
     include/translation_mod.h
     include/translate_dialog.h

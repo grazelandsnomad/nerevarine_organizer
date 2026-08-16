@@ -7,6 +7,9 @@
 #include "translate_dialog.h"
 #include "translation_mod.h"
 #include "translation_store.h"
+#include "target_language.h"
+#include "mod_package.h"
+#include "async_guarded.h"
 #include "mainwindow_internal.h"
 #include "settings.h"
 #include "theme.h"
@@ -803,6 +806,9 @@ void MainWindow::onContextMenu(const QPoint &pos)
                     QString path = item->data(ModRole::ModPath).toString();
                     subprocess::startDetached("xdg-open", {path});
                 });
+                menu.addAction(T("ctx_package_mod"), this, [this, item]{
+                    onPackageMod(item);
+                });
 
                 // A mod the scan flagged red carries text nothing translates -
                 // so the fix is offered on the spot, named for the language it
@@ -810,10 +816,11 @@ void MainWindow::onContextMenu(const QPoint &pos)
                 // caption directly above the cursor. The generic entry stays
                 // for every other installed mod (state 1 = no translation).
                 if (item->data(ModRole::TranslationState).toInt() == 1) {
-                    QString lang = Settings::uiLanguage().trimmed();
-                    if (!lang.isEmpty()) lang[0] = lang[0].toUpper();
+                    // No language in the label. Naming one here meant naming
+                    // the app's UI language, which is the language the mod is
+                    // already in; the editor names the real target instead.
                     QAction *act = menu.addAction(
-                        T("translate_create_here").arg(lang),
+                        T("translate_create_here"),
                         this, [this, item]{ onTranslateMod(item); });
                     QFont f = act->font();
                     f.setBold(true);
@@ -1534,13 +1541,19 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
     if (modPath.isEmpty() || !QDir(modPath).exists()) return;
 
     // Target the same language the untranslated scan judges against, so what
-    // the toggle marks red is what this dialog offers to fix.
-    const QString language = Settings::uiLanguage().trimmed().toLower();
+    // the toggle marks red is what this dialog offers to fix. This is the one
+    // action that cannot proceed without an answer, so it is where the
+    // one-time question gets asked.
+    const QString language = ensureTranslationLanguage();
+    if (language.isEmpty()) return;   // cancelled the language prompt
 
     // Collect every string, core and secondary alike. The tier split exists to
     // keep a RATIO honest (plugin_strings.h); for editing, an NPC_ name is
     // exactly as translatable as a book title - it is the Bandit Chief case.
     QList<TranslatableString> strings;
+    // Each plugin's own encoding, carried to the writer so a CP1252 plugin
+    // does not come back as UTF-8 mojibake in game (plugin_text.h).
+    translation_mod::EncodingByPlugin encodings;
     bool sawPlugin = false;
     QDirIterator dit(modPath, QDir::Files | QDir::NoDotAndDotDot,
                      QDirIterator::Subdirectories);
@@ -1555,6 +1568,7 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
         const auto set = plugin_strings::extract(dit.filePath());
         if (!set.valid || set.localized) continue;
         const QString rel = QDir(modPath).relativeFilePath(dit.filePath());
+        encodings.insert(rel, set.encoding);
         for (auto it = set.byKey.cbegin(); it != set.byKey.cend(); ++it)
             strings.append({rel, it.key(), it.value(), false});
         for (auto it = set.auxByKey.cbegin(); it != set.auxByKey.cend(); ++it)
@@ -1591,7 +1605,8 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
     const QString modsDir = m_profiles->isEmpty()
         ? QString() : m_profiles->current().modsDir;
     const auto built = translation_mod::build(modPath, modName, modsDir,
-                                              language, dlg.replacements());
+                                              language, dlg.replacements(),
+                                              encodings);
     if (!built.ok) {
         ui::warn(this, T("translate_title").arg(modName),
                  T("translate_failed").arg(built.error));
@@ -1623,4 +1638,174 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
     if (!built.warnings.isEmpty())
         body += QLatin1String("\n\n") + built.warnings.join(QLatin1Char('\n'));
     ui::info(this, T("translate_title").arg(modName), body);
+}
+
+QString MainWindow::translationLanguage() const
+{
+    // The profile's own answer wins; otherwise the one the user gave once.
+    // Deliberately NOT Settings::uiLanguage() at any point - the language the
+    // app is drawn in says nothing about the language the mods should be in.
+    const QString own = m_profiles && !m_profiles->isEmpty()
+        ? m_profiles->current().activeModlist().translationLanguage
+        : QString();
+    return target_language::resolve(own, Settings::translationLanguage());
+}
+
+QString MainWindow::ensureTranslationLanguage()
+{
+    const QString have = translationLanguage();
+    if (!have.isEmpty()) return have;
+
+    // Never been asked. Ask once, and store the answer as the SHARED default
+    // so switching game or profile never asks again; a profile that wants to
+    // differ overrides it from Settings > Mod translation language.
+    const QStringList tokens = target_language::tokens();
+    QStringList names;
+    names.reserve(tokens.size());
+    for (const QString &t : tokens) names << target_language::displayName(t);
+
+    // Pre-select what the system locale suggests. Only a starting point - the
+    // user still has to accept it, and this machine's locale is frequently not
+    // the language its owner plays in.
+    int preset = 0;
+    const QString guess = target_language::fromLocale(QLocale::system().name());
+    if (!guess.isEmpty()) {
+        const int idx = tokens.indexOf(guess);
+        if (idx >= 0) preset = idx;
+    }
+
+    bool ok = false;
+    const QString picked = QInputDialog::getItem(
+        this, T("translation_lang_ask_title"), T("translation_lang_ask_body"),
+        names, preset, /*editable=*/false, &ok);
+    if (!ok || picked.isEmpty()) return {};
+
+    const int idx = names.indexOf(picked);
+    if (idx < 0 || idx >= tokens.size()) return {};
+
+    Settings::setTranslationLanguage(tokens[idx]);
+    refreshTranslationLanguageMenu();
+    return tokens[idx];
+}
+
+void MainWindow::refreshTranslationLanguageMenu()
+{
+    if (!m_translationLangMenu) return;
+    m_translationLangMenu->clear();
+
+    const QString fallback = Settings::translationLanguage();
+    const QString own = m_profiles && !m_profiles->isEmpty()
+        ? m_profiles->current().activeModlist().translationLanguage
+        : QString();
+
+    auto *group = new QActionGroup(m_translationLangMenu);
+    group->setExclusive(true);
+
+    // First entry clears the override, so a profile can be put back on the
+    // shared default without having to know which language that is.
+    const QString fbName = fallback.isEmpty()
+        ? T("translation_lang_none")
+        : target_language::displayName(fallback);
+    auto *inherit = m_translationLangMenu->addAction(
+        T("translation_lang_default").arg(fbName));
+    inherit->setCheckable(true);
+    inherit->setChecked(own.isEmpty());
+    group->addAction(inherit);
+    connect(inherit, &QAction::triggered, this,
+            [this]{ setProfileTranslationLanguage(QString()); });
+    m_translationLangMenu->addSeparator();
+
+    for (const QString &token : target_language::tokens()) {
+        auto *act = m_translationLangMenu->addAction(
+            target_language::displayName(token));
+        act->setCheckable(true);
+        act->setChecked(!own.isEmpty() && own == token);
+        group->addAction(act);
+        connect(act, &QAction::triggered, this,
+                [this, token]{ setProfileTranslationLanguage(token); });
+    }
+}
+
+void MainWindow::setProfileTranslationLanguage(const QString &token)
+{
+    if (!m_profiles || m_profiles->isEmpty()) return;
+    ModlistProfile &mp = m_profiles->current().activeModlist();
+    if (mp.translationLanguage == token) return;
+    mp.translationLanguage = token;
+    m_profiles->save();
+    refreshTranslationLanguageMenu();
+
+    // Every painted verdict was decided against the old language, and the
+    // memory file the editor will open is named after the new one. Re-run the
+    // scan the same way toggling the notices on does, but only when the user
+    // is actually looking at them.
+    if (Settings::untranslatedNoticesVisible()) runTranslationScan();
+
+    statusBar()->showMessage(
+        T("translation_lang_set").arg(
+            token.isEmpty() ? T("translation_lang_none")
+                            : target_language::displayName(token)), 4000);
+}
+
+void MainWindow::onPackageMod(QListWidgetItem *item)
+{
+    if (!item) return;
+    const QString modPath = item->data(ModRole::ModPath).toString();
+    const QString modName = item->text().trimmed();
+    if (modPath.isEmpty() || !QDir(modPath).exists()) return;
+
+    // Desktop by default: this exists to hand a file to a browser upload form,
+    // and that is where people look for it. Falls back to home on a desktop-less
+    // setup rather than to the mods dir, which would bury it among the mods.
+    QString dir = QStandardPaths::writableLocation(QStandardPaths::DesktopLocation);
+    if (dir.isEmpty())
+        dir = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
+
+    const QString suggested =
+        QDir(dir).filePath(mod_package::suggestedFileName(
+            modName, mod_package::Format::Zip));
+
+    const QString dst = QFileDialog::getSaveFileName(
+        this, T("package_dialog_title").arg(modName), suggested,
+        T("package_dialog_filter"));
+    if (dst.isEmpty()) return;
+
+    statusBar()->showMessage(T("package_working").arg(modName));
+    QApplication::setOverrideCursor(Qt::BusyCursor);
+
+    // Off the UI thread: a translation mod is one small plugin, but this entry
+    // is offered on every installed mod and a texture pack is gigabytes.
+    // work() touches only the two local strings it is given, per the
+    // async::guarded contract - no widgets, no members.
+    async::guarded(this,
+        [modPath, dst](MainWindow *) {
+            return mod_package::create(modPath, dst);
+        },
+        [modName](MainWindow *self, mod_package::Result r) {
+            QApplication::restoreOverrideCursor();
+            if (!r.ok) {
+                self->statusBar()->clearMessage();
+                ui::warn(self, T("package_dialog_title").arg(modName),
+                         T("package_failed").arg(r.error));
+                return;
+            }
+            const QString size = QLocale().formattedDataSize(r.bytes);
+            self->statusBar()->showMessage(
+                T("package_done_status").arg(QFileInfo(r.archivePath).fileName()),
+                6000);
+
+            QMessageBox box(self);
+            box.setWindowTitle(T("package_dialog_title").arg(modName));
+            box.setIcon(QMessageBox::Information);
+            box.setText(T("package_done")
+                            .arg(QDir::toNativeSeparators(r.archivePath), size));
+            auto *reveal = box.addButton(T("package_reveal"),
+                                         QMessageBox::ActionRole);
+            box.addButton(QMessageBox::Ok);
+            box.setDefaultButton(QMessageBox::Ok);
+            box.exec();
+            if (box.clickedButton() == reveal)
+                subprocess::startDetached(
+                    "xdg-open", {QFileInfo(r.archivePath).absolutePath()});
+        });
 }

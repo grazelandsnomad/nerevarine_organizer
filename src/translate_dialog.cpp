@@ -2,6 +2,9 @@
 
 #include "prompts.h"
 #include "translator.h"
+#include "target_language.h"
+#include "google_translate.h"
+#include "lore_overrides.h"
 
 #include <QDialogButtonBox>
 #include <QHBoxLayout>
@@ -23,29 +26,13 @@
 
 namespace {
 
-// MyMemory: free, keyless, and the only reason machine translation can be
-// offered at all without asking the user for an account. Rate-limited, so the
-// button translates only the rows that are still empty.
-constexpr const char *kMtEndpoint = "https://api.mymemory.translated.net/get";
-
-// Our lowercase language tokens -> ISO codes the endpoint speaks.
+// The ISO code the endpoint speaks, from the one language table. Was a private
+// copy here, built from the app's UI-translation set - which listed languages
+// Bethesda never ships and spelled Chinese as the app's own filename. See
+// target_language.h.
 QString isoFor(const QString &language)
 {
-    static const QHash<QString, QString> kIso = {
-        {QStringLiteral("spanish"),  QStringLiteral("es")},
-        {QStringLiteral("french"),   QStringLiteral("fr")},
-        {QStringLiteral("german"),   QStringLiteral("de")},
-        {QStringLiteral("italian"),  QStringLiteral("it")},
-        {QStringLiteral("russian"),  QStringLiteral("ru")},
-        {QStringLiteral("japanese"), QStringLiteral("ja")},
-        {QStringLiteral("catalan"),  QStringLiteral("ca")},
-        {QStringLiteral("greek"),    QStringLiteral("el")},
-        {QStringLiteral("arabic"),   QStringLiteral("ar")},
-        {QStringLiteral("thai"),     QStringLiteral("th")},
-        {QStringLiteral("ukrainian"),QStringLiteral("uk")},
-        {QStringLiteral("chinese_simplified"), QStringLiteral("zh")},
-    };
-    return kIso.value(language.trimmed().toLower());
+    return target_language::isoCode(language);
 }
 
 enum Col { ColSource = 0, ColTranslation = 1, ColCount = 2 };
@@ -86,8 +73,10 @@ void TranslateDialog::buildUi(const QString &modName)
     auto *lay = new QVBoxLayout(this);
 
     auto *intro = new QLabel(
-        T("translate_intro").arg(QString::number(m_rowSource.size()),
-                                 QString::number(m_strings.size())), this);
+        T("translate_intro")
+            .arg(QString::number(m_rowSource.size()),
+                 QString::number(m_strings.size()),
+                 target_language::displayName(m_language)), this);
     intro->setWordWrap(true);
     lay->addWidget(intro);
 
@@ -151,56 +140,101 @@ void TranslateDialog::onMachineTranslate()
     if (iso.isEmpty()) return;
 
     // Only the rows still empty: never overwrite something the user typed or
-    // the memory supplied, and keep the request count down on a free endpoint.
-    QList<int> todo;
-    for (int i = 0; i < m_rowSource.size(); ++i)
-        if (m_table->item(i, ColTranslation)->text().trimmed().isEmpty())
-            todo << i;
+    // the memory supplied.
+    // Lore terms first: a published name beats a machine guess, and one that
+    // is answered here never reaches Google at all. "Shadowscales" comes back
+    // from a translator as "escamas de sombra", which translates the words and
+    // loses the name. See lore_overrides.h.
+    m_mtQueue.clear();
+    int lore = 0;
+    for (int i = 0; i < m_rowSource.size(); ++i) {
+        if (!m_table->item(i, ColTranslation)->text().trimmed().isEmpty())
+            continue;
+        const QString canonical =
+            lore_overrides::lookup(m_rowSource[i], m_language);
+        if (!canonical.isEmpty()) {
+            m_table->item(i, ColTranslation)->setText(canonical);
+            ++lore;
+            continue;
+        }
+        m_mtQueue << i;
+    }
 
-    if (todo.isEmpty()) {
+    if (m_mtQueue.isEmpty()) {
+        if (lore > 0) {
+            ui::info(this, T("translate_machine"),
+                     T("translate_lore_only").arg(lore));
+            return;
+        }
         ui::info(this, T("translate_machine"), T("translate_machine_nothing"));
         return;
     }
     if (!ui::confirm(this, T("translate_machine"),
-                     T("translate_machine_confirm").arg(todo.size())))
+                     T("translate_machine_confirm").arg(m_mtQueue.size())))
         return;
 
     if (!m_net) m_net = new QNetworkAccessManager(this);
     m_mtBtn->setEnabled(false);
     m_mtBar->setVisible(true);
-    m_mtBar->setRange(0, todo.size());
+    m_mtBar->setRange(0, m_mtQueue.size());
     m_mtBar->setValue(0);
-    m_mtPending = int(todo.size());
+    m_mtTotal  = int(m_mtQueue.size());
+    m_mtDone   = 0;
+    m_mtFailed = 0;
+    m_mtInFlight = 0;
 
-    for (int rowIdx : todo) {
-        QUrl url(QString::fromLatin1(kMtEndpoint));
-        QUrlQuery q;
-        q.addQueryItem(QStringLiteral("q"), m_rowSource[rowIdx]);
-        q.addQueryItem(QStringLiteral("langpair"),
-                       QStringLiteral("en|") + iso);
-        url.setQuery(q);
+    pumpMachineTranslate();
+}
 
-        QNetworkReply *reply = m_net->get(QNetworkRequest(url));
+void TranslateDialog::pumpMachineTranslate()
+{
+    // A queue, not a fan-out. The free endpoint starts refusing when a whole
+    // mod's worth of strings arrives at once, and 164 strings in one mod is an
+    // ordinary size here.
+    while (!m_mtQueue.isEmpty()
+           && m_mtInFlight < google_translate::kMaxInFlight) {
+        const int rowIdx = m_mtQueue.takeFirst();
+        ++m_mtInFlight;
+
+        QNetworkRequest req(
+            google_translate::requestUrl(m_rowSource[rowIdx], isoFor(m_language)));
+        req.setRawHeader("Accept", "application/json");
+        // Google's edge 403s the bare Qt user agent - see google_translate.h.
+        req.setRawHeader("User-Agent", google_translate::userAgent());
+
+        QNetworkReply *reply = m_net->get(req);
         connect(reply, &QNetworkReply::finished, this, [this, reply, rowIdx]() {
             reply->deleteLater();
-            if (reply->error() == QNetworkReply::NoError) {
-                const QJsonObject root =
-                    QJsonDocument::fromJson(reply->readAll()).object();
-                const QString text = root.value(QStringLiteral("responseData"))
-                                         .toObject()
-                                         .value(QStringLiteral("translatedText"))
-                                         .toString();
+
+            QString text;
+            if (reply->error() == QNetworkReply::NoError)
+                text = google_translate::parseResponse(reply->readAll());
+
+            if (text.isEmpty()) {
+                ++m_mtFailed;
+            } else if (rowIdx < m_table->rowCount()
+                       && m_table->item(rowIdx, ColTranslation)
+                              ->text().trimmed().isEmpty()) {
                 // Only fill if still empty: the user may have typed into the
                 // row while the request was in flight, and they win.
-                if (!text.isEmpty() && rowIdx < m_table->rowCount()
-                    && m_table->item(rowIdx, ColTranslation)->text().trimmed().isEmpty())
-                    m_table->item(rowIdx, ColTranslation)->setText(text);
+                m_table->item(rowIdx, ColTranslation)->setText(text);
             }
-            m_mtBar->setValue(m_mtBar->value() + 1);
-            if (--m_mtPending <= 0) {
-                m_mtBar->setVisible(false);
-                m_mtBtn->setEnabled(true);
-            }
+
+            --m_mtInFlight;
+            m_mtBar->setValue(++m_mtDone);
+
+            if (!m_mtQueue.isEmpty()) { pumpMachineTranslate(); return; }
+            if (m_mtInFlight > 0) return;
+
+            m_mtBar->setVisible(false);
+            m_mtBtn->setEnabled(true);
+            // Say when nothing came back. Google's free endpoint is
+            // undocumented and can start refusing traffic outright; silence
+            // would look identical to "these words have no translation".
+            if (m_mtFailed > 0)
+                ui::warn(this, T("translate_machine"),
+                         T("translate_machine_failed")
+                             .arg(m_mtTotal - m_mtFailed).arg(m_mtFailed));
         });
     }
 }

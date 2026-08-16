@@ -20,6 +20,13 @@ struct ModlistProfile {
     QString modsDir;
     QString modlistFilename;
     QString loadOrderFilename;
+    // Override of the mod-translation language for this profile only; empty
+    // means inherit Settings::translationLanguage(). See target_language.h.
+    //
+    // Every field here is mirrored: save() rewrites all of them from the
+    // struct, so a field added to save() but not to load() is silently
+    // blanked on the next save. Add to both or neither.
+    QString translationLanguage;
 };
 
 struct GameProfile {

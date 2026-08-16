@@ -3342,10 +3342,12 @@ void MainWindow::runTranslationScan()
     // window looking frozen for exactly the moment the panel exists to cover.
     if (m_translationOverlay) m_translationOverlay->begin(T("untranslated_scanning"));
 
-    // The app's own UI language doubles as the game language: it decides which
-    // Strings/<plugin>_<language>.* counts as a translation for a localized
-    // plugin. The string comparison itself needs no language at all.
-    m_loadCtl->scanTranslations(mods, Settings::uiLanguage().trimmed().toLower());
+    // The modlist's target language, NOT the app's UI language: it decides
+    // which Strings/<plugin>_<language>.* counts as a translation for a
+    // localized plugin. The string comparison itself needs no language at all,
+    // which is why an empty value (never asked) is fine here and this path
+    // does not prompt - see target_language.h.
+    m_loadCtl->scanTranslations(mods, translationLanguage());
 }
 
 void MainWindow::onTranslationsScanned(

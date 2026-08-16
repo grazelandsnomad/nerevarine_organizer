@@ -21,7 +21,8 @@ Result build(const QString &sourceModPath,
              const QString &sourceModName,
              const QString &modsDir,
              const QString &language,
-             const ByPlugin &replacements)
+             const ByPlugin &replacements,
+             const EncodingByPlugin &encodings)
 {
     Result r;
 
@@ -64,7 +65,9 @@ Result build(const QString &sourceModPath,
             continue;
         }
 
-        const auto w = plugin_writer::apply(src, dst, it.value());
+        const auto w = plugin_writer::apply(
+            src, dst, it.value(),
+            encodings.value(rel, plugin_text::Encoding::Utf8));
         if (!w.ok) {
             r.warnings << QStringLiteral("%1: %2").arg(rel, w.error);
             continue;

@@ -80,6 +80,11 @@ add_executable(test_profiles
     ${CMAKE_SOURCE_DIR}/src/game_profiles.cpp
     ${CMAKE_SOURCE_DIR}/src/game_adapters.cpp
     ${CMAKE_SOURCE_DIR}/src/settings.cpp
+    ${CMAKE_SOURCE_DIR}/src/target_language.cpp
+    ${CMAKE_SOURCE_DIR}/src/language_guess.cpp
+    ${CMAKE_SOURCE_DIR}/src/lore_overrides.cpp
+    ${CMAKE_SOURCE_DIR}/src/mod_package.cpp
+    ${CMAKE_SOURCE_DIR}/src/subprocess.cpp
     ${CMAKE_SOURCE_DIR}/include/modlist_model.h
     ${CMAKE_SOURCE_DIR}/include/game_profiles.h
 )
@@ -118,7 +123,13 @@ add_executable(test_load_order
     ${CMAKE_SOURCE_DIR}/src/plugin_records.cpp
     ${CMAKE_SOURCE_DIR}/src/plugin_strings.cpp
     ${CMAKE_SOURCE_DIR}/src/plugin_writer.cpp
-    ${CMAKE_SOURCE_DIR}/src/tes3_encoding.cpp
+    ${CMAKE_SOURCE_DIR}/src/plugin_text.cpp
+    ${CMAKE_SOURCE_DIR}/src/target_language.cpp
+    ${CMAKE_SOURCE_DIR}/src/language_guess.cpp
+    ${CMAKE_SOURCE_DIR}/src/lore_overrides.cpp
+    ${CMAKE_SOURCE_DIR}/src/mod_package.cpp
+    ${CMAKE_SOURCE_DIR}/src/subprocess.cpp
+    ${CMAKE_SOURCE_DIR}/src/google_translate.cpp
     ${CMAKE_SOURCE_DIR}/src/translation_store.cpp
     ${CMAKE_SOURCE_DIR}/src/translation_mod.cpp
     ${CMAKE_SOURCE_DIR}/src/pluginparser.cpp

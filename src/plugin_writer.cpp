@@ -1,7 +1,7 @@
 #include "plugin_writer.h"
 
 #include "plugin_strings.h"
-#include "tes3_encoding.h"
+#include "plugin_text.h"
 
 #include <QByteArray>
 #include <QFile>
@@ -86,7 +86,7 @@ QByteArray deflateRecord(const QByteArray &raw)
 // byte-identical even for records we do understand.
 bool patchBody(const QByteArray &body, const char *type, quint32 formId,
                const Replacements &repl, QByteArray &out,
-               QStringList &usedKeys)
+               QStringList &usedKeys, plugin_text::Encoding enc)
 {
     const QString prefix = QString::fromLatin1(type, 4) + QLatin1Char(':')
                          + QString::number(formId, 16) + QLatin1Char(':');
@@ -114,7 +114,7 @@ bool patchBody(const QByteArray &body, const char *type, quint32 formId,
                 // imposing one: a plugin that stored the string without a NUL
                 // keeps that shape, so the diff stays as small as the edit.
                 const bool hadNul = (size > 0 && p[6 + size - 1] == '\0');
-                QByteArray text = it.value().toUtf8();
+                QByteArray text = plugin_text::encode(it.value(), enc);
                 if (hadNul) text.append('\0');
 
                 built.append(p, 4);
@@ -142,7 +142,8 @@ bool patchBody(const QByteArray &body, const char *type, quint32 formId,
 // Rebuild one span of records and groups. Sizes are computed from the bytes
 // each block actually produced, so they cannot drift out of step with content.
 QByteArray rebuild(const QByteArray &src, int begin, int end,
-                   const Replacements &repl, QStringList &usedKeys, bool &bad)
+                   const Replacements &repl, QStringList &usedKeys, bool &bad,
+                   plugin_text::Encoding enc)
 {
     QByteArray out;
     const char *base = src.constData();
@@ -156,7 +157,7 @@ QByteArray rebuild(const QByteArray &src, int begin, int end,
             if (size < quint32(kHeader) || off + qint64(size) > end) { bad = true; return out; }
             const int inner = off + kHeader;
             const int stop  = off + int(size);
-            const QByteArray body = rebuild(src, inner, stop, repl, usedKeys, bad);
+            const QByteArray body = rebuild(src, inner, stop, repl, usedKeys, bad, enc);
             if (bad) return out;
 
             QByteArray head(hdr, kHeader);
@@ -181,7 +182,7 @@ QByteArray rebuild(const QByteArray &src, int begin, int end,
                 inflateRecord(QByteArray::fromRawData(bodyPtr, int(size)));
             QByteArray patched;
             if (!raw.isEmpty()
-                && patchBody(raw, hdr, formId, repl, patched, usedKeys)) {
+                && patchBody(raw, hdr, formId, repl, patched, usedKeys, enc)) {
                 newBody = deflateRecord(patched);
                 // A compression failure must not silently drop the record.
                 if (newBody.isEmpty()) { bad = true; return out; }
@@ -190,7 +191,7 @@ QByteArray rebuild(const QByteArray &src, int begin, int end,
         } else {
             QByteArray patched;
             if (patchBody(QByteArray::fromRawData(bodyPtr, int(size)),
-                          hdr, formId, repl, patched, usedKeys)) {
+                          hdr, formId, repl, patched, usedKeys, enc)) {
                 newBody = patched;
                 changed = true;
             }
@@ -217,14 +218,15 @@ QByteArray rebuild(const QByteArray &src, int begin, int end,
 // Flat record stream: hdr = type[4] dataSize[4] header1[4] flags[4], then
 // subrecords type[4] size[4] data. No groups, no compression - the rebuild is
 // a single pass, and only the record's own dataSize has to follow a change.
-// Text is CP1252 (tes3_encoding), and key generation is shared with the
+// Text is CP1252 (plugin_text), and key generation is shared with the
 // extractor via plugin_strings::tes3TextSubrecord / tes3Identity, so identity
 // subrecords (DIAL topics, CELL names, editor ids) can never be rewritten:
 // they are never text, so no key names them.
 constexpr int kTes3Header = 16;
 
 QByteArray rebuildTes3(const QByteArray &src, const Replacements &repl,
-                       QStringList &usedKeys, bool &bad)
+                       QStringList &usedKeys, bool &bad,
+                       plugin_text::Encoding enc)
 {
     QByteArray out;
     out.reserve(src.size());
@@ -270,7 +272,7 @@ QByteArray rebuildTes3(const QByteArray &src, const Replacements &repl,
                     // strings usually carry a trailing NUL, but not always
                     // (INFO NAME frequently does not).
                     const bool hadNul = (ss > 0 && p[8 + ss - 1] == '\0');
-                    QByteArray text = tes3_encoding::toCp1252(it.value());
+                    QByteArray text = plugin_text::encode(it.value(), enc);
                     if (hadNul) text.append('\0');
 
                     built.append(p, 4);
@@ -307,7 +309,7 @@ QByteArray rebuildTes3(const QByteArray &src, const Replacements &repl,
 } // namespace
 
 Result apply(const QString &srcPath, const QString &dstPath,
-             const Replacements &repl)
+             const Replacements &repl, plugin_text::Encoding encoding)
 {
     Result r;
 
@@ -335,11 +337,15 @@ Result apply(const QString &srcPath, const QString &dstPath,
         return r;
     }
 
+    // TES3 has exactly one encoding, so the caller's value is ignored there
+    // rather than trusted.
+    if (tes3) encoding = plugin_text::Encoding::Cp1252;
+
     QStringList used;
     bool bad = false;
     const QByteArray out = tes3
-        ? rebuildTes3(src, repl, used, bad)
-        : rebuild(src, 0, int(src.size()), repl, used, bad);
+        ? rebuildTes3(src, repl, used, bad, encoding)
+        : rebuild(src, 0, int(src.size()), repl, used, bad, encoding);
     if (bad) {
         r.error = QStringLiteral("malformed plugin structure; refusing to write");
         return r;

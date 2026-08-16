@@ -3,6 +3,8 @@
 #include "modlist_model.h"
 #include "modentry.h"
 #include "game_profiles.h"
+#include "settings.h"
+#include "target_language.h"
 
 #include <QCoreApplication>
 #include <QSignalSpy>
@@ -515,6 +517,111 @@ static void mp_testRenameNonDefaultMovesFiles()
           QFile::exists(mp_stateRoot() + "/modlist_morrowind__New.txt"));
 }
 
+
+// The per-profile mod-translation language. Every ModlistProfile field is
+// mirrored: save() rewrites all of them from the struct, so a field added to
+// save() but not to load() is silently blanked on the next save. This is the
+// regression guard for exactly that.
+static void mp_testTranslationLanguageSurvivesSaveLoad()
+{
+    std::cout << "\n[a profile's translation language survives save + load]\n";
+    mp_clearHarness();
+
+    QString gameId, profileName;
+    {
+        GameProfileRegistry reg;
+        reg.load();
+        if (reg.size() == 0) { check("registry loaded", false); return; }
+        gameId      = reg.current().id;
+        profileName = reg.current().activeModlist().name;
+        reg.current().activeModlist().translationLanguage = QStringLiteral("spanish");
+        reg.save();
+    }
+
+    // Round trip through a completely fresh registry - the save/load lockstep.
+    {
+        GameProfileRegistry fresh;
+        fresh.load();
+        check("the override came back",
+              fresh.current().activeModlist().translationLanguage
+                  == QStringLiteral("spanish"),
+              fresh.current().activeModlist().translationLanguage);
+    }
+    check("and it is under the profile's own settings key",
+          Settings::modlistTranslationLanguage(gameId, profileName)
+              == QStringLiteral("spanish"));
+
+    // A second save must not blank it: that is the failure mode where load()
+    // was forgotten, and it only shows up on the save AFTER the one that
+    // wrote the value.
+    {
+        GameProfileRegistry again;
+        again.load();
+        again.save();
+        GameProfileRegistry third;
+        third.load();
+        check("a second save round trip does not blank it",
+              third.current().activeModlist().translationLanguage
+                  == QStringLiteral("spanish"),
+              third.current().activeModlist().translationLanguage);
+    }
+}
+
+static void mp_testTranslationLanguageDefaultsEmpty()
+{
+    std::cout << "\n[an untouched profile inherits rather than guessing]\n";
+    mp_clearHarness();
+
+    GameProfileRegistry reg;
+    reg.load();
+    if (reg.size() == 0) { check("registry loaded", false); return; }
+    // Empty means "inherit the shared default". It must never come back as
+    // "english", which is the assumption this whole setting replaced.
+    check("no override by default",
+          reg.current().activeModlist().translationLanguage.isEmpty(),
+          reg.current().activeModlist().translationLanguage);
+    check("and the shared default is unset until asked",
+          Settings::translationLanguage().isEmpty());
+
+    // The shared default is what the one-time prompt writes, so every other
+    // game and profile inherits it and is never asked again.
+    Settings::setTranslationLanguage(QStringLiteral("spanish"));
+    check("the shared default round-trips",
+          Settings::translationLanguage() == QStringLiteral("spanish"));
+    check("an untouched profile now inherits it",
+          target_language::resolve(
+              reg.current().activeModlist().translationLanguage,
+              Settings::translationLanguage()) == QStringLiteral("spanish"));
+}
+
+static void mp_testRenameCarriesTranslationLanguage()
+{
+    std::cout << "\n[renaming a profile keeps its translation language]\n";
+    mp_clearHarness();
+
+    GameProfileRegistry reg;
+    reg.load();
+    if (reg.size() == 0) { check("registry loaded", false); return; }
+
+    const int idx = reg.addModlistProfile(QStringLiteral("Castellano"));
+    if (idx < 0) { check("profile added", false); return; }
+    reg.current().modlistProfiles[idx].translationLanguage = QStringLiteral("spanish");
+    reg.save();
+
+    check("renamed", reg.renameModlistProfile(idx, QStringLiteral("Espanol")));
+    check("the language followed the new name",
+          reg.current().modlistProfiles[idx].translationLanguage
+              == QStringLiteral("spanish"));
+    check("stored under the new name",
+          Settings::modlistTranslationLanguage(reg.current().id,
+                                               QStringLiteral("Espanol"))
+              == QStringLiteral("spanish"));
+    check("and the old key is gone",
+          Settings::modlistTranslationLanguage(reg.current().id,
+                                               QStringLiteral("Castellano"))
+              .isEmpty());
+}
+
 static void run_modlist_profiles()
 {
     mp_harness();   // set up the temp INI / state root
@@ -527,6 +634,9 @@ static void run_modlist_profiles()
     mp_testRemoveProfileDropsSettings();
     mp_testRenameKeepsLegacyFilenameForDefault();
     mp_testRenameNonDefaultMovesFiles();
+    mp_testTranslationLanguageDefaultsEmpty();
+    mp_testTranslationLanguageSurvivesSaveLoad();
+    mp_testRenameCarriesTranslationLanguage();
 }
 
 int main(int argc, char **argv)

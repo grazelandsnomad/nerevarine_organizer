@@ -70,6 +70,8 @@
 // geography that stays put across languages (WRLD, TREE). Silence for those is
 // correct, not a blind spot.
 
+#include "plugin_text.h"
+
 #include <QHash>
 #include <QString>
 #include <QStringList>
@@ -100,6 +102,12 @@ struct StringSet {
     // concept. Callers that gate a calibrated threshold need to know: the
     // 5%/20 partial thresholds were measured on a TES4 pair only.
     bool tes3 = false;
+
+    // How this plugin's text is stored. TES3 is always CP1252; TES4-family
+    // plugins are whatever the author's tools wrote and both occur - so the
+    // writer must put replacements back in the SAME encoding or it mojibakes
+    // every accent in game. See plugin_text.h.
+    plugin_text::Encoding encoding = plugin_text::Encoding::Utf8;
 
     // True when the plugin carries no player-visible text in either tier -
     // the mesh/texture replacer case, which must stay silent.

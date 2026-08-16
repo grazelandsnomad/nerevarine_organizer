@@ -58,6 +58,11 @@ struct Settings {
     static QString modlistFilename(const QString &gameId, const QString &profile);
     static void    setModlistFilename(const QString &gameId, const QString &profile, const QString &name);
     static QString loadOrderFilename(const QString &gameId, const QString &profile);
+    // Per-profile override of the mod-translation language; empty = inherit
+    // translationLanguage(). See target_language.h.
+    static QString modlistTranslationLanguage(const QString &gameId, const QString &profile);
+    static void    setModlistTranslationLanguage(const QString &gameId, const QString &profile,
+                                                 const QString &lang);
     static void    setLoadOrderFilename(const QString &gameId, const QString &profile, const QString &name);
 
     // Drop the whole `games/<id>/profile/<name>` group on profile
@@ -85,6 +90,12 @@ struct Settings {
     static void    setUiScaleFactor(double factor);
     static QString uiLanguage();
     static void    setUiLanguage(const QString &lang);
+    // The language MODS should be in - NOT uiLanguage, which is the language
+    // the app itself is drawn in. Shared default across every game and
+    // profile; empty means the user has never been asked. See
+    // target_language.h for why conflating the two was a bug.
+    static QString translationLanguage();
+    static void    setTranslationLanguage(const QString &lang);
     static bool    utilityExplainerSeen();
     static void    setUtilityExplainerSeen(bool seen);
     static bool    uiDarkMode();                 // default false (light)

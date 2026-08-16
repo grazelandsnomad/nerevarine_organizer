@@ -60,6 +60,11 @@ private slots:
     void onImportDatabase();
 
 private:
+    // Drains m_mtQueue while fewer than kMaxInFlight requests are outstanding;
+    // each reply calls back in to keep the queue moving.
+    void pumpMachineTranslate();
+
+private:
     void buildUi(const QString &modName);
     void fillFromMemory();
 
@@ -75,7 +80,11 @@ private:
     QPushButton  *m_mtBtn   = nullptr;
     QProgressBar *m_mtBar   = nullptr;
     QNetworkAccessManager *m_net = nullptr;
-    int           m_mtPending = 0;
+    QList<int>    m_mtQueue;        // rows still waiting to be sent
+    int           m_mtInFlight = 0;
+    int           m_mtDone     = 0;
+    int           m_mtTotal    = 0;
+    int           m_mtFailed   = 0;
 };
 
 #endif // TRANSLATE_DIALOG_H

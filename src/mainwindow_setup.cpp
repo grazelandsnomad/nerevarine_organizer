@@ -386,6 +386,14 @@ void MainWindow::setupMenuBar()
         });
     }
 
+    // The language MODS should be in, which is a different question from the
+    // one above (the language this window is drawn in). Per modlist profile,
+    // defaulting to the answer given once; filled in by
+    // refreshTranslationLanguageMenu() because the active profile can change
+    // long after this menu is built, and this menu is never rebuilt.
+    m_translationLangMenu = settingsMenu->addMenu(T("menu_translation_language"));
+    refreshTranslationLanguageMenu();
+
     settingsMenu->addSeparator();
     settingsMenu->addAction(T("menu_customize_toolbar"), this,
                             [this]{ m_tbCustom->showCustomizeDialog(this); });
@@ -1947,6 +1955,10 @@ void MainWindow::onManageModlistProfiles()
 
 void MainWindow::updateProfileButton()
 {
+    // Before the early returns: the translation-language checkmark belongs to
+    // the active profile, and this is the one hook both switch paths share.
+    refreshTranslationLanguageMenu();
+
     if (!m_profileBtn) return;
 
     if (m_profiles->isEmpty()) {
