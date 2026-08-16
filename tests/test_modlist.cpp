@@ -770,6 +770,43 @@ static void testLoadOrderV1StillLoads()
 
 } // namespace serialization_section
 
+
+// The flag that decides whether "package as archive" is offered. It has to
+// survive a restart, or a translation built today loses the one action it was
+// built for tomorrow.
+static void testGeneratedTranslationFlagRoundTrips()
+{
+    std::cout << "\n-- generated-translation flag --\n";
+    ModEntry m;
+    m.itemType      = QStringLiteral("mod");
+    m.displayName   = QStringLiteral("Varuun DLC items - Spanish (Nerevarine)");
+    m.modPath       = QStringLiteral("/mods/varuun-es");
+    m.installStatus = 1;
+    m.isGeneratedTranslation = true;
+
+    const QString text = modlist_serializer::serializeModlist({m});
+    check("the flag is written", text.contains(QStringLiteral("generated_translation")));
+
+    const QList<ModEntry> got = modlist_serializer::parseModlist(text);
+    check("one entry back", got.size() == 1);
+    check("and it is still ours",
+          !got.isEmpty() && got[0].isGeneratedTranslation);
+
+    // An ordinary downloaded mod must NOT carry it, or the action would show
+    // up everywhere again.
+    ModEntry plain;
+    plain.itemType      = QStringLiteral("mod");
+    plain.displayName   = QStringLiteral("Some Downloaded Mod");
+    plain.modPath       = QStringLiteral("/mods/other");
+    plain.installStatus = 1;
+    const QString plainText = modlist_serializer::serializeModlist({plain});
+    check("an ordinary mod does not write the flag",
+          !plainText.contains(QStringLiteral("generated_translation")));
+    const QList<ModEntry> back = modlist_serializer::parseModlist(plainText);
+    check("and reads back false",
+          !back.isEmpty() && !back[0].isGeneratedTranslation);
+}
+
 static void run_modlist_serialization()
 {
     using namespace serialization_section;
@@ -801,6 +838,7 @@ static void run_modlist_serialization()
     testEmptyInputReturnsEmpty();
     testLoadOrderV2RoundTrip();
     testLoadOrderV1StillLoads();
+    testGeneratedTranslationFlagRoundTrips();
 }
 
 // === ModEntry ===

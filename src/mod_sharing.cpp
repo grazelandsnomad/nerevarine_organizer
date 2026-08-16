@@ -35,6 +35,7 @@ ModEntry makeSharedRow(const ModEntry &source, bool copyConfig)
         e.annotation   = source.annotation;
         e.dependsOn    = source.dependsOn;
         e.isUtility    = source.isUtility;
+        e.isGeneratedTranslation = source.isGeneratedTranslation;
         e.isFavorite   = source.isFavorite;
     } else {
         e.checked = false;          // start disabled at default config

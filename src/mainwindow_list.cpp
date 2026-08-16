@@ -806,9 +806,14 @@ void MainWindow::onContextMenu(const QPoint &pos)
                     QString path = item->data(ModRole::ModPath).toString();
                     subprocess::startDetached("xdg-open", {path});
                 });
-                menu.addAction(T("ctx_package_mod"), this, [this, item]{
-                    onPackageMod(item);
-                });
+                // Only on translations built here. Packaging is for
+                // publishing your own work; offering it on a mod someone else
+                // wrote is an invitation to re-upload it.
+                if (item->data(ModRole::IsGeneratedTranslation).toBool()) {
+                    menu.addAction(T("ctx_package_mod"), this, [this, item]{
+                        onPackageMod(item);
+                    });
+                }
 
                 // A mod the scan flagged red carries text nothing translates -
                 // so the fix is offered on the spot, named for the language it
@@ -1628,6 +1633,9 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
     tr->setData(ModRole::ModPath,       built.modPath);
     tr->setData(ModRole::InstallStatus, 1);
     tr->setData(ModRole::DateAdded,     QDateTime::currentDateTime());
+    // Marks this as ours, which is what makes "package as archive" appear on
+    // it and nowhere else.
+    tr->setData(ModRole::IsGeneratedTranslation, true);
     tr->setCheckState(Qt::Checked);
     tr->setToolTip(built.modPath);
     m_modList->insertItem(m_modList->row(item) + 1, tr);
@@ -1756,6 +1764,9 @@ void MainWindow::setProfileTranslationLanguage(const QString &token)
 void MainWindow::onPackageMod(QListWidgetItem *item)
 {
     if (!item) return;
+    // Checked here as well as in the menu: a gate that lives only in the UI
+    // that draws it is one keyboard shortcut away from not existing.
+    if (!item->data(ModRole::IsGeneratedTranslation).toBool()) return;
     const QString modPath = item->data(ModRole::ModPath).toString();
     const QString modName = item->text().trimmed();
     if (modPath.isEmpty() || !QDir(modPath).exists()) return;

@@ -100,6 +100,8 @@ QJsonObject modToJson(const ModEntry &e)
     }
     if (e.updateAvailable)           o.insert(QStringLiteral("update"),   true);
     if (e.isUtility)                 o.insert(QStringLiteral("utility"),  true);
+    if (e.isGeneratedTranslation)
+        o.insert(QStringLiteral("generated_translation"), true);
     if (e.isFavorite)                o.insert(QStringLiteral("favorite"), true);
     if (!e.fomodChoices.isEmpty())   o.insert(QStringLiteral("fomod"),    e.fomodChoices);
     if (!e.bainChoices.isEmpty())    o.insert(QStringLiteral("bain"),     e.bainChoices);
@@ -181,6 +183,10 @@ ModEntry modFromJson(const QJsonObject &o)
     }
     e.updateAvailable = o.value(QStringLiteral("update")).toBool(false);
     e.isUtility       = o.value(QStringLiteral("utility")).toBool(false);
+    // No v1 counterpart: the tab format predates the translate editor, so a
+    // v1 list cannot hold one of these.
+    e.isGeneratedTranslation =
+        o.value(QStringLiteral("generated_translation")).toBool(false);
     e.isFavorite      = o.value(QStringLiteral("favorite")).toBool(false);
     e.fomodChoices    = o.value(QStringLiteral("fomod")).toString();
     e.bainChoices     = o.value(QStringLiteral("bain")).toString();

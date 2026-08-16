@@ -116,6 +116,11 @@ namespace ModRole {
     // lists: "partnerName\t<translatable>\t<identical>\t<common>", then the
     // plugin names, then a blank field, then sample untranslated strings.
     constexpr int TranslationDetail     = Qt::UserRole + 48; // QStringList
+    // bool: this mod was BUILT here, by the translate editor, rather than
+    // downloaded. Gates the "package as archive" action, which exists to help
+    // publish your own work and has no business appearing on someone else's
+    // mod. Persisted, so it survives a restart.
+    constexpr int IsGeneratedTranslation = Qt::UserRole + 49; // bool
 }
 
 namespace ItemType {

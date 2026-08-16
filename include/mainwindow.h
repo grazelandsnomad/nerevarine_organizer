@@ -420,7 +420,9 @@ private:
     // shape was chosen over patching the plugin in place.
     void onTranslateMod(QListWidgetItem *item);
     // "Package as archive...": zips the mod's folder contents ready for a mod
-    // page. Runs off the UI thread - a texture mod is gigabytes.
+    // page. Offered ONLY on translations this app generated
+    // (ModRole::IsGeneratedTranslation) - it exists to publish your own work,
+    // not to repackage someone else's mod. Runs off the UI thread.
     void onPackageMod(QListWidgetItem *item);
     // The language mods should be in for the ACTIVE modlist profile: its own
     // override when it has one, else the shared default. Empty means the user

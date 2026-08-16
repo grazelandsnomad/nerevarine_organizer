@@ -34,6 +34,8 @@ QList<ItemSnapshot> UndoStack::captureState() const
             s.installStatus   = it->data(ModRole::InstallStatus).toInt();
             s.updateAvailable = it->data(ModRole::UpdateAvailable).toBool();
             s.isUtility       = it->data(ModRole::IsUtility).toBool();
+            s.isGeneratedTranslation =
+                it->data(ModRole::IsGeneratedTranslation).toBool();
             s.isFavorite      = it->data(ModRole::IsFavorite).toBool();
         }
         state.append(s);
@@ -62,6 +64,7 @@ void UndoStack::applyState(const QList<ItemSnapshot> &state)
             it->setData(ModRole::InstallStatus, s.installStatus);
             it->setData(ModRole::UpdateAvailable, s.updateAvailable);
             it->setData(ModRole::IsUtility,   s.isUtility);
+            it->setData(ModRole::IsGeneratedTranslation, s.isGeneratedTranslation);
             it->setData(ModRole::IsFavorite,  s.isFavorite);
             it->setCheckState(s.checkState);
             it->setToolTip(s.modPath);

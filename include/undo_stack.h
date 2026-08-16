@@ -23,6 +23,7 @@ struct ItemSnapshot {
     int            installStatus = 0;
     bool           updateAvailable = false;
     bool           isUtility = false;
+    bool           isGeneratedTranslation = false;
     bool           isFavorite = false;
     QColor         bgColor;
     QColor         fgColor;

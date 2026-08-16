@@ -47,6 +47,9 @@ struct ModEntry {
     QDateTime dateAdded;
     bool      isUtility  = false;
     bool      isFavorite = false;
+    // Built by the translate editor rather than downloaded. See
+    // ModRole::IsGeneratedTranslation.
+    bool      isGeneratedTranslation = false;
     QString   fomodChoices;            // serialized "si:gi:pi;..."
     QString   bainChoices;             // ";"-joined BAIN package names chosen at install
 

@@ -36,6 +36,8 @@ ModEntry ModEntry::fromItem(const QListWidgetItem *item)
     e.dateAdded    = item->data(ModRole::DateAdded).toDateTime();
     e.isUtility    = item->data(ModRole::IsUtility).toBool();
     e.isFavorite   = item->data(ModRole::IsFavorite).toBool();
+    e.isGeneratedTranslation =
+        item->data(ModRole::IsGeneratedTranslation).toBool();
     e.fomodChoices = item->data(ModRole::FomodChoices).toString();
     e.bainChoices  = item->data(ModRole::BainChoices).toString();
 
@@ -95,6 +97,7 @@ void ModEntry::applyToItem(QListWidgetItem *item) const
     item->setData(ModRole::DateAdded,    dateAdded);
     item->setData(ModRole::IsUtility,    isUtility);
     item->setData(ModRole::IsFavorite,   isFavorite);
+    item->setData(ModRole::IsGeneratedTranslation, isGeneratedTranslation);
     item->setData(ModRole::FomodChoices, fomodChoices);
     item->setData(ModRole::BainChoices,  bainChoices);
 
