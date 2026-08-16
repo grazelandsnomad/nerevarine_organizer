@@ -56,6 +56,12 @@ public:
     // whether the memory is worth saving.
     bool memoryChanged() const { return m_memoryChanged; }
 
+private:
+    // Test hook: tests/test_translate_ui.cpp drives the table directly. The
+    // bug it exists to catch is invisible from outside - a programmatic write
+    // reads as a user edit and silently blanks the row.
+    friend struct TranslateDialogTestHook;
+
 private slots:
     void onAccept();
     void onMachineTranslate();

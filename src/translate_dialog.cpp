@@ -44,6 +44,24 @@ enum Col { ColSource = 0, ColTranslation = 1, ColCount = 2 };
 // the user edits the row by hand, which detaches it.
 constexpr int TemplateRole = Qt::UserRole + 1;
 
+// Marks a write to the table as OURS rather than the user's.
+//
+// QTableWidget emits cellChanged for a custom role just as it does for the
+// visible text, so storing the hidden template looked exactly like the user
+// typing: the row detached itself, expandRow then found no template, and every
+// row but the name came back blank. RAII so a new write site cannot forget it.
+class ProgrammaticEdit {
+public:
+    explicit ProgrammaticEdit(bool &flag) : m_flag(flag), m_prev(flag)
+    { m_flag = true; }
+    ~ProgrammaticEdit() { m_flag = m_prev; }
+    ProgrammaticEdit(const ProgrammaticEdit &) = delete;
+    ProgrammaticEdit &operator=(const ProgrammaticEdit &) = delete;
+private:
+    bool &m_flag;
+    bool  m_prev;
+};
+
 } // namespace
 
 TranslateDialog::TranslateDialog(const QString &modName,
@@ -284,16 +302,19 @@ void TranslateDialog::pumpMachineTranslate()
                 if (nameIdx >= 0 && nameIdx < m_nameRendering.size())
                     m_nameRendering[nameIdx] = text;
                 if (item >= 0 && item < m_table->rowCount()) {
-                    m_expanding = true;
+                    ProgrammaticEdit guard(m_expanding);
                     m_table->item(item, ColTranslation)->setText(text);
-                    m_expanding = false;
                 }
             } else if (item >= 0 && item < m_table->rowCount()
                        && m_table->item(item, ColTranslation)
                               ->text().trimmed().isEmpty()) {
                 // Keep the masked form: it is what lets this row follow the
-                // name if the user changes their mind about it.
-                m_table->item(item, ColTranslation)->setData(TemplateRole, text);
+                // name if the user changes their mind about it. Guarded, or
+                // storing it reads as a hand edit and blanks the row.
+                {
+                    ProgrammaticEdit guard(m_expanding);
+                    m_table->item(item, ColTranslation)->setData(TemplateRole, text);
+                }
                 expandRow(item);
             }
 
@@ -349,9 +370,8 @@ void TranslateDialog::expandRow(int row)
         subs << (m_nameRendering.value(i).isEmpty() ? m_mtNames[i]
                                                     : m_nameRendering[i]);
 
-    m_expanding = true;
+    ProgrammaticEdit guard(m_expanding);
     cell->setText(term_protect::unmask(tmpl, subs));
-    m_expanding = false;
 }
 
 void TranslateDialog::restyleLinkedRows()
@@ -362,7 +382,7 @@ void TranslateDialog::restyleLinkedRows()
     tint.setAlpha(48);
     const QBrush none(Qt::NoBrush);
 
-    m_expanding = true;
+    ProgrammaticEdit guard(m_expanding);
     for (int row = 0; row < m_table->rowCount(); ++row) {
         auto *cell = m_table->item(row, ColTranslation);
         auto *srcCell = m_table->item(row, ColSource);
@@ -385,7 +405,6 @@ void TranslateDialog::restyleLinkedRows()
             cell->setToolTip(QString());
         }
     }
-    m_expanding = false;
 }
 
 void TranslateDialog::onCellChanged(int row, int column)
@@ -407,7 +426,10 @@ void TranslateDialog::onCellChanged(int row, int column)
     // losing the link.
     auto *cell = m_table->item(row, ColTranslation);
     if (cell && !cell->data(TemplateRole).toString().isEmpty()) {
-        cell->setData(TemplateRole, QString());
+        {
+            ProgrammaticEdit guard(m_expanding);
+            cell->setData(TemplateRole, QString());
+        }
         restyleLinkedRows();
     }
 }

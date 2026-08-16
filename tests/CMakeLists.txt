@@ -230,6 +230,35 @@ target_include_directories(test_extract PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(test_extract PRIVATE Qt6::Core Qt6::Concurrent)
 set_target_properties(test_extract PROPERTIES AUTOMOC ON)
 
+
+# Translate editor's table behaviour. A QDialog with Q_OBJECT -> AUTOMOC +
+# Widgets, and translator.h pulls the generated translation_keys.h.
+add_executable(test_translate_ui
+    test_translate_ui.cpp
+    ${CMAKE_SOURCE_DIR}/src/translate_dialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/translation_store.cpp
+    ${CMAKE_SOURCE_DIR}/src/translation_mod.cpp
+    ${CMAKE_SOURCE_DIR}/src/translation_rules.cpp
+    ${CMAKE_SOURCE_DIR}/src/term_protect.cpp
+    ${CMAKE_SOURCE_DIR}/src/google_translate.cpp
+    ${CMAKE_SOURCE_DIR}/src/lore_overrides.cpp
+    ${CMAKE_SOURCE_DIR}/src/target_language.cpp
+    ${CMAKE_SOURCE_DIR}/src/plugin_writer.cpp
+    ${CMAKE_SOURCE_DIR}/src/plugin_strings.cpp
+    ${CMAKE_SOURCE_DIR}/src/plugin_text.cpp
+    ${CMAKE_SOURCE_DIR}/src/prompts.cpp
+    ${CMAKE_SOURCE_DIR}/src/subprocess.cpp
+    ${CMAKE_SOURCE_DIR}/src/translator.cpp
+    ${CMAKE_SOURCE_DIR}/include/translate_dialog.h
+)
+set_target_properties(test_translate_ui PROPERTIES AUTOMOC ON)
+target_include_directories(test_translate_ui PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/generated
+)
+target_link_libraries(test_translate_ui PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network)
+
 # CTest registration. "unit" = hermetic; test_nxm also carries an "integration"
 # variant gated on NEREVARINE_SKIP_INTEGRATION.
 set(UNIT_TESTS
@@ -238,6 +267,7 @@ set(UNIT_TESTS
     test_bethesda
     test_modlist
     test_profiles
+    test_translate_ui
     test_nexus
     test_plugins
     test_load_order
