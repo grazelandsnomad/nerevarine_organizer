@@ -851,6 +851,84 @@ void FomodWizard::buildUi()
             }
         }
 
+        // Pass G: exclusive groups whose options name alternative FRAMEWORKS.
+        //
+        // Producers of Skyrim asks how to inject its orc-stronghold blacksmith
+        // goods - Don't Install / Container Distribution Framework /
+        // SkyPatcher - and ships with a framework pre-selected. With neither
+        // installed that writes config files nothing reads: no crash, no
+        // error, the blacksmiths simply have no goods.
+        //
+        // Runs BEFORE Pass F so a requirement stated in a description still
+        // has the last word on the same option.
+        for (int si = 0; si < m_steps.size(); ++si) {
+            const FomodStep &step = m_steps[si];
+            for (int gi = 0; gi < step.groups.size(); ++gi) {
+                const FomodGroup &group = step.groups[gi];
+                if (group.type != QLatin1String("SelectExactlyOne")
+                    && group.type != QLatin1String("SelectAtMostOne")) continue;
+
+                QStringList names;
+                names.reserve(group.plugins.size());
+                for (const FomodPlugin &p : group.plugins) names << p.name;
+
+                const auto choice =
+                    fomod::chooseFrameworkOption(names, m_installedModNames);
+                if (choice.states.isEmpty()) continue;   // not a framework group
+
+                using St = fomod::FrameworkChoice::State;
+                for (int pi = 0; pi < names.size()
+                                 && pi < m_buttons[si][gi].size(); ++pi) {
+                    QAbstractButton *btn = m_buttons[si][gi][pi];
+                    if (!btn) continue;
+                    const QString tip = btn->toolTip();
+                    auto note = [&](const QString &label, const QString &detail) {
+                        btn->setText(btn->text() + label);
+                        btn->setToolTip((tip.isEmpty() ? QString() : tip + QStringLiteral("\n\n"))
+                                        + detail);
+                    };
+                    // Hardcoded English, like every other annotation in this
+                    // file - only the dialog chrome goes through T().
+                    if (choice.states[pi] == St::Installed) {
+                        note(QStringLiteral(" \u2705"),
+                             QStringLiteral("%1 is installed, so this option "
+                                            "will work.").arg(names[pi]));
+                    } else if (choice.states[pi] == St::Missing) {
+                        note(QStringLiteral(" \u26A0\uFE0F not installed"),
+                             QStringLiteral("%1 is not installed in this "
+                                            "modlist. Choosing this writes "
+                                            "configuration files nothing will "
+                                            "read - no error, the feature "
+                                            "simply does nothing.").arg(names[pi]));
+                    } else if (choice.states[pi] == St::OptOut
+                               && !choice.anyInstalled) {
+                        note(QStringLiteral(" \u2705"),
+                             QStringLiteral("None of the frameworks this offers "
+                                            "is installed, so this is the only "
+                                            "option that does what it says."));
+                    }
+                }
+
+                if (choice.index >= 0 && choice.index < m_buttons[si][gi].size()) {
+                    QAbstractButton *pick = m_buttons[si][gi][choice.index];
+                    if (pick && pick->isEnabled()) {
+                        pick->setChecked(true);
+                        if (choice.brokeTie)
+                            pick->setToolTip(pick->toolTip()
+                                + QStringLiteral("\n\nMore than one of these "
+                                    "frameworks is installed, so either would "
+                                    "work. This one is picked because more mods "
+                                    "depend on it, making it the more "
+                                    "field-tested - not because the other is "
+                                    "known to be less stable."));
+                    }
+                    // Settled by what is installed, not by preference, so the
+                    // prior-choices block must not undo it.
+                    openMwOverriddenGroups.insert((quint64(si) << 16) | quint64(gi));
+                }
+            }
+        }
+
         // Pass F: options whose description names a mod they REQUIRE.
         //
         // Grand Solitude's "SMIM Rotor" ships ticked and reads "Required

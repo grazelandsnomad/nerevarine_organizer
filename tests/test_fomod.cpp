@@ -989,6 +989,77 @@ static void run_fomod_hint()
 
 
 
+
+    std::cout << "\n[an exclusive group offering alternative frameworks]\n";
+    {
+        // Producers of Skyrim, verbatim.
+        const QStringList group{QStringLiteral("Don't Install"),
+                                QStringLiteral("Container Distribution Framework"),
+                                QStringLiteral("SkyPatcher")};
+        using St = fomod::FrameworkChoice::State;
+
+        // Neither installed: the pre-selected framework writes config nothing
+        // reads, so the opt-out is the only honest answer.
+        {
+            const auto c = fomod::chooseFrameworkOption(
+                group, {QStringLiteral("Base Object Swapper")});
+            check("opt-out chosen when no framework is installed", c.index == 0);
+            check("and neither framework is claimed present", !c.anyInstalled);
+            check("each missing one is marked",
+                  c.states[1] == St::Missing && c.states[2] == St::Missing);
+        }
+        // Exactly one installed: that fact decides, no preference involved.
+        {
+            const auto c = fomod::chooseFrameworkOption(
+                group, {QStringLiteral("Container Distribution Framework")});
+            check("the installed one is chosen", c.index == 1);
+            check("without invoking the tiebreak", !c.brokeTie);
+        }
+        {
+            const auto c = fomod::chooseFrameworkOption(
+                group, {QStringLiteral("SkyPatcher")});
+            check("and the other way round", c.index == 2 && !c.brokeTie);
+        }
+        // Both installed: either works, so a documented order breaks the tie
+        // and the UI is told that is what happened.
+        {
+            const auto c = fomod::chooseFrameworkOption(
+                group, {QStringLiteral("Container Distribution Framework"),
+                        QStringLiteral("SkyPatcher")});
+            check("a tie is broken toward the more depended-upon framework",
+                  c.index == 2, QString::number(c.index));
+            check("and reported as a tiebreak, not as a verdict", c.brokeTie);
+        }
+        // An acronym in the modlist still counts as the same framework.
+        {
+            const auto c = fomod::chooseFrameworkOption(
+                group, {QStringLiteral("CDF")});
+            check("installed under its acronym", c.index == 1);
+        }
+
+        // A group whose options name nothing identifiable is left entirely
+        // alone - the rule that keeps ordinary option names quiet.
+        {
+            const auto c = fomod::chooseFrameworkOption(
+                {QStringLiteral("Default LOD"),
+                 QStringLiteral("Distant windows do not glow")},
+                {QStringLiteral("SkyPatcher")});
+            check("an ordinary exclusive group is not touched",
+                  c.states.isEmpty() && c.index == -1);
+        }
+        // No opt-out offered and nothing installed: nothing safe to pick, so
+        // the author's default is left alone rather than guessed at.
+        {
+            const auto c = fomod::chooseFrameworkOption(
+                {QStringLiteral("Container Distribution Framework"),
+                 QStringLiteral("SkyPatcher")}, {QStringLiteral("SkyUI")});
+            check("no opt-out and nothing installed leaves the default alone",
+                  c.index == -1);
+            check("but both are still marked missing",
+                  c.states[0] == St::Missing && c.states[1] == St::Missing);
+        }
+    }
+
     std::cout << "\n[downloading the build for the wrong game version]\n";
     {
         // The real Scrambled Bugs mod page.
@@ -1599,6 +1670,61 @@ static void wizardui_testRequiredModTogglesTheOption()
     }
 }
 
+
+// The reported case end to end: Producers of Skyrim ships a framework
+// pre-selected, and with neither installed that writes config nothing reads.
+static void wizardui_testFrameworkGroup()
+{
+    auto build = [](const QStringList &installed) {
+        FomodGroup g = wizardui_mkGroup("SelectExactlyOne", {
+            wizardui_mkPlugin("Don't Install"),
+            wizardui_mkPlugin("Container Distribution Framework"),
+            wizardui_mkPlugin("SkyPatcher"),
+        });
+        g.name = QStringLiteral("Orc Stronghold Blacksmiths");
+        FomodStep st;
+        st.name   = QStringLiteral("Step 1 of 1");
+        st.groups = { g };
+        return FomodWizardTestHook::build({ st }, {}, installed);
+    };
+
+    std::cout << "\n[no framework installed: the opt-out is selected]\n";
+    {
+        auto *w = build({QStringLiteral("Base Object Swapper")});
+        check("Don't Install is picked",
+              FomodWizardTestHook::btn(w, 0, 0, 0)->isChecked());
+        check("the framework the FOMOD defaulted to is not",
+              !FomodWizardTestHook::btn(w, 0, 0, 1)->isChecked());
+        check("and it is marked missing",
+              FomodWizardTestHook::btn(w, 0, 0, 1)->text()
+                  .contains(QStringLiteral("not installed")),
+              FomodWizardTestHook::btn(w, 0, 0, 1)->text());
+        delete w;
+    }
+
+    std::cout << "\n[both installed: the tiebreak is explained, not asserted]\n";
+    {
+        auto *w = build({QStringLiteral("SkyPatcher"),
+                         QStringLiteral("Container Distribution Framework")});
+        check("SkyPatcher is picked",
+              FomodWizardTestHook::btn(w, 0, 0, 2)->isChecked());
+        const QString tip = FomodWizardTestHook::btn(w, 0, 0, 2)->toolTip();
+        check("the tooltip says either would work",
+              tip.contains(QStringLiteral("either would work")), tip);
+        check("and does not claim the other is unstable",
+              tip.contains(QStringLiteral("not because")), tip);
+        delete w;
+    }
+
+    std::cout << "\n[only the one you have is picked]\n";
+    {
+        auto *w = build({QStringLiteral("Container Distribution Framework")});
+        check("CDF chosen when it is the only one present",
+              FomodWizardTestHook::btn(w, 0, 0, 1)->isChecked());
+        delete w;
+    }
+}
+
 static void run_fomod_wizard_ui()
 {
     std::cout << "=== fomod_wizard_ui (buildUi) tests ===\n";
@@ -1607,6 +1733,7 @@ static void run_fomod_wizard_ui()
     wizardui_testModlistVerdict();
     wizardui_testMissingCitedMod();
     wizardui_testRequiredModTogglesTheOption();
+    wizardui_testFrameworkGroup();
 
     // SelectAtMostOne, nothing required: starts on None
     {

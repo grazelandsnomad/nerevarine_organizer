@@ -37,6 +37,20 @@ QStringList aliasesFor(const QString &name);
 // The shape a caller matching against a modlist wants.
 QStringList expand(const QStringList &names);
 
+// Distribution frameworks a FOMOD may offer as alternatives for the same
+// content, most preferred first.
+//
+// This is a TIEBREAK, used only when the user has more than one installed and
+// something has to be picked. It is NOT a claim that one crashes less than
+// another - no such evidence exists, and a manager inventing one would be
+// worse than useless. The order is by how widely each is depended upon, on the
+// reasoning that the framework hundreds of mods already load is the more
+// field-tested one.
+//
+// When only one is installed, that fact decides and this order is never
+// consulted.
+QStringList frameworkPreference();
+
 } // namespace mod_aliases
 
 #endif // MOD_ALIASES_H

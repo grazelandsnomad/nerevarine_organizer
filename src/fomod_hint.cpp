@@ -1,5 +1,7 @@
 #include "fomod_hint.h"
 
+#include "mod_aliases.h"
+
 #include <QRegularExpression>
 #include <QSet>
 #include <QStringList>
@@ -340,6 +342,96 @@ SkyrimRuntime classifyRuntimeVariant(const QString &optionName)
     // side of a pair; say nothing rather than guess.
     if (ae == se) return SkyrimRuntime::None;
     return ae ? SkyrimRuntime::AE : SkyrimRuntime::SE;
+}
+
+namespace {
+
+// Word-boundary match of any alias of `name` against any installed mod name.
+// Short needles must match at the start so "CDF" cannot fire inside an
+// unrelated word.
+bool installedUnderAnyName(const QString &name, const QStringList &installed)
+{
+    for (const QString &cand : mod_aliases::expand({name})) {
+        const bool shortNeedle = cand.length() < 8;
+        const QString pat = shortNeedle
+            ? (QLatin1String("^") + QRegularExpression::escape(cand) + QLatin1String("\\b"))
+            : (QLatin1String("\\b") + QRegularExpression::escape(cand) + QLatin1String("\\b"));
+        const QRegularExpression re(pat, QRegularExpression::CaseInsensitiveOption);
+        for (const QString &mod : installed)
+            if (re.match(mod).hasMatch()) return true;
+    }
+    return false;
+}
+
+// "Don't Install", "None", "Skip" - the escape hatch a framework group offers.
+bool isOptOut(const QString &name)
+{
+    static const QRegularExpression re(
+        QStringLiteral("^\\s*(?:don'?t\\s+install|do\\s+not\\s+install|none|no|skip|"
+                       "not\\s+installed|disabled?)\\s*$"),
+        QRegularExpression::CaseInsensitiveOption);
+    return re.match(name).hasMatch();
+}
+
+} // namespace
+
+FrameworkChoice chooseFrameworkOption(const QStringList &optionNames,
+                                      const QStringList &installedModNames)
+{
+    FrameworkChoice out;
+    out.states.reserve(optionNames.size());
+
+    int optOutIdx = -1;
+    QList<int> named;          // options identified as mods
+    for (int i = 0; i < optionNames.size(); ++i) {
+        const QString n = optionNames[i].trimmed();
+        if (isOptOut(n)) {
+            out.states << FrameworkChoice::State::OptOut;
+            if (optOutIdx < 0) optOutIdx = i;
+            continue;
+        }
+        // Identifiable as a mod only via the alias table. Without that a bare
+        // option name is not evidence of anything - the rule that keeps
+        // "Normal Maps" quiet elsewhere.
+        if (mod_aliases::aliasesFor(n).isEmpty()
+            && !mod_aliases::frameworkPreference().contains(n, Qt::CaseInsensitive)) {
+            out.states << FrameworkChoice::State::Unknown;
+            continue;
+        }
+        named << i;
+        const bool have = installedUnderAnyName(n, installedModNames);
+        if (have) out.anyInstalled = true;
+        out.states << (have ? FrameworkChoice::State::Installed
+                            : FrameworkChoice::State::Missing);
+    }
+
+    // No option we can identify: not our group.
+    if (named.isEmpty()) { out.states.clear(); return out; }
+
+    if (out.anyInstalled) {
+        // Prefer an installed one. With several, the documented order breaks
+        // the tie - see mod_aliases::frameworkPreference.
+        QList<int> installedIdx;
+        for (int i : named)
+            if (out.states[i] == FrameworkChoice::State::Installed) installedIdx << i;
+
+        out.index = installedIdx.first();
+        if (installedIdx.size() > 1) {
+            out.brokeTie = true;
+            int bestRank = -1;
+            for (int i : installedIdx) {
+                const int rank = mod_aliases::frameworkPreference()
+                                     .indexOf(optionNames[i].trimmed(), Qt::CaseInsensitive);
+                const int r = (rank < 0) ? 999 : rank;
+                if (bestRank < 0 || r < bestRank) { bestRank = r; out.index = i; }
+            }
+        }
+        return out;
+    }
+
+    // Nothing installed: the opt-out is the only option that does what it says.
+    out.index = optOutIdx;
+    return out;
 }
 
 QString betterRuntimeFile(const QString &chosen, const QStringList &candidates,

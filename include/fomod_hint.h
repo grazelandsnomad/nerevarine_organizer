@@ -21,6 +21,7 @@
 #include "nxmurl.h"
 
 #include <QList>
+#include <QStringList>
 #include <QString>
 #include <QStringList>
 
@@ -109,6 +110,51 @@ QString missingModLabel(const QStringList &optionNames, const QString &groupName
 QStringList requiredMods(const QString &description,
                          const QString &optionName = {},
                          const QString &groupName = {});
+
+// -- Exclusive groups offering alternative frameworks -----------------
+//
+// Producers of Skyrim asks how to inject its orc-stronghold blacksmith goods:
+//
+//   Orc Stronghold Blacksmiths
+//     ( ) Don't Install
+//     (o) Container Distribution Framework      <- the FOMOD's default
+//     ( ) SkyPatcher
+//
+// The options are not content, they are FRAMEWORKS the user must already have.
+// With neither installed the pre-selected one installs config files that
+// silently do nothing: no crash, no error, the blacksmiths just have no goods.
+// Nothing in the manager said so, though it knew the modlist.
+//
+// Unlike the checkbox passes, an exclusive group always has something
+// selected, so this must choose rather than merely warn.
+
+struct FrameworkChoice {
+    // Index to select, or -1 to leave the FOMOD's own default alone.
+    int  index = -1;
+    // Per-option verdicts, index-parallel with the names passed in. A name
+    // this cannot identify as a mod gets Unknown and is never judged.
+    enum class State { Unknown, Installed, Missing, OptOut };
+    QList<State> states;
+    // True when at least one named framework is installed, so the group can
+    // actually do something.
+    bool anyInstalled = false;
+    // Set when more than one was installed and the preference order broke the
+    // tie, so the UI can say that is what happened.
+    bool brokeTie = false;
+};
+
+// Decide an exclusive group whose options name alternative frameworks.
+//
+// Only acts on options it can identify as mods (via mod_aliases), which is the
+// positive evidence that makes a missing one meaningful - the same rule the
+// requirement passes turn on. A group with no identifiable option is left
+// entirely alone.
+//
+// Picks an installed framework when there is one, breaking a tie by
+// mod_aliases::frameworkPreference(); otherwise the opt-out option
+// ("Don't Install", "None") when the group offers one.
+FrameworkChoice chooseFrameworkOption(const QStringList &optionNames,
+                                      const QStringList &installedModNames);
 
 // -- Skyrim runtime pairs ---------------------------------------------
 //

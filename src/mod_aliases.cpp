@@ -18,6 +18,9 @@ const QList<QStringList> &table()
         {"USLEEP", "Unofficial Skyrim Legendary Edition Patch"},
         {"SKSE", "SKSE64", "Skyrim Script Extender"},
         {"SkyUI"},
+        {"SkyPatcher"},
+        {"CDF", "Container Distribution Framework"},
+        {"BOS", "Base Object Swapper"},
         {"DynDOLOD", "Dynamic Distant Objects LOD"},
         {"FNIS", "Fores New Idles in Skyrim"},
         {"XPMSE", "XPMSSE", "XP32 Maximum Skeleton"},
@@ -69,6 +72,16 @@ QStringList aliasesFor(const QString &name)
     for (const QString &n : table()[*it])
         if (n.toLower() != key) out << n;
     return out;
+}
+
+QStringList frameworkPreference()
+{
+    // SkyPatcher first: it is depended upon by far more mods than the others
+    // here, so it is the most exercised in the field. Not a stability claim -
+    // see the header.
+    return {QStringLiteral("SkyPatcher"),
+            QStringLiteral("Container Distribution Framework"),
+            QStringLiteral("Base Object Swapper")};
 }
 
 QStringList expand(const QStringList &names)
