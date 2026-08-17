@@ -194,7 +194,34 @@ bool looksLikeModName(const QString &phrase)
 
 } // namespace
 
-QStringList requiredMods(const QString &description)
+// Installer vocabulary: what a FOMOD calls its own pieces. A requirement
+// naming one of these is about the package being installed.
+bool isInstallerBoilerplate(const QString &phrase)
+{
+    static const QSet<QString> kSelf = {
+        "main files", "main file", "main", "core files", "core file", "core",
+        "base files", "base file", "required files", "required file",
+        "optional files", "optional file", "this mod", "the mod",
+        "main package", "base package", "core package",
+    };
+    return kSelf.contains(phrase.trimmed().toLower());
+}
+
+// Does `phrase` just name the option or group it is attached to? Exact match
+// only: "SMIM" must survive on an option called "SMIM Rotor", so containment
+// would be far too eager.
+bool isSelfReference(const QString &phrase, const QString &optionName,
+                     const QString &groupName)
+{
+    const QString p = phrase.simplified().toLower();
+    if (p.isEmpty()) return false;
+    return p == optionName.simplified().toLower()
+        || p == groupName.simplified().toLower();
+}
+
+QStringList requiredMods(const QString &description,
+                         const QString &optionName,
+                         const QString &groupName)
 {
     if (description.isEmpty()) return {};
 
@@ -256,9 +283,14 @@ QStringList requiredMods(const QString &description)
         // the long form spanned two mods.
         const QString name  = titleRun(words, 0, /*stopAtConnector=*/false);
         const QString short_ = titleRun(words, 0, /*stopAtConnector=*/true);
-        if (name.isEmpty() || !looksLikeModName(name)) continue;
+        const auto acceptable = [&](const QString &n) {
+            return !n.isEmpty() && looksLikeModName(n)
+                && !isInstallerBoilerplate(n)
+                && !isSelfReference(n, optionName, groupName);
+        };
+        if (!acceptable(name)) continue;
         if (!out.contains(name)) out << name;
-        if (!short_.isEmpty() && short_ != name && looksLikeModName(short_)
+        if (!short_.isEmpty() && short_ != name && acceptable(short_)
             && !out.contains(short_))
             out << short_;
 

@@ -877,7 +877,8 @@ void FomodWizard::buildUi()
                 for (int pi = 0; pi < group.plugins.size() &&
                                  pi < m_buttons[si][gi].size(); ++pi) {
                     const QStringList needed =
-                        fomod::requiredMods(group.plugins[pi].description);
+                        fomod::requiredMods(group.plugins[pi].description,
+                                            group.plugins[pi].name, group.name);
                     if (needed.isEmpty()) continue;
 
                     // Widen by the scene's acronyms, so "SMIM" finds a mod
@@ -902,17 +903,27 @@ void FomodWizard::buildUi()
                     QAbstractButton *btn = m_buttons[si][gi][pi];
                     if (!btn || !btn->isEnabled()) continue;
 
+                    // Short on the label, full sentence in the tooltip. The
+                    // long form ran off the end of the dialog and buried the
+                    // option's own name, which is what the user is reading.
+                    const QString tip = btn->toolTip();
                     if (present) {
                         if (tickable) btn->setChecked(true);
-                        btn->setText(btn->text() + QStringLiteral(
-                            " \u2705 %1 is installed, so this option works.")
-                                .arg(firstName));
+                        btn->setText(btn->text()
+                            + QStringLiteral(" \u2705 %1 \u2713").arg(firstName));
+                        btn->setToolTip(
+                            (tip.isEmpty() ? QString() : tip + QStringLiteral("\n\n"))
+                            + QStringLiteral("%1 is installed, so this option works.")
+                                  .arg(firstName));
                     } else {
                         if (tickable) btn->setChecked(false);
-                        btn->setText(btn->text() + QStringLiteral(
-                            " \u26A0\uFE0F Warning: this option requires %1, "
-                            "which is not installed in this modlist.")
-                                .arg(firstName));
+                        btn->setText(btn->text()
+                            + QStringLiteral(" \u26A0\uFE0F needs %1").arg(firstName));
+                        btn->setToolTip(
+                            (tip.isEmpty() ? QString() : tip + QStringLiteral("\n\n"))
+                            + QStringLiteral("This option requires %1, which is not "
+                                             "installed in this modlist, so it has "
+                                             "been unticked.").arg(firstName));
                     }
                 }
             }

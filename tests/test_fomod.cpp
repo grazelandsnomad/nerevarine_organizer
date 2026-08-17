@@ -962,6 +962,29 @@ static void run_fomod_hint()
         check("a description with no requirement says nothing",
               fomod::requiredMods("Installs Ashfall compatible meshes.").isEmpty());
         check("empty in, empty out", fomod::requiredMods(QString()).isEmpty());
+
+        // Grand Solitude's own required entry: "Required Main Files." under a
+        // group called "Required", on an option called "Main files". Without
+        // the self-reference guard this parsed as a missing mod named "Main
+        // Files" and warned on the one option the user cannot deselect.
+        check("a requirement naming the option itself is not another mod",
+              fomod::requiredMods("Required Main Files.",
+                                  "Main files", "Required").isEmpty());
+        check("nor is one naming its group",
+              fomod::requiredMods("Requires the Core Files.",
+                                  "Core Files", "Options").isEmpty());
+        check("installer boilerplate is not a mod either",
+              fomod::requiredMods("Required Main Package.",
+                                  "Whatever", "Options").isEmpty());
+        // The guard is an EXACT match on purpose: "SMIM" has to survive on an
+        // option called "SMIM Rotor", so containment would be far too eager.
+        check("an acronym inside the option name still counts",
+              fomod::requiredMods(
+                  "SMIM Rotor for Solitude Windmill. Required Static Mesh "
+                  "Improvement Mod - SMIM by Brumbek.",
+                  "SMIM Rotor", "SMIM Rotor")
+                  .contains(QStringLiteral("SMIM")));
+
     }
 
 
@@ -1507,6 +1530,11 @@ static void wizardui_testRequiredModTogglesTheOption()
               btn->text());
         check("with a warning, not a recommendation",
               btn->text().contains(QString::fromUtf8("⚠")), btn->text());
+        // The label stays short enough to read; the full sentence is a
+        // tooltip. The long form ran off the end of the dialog.
+        check("the label is short", btn->text().size() < 70, btn->text());
+        check("and the tooltip carries the explanation",
+              btn->toolTip().contains(QStringLiteral("unticked")), btn->toolTip());
         delete w;
     }
 
@@ -1515,8 +1543,11 @@ static void wizardui_testRequiredModTogglesTheOption()
         auto *w = build({QStringLiteral("Static Mesh Improvement Mod SE")});
         auto *btn = FomodWizardTestHook::btn(w, 0, 0, 0);
         check("ticked", btn->isChecked());
-        check("and says so", btn->text().contains(QStringLiteral("is installed")),
+        check("and names the mod on the label",
+              btn->text().contains(QStringLiteral("Static Mesh Improvement Mod")),
               btn->text());
+        check("with the detail in the tooltip",
+              btn->toolTip().contains(QStringLiteral("is installed")), btn->toolTip());
         delete w;
     }
 
@@ -1527,6 +1558,26 @@ static void wizardui_testRequiredModTogglesTheOption()
         auto *w = build({QStringLiteral("SMIM")});
         check("ticked from the acronym alone",
               FomodWizardTestHook::btn(w, 0, 0, 0)->isChecked());
+        delete w;
+    }
+
+
+    std::cout << "\n[a FOMOD's own required entry is not a missing mod]\n";
+    {
+        // Grand Solitude's Required group holds one option, "Main files",
+        // described as "Required Main Files." That parsed as a missing mod
+        // called "Main Files" and warned on the one option with no choice.
+        FomodPlugin p = wizardui_mkPlugin("Main files", "Required");
+        p.description = QStringLiteral("Required Main Files.");
+        FomodGroup g = wizardui_mkGroup("SelectAll", { p });
+        g.name = QStringLiteral("Required");
+        FomodStep st;
+        st.name   = QStringLiteral("Step 1 of 1");
+        st.groups = { g };
+        auto *w = FomodWizardTestHook::build({ st });
+        const QString text = FomodWizardTestHook::btn(w, 0, 0, 0)->text();
+        check("no warning on the installer's own required files",
+              !text.contains(QString::fromUtf8("⚠")), text);
         delete w;
     }
 

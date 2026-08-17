@@ -100,7 +100,15 @@ QString missingModLabel(const QStringList &optionNames, const QString &groupName
 // full name, then any acronym). Empty when the description states no
 // requirement, or states one that is not about another mod - which is the
 // common case and the reason this is safe.
-QStringList requiredMods(const QString &description);
+// `optionName` and `groupName` are what the option calls ITSELF. A FOMOD's
+// own required entry reads "Required Main Files." under a group called
+// "Required", and without them that parses as a missing mod named "Main
+// Files" - a warning on the one option the user has no choice about. A
+// requirement that names the option it is attached to is describing this
+// mod's own files, not another mod.
+QStringList requiredMods(const QString &description,
+                         const QString &optionName = {},
+                         const QString &groupName = {});
 
 // -- Skyrim runtime pairs ---------------------------------------------
 //
