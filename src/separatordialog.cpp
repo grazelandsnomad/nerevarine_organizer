@@ -59,6 +59,12 @@ static const QList<Preset> PRESETS = {
     // Visuals: violet on lavender for lighting/shaders/post-fx; distinct from
     // Textures, which is surface art not rendering effects.
     {"👁️", "sep_preset_visuals",      QColor("#E8D5F5"), QColor("#5B2D82")},
+    // Blood / gore: bright red on near-black. The red family was already
+    // crowded - Armor is pale-on-dark-red, Combat and Overhauls are
+    // dark-on-pale - so this goes far darker than any of them to stay
+    // distinguishable at a glance. 6.03:1, well clear of the 3:1 bar
+    // separator_theme.h enforces.
+    {"🩸", "sep_preset_blood_gore",   QColor("#2B0A0A"), QColor("#FF5C5C")},
 };
 
 SeparatorDialog::SeparatorDialog(QWidget *parent)
