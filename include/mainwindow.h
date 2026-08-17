@@ -515,7 +515,11 @@ private:
 
     void scheduleTranslationScan();
     void runTranslationScan();
-    void onTranslationsScanned(const QHash<QString, TranslationCoverage> &byModPath);
+    // modsWithoutPlugins: enabled mods the scan never opened, because they
+    // carry no plugin. Shown in the summary so it reports what it checked
+    // rather than implying it checked everything.
+    void onTranslationsScanned(const QHash<QString, TranslationCoverage> &byModPath,
+                               int modsWithoutPlugins);
     // Wipe the roles when the toggle goes off, so a stale verdict can't be
     // left painted on a row.
     void clearTranslationMarks();

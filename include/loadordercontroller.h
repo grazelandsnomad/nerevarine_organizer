@@ -130,8 +130,14 @@ signals:
         const QHash<QString, QList<plugin_records::RecordClash>> &recordClashes);
     void missingMastersScanned(
         const QHash<QString, QPair<bool, QStringList>> &byModPath);
+    // `modsWithoutPlugins` is how many enabled mods carried no .esp/.esm/.esl
+    // at all. The scan reads plugins, so those mods were not examined - text
+    // built into an SKSE DLL, an MCM menu or packed in a BSA is invisible to
+    // it. Reported so the summary can say what it did NOT check instead of
+    // claiming everything is covered.
     void translationsScanned(
-        const QHash<QString, TranslationCoverage> &byModPath);
+        const QHash<QString, TranslationCoverage> &byModPath,
+        int modsWithoutPlugins);
     // 0-100 while a translation scan runs, polled off the worker. Emitted at 0
     // the moment a scan starts, so the UI can put its progress panel up before
     // the first plugin is read.

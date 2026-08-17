@@ -122,6 +122,10 @@ public:
 
     // Read only after finished() fires.
     const QHash<QString, TranslationCoverage> &results() const { return m_results; }
+    // Enabled mods that carried no plugin at all. Not a failure - most are
+    // meshes or SKSE libraries with genuinely nothing to translate - but the
+    // scan did not look INSIDE them, so the summary must not claim it did.
+    int modsWithoutPlugins() const { return m_noPluginMods; }
 
     // 0-100, safe to read from the UI thread at any time. Polled by the
     // controller rather than signalled per plugin: the bar only needs a few
@@ -150,6 +154,7 @@ protected:
             QDir dir(m_mods[i].path);
             if (!dir.exists()) continue;
 
+            bool sawPlugin = false;
             QDirIterator dit(m_mods[i].path, QDir::Files | QDir::NoDotAndDotDot,
                              QDirIterator::Subdirectories);
             while (dit.hasNext()) {
@@ -166,6 +171,7 @@ protected:
                 if (!lower.endsWith(QLatin1String(".esp"))
                  && !lower.endsWith(QLatin1String(".esm"))
                  && !lower.endsWith(QLatin1String(".esl"))) continue;
+                sawPlugin = true;
 
                 const auto st = cachedExtract(dit.filePath());
                 if (!st.valid) continue;
@@ -176,6 +182,7 @@ protected:
                 if (st.empty() && !st.localized) continue;
                 entries.append({i, lower, st});
             }
+            if (!sawPlugin) ++m_noPluginMods;
         }
         if (isInterruptionRequested()) return;
 
@@ -367,6 +374,7 @@ private:
 
     QList<conflict_direction::Mod>      m_mods;
     QString                             m_language;
+    int                                 m_noPluginMods = 0;
     Cache                              *m_cache   = nullptr;
     QMutex                             *m_cacheMu = nullptr;
     QHash<QString, TranslationCoverage> m_results;
@@ -433,9 +441,12 @@ void LoadOrderController::scanTranslations(
         m_translationProgressTimer->stop();
         const QHash<QString, TranslationCoverage> results =
             m_activeTranslationScanner->results();
+        // Read before the worker is destroyed - it is what lets the summary
+        // say what it did not examine.
+        const int noPlugin = m_activeTranslationScanner->modsWithoutPlugins();
         m_activeTranslationScanner->deleteLater();
         m_activeTranslationScanner = nullptr;
-        emit translationsScanned(results);
+        emit translationsScanned(results, noPlugin);
         // Serve whatever came in while this one was running, so the last edit
         // the user made is always the one reflected on screen.
         if (m_translationScanPending) {

@@ -3353,7 +3353,8 @@ void MainWindow::runTranslationScan()
 }
 
 void MainWindow::onTranslationsScanned(
-    const QHash<QString, TranslationCoverage> &byModPath)
+    const QHash<QString, TranslationCoverage> &byModPath,
+    int modsWithoutPlugins)
 {
     int flagged = 0, noTranslation = 0;
     for (int i = 0; i < m_modList->count(); ++i) {
@@ -3404,6 +3405,12 @@ void MainWindow::onTranslationsScanned(
         msg = T("untranslated_result_mixed")
                   .arg(noTranslation).arg(flagged - noTranslation);
     }
+    // Say what was NOT looked at. The scan reads plugins; a mod without one
+    // was never opened, so "nothing left to translate" on its own claims more
+    // than the scan can know - which is how Smart Talk, an SKSE DLL with no
+    // plugin, read as cleared when it had simply never been examined.
+    if (modsWithoutPlugins > 0)
+        msg += T("untranslated_result_unchecked").arg(modsWithoutPlugins);
     m_translationOverlay->showResult(msg);
 }
 
