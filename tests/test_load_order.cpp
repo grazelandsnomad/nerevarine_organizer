@@ -808,6 +808,7 @@ static void testMastersAndOverrides()
           pl.ownRecords == 2, QString::number(pl.ownRecords));
 }
 
+
 static void testMorrowindPluginRejected()
 {
     std::cout << "\n[a TES3 plugin is rejected on the magic]\n";
@@ -1106,6 +1107,54 @@ static void testLocalizedPluginReportsNoStrings()
           QString::number(s.byKey.size()));
 }
 
+// The scan's localized branch decides coverage from which
+// Strings/<plugin>_<lang> files it can SEE. Sanguine Symphony is localized
+// and ships its Strings inside a BSA, which the walk cannot read, so it saw
+// none - not even the English set that is certainly in there - and reported
+// "no translation", while the editor refused the same plugin for being
+// localized. The manager said both at once.
+//
+// Extracted as a free function because the rule is the whole bug: a missing
+// target file only counts once some file for that plugin has been seen.
+static bool localizedCovered(const QSet<QString> &stringFiles,
+                             const QString &base, const QString &language)
+{
+    if (language.isEmpty()) return true;
+    bool sawAny = false;
+    for (const QString &tok : stringFiles)
+        if (tok.startsWith(base + QLatin1Char('_'))) { sawAny = true; break; }
+    if (!sawAny) return true;               // could not look; make no claim
+    return stringFiles.contains(base + QLatin1Char('_') + language);
+}
+
+static void testLocalizedCoverageNeedsEvidence()
+{
+    std::cout << "\n[a localized plugin whose Strings cannot be seen is not a finding]\n";
+    const QString base = QStringLiteral("sanguine symphony");
+
+    // BSA-packed: nothing visible at all. This is the contradiction case.
+    check("no visible Strings means no claim",
+          localizedCovered({}, base, QStringLiteral("spanish")));
+    // Another mod's loose files must not count as evidence about this one.
+    check("another plugin's Strings are not evidence",
+          localizedCovered({QStringLiteral("someothermod_english")}, base,
+                           QStringLiteral("spanish")));
+
+    // Loose English present, Spanish absent: now the absence means something.
+    check("a missing target language IS a finding once we can see the set",
+          !localizedCovered({base + QStringLiteral("_english")}, base,
+                            QStringLiteral("spanish")));
+    check("and covered once the target language is there",
+          localizedCovered({base + QStringLiteral("_english"),
+                            base + QStringLiteral("_spanish")}, base,
+                           QStringLiteral("spanish")));
+
+    // No target language configured: nothing to judge against.
+    check("no target language means no claim",
+          localizedCovered({base + QStringLiteral("_english")}, base, QString()));
+}
+
+
 static void testMorrowindPluginRejected()
 {
     // Historical name: this used to assert TES3 was rejected. TES3 is now a
@@ -1359,6 +1408,7 @@ static void run_plugin_strings()
     ps_test::testOnlyPlayerFacingTypesAreRead();
     ps_test::testCompressedRecordIsRead();
     ps_test::testLocalizedPluginReportsNoStrings();
+    ps_test::testLocalizedCoverageNeedsEvidence();
     ps_test::testMorrowindPluginRejected();
     ps_test::testComparisonSeparatesTranslatedFromNot();
     ps_test::testReplacerPluginHasNothingToTranslate();

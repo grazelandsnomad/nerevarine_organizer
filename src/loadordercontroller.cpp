@@ -196,10 +196,32 @@ protected:
 
             // A localized plugin keeps its text in Strings/, so coverage is a
             // file-presence question and no comparison is possible.
+            //
+            // But the absence of a Spanish Strings file is only evidence when
+            // the Strings files can be seen AT ALL. Sanguine Symphony is
+            // localized and ships its Strings inside a BSA, which this walk
+            // cannot read (bsareader is TES3-only), so it found nothing - not
+            // even the English set that is definitely in there - and reported
+            // "no translation". Meanwhile the editor refused the same plugin
+            // for being localized, so the manager said both at once.
+            //
+            // Finding SOME Strings file for this plugin is what makes the
+            // missing one meaningful. Finding none means we could not look.
             if (ea.strings.localized) {
                 const QString base = ea.pluginName.section(QLatin1Char('.'), 0, 0);
-                const bool covered = m_language.isEmpty()
-                    || stringFiles.contains(base + QLatin1Char('_') + m_language);
+                bool sawAny = false;
+                for (const QString &tok : stringFiles) {
+                    if (tok.startsWith(base + QLatin1Char('_'))) { sawAny = true; break; }
+                }
+                if (m_language.isEmpty() || !sawAny) {
+                    // Nothing to say: no target language set, or the Strings
+                    // are somewhere we cannot read.
+                    noteCoverage(ea.modIdx, ea.pluginName, /*translatable=*/0,
+                                 TranslationCoverage::State::Ok, {}, {});
+                    continue;
+                }
+                const bool covered =
+                    stringFiles.contains(base + QLatin1Char('_') + m_language);
                 noteCoverage(ea.modIdx, ea.pluginName, /*translatable=*/0,
                              covered ? TranslationCoverage::State::Ok
                                      : TranslationCoverage::State::NoTranslation,

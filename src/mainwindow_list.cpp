@@ -1560,6 +1560,7 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
     // does not come back as UTF-8 mojibake in game (plugin_text.h).
     translation_mod::EncodingByPlugin encodings;
     bool sawPlugin = false;
+    bool sawLocalized = false;
     QDirIterator dit(modPath, QDir::Files | QDir::NoDotAndDotDot,
                      QDirIterator::Subdirectories);
     while (dit.hasNext()) {
@@ -1571,7 +1572,12 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
         sawPlugin = true;
 
         const auto set = plugin_strings::extract(dit.filePath());
-        if (!set.valid || set.localized) continue;
+        if (!set.valid) continue;
+        // A localized plugin keeps its text in Strings/<plugin>_<lang>.* and
+        // holds only string IDs, so there is nothing here to edit. That is a
+        // different fact from "carries no text", and saying the latter next to
+        // a red "no translation" caption made the manager contradict itself.
+        if (set.localized) { sawLocalized = true; continue; }
         const QString rel = QDir(modPath).relativeFilePath(dit.filePath());
         encodings.insert(rel, set.encoding);
         for (auto it = set.byKey.cbegin(); it != set.byKey.cend(); ++it)
@@ -1587,7 +1593,8 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
     }
     if (strings.isEmpty()) {
         ui::info(this, T("translate_title").arg(modName),
-                 T("translate_no_strings").arg(modName));
+                 sawLocalized ? T("translate_localized").arg(modName)
+                              : T("translate_no_strings").arg(modName));
         return;
     }
 
