@@ -25,6 +25,10 @@ constexpr qint64 kSigLen      = 16;
 constexpr qint64 kStampOffset = 280;
 const char       kSignature[] = "PSVDSC_V2.00\n\r\n\r";
 
+// QTimeZone::utc(), not QTimeZone::UTC: the enum constant is Qt 6.5, and CI
+// builds against Ubuntu 24.04's qt6-base-dev, which is 6.4.2. The static has
+// been there since Qt 5.2 and means the same thing.
+
 // Positional stamps start here. Far past anything a human authored (Gothic II
 // itself is 2002, its addon 2003, and a mod released today is still 20-odd
 // years short of this), so a deployed archive always outranks the base game.
@@ -259,12 +263,12 @@ QDateTime fromDosStamp(quint32 stamp)
     const QDate d(int(date >> 9) + 1980, int((date >> 5) & 0xf), int(date & 0x1f));
     const QTime t(int(time >> 11), int((time >> 5) & 0x3f), int((time & 0x1f) * 2));
     if (!d.isValid() || !t.isValid()) return {};
-    return QDateTime(d, t, QTimeZone::UTC);
+    return QDateTime(d, t, QTimeZone::utc());
 }
 
 quint32 stampForIndex(int index)
 {
-    const QDateTime base(kStampBaseDate, QTime(0, 0), QTimeZone::UTC);
+    const QDateTime base(kStampBaseDate, QTime(0, 0), QTimeZone::utc());
     return toDosStamp(base.addSecs(qint64(qMax(0, index)) * kStampStepSecs));
 }
 
