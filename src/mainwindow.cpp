@@ -30,6 +30,7 @@
 #include "forbidden_mods.h"
 #include "game_profiles.h"
 #include "game_adapter.h"
+#include "opengothic.h"
 #include "game_match.h"
 #include "conflict_inspector.h"
 #include "report_dialog.h"
@@ -3164,6 +3165,22 @@ void MainWindow::addAndDetectGame(const QString &gameId, const QString &displayN
         }
     }
 
+    // OpenGothic is set up by folder, not by .exe: what gets run is the engine
+    // (which lives wherever the user built or installed it, never in the game
+    // folder), and what it needs pointing at is the Gothic II root. Asking for
+    // "the game's executable" here would collect system/Gothic2.exe, the 2002
+    // Windows binary this profile does not run.
+    const GameAdapter *newAdapter = GameAdapterRegistry::find(gameId);
+    if (newAdapter && newAdapter->isOpenGothic()) {
+        QString engine, root;
+        if (!opengothicResolvePaths(this, gameId, engine, root)) return;
+        ui::info(this, displayName,
+                 T("gothic_detected").arg(QDir::toNativeSeparators(root),
+                                          QDir::toNativeSeparators(engine)));
+        createGameProfile(gameId, displayName);
+        return;
+    }
+
     // Detect: Heroic/GOG → Steam → Lutris.
     QString exe = GameProfileRegistry::findGogGameExe(gameId, /*wantLauncher=*/false);
     if (exe.isEmpty() || !QFile::exists(exe))
@@ -3186,6 +3203,14 @@ void MainWindow::addAndDetectGame(const QString &gameId, const QString &displayN
     // Confirm to the user where it was found.
     ui::info(this, displayName, QString("%1 detected at:\n%2").arg(displayName, QDir::toNativeSeparators(exe)));
 
+    createGameProfile(gameId, displayName);
+}
+
+// Ask for the mods directory and create the profile, once the game itself has
+// been located. Shared by the two ways of getting here: an .exe from a
+// storefront, or an OpenGothic folder pair.
+void MainWindow::createGameProfile(const QString &gameId, const QString &displayName)
+{
     // Per-game mods directory: each profile gets its own root so users can
     // park heavy installs (FNV, Skyrim, etc) on a different mount than OpenMW.
     const QString defaultModsDir = QDir::homePath() + "/Games/" + gameId + "_mods";

@@ -39,6 +39,17 @@ QString nexusDomainFor(const QString &profileId);
 // Defined in mainwindow_install.cpp; used there and by the cleanup sweep.
 void removeModFoldersAsync(QStringList paths);
 
+// Resolve the two paths an OpenGothic profile needs, asking only for what is
+// missing: the Gothic II game folder (what -g points at, and what mods deploy
+// into) and the engine binary (which lives wherever the user built or unpacked
+// it). Remembers both in Settings. False if the user backed out.
+//
+// Defined in mainwindow_deploy.cpp; used there for launching and in
+// mainwindow.cpp when the profile is first created.
+class QWidget;
+bool opengothicResolvePaths(QWidget *parent, const QString &gameId,
+                            QString &engine, QString &root);
+
 // Suffix predicates for drop handling - used by the ModListWidget drop target
 // (setup TU) and MainWindow's drag/drop events (home).
 bool isInstallableArchiveSuffix(const QString &path);

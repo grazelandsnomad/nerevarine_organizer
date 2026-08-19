@@ -112,6 +112,7 @@ set(SOURCES
     src/variant_picker.cpp
     src/firstrunwizard.cpp
     src/openmwconfigwriter.cpp
+    src/opengothic.cpp
     src/proton_paths.cpp
     src/dll_overrides.cpp
     src/bethesda_deploy.cpp

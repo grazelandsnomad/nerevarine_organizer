@@ -91,6 +91,12 @@ public:
     // openmw.cfg sync, plugin parsing, and BSA discovery.
     virtual bool isMorrowind() const { return false; }
 
+    // True iff this game is played through OpenGothic (Gothic II today), the
+    // same way isMorrowind() means "played through OpenMW". Gates the engine
+    // launch, the generated -game: ini and the archive stamping in
+    // opengothic.h - none of which any other engine has an equivalent of.
+    virtual bool isOpenGothic() const { return false; }
+
     // -- Mod deployment / load order (Bethesda titles) -----------------
     // Unconsumed yet: where load order and per-user config live, for a
     // later non-OpenMW deploy/sync path. Defaults = "not a managed
@@ -107,6 +113,16 @@ public:
     //
     // Empty for engines with no single root (OpenMW reads many data= paths).
     virtual QString dataSubdir() const { return {}; }
+
+    // True when a mod's own top level IS the game folder's top level, so the
+    // deploy overlays it as-is instead of hunting for a data root inside it.
+    // That is how Souls mods are packaged ("copy these into your Game folder")
+    // and how Gothic mods are ("Data/ goes in Data/, system/ in system/").
+    //
+    // Defaults to the "." case rather than being a second thing to remember;
+    // Gothic overrides it because its deploy root is the folder ABOVE the one
+    // holding the exe, so its dataSubdir cannot be ".".
+    virtual bool overlayDeploy() const { return dataSubdir() == QStringLiteral("."); }
 
     // Per-user config folders inside the Proton prefix:
     // AppData/Local/<localAppDataName> holds Plugins.txt;

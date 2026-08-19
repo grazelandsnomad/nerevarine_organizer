@@ -215,6 +215,9 @@ private slots:
     // Detect an external (non-OpenMW) game in Steam/Heroic/Lutris, prompt for
     // the exe if not found, create a profile and switch. From pinned-game menu.
     void addAndDetectGame(const QString &gameId, const QString &displayName);
+    // The tail of addAndDetectGame: mods dir + profile creation, once the game
+    // has been located (by .exe, or by folder for OpenGothic).
+    void createGameProfile(const QString &gameId, const QString &displayName);
     void onCurrentModChanged(QListWidgetItem *current, QListWidgetItem *previous);
 
     bool eventFilter(QObject *obj, QEvent *event) override;

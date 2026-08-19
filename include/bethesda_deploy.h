@@ -66,6 +66,12 @@ struct DeploySource {
     // two destinations, so the root files are named explicitly rather than
     // discovered by a walk that would also sweep up Data/ and src/.
     QStringList onlyFiles;
+    // Folder under the deploy root these files land in, "" for the root itself.
+    //
+    // For the mods that ship a bare archive with no folder around it. A Gothic
+    // mod is often a single Karibik.mod, and the engine only scans <root>/Data,
+    // so deploying it where it sits would place a file nothing ever looks at.
+    QString destSubdir;
 };
 
 struct DeployResult {

@@ -129,8 +129,9 @@ DeployResult deploy(const QString &dataDir,
 
         for (const QString &abs : absFiles) {
             if (progress && (++seen % kReportEvery) == 0) progress(seen, total);
-            const QString rel = base.relativeFilePath(abs);
+            QString rel = base.relativeFilePath(abs);
             if (rel.startsWith(QLatin1String(".."))) continue;   // don't escape Data/
+            if (!src.destSubdir.isEmpty()) rel = src.destSubdir + QLatin1Char('/') + rel;
             const QString dst = data.filePath(rel);
             QDir().mkpath(QFileInfo(dst).absolutePath());
 

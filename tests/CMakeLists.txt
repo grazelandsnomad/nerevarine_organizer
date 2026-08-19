@@ -60,6 +60,19 @@ add_executable(test_bethesda
 target_include_directories(test_bethesda PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(test_bethesda PRIVATE Qt6::Core)
 
+# OpenGothic (Gothic II): install detection, VDFS archive stamps, mod inis.
+# game_adapters.cpp comes along so the Gothic profile's own wiring is checked
+# against the same registry the app uses.
+add_executable(test_opengothic
+    test_opengothic.cpp
+    ${CMAKE_SOURCE_DIR}/src/opengothic.cpp
+    ${CMAKE_SOURCE_DIR}/src/fomod_path.cpp
+    ${CMAKE_SOURCE_DIR}/src/game_adapters.cpp
+    ${CMAKE_SOURCE_DIR}/include/game_adapter.h
+)
+target_include_directories(test_opengothic PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(test_opengothic PRIVATE Qt6::Core)
+
 # Modlist persistence: io, serializer, ModEntry value type, sync guard.
 add_executable(test_modlist
     test_modlist.cpp
@@ -267,6 +280,7 @@ set(UNIT_TESTS
     test_openmw_config
     test_fomod
     test_bethesda
+    test_opengothic
     test_modlist
     test_profiles
     test_translate_ui

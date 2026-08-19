@@ -525,17 +525,46 @@ public:
     }; }
 };
 
+// Gothic II is managed through OpenGothic, the open re-implementation of its
+// engine, which is what makes it playable natively on Linux at all - the same
+// relationship Morrowind has with OpenMW.
+//
+// Two fields here are not what they look like:
+//
+//   * The exe is system/Gothic2.exe, not Gothic2.exe. It really does live one
+//     level down, next to GOTHIC.INI and the mod inis, and the storefront
+//     locators check the path exists - a root-level spelling simply never
+//     matched and the game was never detected.
+//
+//   * dataSubdir is "..", because the deploy target is the folder ABOVE the
+//     exe. A Gothic mod is packaged as Data/ (its archives) plus system/ (its
+//     ini), so it overlays the game root; deploying into system/ would bury
+//     both. bethesdaResolveDataDir cleans the path, so this resolves to the
+//     root itself.
+//
+// No LOOT (it does not know the game), no plugins.txt (the engine has no
+// plugin list: what loads is decided by the generated -game: ini and the
+// archive header stamps - see opengothic.h), and no script extender.
 class Gothic2Adapter : public GameAdapter {
 public:
     QString id()          const override { return QStringLiteral("gothic2"); }
-    QString displayName() const override { return QStringLiteral("Gothic II"); }
+    QString displayName() const override { return QStringLiteral("Gothic II (OpenGothic)"); }
     QString steamAppId()  const override { return QStringLiteral("39510"); }
-    SteamLayout steamLayout() const override { return {"Gothic II", "Gothic2.exe", ""}; }
+    SteamLayout steamLayout() const override { return {"Gothic II", "system/Gothic2.exe", ""}; }
     QList<GogLayout> gogLayouts() const override { return {
-        {"Gothic II Gold Edition", "Gothic2.exe", ""},
-        {"Gothic 2 Gold Edition",  "Gothic2.exe", ""},
-        {"Gothic II",              "Gothic2.exe", ""},
+        {"Gothic II Gold Edition", "system/Gothic2.exe", ""},
+        {"Gothic 2 Gold Edition",  "system/Gothic2.exe", ""},
+        {"Gothic II",              "system/Gothic2.exe", ""},
     }; }
+    QStringList lutrisTokens() const override { return {"gothic", "2"}; }
+    bool    isOpenGothic() const override { return true; }
+    QString dataSubdir()   const override { return QStringLiteral(".."); }
+    bool    overlayDeploy() const override { return true; }
+    // GothicStarter.exe is the original Windows launcher and picks the mod ini
+    // itself; under OpenGothic that job is the generated ini's, so there is no
+    // launcher button to offer.
+    bool    hasLauncher()  const override { return false; }
+    bool    pinned()       const override { return true; }
 };
 
 class Gothic3Adapter : public GameAdapter {

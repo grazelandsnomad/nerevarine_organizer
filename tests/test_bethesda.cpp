@@ -42,6 +42,43 @@ static bool exists(const QString &p)
     return QFileInfo::exists(p) || QFileInfo(p).isSymLink();
 }
 
+static void testDestSubdirRoutesBareFiles()
+{
+    std::cout << "\n[deploy: a source can land in a subfolder]\n";
+    QTemporaryDir tmp;
+    const QString root = tmp.filePath("game");
+    QDir().mkpath(root);
+
+    // The Gothic case: a mod that is one bare archive plus its ini, which the
+    // engine only finds in Data/ and system/ respectively.
+    touch(tmp.filePath("Bare/Karibik.mod"), "archive");
+    touch(tmp.filePath("Bare/Karibik.ini"), "ini");
+
+    const DeployResult r = deploy(root, tmp.filePath("backup"), {
+        {"Karibik", tmp.filePath("Bare"), {"Karibik.mod"}, "Data"},
+        {"Karibik", tmp.filePath("Bare"), {"Karibik.ini"}, "system"},
+    });
+
+    check("no errors", r.errors.isEmpty(), r.errors.join(';'));
+    check("the archive landed in Data/", exists(root + "/Data/Karibik.mod"));
+    check("the ini landed in system/", exists(root + "/system/Karibik.ini"));
+    check("and neither is left at the root",
+          !exists(root + "/Karibik.mod") && !exists(root + "/Karibik.ini"));
+    // The manifest is what undeploy reads, so it has to record the routed path
+    // and not the one inside the mod folder.
+    QStringList rels;
+    for (const auto &f : r.manifest.files) rels << f.rel;
+    rels.sort();
+    check("the manifest records where they went",
+          rels == QStringList({"Data/Karibik.mod", "system/Karibik.ini"}),
+          rels.join('|'));
+
+    const UndeployResult u = undeploy(root, tmp.filePath("backup"), r.manifest);
+    check("and undeploy takes them back out",
+          u.removed == 2 && !exists(root + "/Data/Karibik.mod"),
+          QString::number(u.removed));
+}
+
 static void testLastWriterWins()
 {
     std::cout << "\n[deploy: later mod overrides earlier]\n";
@@ -166,6 +203,7 @@ static void run_bethesda_deploy()
 {
     std::cout << "=== bethesda_deploy tests ===\n";
     deploy_section::testLastWriterWins();
+    deploy_section::testDestSubdirRoutesBareFiles();
     deploy_section::testVanillaBackupRestore();
     deploy_section::testUndeployNoVanilla();
     deploy_section::testNestedAndCopyMethod();

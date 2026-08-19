@@ -16,6 +16,7 @@
 #include "bethesda_loadorder.h"
 #include "bethesda_archives.h"
 #include "bethesda_custom_ini.h"
+#include "opengothic.h"
 #include <functional>
 #include "proton_paths.h"
 #include "dll_overrides.h"
@@ -703,6 +704,13 @@ static QString bethesdaApplyUndeploy(const QString &id, const GameAdapter *adapt
     const QStringList unset =
         bethesdaUnregisterDllOverrides(adapter, dataDir, man.dllOverrides);
 
+    // The generated -game: ini is ours and is not in the manifest (nothing
+    // deployed it), so it has to be taken back out by name. Leaving it would
+    // point the engine at a VDF list of archives that are no longer there.
+    if (adapter && adapter->isOpenGothic())
+        QFile::remove(QDir(dataDir).filePath(QStringLiteral("system/")
+                                             + opengothic::generatedIniName()));
+
     const QString pluginsTxt = resolveBethesdaPluginsTxt(id, adapter, dataDir);
     if (!pluginsTxt.isEmpty()) restoreNerevarineBak(pluginsTxt);
     if (id == QLatin1String("oblivion")) {
@@ -736,7 +744,7 @@ static QList<bethesda_deploy::DeploySource> gatherBethesdaSources(QListWidget *l
                                                                   const QString &modsDir)
 {
     static const QStringList kExts{".esp", ".esm", ".esl"};
-    const bool overlay = adapter && adapter->dataSubdir() == QLatin1String(".");
+    const bool overlay = adapter && adapter->overlayDeploy();
     QList<bethesda_deploy::DeploySource> sources;
     for (int i = 0; i < list->count(); ++i) {
         auto *item = list->item(i);
@@ -749,6 +757,20 @@ static QList<bethesda_deploy::DeploySource> gatherBethesdaSources(QListWidget *l
         if (overlay) {
             QString label = item->data(ModRole::CustomName).toString();
             if (label.isEmpty()) label = item->text();
+            // Gothic mods come in two shapes: the game's own layout (Data/,
+            // system/), which overlays unchanged, and a bare archive with
+            // nothing around it, which has to be routed into Data/ or the
+            // engine never scans past it. See opengothic::mapModFolder.
+            if (adapter && adapter->isOpenGothic()) {
+                const auto m = opengothic::mapModFolder(modPath);
+                if (!m.overlay) {
+                    if (!m.archives.isEmpty())
+                        sources.append({label, modPath, m.archives, QStringLiteral("Data")});
+                    if (!m.inis.isEmpty())
+                        sources.append({label, modPath, m.inis, QStringLiteral("system")});
+                    continue;
+                }
+            }
             sources.append({label, modPath});
             continue;
         }
@@ -952,6 +974,60 @@ static QStringList bethesdaConfigureArchives(const QString &id, const GameAdapte
     return stray;
 }
 
+// -- OpenGothic (Gothic II) --------------------------------------------
+//
+// The step without which a Gothic deploy does nothing at all.
+//
+// Copying a mod's Data/ and system/ into the game folder is only half of it:
+// the engine throws away every .mod archive that is not named in the [FILES]
+// VDF list of the ini it was started with, and with no ini at all it throws
+// away ALL of them (see opengothic.h). So the ini is generated here from what
+// was actually deployed, and conflicts between archives are settled by stamping
+// their headers in list order, because that is the only thing the engine looks
+// at when two archives carry the same file.
+//
+// Returns a line for the deploy summary, empty for every other engine.
+static QString opengothicActivate(const GameAdapter *adapter, const QString &gameRoot,
+                                  const bethesda_deploy::Manifest &manifest)
+{
+    if (!adapter || !adapter->isOpenGothic()) return {};
+
+    // Manifest order IS load order: deploy walks the sources top to bottom.
+    QStringList rels;
+    rels.reserve(manifest.files.size());
+    for (const auto &f : manifest.files) rels << f.rel;
+
+    const auto plan = opengothic::planActivation(gameRoot, rels);
+    if (plan.isEmpty()) return {};
+
+    const auto stamps = opengothic::applyOrder(plan.archivePaths);
+
+    const opengothic::ModIni merged =
+        opengothic::mergeModInis(plan.modInis, plan.archiveNames);
+    const QString iniPath = QDir(gameRoot).filePath(QStringLiteral("system/")
+                                                    + opengothic::generatedIniName());
+    QDir().mkpath(QFileInfo(iniPath).absolutePath());
+    bool wrote = false;
+    QFile out(iniPath);
+    if (out.open(QIODevice::WriteOnly)) {      // binary: the file is CRLF
+        out.write(opengothic::buildModIni(merged).toUtf8());
+        out.close();
+        wrote = true;
+    }
+
+    QString note = T("deploy_gothic_ini")
+                       .arg(QString::number(merged.vdf.size()),
+                            opengothic::generatedIniName(),
+                            QString::number(stamps.stamped));
+    if (!wrote) note = T("deploy_gothic_ini_failed").arg(iniPath);
+    if (!plan.unusable.isEmpty())
+        note += QStringLiteral("\n") + T("deploy_gothic_space_in_name")
+                                            .arg(plan.unusable.join(QStringLiteral(", ")));
+    if (!stamps.errors.isEmpty())
+        note += QStringLiteral("\n") + stamps.errors.join(QStringLiteral("\n"));
+    return note;
+}
+
 // Undeploy the previous manifest, deploy `sources`, persist the new manifest,
 // then activate (load order + Plugins.txt) and configure archives.  Returns the
 // human summary.  Shared by the Deploy action and deploy-on-launch.
@@ -1023,6 +1099,7 @@ static QString bethesdaApplyDeploy(const QString &id, const GameAdapter *adapter
     const int activated = bethesdaActivate(id, adapter, dataDir, res.manifest, loadOrder);
     const QStringList stray =
         bethesdaConfigureArchives(id, adapter, dataDir, res.manifest);
+    const QString gothicNote = opengothicActivate(adapter, dataDir, res.manifest);
 
     QString summary = writesPluginList(adapter)
         ? T("deploy_done").arg(res.filesDeployed).arg(res.vanillaBackedUp)
@@ -1045,6 +1122,9 @@ static QString bethesdaApplyDeploy(const QString &id, const GameAdapter *adapter
         summary += QStringLiteral("\n\n")
                  + T("deploy_dll_overrides")
                        .arg(res.manifest.dllOverrides.join(QStringLiteral(", ")));
+    // The Gothic line goes last because it is the one that decides what the
+    // engine will actually load.
+    if (!gothicNote.isEmpty()) summary += QStringLiteral("\n\n") + gothicNote;
     return summary;
 }
 
@@ -1677,6 +1757,84 @@ void MainWindow::onLaunchSteamLauncher()
         ui::warn(this, T("launch_error_title"), T("launch_error_body").arg(path));
 }
 
+// Resolve the two paths an OpenGothic launch needs, asking only for what is
+// missing, and remember both: the engine binary (it ships no assets and is not
+// in the game folder) and the Gothic II root it has to be pointed at with -g.
+//
+// Kept together because neither is useful alone, and because both are stored
+// under keys that already exist: the engine is this profile's "game exe" (it
+// IS what gets run) and the root is its data dir (it IS what mods deploy into).
+bool opengothicResolvePaths(QWidget *parent, const QString &id,
+                            QString &engine, QString &root)
+{
+    root = Settings::dataDir(id);
+    if (!opengothic::isGameRoot(root)) {
+        // The storefront locators point at system/Gothic2.exe; the root is the
+        // folder above it, and it is validated the way the engine validates it.
+        QString exe = GameProfileRegistry::findGogGameExe(id, /*wantLauncher=*/false);
+        if (exe.isEmpty()) exe = GameProfileRegistry::findSteamGameExe(id);
+        if (exe.isEmpty()) exe = GameProfileRegistry::findLutrisGameExe(id);
+        root = opengothic::gameRootFor(exe);
+    }
+    bool asked = false;
+    while (!opengothic::isGameRoot(root)) {
+        if (!asked) ui::info(parent, T("gothic_title"), T("gothic_locate_game"));
+        asked = true;
+        const QString picked = QFileDialog::getExistingDirectory(
+            parent, T("gothic_locate_game_dialog"), QDir::homePath());
+        if (picked.isEmpty()) return false;
+        if (opengothic::isGameRoot(picked)) { root = picked; break; }
+
+        // The engine, offered as the game. This is the mistake to expect: it is
+        // the folder they just downloaded, and the profile is named after it.
+        // Keep it - it is the other half of what has to be found anyway - and
+        // ask again for the half that is still missing.
+        const QString enginePicked = opengothic::findEngine({picked});
+        if (!enginePicked.isEmpty()) {
+            Settings::setGameExePath(id, enginePicked);
+            if (!ui::confirm(parent, T("gothic_title"),
+                             T("gothic_that_is_the_engine")
+                                 .arg(QDir::toNativeSeparators(enginePicked))))
+                return false;
+            continue;
+        }
+
+        // Look around where they were looking: the game is usually a folder or
+        // two away from whatever was picked.
+        QStringList near = opengothic::findGameRoots(picked);
+        if (near.isEmpty())
+            near = opengothic::findGameRoots(QFileInfo(picked).absolutePath());
+        if (!near.isEmpty()
+            && ui::confirm(parent, T("gothic_title"),
+                           T("gothic_found_nearby").arg(QDir::toNativeSeparators(near.first())))) {
+            root = near.first();
+            break;
+        }
+
+        // Wrong folder for no reason we can name (people pick system/ or Data/),
+        // so say what was looked for.
+        if (!ui::confirm(parent, T("gothic_title"),
+                         T("gothic_not_a_game_root").arg(QDir::toNativeSeparators(picked))))
+            return false;
+    }
+    Settings::setDataDir(id, root);
+
+    // The engine second, because knowing where the game is makes finding it
+    // likely enough to be worth trying before asking.
+    engine = Settings::gameExePath(id);
+    if (engine.isEmpty() || !QFileInfo(engine).isExecutable()) {
+        engine = opengothic::findEngine(opengothic::engineSearchHints(root));
+        if (engine.isEmpty()) {
+            ui::info(parent, T("gothic_title"), T("gothic_locate_engine"));
+            engine = QFileDialog::getOpenFileName(parent, T("gothic_locate_engine_dialog"),
+                                                  QDir::homePath());
+            if (engine.isEmpty()) return false;
+        }
+        Settings::setGameExePath(id, engine);
+    }
+    return true;
+}
+
 void MainWindow::onLaunchGame()
 {
     const QString &id   = currentProfile().id;
@@ -1689,6 +1847,28 @@ void MainWindow::onLaunchGame()
     // Deploy-on-launch: re-sync a previously-deployed Bethesda profile's Data/
     // to the current list before the game starts (best-effort, never blocks).
     maybeDeployBeforeLaunch(id);
+
+    // -- 0. OpenGothic - not a storefront launch at all -----------------
+    //
+    // The thing being run is the engine, which lives wherever the user put it
+    // and is handed the game folder with -g. Running Gothic2.exe instead would
+    // start the 2002 Windows binary under Wine, which is not what this profile
+    // manages and would ignore everything deployed.
+    if (adapter && adapter->isOpenGothic()) {
+        QString engine, root;
+        if (!opengothicResolvePaths(this, id, engine, root)) return;
+        // Only pass -game: when the ini is actually there. Passing a missing
+        // one makes the engine log "no file in path" and fall back to vanilla,
+        // which looks exactly like the mods not working.
+        const QString iniName = opengothic::generatedIniName();
+        const bool haveIni = QFileInfo::exists(
+            QDir(root).filePath(QStringLiteral("system/") + iniName));
+        const QStringList args = opengothic::launchArgs(root, haveIni ? iniName : QString());
+        qCInfo(logging::lcLaunch) << "launch game: opengothic" << engine << args;
+        if (!subprocess::startDetached(engine, args))
+            ui::warn(this, T("launch_error_title"), T("launch_error_body").arg(engine));
+        return;
+    }
 
     // -- 1. GOG / Heroic - always wins when the game is present there ---
     const QString gogExe = GameProfileRegistry::findGogGameExe(id);
