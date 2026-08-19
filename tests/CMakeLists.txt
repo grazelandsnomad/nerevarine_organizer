@@ -73,6 +73,18 @@ add_executable(test_opengothic
 target_include_directories(test_opengothic PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(test_opengothic PRIVATE Qt6::Core)
 
+# Store detection: Heroic/GOG caches, Steam appmanifest, title normalisation.
+# game_adapters.cpp comes along so the shipped folder candidates are what the
+# match is tested against, not a copy of them.
+add_executable(test_store_scan
+    test_store_scan.cpp
+    ${CMAKE_SOURCE_DIR}/src/store_scan.cpp
+    ${CMAKE_SOURCE_DIR}/src/game_adapters.cpp
+    ${CMAKE_SOURCE_DIR}/include/game_adapter.h
+)
+target_include_directories(test_store_scan PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(test_store_scan PRIVATE Qt6::Core)
+
 # Modlist persistence: io, serializer, ModEntry value type, sync guard.
 add_executable(test_modlist
     test_modlist.cpp
@@ -93,6 +105,7 @@ add_executable(test_profiles
     ${CMAKE_SOURCE_DIR}/src/nxmurl.cpp
     ${CMAKE_SOURCE_DIR}/src/game_profiles.cpp
     ${CMAKE_SOURCE_DIR}/src/game_adapters.cpp
+    ${CMAKE_SOURCE_DIR}/src/store_scan.cpp
     ${CMAKE_SOURCE_DIR}/src/settings.cpp
     ${CMAKE_SOURCE_DIR}/src/target_language.cpp
     ${CMAKE_SOURCE_DIR}/src/language_guess.cpp
@@ -281,6 +294,7 @@ set(UNIT_TESTS
     test_fomod
     test_bethesda
     test_opengothic
+    test_store_scan
     test_modlist
     test_profiles
     test_translate_ui

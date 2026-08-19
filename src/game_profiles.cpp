@@ -1,6 +1,7 @@
 #include "game_profiles.h"
 
 #include "game_adapter.h"
+#include "store_scan.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -14,6 +15,8 @@
 #include <QRegularExpression>
 #include <QSet>
 #include <QStandardPaths>
+
+#include <utility>   // std::as_const
 #include <QString>
 #include <QStringList>
 #include <Qt>
@@ -42,61 +45,18 @@ QString loadOrderFilenameFor(const QString &gameId, const QString &profileName)
     return QStringLiteral("loadorder_%1__%2.txt").arg(gameId, sanitized);
 }
 
-// All Steam library roots from steamapps/libraryfolders.vdf. Two shapes
-// in the wild, match both:
-//   modern: "0" { "path" "/mnt/.../SteamLibrary" ... }
-//   legacy: "1"  "/mnt/.../SteamLibrary"
-// Without this, games on a non-default library (extra drive, custom mount)
-// fail detection and the user has to point at the .exe by hand.
+// Every steamapps/common root, derived from the library roots store_scan
+// discovers (libraryfolders.vdf plus the default locations). The vdf parsing
+// lives there so the Steam layout is known in exactly one place, and so the
+// appmanifest lookup below can reuse it.
 QStringList steamCommonRoots()
 {
-    QStringList roots;
-    auto pushIfNew = [&](const QString &p) {
-        if (!p.isEmpty() && !roots.contains(p) && QFileInfo::exists(p))
-            roots.append(p);
-    };
-
-    const QString home = QDir::homePath();
-
-    // Fallbacks for when no vdf is findable (e.g. flatpak Steam elsewhere).
-    pushIfNew(home + "/.steam/steam/steamapps/common");
-    pushIfNew(home + "/.local/share/Steam/steamapps/common");
-    pushIfNew("/mnt/games/Steam/steamapps/common");
-
-    // Parse each readable libraryfolders.vdf.
-    const QStringList vdfCandidates = {
-        home + "/.steam/steam/steamapps/libraryfolders.vdf",
-        home + "/.local/share/Steam/steamapps/libraryfolders.vdf",
-        home + "/.steam/root/steamapps/libraryfolders.vdf",
-        home + "/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/libraryfolders.vdf",
-    };
-
-    static const QRegularExpression rxPath(
-        QStringLiteral("\"path\"\\s+\"([^\"]+)\""),
-        QRegularExpression::CaseInsensitiveOption);
-    static const QRegularExpression rxLegacy(
-        QStringLiteral("^\\s*\"\\d+\"\\s+\"(/[^\"]+)\"\\s*$"),
-        QRegularExpression::MultilineOption);
-
-    for (const QString &vdf : vdfCandidates) {
-        QFile f(vdf);
-        if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) continue;
-        const QString contents = QString::fromUtf8(f.readAll());
-        f.close();
-
-        auto it = rxPath.globalMatch(contents);
-        while (it.hasNext()) {
-            const QString libRoot = it.next().captured(1);
-            pushIfNew(libRoot + "/steamapps/common");
-        }
-        auto it2 = rxLegacy.globalMatch(contents);
-        while (it2.hasNext()) {
-            const QString libRoot = it2.next().captured(1);
-            pushIfNew(libRoot + "/steamapps/common");
-        }
+    QStringList out;
+    for (const QString &lib : store_scan::steamLibraryRoots()) {
+        const QString common = lib + QStringLiteral("/common");
+        if (QFileInfo::exists(common) && !out.contains(common)) out << common;
     }
-
-    return roots;
+    return out;
 }
 
 QString resolveStateFile(const QString &filename)
@@ -482,9 +442,23 @@ namespace {
 // Walk every steamapps/common root looking for the declared layout. Some
 // library snapshots drop the trailing " goty" from Bethesda's "Fallout 3
 // goty" folder, so chop(5) retries without it.
-QString locateInSteam(const QString &folder, const QString &exe)
+QString locateInSteam(const QString &folder, const QString &exe,
+                      const QString &appId = {})
 {
-    if (folder.isEmpty() || exe.isEmpty()) return {};
+    if (exe.isEmpty()) return {};
+
+    // The app's own manifest first. Steam writes "installdir" there and uses it
+    // itself, so it is right even when the folder was renamed or never matched
+    // the name we ship. Folder guessing below is the fallback, not the rule.
+    if (!appId.isEmpty()) {
+        const QString dir = store_scan::steamAppInstallPath(appId);
+        if (!dir.isEmpty()) {
+            const QString path = dir + "/" + exe;
+            if (QFile::exists(path)) return path;
+        }
+    }
+
+    if (folder.isEmpty()) return {};
     const QStringList roots = steamCommonRoots();
     for (const QString &root : roots) {
         QString path = root + "/" + folder + "/" + exe;
@@ -508,7 +482,7 @@ QString GameProfileRegistry::findSteamGameExe(const QString &gameId)
     const GameAdapter *a = GameAdapterRegistry::find(gameId);
     if (!a) return {};
     const auto layout = a->steamLayout();
-    return locateInSteam(layout.folder, layout.exe);
+    return locateInSteam(layout.folder, layout.exe, a->steamAppId());
 }
 
 QString GameProfileRegistry::findSteamLauncherExe(const QString &gameId)
@@ -516,7 +490,7 @@ QString GameProfileRegistry::findSteamLauncherExe(const QString &gameId)
     const GameAdapter *a = GameAdapterRegistry::find(gameId);
     if (!a) return {};
     const auto layout = a->steamLayout();
-    return locateInSteam(layout.folder, layout.launcher);
+    return locateInSteam(layout.folder, layout.launcher, a->steamAppId());
 }
 
 QString GameProfileRegistry::findGogGameExe(const QString &gameId, bool wantLauncher)
@@ -531,48 +505,66 @@ QString GameProfileRegistry::findGogGameExe(const QString &gameId, bool wantLaun
 
     const QString home = QDir::homePath();
 
-    // Scan Heroic's installed.json first (catches custom install paths).
-    const QStringList heroicConfigs = {
-        home + "/.config/heroic",
-        home + "/.var/app/com.heroicgameslauncher.hgl/config/heroic",
+    // Heroic first, because it is the one store that can put a game anywhere.
+    //
+    // An entry is matched on three name signals, not one: the last component of
+    // its install_path (all this used to look at), plus the title and
+    // folder_name Heroic's own library cache records for that app id. The
+    // author's Gothic II sits in a folder called "Gothic 2 Gold" while the
+    // library calls it "Gothic 2 Gold Edition" - a candidate we already ship,
+    // and the reason detection failed and sent the user to a folder picker.
+    const QList<store_scan::HeroicInstall> installs = store_scan::heroicInstalls();
+    const QHash<QString, store_scan::StoreTitle> titles = store_scan::heroicTitles();
+
+    auto exeFor = [wantLauncher](const GameAdapter::GogLayout &gi) {
+        return (wantLauncher && !gi.launcher.isEmpty()) ? gi.launcher : gi.exe;
     };
-    for (const QString &cfg : heroicConfigs) {
-        QFile f(cfg + "/gog_store/installed.json");
-        if (!f.open(QIODevice::ReadOnly)) continue;
-        QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
-        QJsonArray arr;
-        if (doc.isArray())
-            arr = doc.array();
-        else if (doc.isObject() && doc.object().contains("installed"))
-            arr = doc.object().value("installed").toArray();
 
-        for (const QJsonValue &v : arr) {
-            const QJsonObject obj = v.toObject();
-            const QString installPath = obj.value("install_path").toString();
-            if (installPath.isEmpty()) continue;
-            const QString folderName = QFileInfo(installPath).fileName();
+    // Pass one: an exact name, however it is spelled in the store. Behaviour
+    // for these is unchanged, including returning the expected path when the
+    // exe is not on disk - that is what lets the caller launch via heroic://
+    // for a game Heroic knows about but has not unpacked here.
+    for (const store_scan::HeroicInstall &h : installs) {
+        QStringList names{QFileInfo(h.installPath).fileName()};
+        const store_scan::StoreTitle t = titles.value(h.appName);
+        if (!t.title.isEmpty())      names << t.title;
+        if (!t.folderName.isEmpty()) names << t.folderName;
 
-            for (const GameAdapter::GogLayout &gi : candidates) {
-                if (folderName.compare(gi.folder, Qt::CaseInsensitive) != 0 &&
-                    folderName.compare(QString(gi.folder).replace(' ', '_'), Qt::CaseInsensitive) != 0)
-                    continue;
+        for (const GameAdapter::GogLayout &gi : candidates) {
+            const QString underscored = QString(gi.folder).replace(' ', '_');
+            bool hit = false;
+            for (const QString &n : std::as_const(names))
+                if (n.compare(gi.folder, Qt::CaseInsensitive) == 0
+                 || n.compare(underscored, Qt::CaseInsensitive) == 0) { hit = true; break; }
+            if (!hit) continue;
 
-                const QString wantedExe = (wantLauncher && !gi.launcher.isEmpty())
-                                          ? gi.launcher : gi.exe;
-
-                if (!wantLauncher) {
-                    const QString jsonExe = obj.value("executable").toString();
-                    if (!jsonExe.isEmpty()) {
-                        const QString path = installPath + "/" + jsonExe;
-                        if (QFile::exists(path)) return path;
-                    }
-                }
-                const QString path = installPath + "/" + wantedExe;
+            if (!wantLauncher && !h.executable.isEmpty()) {
+                const QString path = h.installPath + "/" + h.executable;
                 if (QFile::exists(path)) return path;
-                // Return the expected path even if the exe isn't on disk, so
-                // the caller knows Heroic has it and can launch via heroic://.
-                return path;
             }
+            return h.installPath + "/" + exeFor(gi);
+        }
+    }
+
+    // Pass two: the same names compared loosely (roman numerals, edition
+    // words, punctuation), which needs evidence to be safe. A loose name test
+    // alone would hand back an Enderal Special Edition install for a Skyrim
+    // Special Edition query - both ship SkyrimSE.exe - so the file has to be
+    // there before the answer counts.
+    for (const store_scan::HeroicInstall &h : installs) {
+        QStringList names{QFileInfo(h.installPath).fileName()};
+        const store_scan::StoreTitle t = titles.value(h.appName);
+        if (!t.title.isEmpty())      names << t.title;
+        if (!t.folderName.isEmpty()) names << t.folderName;
+
+        for (const GameAdapter::GogLayout &gi : candidates) {
+            bool hit = false;
+            for (const QString &n : std::as_const(names))
+                if (store_scan::titleMatches(gi.folder, n)) { hit = true; break; }
+            if (!hit) continue;
+
+            const QString path = h.installPath + "/" + exeFor(gi);
+            if (QFile::exists(path)) return path;
         }
     }
 
@@ -627,10 +619,18 @@ QString GameProfileRegistry::findLutrisGameExe(const QString &gameId)
         if (!d.exists()) continue;
         const QStringList ymls = d.entryList(QStringList() << "*.yml" << "*.yaml", QDir::Files);
         for (const QString &name : ymls) {
-            const QString lc = name.toLower();
+            // Normalized, so a "gothic-ii-gold-edition.yml" still answers to
+            // the {"gothic", "2"} tokens the adapter declares. The raw
+            // filename was compared before, and a roman numeral or an edition
+            // word in it was enough to lose the game.
+            const QString lc  = name.toLower();
+            const QString norm = store_scan::normalizeTitle(name);
             bool match = true;
             for (const QString &t : needed) {
-                if (!lc.contains(t)) { match = false; break; }
+                if (lc.contains(t) || norm.contains(store_scan::normalizeTitle(t)))
+                    continue;
+                match = false;
+                break;
             }
             if (!match) continue;
 

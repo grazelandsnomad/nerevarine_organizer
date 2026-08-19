@@ -17,6 +17,7 @@
 #include "bethesda_archives.h"
 #include "bethesda_custom_ini.h"
 #include "opengothic.h"
+#include "store_scan.h"
 #include <functional>
 #include "proton_paths.h"
 #include "dll_overrides.h"
@@ -1775,6 +1776,30 @@ bool opengothicResolvePaths(QWidget *parent, const QString &id,
         if (exe.isEmpty()) exe = GameProfileRegistry::findSteamGameExe(id);
         if (exe.isEmpty()) exe = GameProfileRegistry::findLutrisGameExe(id);
         root = opengothic::gameRootFor(exe);
+    }
+    // Still nothing: sweep everywhere the stores say a game is installed and
+    // ask the engine's own validator which of them is Gothic II.
+    //
+    // No names involved, so nothing here can be a false positive: a folder
+    // either holds Data/, _work/Data/ and the compiled scripts, or it is not a
+    // Gothic II install. This is the last thing tried before giving up and
+    // asking, because a store install found this way is still better evidence
+    // than a folder the user picks while half asleep.
+    if (!opengothic::isGameRoot(root)) {
+        QStringList found;
+        for (const QString &p : store_scan::allInstallPaths()) {
+            const QString r = opengothic::gameRootFor(p);
+            if (!r.isEmpty() && !found.contains(r)) found << r;
+        }
+        if (found.size() == 1) {
+            root = found.first();
+        } else if (found.size() > 1) {
+            bool ok = false;
+            const QString picked = QInputDialog::getItem(
+                parent, T("gothic_title"), T("gothic_pick_install"), found, 0,
+                /*editable=*/false, &ok);
+            if (ok && !picked.isEmpty()) root = picked;
+        }
     }
     bool asked = false;
     while (!opengothic::isGameRoot(root)) {
