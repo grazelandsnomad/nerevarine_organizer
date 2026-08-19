@@ -252,6 +252,17 @@ void Settings::setModlistTranslationLanguage(const QString &gameId, const QStrin
     QSettings().setValue(modlistKey(gameId, profile, "translation_language"), lang);
 }
 
+QString Settings::depGraphLayout(const QString &gameId, const QString &profile)
+{
+    return QSettings().value(modlistKey(gameId, profile, "dep_graph_layout")).toString();
+}
+
+void Settings::setDepGraphLayout(const QString &gameId, const QString &profile,
+                                 const QString &json)
+{
+    QSettings().setValue(modlistKey(gameId, profile, "dep_graph_layout"), json);
+}
+
 QString Settings::loadOrderFilename(const QString &gameId, const QString &profile)
 {
     return QSettings().value(modlistKey(gameId, profile, "loadorder_filename")).toString();

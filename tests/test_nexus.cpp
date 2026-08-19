@@ -756,6 +756,169 @@ static void testHighlightOutputLengthMatches()
     check("output size == input size", hl.size() == all.size());
 }
 
+
+// -- buildGraph / wouldCycle / layerOf --------------------------------
+//
+// The reported shape: KID needs MergeMapper, which needs SKSE and Address
+// Library, which itself needs SKSE. Three levels, and the chain the canvas has
+// to draw top to bottom.
+static const QString URL_SKSE   = QStringLiteral("https://www.nexusmods.com/skyrimspecialedition/mods/30379");
+static const QString URL_ADDRLIB= QStringLiteral("https://www.nexusmods.com/skyrimspecialedition/mods/32444");
+static const QString URL_MM     = QStringLiteral("https://www.nexusmods.com/skyrimspecialedition/mods/74689");
+static const QString URL_KID    = QStringLiteral("https://www.nexusmods.com/skyrimspecialedition/mods/55728");
+
+static int nodeNamed(const deps::Graph &g, const QString &label)
+{
+    for (int i = 0; i < g.nodes.size(); ++i)
+        if (g.nodes[i].label == label) return i;
+    return -1;
+}
+static bool hasEdge(const deps::Graph &g, const QString &from, const QString &to)
+{
+    const int a = nodeNamed(g, from), b = nodeNamed(g, to);
+    if (a < 0 || b < 0) return false;
+    for (const auto &e : g.edges) if (e.from == a && e.to == b) return true;
+    return false;
+}
+
+static void testGraphBuildsTheReportedChain()
+{
+    std::cout << "\n[the dependency web as a graph]\n";
+    const QList<ModEntry> mods = {
+        mk(0, "skse64",       URL_SKSE),
+        mk(1, "Address Library", URL_ADDRLIB, true, true, {URL_SKSE}),
+        mk(2, "MergeMapper",  URL_MM,  true, true, {URL_SKSE, URL_ADDRLIB}),
+        mk(3, "KID",          URL_KID, true, true, {URL_MM}),
+    };
+    const auto g = deps::buildGraph(mods);
+
+    check("every row is a node so any can be an endpoint", g.nodes.size() == 4);
+    check("KID needs MergeMapper",         hasEdge(g, "KID", "MergeMapper"));
+    check("MergeMapper needs SKSE",        hasEdge(g, "MergeMapper", "skse64"));
+    check("MergeMapper needs Address Library",
+          hasEdge(g, "MergeMapper", "Address Library"));
+    check("Address Library needs SKSE",    hasEdge(g, "Address Library", "skse64"));
+    check("and nothing points the wrong way",
+          !hasEdge(g, "skse64", "MergeMapper"));
+
+    const auto d = deps::layerOf(g);
+    check("SKSE is the deepest layer",  d[nodeNamed(g, "skse64")] == 0);
+    check("Address Library sits above it", d[nodeNamed(g, "Address Library")] == 1);
+    check("MergeMapper above that",     d[nodeNamed(g, "MergeMapper")] == 2);
+    check("KID on top",                 d[nodeNamed(g, "KID")] == 3);
+}
+
+static void testOneUrlCanBeSeveralRows()
+{
+    std::cout << "\n[a dependency URL is not unique to one row]\n";
+    // MAIN and PATCH from one mod page share a nexusUrl. Resolving with a
+    // first-match lookup drops the second edge silently.
+    const QList<ModEntry> mods = {
+        mk(0, "OAAB Data",       URL_SKSE),
+        mk(1, "OAAB Data patch", URL_SKSE),
+        mk(2, "Some mod",        URL_MM, true, true, {URL_SKSE}),
+    };
+    const auto g = deps::buildGraph(mods);
+    check("an edge to EACH row sharing the modpage",
+          hasEdge(g, "Some mod", "OAAB Data")
+              && hasEdge(g, "Some mod", "OAAB Data patch"),
+          QString::number(g.edges.size()));
+
+    // The same page written two ways is the same mod.
+    const QList<ModEntry> variants = {
+        mk(0, "Core Impact Framework", URL_SKSE),
+        mk(1, "Sanguine Symphony", URL_MM, true, true,
+           {URL_SKSE + QStringLiteral("?tab=files")}),
+    };
+    const auto g2 = deps::buildGraph(variants);
+    check("a ?tab=files URL resolves to the same mod",
+          hasEdge(g2, "Sanguine Symphony", "Core Impact Framework"));
+    check("and no ghost was invented for it",
+          g2.nodes.size() == 2, QString::number(g2.nodes.size()));
+}
+
+static void testGhostsAndImpossibleTargets()
+{
+    std::cout << "\n[dependencies on mods that are not there]\n";
+    const QList<ModEntry> mods = {
+        mk(0, "Needs something", URL_MM, true, true, {URL_SKSE}),
+        mk(1, "Another",         URL_KID, true, true, {URL_SKSE}),
+    };
+    const auto g = deps::buildGraph(mods);
+    int ghosts = 0;
+    for (const auto &n : g.nodes) if (n.ghost) ++ghosts;
+    check("the absent dependency becomes ONE shared ghost", ghosts == 1,
+          QString::number(ghosts));
+    check("and both edges survive rather than vanishing", g.edges.size() == 2);
+
+    // A row with no Nexus URL can never be depended upon - the picker cannot
+    // offer it - so the canvas must not let the user aim an arrow at it.
+    const QList<ModEntry> handAdded = { mk(0, "Hand-added folder", QString()) };
+    const auto g3 = deps::buildGraph(handAdded);
+    check("a row with no URL cannot be a target", !g3.nodes[0].canBeTarget);
+    check("but a row with one can", deps::buildGraph({mk(0, "X", URL_MM)})
+                                       .nodes[0].canBeTarget);
+}
+
+static void testSectionTravelsToTheNodes()
+{
+    std::cout << "\n[a node remembers which separator it sits under]\n";
+    // The canvas scopes what it draws by separator, and the only place that
+    // grouping exists is the snapshot - the graph itself has no idea where the
+    // separators are unless the node carries it.
+    QList<ModEntry> mods = {
+        mk(0, "skse64",      URL_SKSE),
+        mk(1, "MergeMapper", URL_MM, true, true, {URL_SKSE}),
+    };
+    mods[0].section = QStringLiteral("Utility mods");
+    mods[1].section = QStringLiteral("SKSE mods");
+    const auto g = deps::buildGraph(mods);
+
+    check("each node keeps its own section",
+          g.nodes[nodeNamed(g, "skse64")].section == QLatin1String("Utility mods")
+       && g.nodes[nodeNamed(g, "MergeMapper")].section == QLatin1String("SKSE mods"));
+    // Two thirds of the arrows on the author's real lists cross a boundary
+    // like this one, which is why the view cannot draw a section alone.
+    check("an edge may cross a section boundary",
+          hasEdge(g, "MergeMapper", "skse64"));
+}
+
+static void testNoSelfEdge()
+{
+    std::cout << "\n[a mod cannot depend on itself]\n";
+    // A patch auto-linked to its own modpage ends up with DependsOn == its own
+    // URL; resolveDependencies already skips that, and so must the graph.
+    const auto g = deps::buildGraph({mk(0, "Patch", URL_MM, true, true, {URL_MM})});
+    check("no self-edge is drawn", g.edges.isEmpty(),
+          QString::number(g.edges.size()));
+}
+
+static void testCycleRefusalAndTolerance()
+{
+    std::cout << "\n[cycles are refused, and survived if already present]\n";
+    const QList<ModEntry> mods = {
+        mk(0, "A", URL_SKSE),
+        mk(1, "B", URL_MM, true, true, {URL_SKSE}),   // B needs A
+    };
+    const auto g = deps::buildGraph(mods);
+    const int A = nodeNamed(g, "A"), B = nodeNamed(g, "B");
+
+    check("A needing B would close a loop", deps::wouldCycle(g, A, B));
+    check("but B needing A again is merely redundant",
+          !deps::wouldCycle(g, B, A));
+    check("nothing may depend on itself", deps::wouldCycle(g, A, A));
+    check("out-of-range endpoints are not a cycle",
+          !deps::wouldCycle(g, 99, A) && !deps::wouldCycle(g, A, -1));
+
+    // A cycle can still reach the layout - two edges added in separate
+    // sessions, or a hand-edited modlist. layerOf must terminate.
+    QList<ModEntry> looped = mods;
+    looped[0].dependsOn = {URL_MM};        // now A needs B and B needs A
+    const auto gl = deps::buildGraph(looped);
+    const auto d  = deps::layerOf(gl);
+    check("layerOf terminates on a cycle", d.size() == gl.nodes.size());
+}
+
 static void run_deps_resolver()
 {
     testResolveEmptyDepsIsSilent();
@@ -790,6 +953,12 @@ static void run_deps_resolver()
     testHighlightEmptyCandidateUrlCantBeDep();
     testHighlightOutOfRangeSelectionIsSafe();
     testHighlightOutputLengthMatches();
+    testGraphBuildsTheReportedChain();
+    testOneUrlCanBeSeveralRows();
+    testGhostsAndImpossibleTargets();
+    testSectionTravelsToTheNodes();
+    testNoSelfEdge();
+    testCycleRefusalAndTolerance();
 }
 
 int main(int argc, char **argv)

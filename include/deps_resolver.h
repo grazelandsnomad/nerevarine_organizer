@@ -9,6 +9,8 @@
 //                           from one modpage land side by side.
 //   parseDescriptionDeps  - regex a Nexus description; split same-game hits
 //                           into installed vs missing.
+//   buildGraph            - the whole DependsOn web as nodes + edges, for the
+//                           dependency canvas.
 
 #include <QList>
 #include <QMap>
@@ -26,6 +28,9 @@ struct ModEntry {
     bool         installed   = false;
     bool         isUtility   = false;  // ModRole::IsUtility (framework / library)
     QStringList  dependsOn;
+    // Name of the separator this row sits under, "" for rows above the first
+    // one. Only the canvas uses it, to scope what it draws to one section.
+    QString      section;
 };
 
 // What to paint for one mod after resolving its DependsOn against the
@@ -57,6 +62,68 @@ struct DescriptionDeps {
 // satisfies a multi-candidate URL.
 DepScanResult resolveDependencies(const ModEntry &target,
                                   const QList<ModEntry> &allMods);
+
+// -- The dependency web, as a graph -----------------------------------
+//
+// Everything above answers a question about ONE mod. This answers what the
+// whole set looks like, which is what a canvas needs.
+//
+// Two properties of the underlying data shape this, and both are easy to get
+// wrong:
+//
+//   * A dependency is a Nexus mod-page URL, and that URL is NOT unique per
+//     row. The MAIN, UPDATE and PATCH files of one mod page all carry the same
+//     nexusUrl, so one dependency can legitimately resolve to SEVERAL nodes.
+//     Resolving with a first-match lookup silently drops the rest.
+//
+//   * A row with no nexusUrl can never be the TARGET of a dependency - the
+//     picker only offers rows that have one - though it can still declare
+//     dependencies of its own. An editable canvas has to show that asymmetry
+//     or the user will keep trying to draw an impossible arrow.
+
+struct GraphNode {
+    int     idx = -1;          // row index, or -1 for a ghost
+    QString label;
+    bool    installed   = false;
+    bool    enabled     = false;
+    bool    isUtility   = false;
+    // False when the row has no nexusUrl, so nothing can ever depend on it.
+    bool    canBeTarget = false;
+    // A dependency URL that matches no row at all. The edge is kept and the
+    // missing mod drawn, rather than the edge vanishing and the graph quietly
+    // disagreeing with the modlist.
+    bool    ghost = false;
+    QString ghostUrl;
+    QString modPath;           // layout identity; unique, unlike nexusUrl
+    QString section;           // separator this row sits under; "" for ghosts
+};
+
+// from depends on to. Indices into Graph::nodes, not row indices.
+struct GraphEdge { int from = -1; int to = -1; };
+
+struct Graph {
+    QList<GraphNode> nodes;
+    QList<GraphEdge> edges;
+};
+
+// Build the graph from a modlist snapshot. Every mod row becomes a node so the
+// canvas can offer any of them as an endpoint; edges come only from declared
+// DependsOn. Self-edges are dropped, the way resolveDependencies already skips
+// self-URL candidates.
+Graph buildGraph(const QList<ModEntry> &allMods);
+
+// Would adding from -> to create a cycle? An editable canvas must refuse one:
+// "A needs B needs A" cannot be satisfied, and there is no sensible layer to
+// draw it in either. True also for a self-edge.
+bool wouldCycle(const Graph &g, int from, int to);
+
+// Depth of each node: 0 for one that depends on nothing, otherwise one more
+// than its deepest dependency. Index-parallel with Graph::nodes.
+//
+// Cycle-tolerant by construction. The user can hand-build a cycle that
+// wouldCycle did not see (two edges added in separate sessions, or data edited
+// by hand), and a naive longest-path walk would recurse until the stack died.
+QList<int> layerOf(const Graph &g);
 
 // Same-modpage DependsOn mutations for a newly-installing mod against the
 // current list. `categoryHint` is the Nexus category_name from files.json.

@@ -134,6 +134,7 @@ set(SOURCES
     src/bsareader.cpp
     src/safe_fs.cpp
     src/deps_resolver.cpp
+    src/dep_graph.cpp
     src/installcontroller.cpp
     src/install_layout.cpp
     src/mod_naming.cpp
@@ -262,6 +263,7 @@ set(SOURCES
     include/bsareader.h
     include/safe_fs.h
     include/deps_resolver.h
+    include/dep_graph.h
     include/settings.h
     resources.qrc
 )

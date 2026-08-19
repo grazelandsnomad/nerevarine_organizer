@@ -133,6 +133,9 @@ private slots:
     void onLaunchGame();            // generic launch for non-Morrowind games
     void onLaunchSteamLauncher();   // launches the game's official launcher (e.g. SkyrimSELauncher.exe)
     void onTuneSkyrimIni();         // BethINI-style INI tweaks for Skyrim SE
+    // Dependency canvas: draws the DependsOn web and applies edits back
+    // through the same write path the "Required mods" dialog uses.
+    void onDependencyGraph();
     void onAnimTick();
     void onSortByDate();
     void onSortBySize();
@@ -672,6 +675,7 @@ private:
     QAction               *m_actLaunchGame            = nullptr;  // "▶ Start" for non-Morrowind
     QAction               *m_actLaunchSteamLauncher   = nullptr;  // "▶ Launcher" for non-Morrowind
     QAction               *m_actTuneSkyrimIni         = nullptr;  // "⚙ Tune INI" - Skyrim AE only
+    QAction               *m_actDepGraph              = nullptr;  // dependency canvas
     QAction               *m_actSortLoot              = nullptr;  // "⇅ Sort with LOOT" - LOOT-supported profiles only
     QAction               *m_actMenuSortLoot          = nullptr;  // Mirror of m_actSortLoot under Mods menu (same profile gating)
     QAction               *m_actDeployBethesda        = nullptr;  // "Deploy to game" - Bethesda titles only (Mods menu)

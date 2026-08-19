@@ -1,5 +1,10 @@
 #include "deps_resolver.h"
 
+#include "nxmurl.h"
+
+#include <QHash>
+#include <QSet>
+
 #include <QHash>
 #include <QRegularExpression>
 #include <QSet>
@@ -159,6 +164,155 @@ parseDescriptionDeps(const QString &description,
             out.missingModIds.append(id);
     }
     return out;
+}
+
+
+// -- The dependency web, as a graph -----------------------------------
+
+namespace {
+
+// A dependency URL reduced to what actually identifies the mod. Raw string
+// equality would treat ".../mods/146873" and ".../mods/146873?tab=files" as
+// different mods; the existing lookups do exactly that and miss the match.
+// Unparseable URLs fall back to their trimmed selves so nothing is lost.
+QString urlKey(const QString &url)
+{
+    const auto ref = parseNexusModUrl(url);
+    if (ref) return ref->game + QLatin1Char('/') + QString::number(ref->modId);
+    return url.trimmed();
+}
+
+} // namespace
+
+Graph buildGraph(const QList<ModEntry> &allMods)
+{
+    Graph g;
+
+    // Every row becomes a node, so the canvas can offer any mod as an endpoint
+    // even when it has no edges yet.
+    QHash<int, int> rowToNode;          // row idx -> node index
+    QHash<QString, QList<int>> byKey;   // url key -> node indices (MULTI)
+    for (const ModEntry &m : allMods) {
+        GraphNode n;
+        n.idx         = m.idx;
+        n.label       = m.displayName;
+        n.installed   = m.installed;
+        n.enabled     = m.enabled;
+        n.isUtility   = m.isUtility;
+        n.canBeTarget = !m.nexusUrl.isEmpty();
+        n.section     = m.section;
+        rowToNode.insert(m.idx, int(g.nodes.size()));
+        if (!m.nexusUrl.isEmpty())
+            byKey[urlKey(m.nexusUrl)].append(int(g.nodes.size()));
+        g.nodes.append(n);
+    }
+
+    // Ghosts are created on demand and shared, so two mods needing the same
+    // absent dependency point at one node rather than two.
+    QHash<QString, int> ghostByKey;
+
+    for (const ModEntry &m : allMods) {
+        const int from = rowToNode.value(m.idx, -1);
+        if (from < 0) continue;
+
+        for (const QString &dep : m.dependsOn) {
+            if (dep.trimmed().isEmpty()) continue;
+            const QString key = urlKey(dep);
+
+            const QList<int> targets = byKey.value(key);
+            if (!targets.isEmpty()) {
+                // Every row sharing the modpage, not just the first: a mod
+                // page's MAIN and PATCH rows are both legitimately the
+                // dependency.
+                for (int to : targets) {
+                    if (to == from) continue;      // no self-edge
+                    g.edges.append({from, to});
+                }
+                continue;
+            }
+
+            // Nothing in the list matches. Keep the edge and draw the absence.
+            auto it = ghostByKey.constFind(key);
+            int to;
+            if (it != ghostByKey.constEnd()) {
+                to = *it;
+            } else {
+                GraphNode gh;
+                gh.label       = dep;
+                gh.ghost       = true;
+                gh.ghostUrl    = dep;
+                gh.canBeTarget = true;   // it IS a target, just not installed
+                to = int(g.nodes.size());
+                g.nodes.append(gh);
+                ghostByKey.insert(key, to);
+            }
+            g.edges.append({from, to});
+        }
+    }
+
+    return g;
+}
+
+bool wouldCycle(const Graph &g, int from, int to)
+{
+    if (from < 0 || to < 0 || from >= g.nodes.size() || to >= g.nodes.size())
+        return false;
+    if (from == to) return true;    // a mod cannot need itself
+
+    // Reachable-from-`to`: if `from` is already downstream of `to`, adding
+    // from -> to closes a loop. Iterative, so an existing cycle in the data
+    // cannot blow the stack.
+    QHash<int, QList<int>> out;
+    for (const GraphEdge &e : g.edges) out[e.from].append(e.to);
+
+    QList<int> stack{to};
+    QSet<int> seen;
+    while (!stack.isEmpty()) {
+        const int n = stack.takeLast();
+        if (n == from) return true;
+        if (seen.contains(n)) continue;
+        seen.insert(n);
+        for (int nxt : out.value(n)) stack.append(nxt);
+    }
+    return false;
+}
+
+QList<int> layerOf(const Graph &g)
+{
+    QHash<int, QList<int>> out;
+    for (const GraphEdge &e : g.edges) out[e.from].append(e.to);
+
+    QList<int> depth(g.nodes.size(), 0);
+
+    // Longest path to a leaf, computed iteratively with an explicit colour
+    // map. A cycle is broken by treating an in-progress node as depth 0 rather
+    // than recursing into it - the layout still draws, which matters more than
+    // a "correct" depth for data that is already contradictory.
+    enum Colour : quint8 { White = 0, Grey, Black };
+    QList<quint8> colour(g.nodes.size(), White);
+
+    for (int root = 0; root < g.nodes.size(); ++root) {
+        if (colour[root] != White) continue;
+        QList<int> stack{root};
+        while (!stack.isEmpty()) {
+            const int n = stack.last();
+            if (colour[n] == White) {
+                colour[n] = Grey;
+                for (int m : out.value(n))
+                    if (colour[m] == White) stack.append(m);
+                continue;
+            }
+            // Every child settled (or is part of a cycle): fold them in.
+            stack.removeLast();
+            if (colour[n] == Black) continue;
+            int d = 0;
+            for (int m : out.value(n))
+                if (colour[m] == Black) d = qMax(d, 1 + depth[m]);
+            depth[n]  = d;
+            colour[n] = Black;
+        }
+    }
+    return depth;
 }
 
 } // namespace deps

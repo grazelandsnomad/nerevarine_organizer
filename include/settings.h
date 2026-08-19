@@ -63,6 +63,12 @@ struct Settings {
     static QString modlistTranslationLanguage(const QString &gameId, const QString &profile);
     static void    setModlistTranslationLanguage(const QString &gameId, const QString &profile,
                                                  const QString &lang);
+    // Node positions for the dependency canvas, as a JSON blob. Per profile
+    // because the graph is the profile's modlist; stored here rather than in a
+    // state file so removeModlistProfileGroup() drops it on rename/delete.
+    static QString depGraphLayout(const QString &gameId, const QString &profile);
+    static void    setDepGraphLayout(const QString &gameId, const QString &profile,
+                                     const QString &json);
     static void    setLoadOrderFilename(const QString &gameId, const QString &profile, const QString &name);
 
     // Drop the whole `games/<id>/profile/<name>` group on profile

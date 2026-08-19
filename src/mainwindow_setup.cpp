@@ -276,6 +276,13 @@ void MainWindow::setupMenuBar()
     modsMenu->addAction(T("menu_restore_backup"),  this,
                         [this]{ m_backups->showRestoreBackupDialog(this); });
     modsMenu->addAction(T("menu_inspect_openmw"),  this, &MainWindow::onInspectOpenMWSetup);
+    // Tune INI lives here now that the dependency canvas has its toolbar slot.
+    // Constructed here, not in setupToolbar(): setupMenuBar() runs first, so
+    // adding it there would add a null action.
+    m_actTuneSkyrimIni = new QAction(T("toolbar_tune_skyrim_ini"), this);
+    connect(m_actTuneSkyrimIni, &QAction::triggered,
+            this, &MainWindow::onTuneSkyrimIni);
+    modsMenu->addAction(m_actTuneSkyrimIni);
     modsMenu->addAction(T("menu_conflict_inspector"), this, &MainWindow::onInspectConflicts);
     m_actDeployBethesda = modsMenu->addAction(T("menu_deploy_bethesda"), this, &MainWindow::onDeployBethesda);
     m_actUndeployBethesda = modsMenu->addAction(T("menu_undeploy_bethesda"), this, &MainWindow::onUndeployBethesda);
@@ -459,11 +466,17 @@ void MainWindow::setupToolbar()
         btn->setStyleSheet("color: #1a8a1a; font-weight: bold;");
     m_actLaunchSteamLauncher = tb->addAction(T("toolbar_launch_launcher"), this, &MainWindow::onLaunchSteamLauncher);
 
-    // Skyrim SE - simple BethINI-style INI tweaker (hidden for other profiles)
-    m_actTuneSkyrimIni = tb->addAction(T("toolbar_tune_skyrim_ini"),
-                                        this, &MainWindow::onTuneSkyrimIni);
-    if (auto *btn = qobject_cast<QToolButton *>(tb->widgetForAction(m_actTuneSkyrimIni)))
+    // Dependency canvas. Takes the slot "Tune INI" had, as asked - Tune INI
+    // itself moves to the Mods menu below rather than being deleted, since it
+    // was toolbar-only and losing a working feature is not what swapping a
+    // button should cost.
+    m_actDepGraph = tb->addAction(T("toolbar_dep_graph"),
+                                  this, &MainWindow::onDependencyGraph);
+    if (auto *btn = qobject_cast<QToolButton *>(tb->widgetForAction(m_actDepGraph)))
         btn->setStyleSheet("color: #1a6fa8; font-weight: bold;");
+
+    // Tune INI is no longer on the toolbar; it is created and added in
+    // setupMenuBar(), which runs before this.
 
     // Launch buttons (OpenMW-specific - shown only for Morrowind)
     m_actLaunchOpenMW = tb->addAction(T("toolbar_launch_openmw"), this, &MainWindow::onLaunchOpenMW);
@@ -626,7 +639,7 @@ void MainWindow::setupToolbar()
     }
     m_tbCustom->registerAction("launch_game",           m_actLaunchGame,          T("toolbar_launch_game"));
     m_tbCustom->registerAction("launch_steam_launcher", m_actLaunchSteamLauncher, T("toolbar_launch_launcher"));
-    m_tbCustom->registerAction("tune_skyrim_ini",       m_actTuneSkyrimIni,       T("toolbar_tune_skyrim_ini"));
+    m_tbCustom->registerAction("dep_graph",             m_actDepGraph,            T("toolbar_dep_graph"));
     m_tbCustom->registerAction("launch_openmw",         m_actLaunchOpenMW,        T("toolbar_launch_openmw"));
     m_tbCustom->registerAction("launch_openmw_launcher",m_actLaunchLauncher,      T("toolbar_launch_launcher"));
     m_tbCustom->registerAction("sort_loot",             m_actSortLoot,            T("toolbar_sort_loot"),            /*defaultVisible=*/false);
@@ -1756,9 +1769,15 @@ void MainWindow::updateGameButton()
     setProfileVis(m_actLaunchLauncher,      isMorrowind);
     setProfileVis(m_actLaunchGame,          !isMorrowind);
     setProfileVis(m_actLaunchSteamLauncher, !isMorrowind && hasLauncher);
+    // Tune INI is a MENU action now, not a toolbar one, so it is not
+    // registered with m_tbCustom and has no user-visibility property. Routing
+    // it through setProfileVis would AND against an unset property and hide it
+    // for good. Plain QAction API, like m_actMenuSortLoot above.
+    //
     // Adapter data, not an id compare: Skyrim AE is the same engine and the
-    // same SkyrimPrefs.ini, so a string match on SE's id hid the button for it.
-    setProfileVis(m_actTuneSkyrimIni,       adapter && !adapter->prefsIniName().isEmpty());
+    // same SkyrimPrefs.ini, so a string match on SE's id hid it for that too.
+    if (m_actTuneSkyrimIni)
+        m_actTuneSkyrimIni->setVisible(adapter && !adapter->prefsIniName().isEmpty());
     setProfileVis(m_actSortLoot,            !lootGameFor(gp.id).isEmpty());
     // Mods-menu twin of the toolbar LOOT action: not subject to the
     // user-visibility gate in m_tbCustom->applyVisibility(), so toggle it

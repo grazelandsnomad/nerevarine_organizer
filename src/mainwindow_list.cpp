@@ -9,6 +9,8 @@
 #include "translation_store.h"
 #include "target_language.h"
 #include "mod_package.h"
+#include "dep_graph.h"
+#include "deps_resolver.h"
 #include "async_guarded.h"
 #include "mainwindow_internal.h"
 #include "settings.h"
@@ -1832,4 +1834,71 @@ void MainWindow::onPackageMod(QListWidgetItem *item)
                 subprocess::startDetached(
                     "xdg-open", {QFileInfo(r.archivePath).absolutePath()});
         });
+}
+
+void MainWindow::onDependencyGraph()
+{
+    if (!m_modList) return;
+
+    // Snapshot on the UI thread, exactly as the highlight path does: a
+    // QListWidgetItem is not safe to touch anywhere else, and dep_graph is a
+    // pure view over PODs. Separators get a blank entry so the index space
+    // still lines up with m_modList rows.
+    QList<deps::ModEntry> snap;
+    QHash<int, QString> rowUrl;
+    snap.reserve(m_modList->count());
+    // The section a mod belongs to is the nearest separator above it - the list
+    // has no other notion of grouping - so it is tracked while walking down.
+    QString section;
+    for (int i = 0; i < m_modList->count(); ++i) {
+        auto *it = m_modList->item(i);
+        deps::ModEntry e;
+        e.idx = i;
+        if (it->data(ModRole::ItemType).toString() == ItemType::Separator)
+            section = it->text().trimmed();
+        if (it->data(ModRole::ItemType).toString() == ItemType::Mod) {
+            e.section     = section;
+            e.nexusUrl    = it->data(ModRole::NexusUrl).toString();
+            e.displayName = it->text().trimmed();
+            e.dependsOn   = it->data(ModRole::DependsOn).toStringList();
+            e.isUtility   = it->data(ModRole::IsUtility).toBool();
+            e.enabled     = it->checkState() == Qt::Checked;
+            e.installed   = it->data(ModRole::InstallStatus).toInt() == 1;
+            if (!e.nexusUrl.isEmpty()) rowUrl.insert(i, e.nexusUrl);
+        }
+        snap.append(e);
+    }
+
+    // A separator has no name and no URL; it would draw as an empty box the
+    // user can never link. Drop them, keeping row indices intact via idx.
+    QList<deps::ModEntry> mods;
+    for (const deps::ModEntry &e : snap)
+        if (!e.displayName.isEmpty() || !e.dependsOn.isEmpty()) mods << e;
+
+    deps::Graph g = deps::buildGraph(mods);
+    // modPath is the layout identity - unique per row, unlike nexusUrl.
+    for (deps::GraphNode &n : g.nodes)
+        if (!n.ghost && n.idx >= 0 && n.idx < m_modList->count())
+            n.modPath = m_modList->item(n.idx)->data(ModRole::ModPath).toString();
+
+    // Layout is per modlist profile. Packed with a unit separator rather than
+    // two parameters so the view stays ignorant of profiles.
+    QString layoutKey;
+    if (m_profiles && !m_profiles->isEmpty())
+        layoutKey = m_profiles->current().id + QChar(0x1f)
+                  + m_profiles->current().activeModlist().name;
+
+    const auto res = dep_graph::show(this, g, rowUrl, layoutKey);
+    if (!res.changed) return;
+
+    // Applied here, through the same route the "Required mods" dialog uses, so
+    // there is one place that writes DependsOn and one that pushes undo.
+    m_undoStack->pushUndo();
+    for (auto it = res.dependsOn.constBegin(); it != res.dependsOn.constEnd(); ++it) {
+        if (it.key() < 0 || it.key() >= m_modList->count()) continue;
+        m_modList->item(it.key())->setData(ModRole::DependsOn, it.value());
+    }
+    saveModList();
+    statusBar()->showMessage(
+        T("depgraph_saved").arg(res.dependsOn.size()), 5000);
 }
