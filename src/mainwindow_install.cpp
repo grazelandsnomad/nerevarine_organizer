@@ -20,6 +20,10 @@
 #include "mod_sharing.h"
 #include "nexuscontroller.h"
 #include "nxmurl.h"
+#include "download_watch.h"
+#include "game_adapter.h"
+#include "notify_banner.h"
+#include "settings.h"
 #include "downloadqueue.h"
 #include "undo_stack.h"
 #include "zoom_controller.h"
@@ -1133,12 +1137,11 @@ void MainWindow::repairEmptyModPaths()
 // "new placeholder" path instead of accidentally hijacking a row.
 static int modIdFromArchiveName(const QString &archiveFileName)
 {
-    const QString base = QFileInfo(archiveFileName).completeBaseName();
-    const QStringList parts = base.split('-');
-    if (parts.size() < 5) return -1;  // need <name>-<id>-<v>-<v>-<ts> minimum
-    bool ok = false;
-    const int candidate = parts[1].toInt(&ok);
-    return ok ? candidate : -1;
+    // One implementation, in download_watch, because the watcher needs the
+    // same answer. It also anchors on the trailing timestamp instead of
+    // taking the second dash-separated field, which used to give up on any
+    // mod whose own name contains a hyphen ("Ultimate-Texture-Pack-135-...").
+    return download_watch::nexusModIdFromFileName(archiveFileName);
 }
 
 // Look up a "pending" row that's already waiting for this archive.  A row
@@ -1168,7 +1171,8 @@ static QListWidgetItem *findPendingRowForModId(QListWidget *list, int modId,
     return nullptr;
 }
 
-void MainWindow::installLocalArchive(const QString &archivePath)
+void MainWindow::installLocalArchive(const QString &archivePath,
+                                     const QString &nexusUrlHint)
 {
     QFileInfo srcFi(archivePath);
     if (!srcFi.exists() || !srcFi.isFile()) return;
@@ -1240,6 +1244,12 @@ void MainWindow::installLocalArchive(const QString &archivePath)
         m_modList->addItem(placeholder);
         m_modList->scrollToItem(placeholder);
     }
+    // A hand-downloaded mod keeps its mod page when the caller could work out
+    // which one it came from, so it still gets update checks. Never overwrites
+    // a URL an adopted row already has - that one came from Nexus itself.
+    if (!nexusUrlHint.isEmpty()
+        && placeholder->data(ModRole::NexusUrl).toString().isEmpty())
+        placeholder->setData(ModRole::NexusUrl, nexusUrlHint);
     saveModList();
 
     statusBar()->showMessage(
@@ -1248,4 +1258,68 @@ void MainWindow::installLocalArchive(const QString &archivePath)
         qCWarning(logging::lcInstall)
             << "extractAndAdd for dropped/reinstalled archive failed:" << r.error();
     }
+}
+
+
+// -- caught downloads ---------------------------------------------------
+//
+// For a game Nexus has no mod-manager download button for, every file is a
+// manual download and no nxm:// link ever arrives. The next best thing is to
+// notice the file landing in the browser's download folder. See
+// download_watch.h for why this is scoped to those games only.
+
+void MainWindow::updateDownloadWatch()
+{
+    const GameAdapter *adapter = m_profiles->isEmpty()
+        ? nullptr : GameAdapterRegistry::find(currentProfile().id);
+    const bool want = adapter && adapter->manualDownloadsOnly()
+                   && Settings::watchDownloads();
+
+    if (!want) {
+        if (m_dlWatch) { m_dlWatch->stop(); m_dlWatch->deleteLater(); m_dlWatch = nullptr; }
+        if (m_stickyKind == StickyKind::CaughtDownload) {
+            m_stickyKind = StickyKind::ViewSort;
+            m_caughtDownload.clear();
+            if (m_notify) m_notify->hideSticky();
+        }
+        return;
+    }
+    if (m_dlWatch) return;   // already watching for this profile
+
+    m_dlWatch = new download_watch::Watcher(this);
+    connect(m_dlWatch, &download_watch::Watcher::archiveReady, this,
+            [this](const QString &path) {
+        // A banner rather than a dialog: a download finishing is not a reason
+        // to interrupt whatever the user is doing, and the file will still be
+        // there in a minute.
+        m_caughtDownload = path;
+        m_stickyKind     = StickyKind::CaughtDownload;
+        if (m_notify)
+            m_notify->showSticky(T("download_caught_banner")
+                                     .arg(QFileInfo(path).fileName(),
+                                          currentProfile().displayName),
+                                 QStringLiteral("#1a6fa8"));
+    });
+    m_dlWatch->start({}, [](const QString &p) { return isInstallableArchiveSuffix(p); });
+}
+
+void MainWindow::onDownloadCaught(const QString &path)
+{
+    if (path.isEmpty() || !QFileInfo::exists(path)) return;
+
+    const QString file = QFileInfo(path).fileName();
+    const int modId = download_watch::nexusModIdFromFileName(file);
+    const QString domain = m_profiles->isEmpty() ? QString()
+                                                 : nexusDomainFor(currentProfile().id);
+    const QString url = (modId > 0 && !domain.isEmpty())
+        ? nexusModUrl(domain, modId) : QString();
+
+    const QString body = url.isEmpty()
+        ? T("download_caught_confirm").arg(file, currentProfile().displayName)
+        : T("download_caught_confirm_nexus").arg(file, currentProfile().displayName, url);
+    if (!ui::confirm(this, T("download_caught_title"), body)) {
+        if (m_dlWatch) m_dlWatch->ignore(path);
+        return;
+    }
+    installLocalArchive(path, url);
 }

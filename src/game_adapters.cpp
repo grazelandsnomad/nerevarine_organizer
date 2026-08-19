@@ -558,6 +558,9 @@ public:
     }; }
     QStringList lutrisTokens() const override { return {"gothic", "2"}; }
     bool    isOpenGothic() const override { return true; }
+    // Nexus has a Gothic 2 section (135 mods) but no mod-manager integration
+    // for it, so every file there is a manual download.
+    bool    manualDownloadsOnly() const override { return true; }
     QString dataSubdir()   const override { return QStringLiteral(".."); }
     bool    overlayDeploy() const override { return true; }
     // GothicStarter.exe is the original Windows launcher and picks the mod ini

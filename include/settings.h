@@ -116,6 +116,13 @@ struct Settings {
     // Default FALSE, unlike the conflict notices above: those come free from a
     // scan that runs anyway, while this one reads and decompresses plugin
     // record bodies, so it only happens for users who ask the question.
+    // Watch the browser's download folder and offer what lands there. Only
+    // ever runs for a game with no mod-manager download route at all (see
+    // GameAdapter::manualDownloadsOnly), so the default is on: for those games
+    // there is no other way in but drag and drop.
+    static bool    watchDownloads();             // default true
+    static void    setWatchDownloads(bool on);
+
     static bool    untranslatedNoticesVisible(); // default false
     static void    setUntranslatedNoticesVisible(bool visible);
 

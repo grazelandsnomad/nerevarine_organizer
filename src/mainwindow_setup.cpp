@@ -401,6 +401,18 @@ void MainWindow::setupMenuBar()
     m_translationLangMenu = settingsMenu->addMenu(T("menu_translation_language"));
     refreshTranslationLanguageMenu();
 
+    // Only meaningful for a game with no mod-manager download route, so it is
+    // shown only while such a profile is active rather than sitting in the
+    // menu doing nothing for every other game.
+    m_actWatchDownloads = settingsMenu->addAction(T("menu_watch_downloads"));
+    m_actWatchDownloads->setCheckable(true);
+    m_actWatchDownloads->setChecked(Settings::watchDownloads());
+    m_actWatchDownloads->setToolTip(T("menu_watch_downloads_tip"));
+    connect(m_actWatchDownloads, &QAction::toggled, this, [this](bool on) {
+        Settings::setWatchDownloads(on);
+        updateDownloadWatch();
+    });
+
     settingsMenu->addSeparator();
     settingsMenu->addAction(T("menu_customize_toolbar"), this,
                             [this]{ m_tbCustom->showCustomizeDialog(this); });
@@ -898,11 +910,21 @@ void MainWindow::setupCentralWidget()
     // up: the deploy hint runs the deploy, everything else restores the saved
     // order (the "temporary view sort" banner).
     connect(m_notify, &NotifyBanner::stickyClicked, this, [this] {
-        if (m_stickyIsDeployHint) {
-            m_stickyIsDeployHint = false;
+        switch (m_stickyKind) {
+        case StickyKind::DeployHint:
+            m_stickyKind = StickyKind::ViewSort;
             onDeployBethesda();
             updateDeployHint();      // clears the banner once it has landed
             return;
+        case StickyKind::CaughtDownload: {
+            const QString path = m_caughtDownload;
+            m_stickyKind = StickyKind::ViewSort;
+            m_caughtDownload.clear();
+            if (!path.isEmpty()) onDownloadCaught(path);
+            return;
+        }
+        case StickyKind::ViewSort:
+            break;
         }
         resetToSavedOrder();
     });
@@ -1784,6 +1806,11 @@ void MainWindow::updateGameButton()
     // with the plain QAction API.
     if (m_actMenuSortLoot)
         m_actMenuSortLoot->setVisible(!lootGameFor(gp.id).isEmpty());
+    // The downloads watcher and its toggle: both are about games Nexus has no
+    // mod-manager download for, so both follow the same adapter flag.
+    if (m_actWatchDownloads)
+        m_actWatchDownloads->setVisible(adapter && adapter->manualDownloadsOnly());
+    updateDownloadWatch();
     // Bethesda Data/ deployment: only for classified non-OpenMW titles
     // (those with a Data subdir).  Experimental; hidden for OpenMW/Morrowind.
     if (m_actDeployBethesda)
@@ -1835,7 +1862,7 @@ void MainWindow::switchToGame(int idx)
     updateProfileButton();
     // dismiss() above already took the banner down, so drop the flag before
     // re-asking the question for the game we just switched TO.
-    m_stickyIsDeployHint = false;
+    m_stickyKind = StickyKind::ViewSort;
     updateDeployHint();
 
     statusBar()->showMessage(

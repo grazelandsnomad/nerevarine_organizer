@@ -3064,7 +3064,7 @@ void MainWindow::switchToModlistProfile(int idx)
     updateProfileButton();
     // Deploy state is per modlist profile (the manifest is keyed by the
     // modlist filename), so the answer changes with the profile.
-    m_stickyIsDeployHint = false;
+    m_stickyKind = StickyKind::ViewSort;
     updateDeployHint();
 
     statusBar()->showMessage(

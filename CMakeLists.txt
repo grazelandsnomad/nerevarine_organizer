@@ -114,6 +114,7 @@ set(SOURCES
     src/openmwconfigwriter.cpp
     src/opengothic.cpp
     src/store_scan.cpp
+    src/download_watch.cpp
     src/proton_paths.cpp
     src/dll_overrides.cpp
     src/bethesda_deploy.cpp
@@ -266,6 +267,7 @@ set(SOURCES
     include/safe_fs.h
     include/deps_resolver.h
     include/store_scan.h
+    include/download_watch.h
     include/dep_graph.h
     include/settings.h
     resources.qrc

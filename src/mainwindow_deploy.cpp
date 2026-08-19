@@ -1149,8 +1149,8 @@ void MainWindow::updateDeployHint()
     if (!m_notify || m_profiles->isEmpty()) return;
 
     auto clear = [this] {
-        if (m_stickyIsDeployHint) {
-            m_stickyIsDeployHint = false;
+        if (m_stickyKind == StickyKind::DeployHint) {
+            m_stickyKind = StickyKind::ViewSort;
             m_notify->hideSticky();
         }
     };
@@ -1191,7 +1191,7 @@ void MainWindow::updateDeployHint()
                        && modlist.lastModified() > manifest.lastModified();
     if (deployed && !stale) { clear(); return; }
 
-    m_stickyIsDeployHint = true;
+    m_stickyKind = StickyKind::DeployHint;
     m_notify->showSticky(stale ? T("deploy_hint_stale")
                                : T("deploy_hint_banner").arg(pending),
                          QStringLiteral("#8a4a12"));

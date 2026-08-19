@@ -85,6 +85,17 @@ add_executable(test_store_scan
 target_include_directories(test_store_scan PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(test_store_scan PRIVATE Qt6::Core)
 
+# Catching a manual download: partial-name detection, mod id recovery, settle.
+# Q_OBJECT in the watcher, so AUTOMOC.
+add_executable(test_download_watch
+    test_download_watch.cpp
+    ${CMAKE_SOURCE_DIR}/src/download_watch.cpp
+    ${CMAKE_SOURCE_DIR}/include/download_watch.h
+)
+set_target_properties(test_download_watch PROPERTIES AUTOMOC ON)
+target_include_directories(test_download_watch PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(test_download_watch PRIVATE Qt6::Core)
+
 # Modlist persistence: io, serializer, ModEntry value type, sync guard.
 add_executable(test_modlist
     test_modlist.cpp
@@ -295,6 +306,7 @@ set(UNIT_TESTS
     test_bethesda
     test_opengothic
     test_store_scan
+    test_download_watch
     test_modlist
     test_profiles
     test_translate_ui

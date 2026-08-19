@@ -23,6 +23,7 @@
 #include "save_queue.h"          // serialized off-thread save writes (by-value member)
 #include "nexusclient.h"
 #include "game_profiles.h"
+#include "download_watch.h"   // Watcher* member, and StickyKind routing
 #include "modentry.h"            // ModEntry complete type: QList<ModEntry> by value below
 
 class QAction;
@@ -63,7 +64,11 @@ public slots:
     void handleNxmUrl(const QString &url);
     // Drag-drop entry point for archives. Public so the nested QListWidget
     // subclass in the .cpp can reach it without a friend.
-    void installLocalArchive(const QString &archivePath);
+    // `nexusUrlHint` is stamped onto the new row when the caller could work
+    // out which mod page the archive came from (a manual download's file name
+    // carries its mod id), so a hand-installed mod still gets update checks.
+    void installLocalArchive(const QString &archivePath,
+                             const QString &nexusUrlHint = {});
     void handleDroppedImportFile(const QString &path);
 
 private slots:
@@ -215,6 +220,11 @@ private slots:
     // Detect an external (non-OpenMW) game in Steam/Heroic/Lutris, prompt for
     // the exe if not found, create a profile and switch. From pinned-game menu.
     void addAndDetectGame(const QString &gameId, const QString &displayName);
+    // Offer a mod archive that just landed in the download folder. Only runs
+    // for a profile whose game has no mod-manager download route at all.
+    void onDownloadCaught(const QString &path);
+    // Start or stop that watcher for the current profile.
+    void updateDownloadWatch();
     // The tail of addAndDetectGame: mods dir + profile creation, once the game
     // has been located (by .exe, or by folder for OpenGothic).
     void createGameProfile(const QString &gameId, const QString &displayName);
@@ -680,7 +690,8 @@ private:
     QAction               *m_actTuneSkyrimIni         = nullptr;  // "⚙ Tune INI" - Skyrim AE only
     QAction               *m_actDepGraph              = nullptr;  // dependency canvas
     QAction               *m_actSortLoot              = nullptr;  // "⇅ Sort with LOOT" - LOOT-supported profiles only
-    QAction               *m_actMenuSortLoot          = nullptr;  // Mirror of m_actSortLoot under Mods menu (same profile gating)
+    QAction               *m_actMenuSortLoot          = nullptr;
+    QAction               *m_actWatchDownloads        = nullptr;  // Settings menu; manual-download games only  // Mirror of m_actSortLoot under Mods menu (same profile gating)
     QAction               *m_actDeployBethesda        = nullptr;  // "Deploy to game" - Bethesda titles only (Mods menu)
     QAction               *m_actUndeployBethesda      = nullptr;  // "Remove deployed mods" - Bethesda titles only (Mods menu)
     QAction               *m_actInspectDeployment     = nullptr;  // "Inspect deployment" diagnostics - Bethesda titles only
@@ -739,11 +750,19 @@ private:
     bool         m_translationResultWanted = false;
 
     // Which sticky banner is currently up, so stickyClicked routes to the
-    // right action. True = the "mods are not in the game yet" deploy hint.
-    bool           m_stickyIsDeployHint = false;
+    // right action. Was a bool for the deploy hint; a third kind arrived and a
+    // second bool would have made "which one is up" a question with two
+    // answers.
+    enum class StickyKind { ViewSort, DeployHint, CaughtDownload };
+    StickyKind     m_stickyKind = StickyKind::ViewSort;
+    // The file the CaughtDownload banner is offering.
+    QString        m_caughtDownload;
 
     // Notification banner (shown temporarily above the mod list)
     NotifyBanner  *m_notify         = nullptr;
+    // Watches the browser's download folder, for games Nexus offers no
+    // mod-manager download for (Gothic 2). Null until such a profile is active.
+    download_watch::Watcher *m_dlWatch = nullptr;
     QLabel        *m_modCountLabel  = nullptr;
 
     // First-launch reminder when LOOT isn't installed. Clickable banner when the

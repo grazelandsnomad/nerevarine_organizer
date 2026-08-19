@@ -28,6 +28,7 @@ constexpr auto kUiUtilityExplainer    = "ui/utility_explainer_seen";
 constexpr auto kUiDarkMode            = "ui/dark_mode";
 constexpr auto kUiConflictNotices     = "ui/conflict_notices";
 constexpr auto kUiUntranslatedNotices = "ui/untranslated_notices";
+constexpr auto kDownloadsWatch       = "downloads/watch_folder";
 
 constexpr auto kLootBannerDisabled  = "loot/banner_disabled";
 constexpr auto kQueueVisible        = "queue/visible";
@@ -392,6 +393,16 @@ bool Settings::conflictNoticesVisible()
 void Settings::setConflictNoticesVisible(bool visible)
 {
     QSettings().setValue(kUiConflictNotices, visible);
+}
+
+bool Settings::watchDownloads()
+{
+    return QSettings().value(kDownloadsWatch, true).toBool();
+}
+
+void Settings::setWatchDownloads(bool on)
+{
+    QSettings().setValue(kDownloadsWatch, on);
 }
 
 bool Settings::untranslatedNoticesVisible()

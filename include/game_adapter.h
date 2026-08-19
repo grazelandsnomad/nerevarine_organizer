@@ -97,6 +97,16 @@ public:
     // opengothic.h - none of which any other engine has an equivalent of.
     virtual bool isOpenGothic() const { return false; }
 
+    // True when this game's mods can only be fetched by hand, so a downloads
+    // watcher is worth running for it (see download_watch.h).
+    //
+    // Nexus shows "Mod Manager Download" only for games it has manager
+    // integration for; Gothic 2 has none, so no nxm:// link is ever generated
+    // for that section and every file there is a manual download. Everywhere
+    // else the protocol handler already does this properly and a banner per
+    // download would just be noise.
+    virtual bool manualDownloadsOnly() const { return false; }
+
     // -- Mod deployment / load order (Bethesda titles) -----------------
     // Unconsumed yet: where load order and per-user config live, for a
     // later non-OpenMW deploy/sync path. Defaults = "not a managed
