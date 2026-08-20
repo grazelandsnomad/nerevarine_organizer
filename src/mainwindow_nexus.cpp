@@ -18,6 +18,7 @@ static constexpr const char *kKeychainKey     = "nexus_api_key";
 #include "placeholder_state.h"
 #include "fomodwizard.h"
 #include "fomod_hint.h"
+#include "file_pick.h"
 #include "bainwizard.h"
 #include "install_layout.h"
 #include "modlist_model.h"
@@ -529,6 +530,38 @@ void MainWindow::onDependenciesScanned(QListWidgetItem *item,
         fetchModFiles(game, modId, item);
 }
 
+// The wording for a file_pick verdict. Kept here, and kept literal: the
+// parity check reads T("...") out of the source, so a key assembled at
+// runtime would be reported as dead for as long as it exists.
+static QString filePickBadge(file_pick::Kind kind)
+{
+    switch (kind) {
+    case file_pick::Kind::Base:  return T("file_pick_badge_base");
+    case file_pick::Kind::AddOn: return T("file_pick_badge_addon");
+    case file_pick::Kind::Patch: return T("file_pick_badge_patch");
+    case file_pick::Kind::Old:   return T("file_pick_badge_old");
+    default: return {};
+    }
+}
+
+static QString filePickDetail(const file_pick::Note &n)
+{
+    switch (n.kind) {
+    case file_pick::Kind::Base:     return T("file_pick_detail_base");
+    case file_pick::Kind::AddOn:    return T("file_pick_detail_addon").arg(n.detailArg);
+    case file_pick::Kind::Main:     return T("file_pick_detail_main");
+    case file_pick::Kind::Optional: return T("file_pick_detail_optional");
+    case file_pick::Kind::Old:      return T("file_pick_detail_old");
+    case file_pick::Kind::Other:    return T("file_pick_detail_other");
+    case file_pick::Kind::Patch:
+        // Naming the file it patches is the difference between "you need
+        // something else too" and knowing which something.
+        return n.goesOn >= 0 ? T("file_pick_detail_patch_for").arg(n.detailArg)
+                             : T("file_pick_detail_patch");
+    }
+    return {};
+}
+
 void MainWindow::onFileListFetched(QListWidgetItem *item,
                                    const QString &game, int modId,
                                    const QList<NexusClient::FileEntry> &allFiles)
@@ -570,12 +603,28 @@ void MainWindow::onFileListFetched(QListWidgetItem *item,
         return 1;                                // engine-neutral
     };
 
-    int bestIdx = 0;
-    int bestScore = scoreForProfile(files.first());
-    for (int i = 1; i < files.size(); ++i) {
-        int s = scoreForProfile(files[i]);
-        if (s > bestScore) { bestScore = s; bestIdx = i; }
+    // What each file on the page actually is - the mod, a second download
+    // alongside it, or a patch that is not a whole mod at all. Pure and
+    // tested in file_pick; this end only renders it and asks it for the
+    // opening selection.
+    QList<file_pick::FileInfo> picks;
+    QList<int>                 scores;
+    picks.reserve(files.size());
+    scores.reserve(files.size());
+    for (const auto &f : files) {
+        file_pick::FileInfo p;
+        p.name        = f.name;
+        p.version     = f.version;
+        p.category    = f.category;
+        p.description = f.description;
+        p.sizeBytes   = f.sizeBytes;
+        p.isPrimary   = f.isPrimary;
+        picks.append(p);
+        scores.append(scoreForProfile(f));
     }
+    const QList<file_pick::Note> notes = file_pick::describe(picks);
+
+    int bestIdx = file_pick::defaultIndex(picks, notes, scores);
 
     // Dependency-variant recommendation.  Some Morrowind mods ship parallel
     // MAIN files for "OAAB" (uses OAAB Data assets) vs "No OAAB" - e.g. Sixth
@@ -675,6 +724,10 @@ void MainWindow::onFileListFetched(QListWidgetItem *item,
         QString label = QString("%1  [v%2]  %3  -  %4 MB")
                             .arg(f.name, f.version, f.category)
                             .arg(mb, 0, 'f', 1);
+        // A few words on the row saying which of these the file is; the full
+        // sentence waits in the panel for whichever row is selected.
+        const QString badge = filePickBadge(notes[i].kind);
+        if (!badge.isEmpty()) label += QStringLiteral("  - ") + badge;
         if (i == recommendIdx) label += recommendNote;
         auto *li = new QListWidgetItem(label, fileList);
         li->setData(Qt::UserRole,       f.fileId);
@@ -682,6 +735,32 @@ void MainWindow::onFileListFetched(QListWidgetItem *item,
         li->setData(Qt::UserRole + 2,   f.sizeBytes);
         li->setData(Qt::UserRole + 3,   f.category);
     }
+
+    // The explanation the picker never had. Rafael's Shader Pack offers a
+    // 22 MB main file, a 2 MB add-on and a patch for the add-on, under three
+    // bare filenames - there was no way to tell from this dialog which was
+    // which, or that one of them installs a fragment of a mod on its own.
+    auto *whatBox = new QGroupBox(T("file_pick_panel_title"), &dlg);
+    auto *whatLay = new QVBoxLayout(whatBox);
+    auto *whatLbl = new QLabel(whatBox);
+    whatLbl->setWordWrap(true);
+    whatLbl->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    whatLbl->setMinimumHeight(72);
+    whatLbl->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+    whatLay->addWidget(whatLbl);
+
+    connect(fileList, &QListWidget::currentRowChanged, whatLbl,
+            [whatLbl, &notes, &files](int row) {
+        if (row < 0 || row >= notes.size()) { whatLbl->clear(); return; }
+        QString text = filePickDetail(notes[row]);
+        // The author's own words beat anything inferred from a category, so
+        // they go last, where they read as the final say.
+        const QString says = file_pick::plainDescription(files[row].description);
+        if (!says.isEmpty())
+            text += QStringLiteral("\n\n") + T("file_pick_author_note")
+                  + QLatin1Char(' ') + says;
+        whatLbl->setText(text);
+    });
     fileList->setCurrentRow(bestIdx);
 
     auto *buttons = new QDialogButtonBox(
@@ -690,6 +769,7 @@ void MainWindow::onFileListFetched(QListWidgetItem *item,
     connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
     connect(fileList, &QListWidget::itemDoubleClicked, &dlg, &QDialog::accept);
     layout->addWidget(fileList);
+    layout->addWidget(whatBox);
     layout->addWidget(buttons);
 
     if (dlg.exec() != QDialog::Accepted) {

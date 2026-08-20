@@ -138,6 +138,7 @@ add_executable(test_nexus
     ${CMAKE_SOURCE_DIR}/src/nexusclient.cpp
     ${CMAKE_SOURCE_DIR}/src/deps_resolver.cpp
     ${CMAKE_SOURCE_DIR}/src/nxmurl.cpp
+    ${CMAKE_SOURCE_DIR}/src/file_pick.cpp
 )
 target_include_directories(test_nexus PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(test_nexus PRIVATE Qt6::Core Qt6::Network)

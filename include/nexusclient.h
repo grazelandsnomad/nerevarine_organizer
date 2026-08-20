@@ -119,6 +119,14 @@ public:
         QString md5;            // lowercase
         qint64  sizeBytes = 0;  // from size_in_bytes
         double  sizeKb    = 0;  // from size_kb (for UI display)
+        // The author's own words about THIS file, from "description". Often
+        // the only thing that explains what a second MAIN file even is, so
+        // the picker shows it verbatim. Frequently empty.
+        QString description;
+        // "is_primary": the file the mod page's own download button hands
+        // you. The author's answer to "which one do I want?", and the only
+        // field here that ranks the files at all.
+        bool    isPrimary = false;
     };
     // Every file in "files", minus any the "file_updates" succession chain
     // marks superseded by a still-present newer file (an author re-uploading

@@ -192,6 +192,11 @@ NexusClient::parseFilesList(const QByteArray &json)
         f.md5       = o["md5"].toString().trimmed().toLower();
         f.sizeBytes = o["size_in_bytes"].toVariant().toLongLong();
         f.sizeKb    = o["size_kb"].toDouble();
+        // Both optional in practice - an author who never filled in a file
+        // description, or a page with no primary marked - so absence is read
+        // as "nothing to say", never as a value.
+        f.description = o["description"].toString();
+        f.isPrimary   = o["is_primary"].toBool();
         out.append(f);
     }
 

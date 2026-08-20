@@ -1,5 +1,6 @@
 #include "nexusclient.h"
 #include "deps_resolver.h"
+#include "file_pick.h"
 
 #include <QCoreApplication>
 #include <QByteArray>
@@ -77,7 +78,9 @@ static void testFilesList()
                 "category_name": "MAIN",
                 "md5": "ABCDEF0123456789",
                 "size_in_bytes": 1048576,
-                "size_kb": 1024
+                "size_kb": 1024,
+                "is_primary": true,
+                "description": "The whole mod.<br />Install this one."
             },
             {
                 "file_id": 1002,
@@ -104,6 +107,13 @@ static void testFilesList()
         check("size_kb as double",          list[0].sizeKb == 1024.0);
         check("second name",                list[1].name == "Optional Patch");
         check("empty md5 stays empty",      list[1].md5.isEmpty());
+        // The two fields the picker explains files with. Both are optional on
+        // a real page, so absence has to read as "nothing to say".
+        check("is_primary read",            list[0].isPrimary);
+        check("the author's file note read",
+              list[0].description.contains("Install this one"), list[0].description);
+        check("no is_primary means not primary", !list[1].isPrimary);
+        check("no description means empty",  list[1].description.isEmpty());
     }
 
     // Drop superseded uploads via the "file_updates" chain. Mod 58624:
@@ -961,12 +971,228 @@ static void run_deps_resolver()
     testCycleRefusalAndTolerance();
 }
 
+// -- file_pick: what each file on a mod page is ------------------------
+//
+// The page that prompted it, verbatim from the picker: Rafael's Shader Pack
+// (Morrowind mod 53667) offers a 22.4 MB main file, a 2.3 MB add-on with
+// "OpenMW" in its name, and a patch for the add-on. Nothing on screen said
+// which was which, and the engine scorer pre-selected the add-on because its
+// name mentioned OpenMW and the base file's did not.
+
+static QList<file_pick::FileInfo> rafaelsPage(bool markPrimary = true)
+{
+    file_pick::FileInfo base;
+    base.name      = QStringLiteral("Rafael's Shader Pack 2.0e");
+    base.version   = QStringLiteral("2.0e");
+    base.category  = QStringLiteral("MAIN");
+    base.sizeBytes = 23488102;
+    base.isPrimary = markPrimary;
+
+    file_pick::FileInfo pbr;
+    pbr.name      = QStringLiteral("Enhanced PBR Lighting for OpenMW 0.49-0.52");
+    pbr.version   = QStringLiteral("2.0e");
+    pbr.category  = QStringLiteral("MAIN");
+    pbr.sizeBytes = 2411724;
+
+    file_pick::FileInfo patch;
+    patch.name      = QStringLiteral("Patch For Enhanced PBR Lighting For OpenMW 0.52");
+    patch.version   = QStringLiteral("2.0e");
+    patch.category  = QStringLiteral("UPDATE");
+    patch.sizeBytes = 4096;
+
+    return { base, pbr, patch };
+}
+
+// The engine scorer's real verdict on those three names for an OpenMW
+// profile: "OpenMW" in the name scores 2, engine-neutral scores 1.
+static const QList<int> kRafaelScores = { 1, 2, 2 };
+
+static void testDescribesTheReportedPage()
+{
+    std::cout << "\nfile_pick::describe:\n";
+    const auto files = rafaelsPage();
+    const auto notes = file_pick::describe(files);
+    check("one note per file", notes.size() == 3);
+
+    check("the page's own download is the mod",
+          notes[0].kind == file_pick::Kind::Base);
+
+    check("the second main file is an add-on beside it",
+          notes[1].kind == file_pick::Kind::AddOn);
+    check("named after the file it sits beside",
+          notes[1].detailArg == QLatin1String("Rafael's Shader Pack 2.0e"),
+          notes[1].detailArg);
+
+    check("the UPDATE is a patch", notes[2].kind == file_pick::Kind::Patch);
+    // The whole point of the pairing: the patch is for the ADD-ON, not for
+    // the mod, and its name is the only thing that says so.
+    check("the patch is matched to the add-on it patches",
+          notes[2].goesOn == 1, QString::number(notes[2].goesOn));
+    check("and the name the sentence shows is the add-on's",
+          notes[2].detailArg
+              == QLatin1String("Enhanced PBR Lighting for OpenMW 0.49-0.52"));
+}
+
+static void testNoPrimaryMeansNoRanking()
+{
+    std::cout << "\nfile_pick::describe with no primary marked:\n";
+    const auto notes = file_pick::describe(rafaelsPage(false));
+    // Nothing claims to be the page's download, so nothing is an "add-on" to
+    // anything - two MAIN files are two MAIN files, said plainly.
+    check("neither main file is called the mod",
+          notes[0].kind == file_pick::Kind::Main
+              && notes[1].kind == file_pick::Kind::Main);
+    check("so neither names the other",
+          notes[0].detailArg.isEmpty() && notes[1].detailArg.isEmpty());
+    check("the patch is still a patch",
+          notes[2].kind == file_pick::Kind::Patch && notes[2].goesOn == 1);
+
+    // Two files both flagged primary is a page saying nothing, not a page
+    // saying both.
+    auto two = rafaelsPage();
+    two[1].isPrimary = true;
+    const auto n2 = file_pick::describe(two);
+    check("two primaries cancel out",
+          n2[0].kind == file_pick::Kind::Main
+              && n2[1].kind == file_pick::Kind::Main);
+}
+
+static void testPatchPairingNeedsARealName()
+{
+    std::cout << "\nfile_pick::describe patch pairing:\n";
+    file_pick::FileInfo core;
+    core.name      = QStringLiteral("Core");
+    core.category  = QStringLiteral("MAIN");
+    core.isPrimary = true;
+    file_pick::FileInfo patch;
+    patch.name     = QStringLiteral("Hotfix for the core meshes");
+    patch.category = QStringLiteral("UPDATE");
+    const auto notes = file_pick::describe({ core, patch });
+    // "Core" appears inside half the names on any page. A short one-word name
+    // identifies nothing, so the patch says it is a patch and stops there.
+    check("a one-word file name does not claim the patch",
+          notes[1].goesOn == -1, QString::number(notes[1].goesOn));
+    check("so the wording has no name to drop in",
+          notes[1].detailArg.isEmpty());
+
+    file_pick::FileInfo old;
+    old.name     = QStringLiteral("Rafael's Shader Pack 1.9");
+    old.category = QStringLiteral("OLD_VERSION");
+    file_pick::FileInfo misc;
+    misc.name     = QStringLiteral("Config tool");
+    misc.category = QStringLiteral("MISCELLANEOUS");
+    file_pick::FileInfo opt;
+    opt.name      = QStringLiteral("Alternative colours");
+    opt.category  = QStringLiteral("OPTIONAL");
+    const auto rest = file_pick::describe({ old, misc, opt });
+    check("an archived upload is called an older version",
+          rest[0].kind == file_pick::Kind::Old);
+    check("a miscellaneous file is neither main nor patch",
+          rest[1].kind == file_pick::Kind::Other);
+    check("an optional file says the mod works without it",
+          rest[2].kind == file_pick::Kind::Optional);
+}
+
+static void testDefaultIndexPrefersTheModItself()
+{
+    std::cout << "\nfile_pick::defaultIndex:\n";
+    const auto files = rafaelsPage();
+    const auto notes = file_pick::describe(files);
+
+    // The reported bug in one assertion: the add-on outscores the base file
+    // 2-to-1 on the engine heuristic, and must still lose to the page's own
+    // main download.
+    check("the mod itself wins over a higher-scoring add-on",
+          file_pick::defaultIndex(files, notes, kRafaelScores) == 0,
+          QString::number(file_pick::defaultIndex(files, notes, kRafaelScores)));
+
+    // With nothing marked primary there is no such answer, and the engine
+    // score is all that is left - the old behaviour, kept.
+    const auto loose = rafaelsPage(false);
+    check("without a primary the engine score decides again",
+          file_pick::defaultIndex(loose, file_pick::describe(loose), kRafaelScores) == 1);
+
+    // A main download built for the wrong engine is still the wrong file.
+    check("a negative engine score overrules the primary",
+          file_pick::defaultIndex(files, notes, { -1, 2, 2 }) == 1);
+
+    // Defaulting to a patch installs a fragment of a mod.
+    {
+        auto twoPatches = rafaelsPage(false);
+        twoPatches[1].category = QStringLiteral("UPDATE");
+        const auto n = file_pick::describe(twoPatches);
+        check("a patch is never the opening selection",
+              file_pick::defaultIndex(twoPatches, n, { 1, 9, 9 }) == 0);
+    }
+
+    // A page of nothing but patches still has to open on something.
+    {
+        QList<file_pick::FileInfo> only;
+        for (auto f : rafaelsPage(false)) {
+            f.category = QStringLiteral("UPDATE");
+            only.append(f);
+        }
+        const auto n = file_pick::describe(only);
+        const int idx = file_pick::defaultIndex(only, n, {});
+        check("an all-patch page selects a real row", idx >= 0 && idx < only.size(),
+              QString::number(idx));
+    }
+
+    check("an empty list is index 0, not a crash",
+          file_pick::defaultIndex({}, {}, {}) == 0);
+    check("missing scores are treated as no opinion",
+          file_pick::defaultIndex(files, notes, {}) == 0);
+}
+
+static void testPlainDescription()
+{
+    std::cout << "\nfile_pick::plainDescription:\n";
+    check("a line break becomes a space",
+          file_pick::plainDescription("Main file.<br />Install first.")
+              == QLatin1String("Main file. Install first."),
+          file_pick::plainDescription("Main file.<br />Install first."));
+    check("markup does not run words together",
+          file_pick::plainDescription("<b>Requires</b><i>the main file</i>")
+              == QLatin1String("Requires the main file"),
+          file_pick::plainDescription("<b>Requires</b><i>the main file</i>"));
+    check("entities are decoded",
+          file_pick::plainDescription("Rafael&#39;s pack &amp; patch")
+              == QLatin1String("Rafael's pack & patch"),
+          file_pick::plainDescription("Rafael&#39;s pack &amp; patch"));
+    // &amp;lt; must decode to "&lt;", not all the way to a "<" that then
+    // looks like markup the stripper already ran past.
+    check("a double-encoded entity only decodes once",
+          file_pick::plainDescription("&amp;lt;b&amp;gt;")
+              == QLatin1String("&lt;b&gt;"),
+          file_pick::plainDescription("&amp;lt;b&amp;gt;"));
+    check("whitespace collapses",
+          file_pick::plainDescription("  a\n\n   b  ") == QLatin1String("a b"));
+    check("empty stays empty", file_pick::plainDescription(QString()).isEmpty());
+
+    const QString longText = QStringLiteral("word ").repeated(200);
+    const QString cut = file_pick::plainDescription(longText, 40);
+    check("a long description is cut", cut.size() <= 44, QString::number(cut.size()));
+    check("and cut at a word, not mid-word", cut.endsWith(QLatin1String("word...")), cut);
+    check("a short one is untouched",
+          file_pick::plainDescription("Short.", 40) == QLatin1String("Short."));
+}
+
+static void run_file_pick()
+{
+    testDescribesTheReportedPage();
+    testNoPrimaryMeansNoRanking();
+    testPatchPairingNeedsARealName();
+    testDefaultIndexPrefersTheModItself();
+    testPlainDescription();
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
 
     run_nexus_client();
     run_deps_resolver();
+    run_file_pick();
 
     std::cout << "\n"
               << s_passed << " passed, "

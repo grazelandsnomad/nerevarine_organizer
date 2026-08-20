@@ -91,6 +91,7 @@ set(SOURCES
     src/fomodwizard.cpp
     src/fomod_copy.cpp
     src/fomod_hint.cpp
+    src/file_pick.cpp
     src/mod_aliases.cpp
     src/fomod_install.cpp
     src/fomod_path.cpp
