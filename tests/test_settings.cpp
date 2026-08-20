@@ -3,6 +3,7 @@
 
 #include "settings_migrations.h"
 #include "forbidden_mods.h"
+#include "translator.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -414,6 +415,85 @@ static void run_forbidden_mods()
     }
 }
 
+
+// -- Translator::parseIni ---------------------------------------------
+//
+// These files hold prose, and QSettings read them as configuration: a ";"
+// anywhere on the line ended the value, every ", " came back as ",", and a
+// quoted phrase lost both its quotes and the space beside it. 174 of the
+// app's own strings rendered wrong, 24 of them with whole sentences deleted.
+// Each case below is a real line from english.ini.
+static void run_translation_ini()
+{
+    std::cout << "\nTranslator::parseIni:\n";
+
+    const QByteArray ini =
+        "; a comment line\n"
+        "[General]\n"
+        "\n"
+        "loot_missing=LOOT is not installed. Install it from https://loot.github.io/"
+        " (or via your distro / Flatpak \"io.github.loot.loot\") so plugin auto-sorting"
+        " works. The modlist still saves; just without the sort step.\n"
+        "conflict_inspector_counts=%1 conflicting path(s), %2 mod(s) involved.\n"
+        "ctx_conflict_give_way=Let \"%1\" overwrite this (move above it)\n"
+        "translate_import_db_filter=Translation databases (*.ini *.txt);;All files (*)\n"
+        "wizard_apikey_body=Go to your Nexus account settings.\\n\\nIt is stored in your"
+        " keyring.\n"
+        "# hash comment\n"
+        "empty_value=\n"
+        "=no key at all\n"
+        "no_equals_sign\n";
+
+    const auto m = Translator::parseIni(ini);
+
+    // The one that deleted text: everything after the semicolon used to go.
+    check("a semicolon mid-sentence is text, not a comment",
+          m.value("loot_missing").endsWith(QLatin1String("just without the sort step.")),
+          m.value("loot_missing"));
+    check("and the quoted package name keeps its quotes and its spaces",
+          m.value("loot_missing").contains(QLatin1String("Flatpak \"io.github.loot.loot\") so")),
+          m.value("loot_missing"));
+
+    check("a comma keeps the space after it",
+          m.value("conflict_inspector_counts")
+              == QLatin1String("%1 conflicting path(s), %2 mod(s) involved."),
+          m.value("conflict_inspector_counts"));
+
+    // This one shipped as: Let %1overwrite this (move above it)
+    check("a quoted placeholder does not swallow the next word",
+          m.value("ctx_conflict_give_way")
+              == QLatin1String("Let \"%1\" overwrite this (move above it)"),
+          m.value("ctx_conflict_give_way"));
+
+    // A Qt file-dialog filter is ";;"-separated, so the old reader cut it
+    // down to one entry and the dialog silently lost "All files".
+    check("a file filter survives its double semicolons",
+          m.value("translate_import_db_filter")
+              == QLatin1String("Translation databases (*.ini *.txt);;All files (*)"),
+          m.value("translate_import_db_filter"));
+
+    check("\\n is still a line break",
+          m.value("wizard_apikey_body").count(QLatin1Char('\n')) == 2,
+          m.value("wizard_apikey_body"));
+
+    check("a ; comment line is skipped",   !m.contains("; a comment line"));
+    check("a # comment line is skipped",   !m.contains("# hash comment"));
+    check("the section header is skipped", !m.contains("[General]"));
+    check("a key with an empty value is kept, and empty",
+          m.contains("empty_value") && m.value("empty_value").isEmpty());
+    check("a line with no key is dropped",     m.value("no key at all").isEmpty());
+    check("a line with no = is dropped",       !m.contains("no_equals_sign"));
+    check("nothing in yields nothing out",     Translator::parseIni({}).isEmpty());
+
+    // Escapes, in one pass: a doubled backslash is a backslash, and the n
+    // after it is a letter.
+    const auto esc = Translator::parseIni("k=a\\\\nb\tc\\td\\qe");
+    check("a doubled backslash stays literal",
+          esc.value("k").startsWith(QLatin1String("a\\nb")), esc.value("k"));
+    check("an unknown escape is left alone",
+          esc.value("k").endsWith(QLatin1String("\\qe")), esc.value("k"));
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -423,6 +503,7 @@ int main(int argc, char **argv)
 
     run_settings_migrations();
     run_forbidden_mods();
+    run_translation_ini();
 
     std::cout << "\n"
               << s_passed << " passed, "

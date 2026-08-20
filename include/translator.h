@@ -32,6 +32,12 @@ public:
     // Scans the translations directory and returns all available language codes.
     static QStringList available();
 
+    // The .ini parser, exposed so it can be tested without a filesystem.
+    //
+    // Hand-written on purpose: QSettings reads these files as configuration
+    // and destroys prose doing it. See the note on loadFile.
+    static QMap<QString, QString> parseIni(const QByteArray &bytes);
+
 private:
     static QString findTranslationsDir();
     static QMap<QString, QString> loadFile(const QString &path);

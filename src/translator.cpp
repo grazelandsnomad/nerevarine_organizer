@@ -4,7 +4,6 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QSettings>
 #include <QStandardPaths>
 
 QMap<QString, QString> Translator::s_strings;
@@ -34,24 +33,72 @@ QString Translator::findTranslationsDir()
     return {};
 }
 
+// Read a translations .ini.
+//
+// Hand-parsed rather than handed to QSettings, which reads these files as
+// configuration and quietly destroys prose in three ways:
+//
+//   ";"  starts a comment ANYWHERE on the line, so "The modlist still saves;
+//        just without the sort step." shipped as "The modlist still saves"
+//        with the rest of the sentence deleted. 24 strings were losing text.
+//   ","  splits the value into a QStringList whose pieces come back trimmed,
+//        so every ", " in the file rendered as ",": "(Flatpak,custom
+//        XDG_CONFIG_HOME,snap)". 109 strings were affected.
+//   '"'  is a quoting delimiter, removed along with the space beside it, so
+//        Created "%1". came out as Created %1. and "overwritten by" captions
+//        as overwritten bycaptions.
+//
+// The format here is one key=value per line, which needs none of that. A
+// comment is a line that starts with ; or #, everything after the first = is
+// the value verbatim, and the only escapes are the ones english.ini's own
+// header documents.
 QMap<QString, QString> Translator::loadFile(const QString &path)
 {
-    QMap<QString, QString> result;
-    QSettings ini(path, QSettings::IniFormat);
-    for (const QString &key : ini.allKeys()) {
-        // QSettings prefixes default-group keys with "General/"; strip it.
-        QString k = key;
-        if (k.startsWith("General/", Qt::CaseInsensitive))
-            k = k.mid(8);
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) return {};
+    return parseIni(f.readAll());
+}
 
-        // IniFormat splits comma values into a QStringList, and toString() on
-        // one returns "". Re-join with "," (lossless: escapes are handled
-        // before the split, so join is the exact inverse).
-        QVariant v = ini.value(key);
-        if (v.typeId() == QMetaType::QStringList)
-            result[k] = v.toStringList().join(QLatin1Char(','));
-        else
-            result[k] = v.toString();
+QMap<QString, QString> Translator::parseIni(const QByteArray &bytes)
+{
+    QMap<QString, QString> result;
+
+    // UTF-8 regardless of the user's locale: these files carry accented text
+    // and CJK, and a locale-decoded read would mangle them.
+    const QStringList lines =
+        QString::fromUtf8(bytes).split(QLatin1Char('\n'));
+
+    for (const QString &raw : lines) {
+        const QString line = raw.trimmed();       // also drops a trailing \r
+        if (line.isEmpty()) continue;
+        if (line.startsWith(QLatin1Char(';')) || line.startsWith(QLatin1Char('#')))
+            continue;
+        if (line.startsWith(QLatin1Char('[')))    // [General], left over from QSettings
+            continue;
+
+        const int eq = line.indexOf(QLatin1Char('='));
+        if (eq <= 0) continue;
+        const QString key = line.left(eq).trimmed();
+        if (key.isEmpty()) continue;
+
+        // Escapes, in one left-to-right pass so "\\n" stays a literal
+        // backslash-n instead of being re-read as a line break.
+        const QString rawValue = line.mid(eq + 1).trimmed();
+        QString value;
+        value.reserve(rawValue.size());
+        for (int i = 0; i < rawValue.size(); ++i) {
+            if (rawValue[i] != QLatin1Char('\\') || i + 1 >= rawValue.size()) {
+                value.append(rawValue[i]);
+                continue;
+            }
+            const QChar next = rawValue[++i];
+            if      (next == QLatin1Char('n'))  value.append(QLatin1Char('\n'));
+            else if (next == QLatin1Char('t'))  value.append(QLatin1Char('\t'));
+            else if (next == QLatin1Char('\\')) value.append(QLatin1Char('\\'));
+            else { value.append(QLatin1Char('\\')); value.append(next); }
+        }
+
+        result[key] = value;   // last definition wins, as QSettings did
     }
     return result;
 }
