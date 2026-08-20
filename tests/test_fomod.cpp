@@ -1465,6 +1465,11 @@ static void wizardui_testModlistVerdict()
 // Ashfall-compatible meshes and pre-ticks a Glass Glowset option, with neither
 // mod in the 412-mod list. Descriptions and mod ids are verbatim from its
 // ModuleConfig.xml.
+//
+// The screenshot that prompted the second round: the Glass Glowset box sat
+// TICKED with "Glass Glowset is not installed in this modlist" written along
+// its own label. Warning and then installing anyway is the manager arguing
+// with itself, so the verdict now moves the tick - both ways.
 static void wizardui_testMissingCitedMod()
 {
     const QString kAshfall =
@@ -1477,8 +1482,11 @@ static void wizardui_testMissingCitedMod()
         "1K Normals for new textures. For OpenMW support "
         "(still requires Materials set for OpenMW)";
 
-    auto withDesc = [](const QString &name, const QString &desc) {
-        FomodPlugin p = wizardui_mkPlugin(name);
+    // `type` matters here in a way it did not before: the reported options
+    // ship Recommended, which is what puts the tick on screen.
+    auto withDesc = [](const QString &name, const QString &desc,
+                       const QString &type = QStringLiteral("Optional")) {
+        FomodPlugin p = wizardui_mkPlugin(name, type);
         p.description = desc;
         return p;
     };
@@ -1486,9 +1494,9 @@ static void wizardui_testMissingCitedMod()
     std::cout << "\n[compatibility option for a mod that is not installed]\n";
     {
         FomodGroup g = wizardui_mkGroup("SelectAny", {
-            withDesc("Ashfall",       kAshfall),
-            withDesc("Ashfall (HD)",  kAshfall),
-            withDesc("Glass Glowset", kGlowset),
+            withDesc("Ashfall",       kAshfall, "Recommended"),
+            withDesc("Ashfall (HD)",  kAshfall, "Recommended"),
+            withDesc("Glass Glowset", kGlowset, "Recommended"),
         });
         g.name = QStringLiteral("Compatibility Options");
         FomodStep st;
@@ -1504,14 +1512,30 @@ static void wizardui_testMissingCitedMod()
         check("each option names its own mod",
               FomodWizardTestHook::btn(w, 0, 0, 2)->text()
                   .contains("Glass Glowset is not installed"));
-        // Warn, don't decide: the author's defaults are left alone.
-        check("selection is not changed",
+
+        // The reported bug: all three shipped Recommended, so all three were
+        // ticked underneath their own "not installed" warning.
+        check("the Recommended tick is taken off Ashfall",
               !FomodWizardTestHook::btn(w, 0, 0, 0)->isChecked());
+        check("and off the HD variant",
+              !FomodWizardTestHook::btn(w, 0, 0, 1)->isChecked());
+        check("and off Glass Glowset, the one in the screenshot",
+              !FomodWizardTestHook::btn(w, 0, 0, 2)->isChecked());
+        check("the tooltip says the tick was moved and how to put it back",
+              FomodWizardTestHook::btn(w, 0, 0, 2)->toolTip()
+                  .contains(QStringLiteral("Unticked because")),
+              FomodWizardTestHook::btn(w, 0, 0, 2)->toolTip());
+        // Unticked, not disabled: a mod installed outside the manager is not
+        // in the modlist and the user is the only one who knows that.
+        check("the option stays settable",
+              FomodWizardTestHook::btn(w, 0, 0, 2)->isEnabled());
         delete w;
     }
 
     std::cout << "\n[the same options once the mod IS installed]\n";
     {
+        // Both ship Optional, i.e. unticked, so a tick here can only have come
+        // from the modlist verdict.
         FomodGroup g = wizardui_mkGroup("SelectAny", {
             withDesc("Ashfall",       kAshfall),
             withDesc("Glass Glowset", kGlowset),
@@ -1526,9 +1550,16 @@ static void wizardui_testMissingCitedMod()
         check("no warning once the cited mod is installed",
               !FomodWizardTestHook::btn(w, 0, 0, 0)->text()
                   .contains(QString::fromUtf8("⚠")));
+        check("the option for the installed mod is ticked",
+              FomodWizardTestHook::btn(w, 0, 0, 0)->isChecked());
+        check("and says which mod put it there",
+              FomodWizardTestHook::btn(w, 0, 0, 0)->text().contains("Ashfall"),
+              FomodWizardTestHook::btn(w, 0, 0, 0)->text());
         check("the option for the other absent mod still warns",
               FomodWizardTestHook::btn(w, 0, 0, 1)->text()
                   .contains("Glass Glowset is not installed"));
+        check("and stays off",
+              !FomodWizardTestHook::btn(w, 0, 0, 1)->isChecked());
         delete w;
     }
 
@@ -1536,8 +1567,10 @@ static void wizardui_testMissingCitedMod()
     {
         // "Normal Maps" matches no mod in the modlist either. Without a
         // citation there is no evidence, so it must draw nothing - this is
-        // the guard against the warning becoming noise on ordinary options.
-        FomodGroup g = wizardui_mkGroup("SelectAny", { withDesc("1K", kNormals) });
+        // the guard against the warning becoming noise on ordinary options,
+        // and now against the tick moving on ordinary options too.
+        FomodGroup g = wizardui_mkGroup("SelectAny",
+                                        { withDesc("1K", kNormals, "Recommended") });
         g.name = QStringLiteral("Normal Maps");
         FomodStep st;
         st.name   = QStringLiteral("Compatibility Options");
@@ -1546,6 +1579,8 @@ static void wizardui_testMissingCitedMod()
         check("no warning without a citation",
               !FomodWizardTestHook::btn(w, 0, 0, 0)->text()
                   .contains(QString::fromUtf8("⚠")));
+        check("and the author's own default is left alone",
+              FomodWizardTestHook::btn(w, 0, 0, 0)->isChecked());
         delete w;
     }
 
@@ -1566,6 +1601,28 @@ static void wizardui_testMissingCitedMod()
               FomodWizardTestHook::btn(w, 0, 0, 0)->text()
                   .contains("Ashfall is not installed"),
               FomodWizardTestHook::btn(w, 0, 0, 0)->text());
+        // Exclusive: unticking one means picking another, which is the user's
+        // call. SelectExactlyOne forces the first option on, and it stays on.
+        check("the radio selection is not touched",
+              FomodWizardTestHook::btn(w, 0, 0, 0)->isChecked());
+        delete w;
+    }
+
+    std::cout << "\n[a stored choice does not put back a tick for a missing mod]\n";
+    {
+        // Re-installing the same FOMOD replays the previous run's choices. That
+        // run may have been made against a modlist that HAD Glass Glowset; this
+        // one does not, and the label says so, so the tick cannot come back.
+        FomodGroup g = wizardui_mkGroup("SelectAny", {
+            withDesc("Glass Glowset", kGlowset, "Recommended"),
+        });
+        g.name = QStringLiteral("Glass Glowset");
+        FomodStep st;
+        st.name   = QStringLiteral("Compatibility Options");
+        st.groups = { g };
+        auto *w = FomodWizardTestHook::build({ st }, QStringLiteral("0:0:0"));
+        check("the prior tick loses to the modlist",
+              !FomodWizardTestHook::btn(w, 0, 0, 0)->isChecked());
         delete w;
     }
 }

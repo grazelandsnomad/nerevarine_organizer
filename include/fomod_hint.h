@@ -60,8 +60,9 @@ bool asksAboutAnotherMod(const QString &stepName, const QString &groupName);
 // as "no evidence", never as "no dependency".
 QList<NexusModRef> citedMods(const QString &text);
 
-// The best name to call a missing mod, given the names of the options that
-// cite it and the name of the group holding them. Installers split the same
+// The best name to call a cited mod, given the names of the options that
+// cite it and the name of the group holding them. Used for both halves of
+// the verdict, since a mod that IS installed still has to be named. Installers split the same
 // mod across options in two shapes, and one rule covers both: the longest
 // common prefix of the option names ("Ashfall" + "Ashfall (HD)" -> "Ashfall"),
 // falling back to the group name when the options share nothing worth showing

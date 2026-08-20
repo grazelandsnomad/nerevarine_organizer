@@ -494,6 +494,12 @@ void FomodWizard::buildUi()
     // Key: (si<<32)|(gi<<16)|pi. Prior-choices block ORs this in so a Recommended
     // checkbox isn't unticked just because an earlier install left it off.
     QSet<quint64> recommendedInstalledPlugins;
+    // Ticks settled by what is in the modlist right now (Pass E and Pass F),
+    // same key, value = the tick that was forced. Whether a mod is installed
+    // is a fact about this profile, not a preference, so a choice stored from
+    // an earlier install of this same FOMOD must not put the old tick back:
+    // the modlist it was made against is gone.
+    QHash<quint64, bool> modlistSettledPlugins;
 
     {
         // (si,gi) pairs with a stored selection. Pass B annotates but doesn't
@@ -790,14 +796,23 @@ void FomodWizard::buildUi()
         // names exactly one page, so this matches by id - no name guessing,
         // and options that cite nothing stay silent. See fomod_hint.h.
         //
-        // Warn only. The selection is left exactly as the author set it: this
-        // pass reads a citation, not a dependency declaration, and an option
-        // may still be wanted (the target mod installed outside the manager,
-        // or arriving later). Saying so beats deciding for the user.
+        // The verdict decides the tick, in both directions. Leaving the
+        // author's default ticked underneath "Glass Glowset is not installed
+        // in this modlist" states a fact and then acts against it, and the
+        // warning is worth nothing if the box below it still installs meshes
+        // for a mod that is not there. What IS in the modlist is a fact this
+        // manager owns, so it answers with it - and the tick stays live, for
+        // a copy installed outside the manager or one arriving later.
+        //
+        // Only where a tick is independently settable, as in Pass F: in an
+        // exclusive group unticking means picking something else, which is
+        // not ours to decide, so those are annotated only.
         for (int si = 0; si < m_steps.size(); ++si) {
             const FomodStep &step = m_steps[si];
             for (int gi = 0; gi < step.groups.size(); ++gi) {
                 const FomodGroup &group = step.groups[gi];
+                const bool tickable = group.type == QLatin1String("SelectAny")
+                                   || group.type == QLatin1String("SelectAtLeastOne");
 
                 // Collect, per cited mod page, the options citing it - the
                 // option names are what name the mod when the group does not.
@@ -819,27 +834,69 @@ void FomodWizard::buildUi()
                     const QList<NexusModRef> &cited = perPlugin[pi];
                     if (cited.isEmpty()) continue;   // no citation, no verdict
 
+                    QAbstractButton *btn = m_buttons[si][gi][pi];
+                    if (!btn) continue;
+
                     // An option citing several mods is only a problem when it
                     // has none of them; one present mod is reason enough for
                     // the option to exist.
+                    QString     present;
                     QStringList missing;
                     for (const NexusModRef &ref : cited) {
                         const QString key = ref.game.toLower() + u'/'
                                           + QString::number(ref.modId);
+                        const QString label =
+                            fomod::missingModLabel(citers.value(key), group.name);
                         if (m_installedNexusKeys.contains(key)) {
+                            present = label;
                             missing.clear();
                             break;
                         }
-                        missing << fomod::missingModLabel(citers.value(key),
-                                                          group.name);
+                        missing << label;
                     }
-                    if (missing.isEmpty()) continue;
+
+                    // A Required or NotUsable plugin is disabled: the FOMOD
+                    // itself has already settled that tick, and there is no
+                    // choice here to correct.
+                    const quint64 key = (quint64(si) << 32) | (quint64(gi) << 16)
+                                      | quint64(pi);
+                    const bool settle = tickable && btn->isEnabled();
+                    const QString tip = btn->toolTip();
+                    auto addTip = [&](const QString &detail) {
+                        btn->setToolTip((tip.isEmpty() ? QString()
+                                                       : tip + QStringLiteral("\n\n"))
+                                        + detail);
+                    };
+
+                    if (missing.isEmpty()) {
+                        // Pass C already ticked this one and said why, having
+                        // matched the option's own name against the modlist. A
+                        // second tick and a second badge add nothing.
+                        if (recommendedInstalledPlugins.contains(key)) continue;
+                        if (settle) {
+                            btn->setChecked(true);
+                            modlistSettledPlugins.insert(key, true);
+                        }
+                        // Neither the options nor the group yielded a name
+                        // worth printing, so say it without one - as the
+                        // warning below does.
+                        const QString what = present.isEmpty()
+                            ? QStringLiteral("The mod this option is for")
+                            : present;
+                        btn->setText(btn->text() + (present.isEmpty()
+                            ? QStringLiteral(" ✅ the mod this is for is installed")
+                            : QStringLiteral(" ✅ %1 ✓").arg(present)));
+                        addTip(settle
+                            ? QStringLiteral("%1 is installed, so this option has "
+                                             "been ticked.").arg(what)
+                            : QStringLiteral("%1 is installed, so this option "
+                                             "will work.").arg(what));
+                        continue;
+                    }
 
                     missing.removeDuplicates();
                     missing.removeAll(QString());
 
-                    QAbstractButton *btn = m_buttons[si][gi][pi];
-                    if (!btn) continue;
                     btn->setText(btn->text() + (missing.isEmpty()
                         ? QStringLiteral(" ⚠️ Warning: this option is "
                                          "for another mod that is not installed "
@@ -847,6 +904,14 @@ void FomodWizard::buildUi()
                         : QStringLiteral(" ⚠️ Warning: %1 is not "
                                          "installed in this modlist.")
                               .arg(missing.join(QStringLiteral(", ")))));
+                    if (!settle) continue;
+                    btn->setChecked(false);
+                    modlistSettledPlugins.insert(key, false);
+                    addTip(QStringLiteral("Unticked because that mod is not in this "
+                                          "modlist, so these files would be installed "
+                                          "for nothing. Tick it back if you have the "
+                                          "mod outside the manager, or are about to "
+                                          "add it."));
                 }
             }
         }
@@ -981,6 +1046,10 @@ void FomodWizard::buildUi()
                     QAbstractButton *btn = m_buttons[si][gi][pi];
                     if (!btn || !btn->isEnabled()) continue;
 
+                    const quint64 key = (quint64(si) << 32) | (quint64(gi) << 16)
+                                      | quint64(pi);
+                    if (tickable) modlistSettledPlugins.insert(key, present);
+
                     // Short on the label, full sentence in the tooltip. The
                     // long form ran off the end of the dialog and buried the
                     // option's own name, which is what the user is reading.
@@ -1060,6 +1129,15 @@ void FomodWizard::buildUi()
                         QAbstractButton *btn = m_buttons[si][gi][pi];
                         if (!btn->isEnabled()) continue;
                         const quint64 key = encode(si, gi, pi);
+                        // A verdict from Pass E or F outranks the stored
+                        // choice: the label says the cited mod is missing (or
+                        // present), and a tick restored from a different
+                        // modlist would contradict it on screen.
+                        const auto settled = modlistSettledPlugins.constFind(key);
+                        if (settled != modlistSettledPlugins.constEnd()) {
+                            btn->setChecked(*settled);
+                            continue;
+                        }
                         btn->setChecked(priorSet.contains(key) ||
                                         recommendedInstalledPlugins.contains(key));
                     }
