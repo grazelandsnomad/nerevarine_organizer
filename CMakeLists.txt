@@ -92,6 +92,7 @@ set(SOURCES
     src/fomod_copy.cpp
     src/fomod_hint.cpp
     src/file_pick.cpp
+    src/game_store.cpp
     src/mod_aliases.cpp
     src/fomod_install.cpp
     src/fomod_path.cpp

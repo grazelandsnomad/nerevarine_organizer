@@ -13,6 +13,7 @@
 
 #include "store_scan.h"
 #include "game_adapter.h"
+#include "game_store.h"
 
 #include <QCoreApplication>
 #include <QString>
@@ -196,6 +197,89 @@ void testSteamManifest()
           store_scan::steamAppInstallPath(QStringList{"/nonexistent"}, "489830").isEmpty());
 }
 
+
+// Which shop a copy of a game came from, and which shop a mod file was built
+// for. The case that prompted it: Skyrim's SKSE page carries "Skyrim Script
+// Extender (SKSE64) GOG" and "... Steam" side by side, the picker called one
+// of them a "separate add-on", and picking it gets you an extender that does
+// not load and does not complain.
+void testGameStoreFromNames()
+{
+    using game_store::Store;
+    std::cout << "\n[What a mod file's name says it was built for]\n";
+
+    check("the GOG build is recognised",
+          game_store::fromFileName("Skyrim Script Extender (SKSE64) GOG")
+              == Store::Gog);
+    check("and the Steam one",
+          game_store::fromFileName("Skyrim Script Extender (SKSE64) Steam")
+              == Store::Steam);
+    check("case does not matter",
+          game_store::fromFileName("SKSE64 gog build") == Store::Gog);
+
+    // The words are words. Whole-word matching is the whole guard here.
+    check("goggles are not a store",
+          game_store::fromFileName("Goggles and Gasmasks 4K") == Store::Unknown);
+    check("neither is steampunk",
+          game_store::fromFileName("Steampunk Dwemer Armour") == Store::Unknown);
+    check("a name claiming both says nothing",
+          game_store::fromFileName("Steam and GOG merged package") == Store::Unknown);
+    check("nor does a name with no store in it",
+          game_store::fromFileName("Address Library for SKSE Plugins")
+              == Store::Unknown);
+
+    // Two builds of one file only look alike once the store word is gone.
+    check("the store word comes out",
+          game_store::stripStoreWords("Skyrim Script Extender (SKSE64) GOG").simplified()
+              == game_store::stripStoreWords("Skyrim Script Extender (SKSE64) Steam").simplified(),
+          game_store::stripStoreWords("Skyrim Script Extender (SKSE64) GOG"));
+
+    check("and the store has a name to print",
+          game_store::name(Store::Steam) == QLatin1String("Steam")
+              && game_store::name(Store::Gog) == QLatin1String("GOG")
+              && game_store::name(Store::Unknown).isEmpty());
+}
+
+void testGameStoreFromPaths()
+{
+    using game_store::Store;
+    std::cout << "\n[What an install path says about where the game came from]\n";
+
+    // The author's own Skyrim, from the profile's data_dir.
+    check("a steamapps component is Steam and nothing else",
+          game_store::fromInstallPath(
+              "/mnt/nvme_2TB/SteamLibrary/steamapps/common/Skyrim Special Edition/Data",
+              {}) == Store::Steam);
+    // Libraries made by older Steam clients spell it with capitals.
+    check("including the old SteamApps spelling",
+          game_store::fromInstallPath(
+              "/home/u/.steam/steam/SteamApps/common/Fallout 4/Fallout4.exe", {})
+              == Store::Steam);
+
+    // GOG leaves no word in the path, so the evidence is Heroic's own list.
+    const QStringList heroic = { "/mnt/nvme_4TB/Jocs/Gothic 2 Gold" };
+    check("a path inside a Heroic install is GOG",
+          game_store::fromInstallPath("/mnt/nvme_4TB/Jocs/Gothic 2 Gold/system", heroic)
+              == Store::Gog);
+    check("the install root itself counts",
+          game_store::fromInstallPath("/mnt/nvme_4TB/Jocs/Gothic 2 Gold", heroic)
+              == Store::Gog);
+    // "Gothic 2 Gold Edition" starts with "Gothic 2 Gold" and is a different
+    // game folder: a prefix test without the separator claims it.
+    check("a sibling folder sharing the first letters does not",
+          game_store::fromInstallPath("/mnt/nvme_4TB/Jocs/Gothic 2 Gold Edition", heroic)
+              == Store::Unknown);
+    check("a root of / owns nothing",
+          game_store::fromInstallPath("/opt/games/whatever", { "/" }) == Store::Unknown);
+
+    // No evidence is its own answer. A hand-copied install belongs to no shop,
+    // and naming one would put a tick beside the wrong file.
+    check("an unrecognised path says nothing",
+          game_store::fromInstallPath("/home/u/Games/Morrowind", {}) == Store::Unknown);
+    check("an empty path says nothing",
+          game_store::fromInstallPath("", heroic) == Store::Unknown);
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -207,6 +291,8 @@ int main(int argc, char **argv)
     testTheReportedCaseMatches();
     testTitleNormalisation();
     testSteamManifest();
+    testGameStoreFromNames();
+    testGameStoreFromPaths();
 
     std::cout << "\n" << s_passed << " passed, " << s_failed << " failed\n";
     return s_failed == 0 ? 0 : 1;

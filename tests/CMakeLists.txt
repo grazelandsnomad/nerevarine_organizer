@@ -79,6 +79,7 @@ target_link_libraries(test_opengothic PRIVATE Qt6::Core)
 add_executable(test_store_scan
     test_store_scan.cpp
     ${CMAKE_SOURCE_DIR}/src/store_scan.cpp
+    ${CMAKE_SOURCE_DIR}/src/game_store.cpp
     ${CMAKE_SOURCE_DIR}/src/game_adapters.cpp
     ${CMAKE_SOURCE_DIR}/include/game_adapter.h
 )
@@ -115,6 +116,7 @@ add_executable(test_profiles
     ${CMAKE_SOURCE_DIR}/src/modentry.cpp
     ${CMAKE_SOURCE_DIR}/src/nxmurl.cpp
     ${CMAKE_SOURCE_DIR}/src/game_profiles.cpp
+    ${CMAKE_SOURCE_DIR}/src/game_store.cpp
     ${CMAKE_SOURCE_DIR}/src/game_adapters.cpp
     ${CMAKE_SOURCE_DIR}/src/store_scan.cpp
     ${CMAKE_SOURCE_DIR}/src/settings.cpp
@@ -139,6 +141,7 @@ add_executable(test_nexus
     ${CMAKE_SOURCE_DIR}/src/deps_resolver.cpp
     ${CMAKE_SOURCE_DIR}/src/nxmurl.cpp
     ${CMAKE_SOURCE_DIR}/src/file_pick.cpp
+    ${CMAKE_SOURCE_DIR}/src/game_store.cpp
 )
 target_include_directories(test_nexus PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(test_nexus PRIVATE Qt6::Core Qt6::Network)

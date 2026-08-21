@@ -1,6 +1,8 @@
 #ifndef GAME_PROFILES_H
 #define GAME_PROFILES_H
 
+#include "game_store.h"
+
 #include <QList>
 #include <QObject>
 #include <QString>
@@ -121,6 +123,17 @@ public:
     // Scans ~/.config/lutris/games/ yml for an entry matching gameId by
     // slug/name; returns the absolute exe path if found.
     static QString findLutrisGameExe(const QString &gameId);
+
+    // Which shop this profile's copy of the game came from, read off the
+    // paths the profile already holds (and, failing that, by asking the
+    // stores where the game is). Unknown when nothing on disk says - a
+    // hand-copied install belongs to no store, and guessing one would be
+    // worse than saying nothing.
+    //
+    // Matters because the two stores ship different executables: an SKSE
+    // build, an ENB or an address library made for the other one loads
+    // nothing and reports nothing. See game_store.h.
+    static game_store::Store detectStore(const QString &gameId);
 
 private:
     QList<GameProfile> m_games;

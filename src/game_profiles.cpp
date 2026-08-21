@@ -1,6 +1,7 @@
 #include "game_profiles.h"
 
 #include "game_adapter.h"
+#include "game_store.h"
 #include "store_scan.h"
 
 #include <QCoreApplication>
@@ -698,4 +699,61 @@ QString GameProfileRegistry::findHeroicGogAppId(const QString &installPathHint)
         }
     }
     return {};
+}
+
+// Which shop the copy came from. Evidence only: the paths this profile is
+// already pointing at, then the stores' own install lists, then GOG's marker
+// file. Nothing here guesses from a game's name.
+game_store::Store GameProfileRegistry::detectStore(const QString &gameId)
+{
+    using game_store::Store;
+    if (gameId.isEmpty()) return Store::Unknown;
+
+    // Everything the profile knows about where the game lives. Plugins.txt is
+    // in the list because on Steam it sits inside the Proton prefix, under
+    // steamapps/compatdata - which is Steam evidence even when the game
+    // folder itself was never recorded.
+    QStringList paths;
+    for (const QString &p : { Settings::gameExePath(gameId),
+                              Settings::dataDir(gameId),
+                              Settings::launcherExePath(gameId),
+                              Settings::pluginsTxtPath(gameId) })
+        if (!p.isEmpty()) paths << p;
+
+    if (paths.isEmpty()) {
+        // Nothing set up yet: ask the stores, and believe only what is on
+        // disk. findGogGameExe answers with the path it EXPECTS on a folder
+        // match, present or not, which is right for launching through Heroic
+        // and wrong as evidence.
+        const QString steam = findSteamGameExe(gameId);
+        if (!steam.isEmpty() && QFileInfo::exists(steam)) return Store::Steam;
+        const QString gog = findGogGameExe(gameId);
+        if (!gog.isEmpty() && QFileInfo::exists(gog)) return Store::Gog;
+        return Store::Unknown;
+    }
+
+    QStringList gogRoots;
+    for (const store_scan::HeroicInstall &h : store_scan::heroicInstalls())
+        if (!h.installPath.isEmpty()) gogRoots << h.installPath;
+
+    for (const QString &p : std::as_const(paths)) {
+        const Store s = game_store::fromInstallPath(p, gogRoots);
+        if (s != Store::Unknown) return s;
+    }
+
+    // A GOG install carries its own marker next to the executable, whoever
+    // put it there - which is the only evidence for a copy Heroic did not
+    // install. Climb a couple of levels, since the path recorded may be the
+    // Data folder rather than the game root.
+    for (const QString &p : std::as_const(paths)) {
+        QDir d(QFileInfo(p).isDir() ? p : QFileInfo(p).absolutePath());
+        for (int up = 0; up < 3; ++up) {
+            if (!d.entryList({ QStringLiteral("goggame-*.info") },
+                             QDir::Files).isEmpty())
+                return Store::Gog;
+            if (!d.cdUp()) break;
+        }
+    }
+
+    return Store::Unknown;
 }

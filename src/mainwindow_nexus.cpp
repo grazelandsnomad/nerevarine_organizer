@@ -19,6 +19,7 @@ static constexpr const char *kKeychainKey     = "nexus_api_key";
 #include "fomodwizard.h"
 #include "fomod_hint.h"
 #include "file_pick.h"
+#include "game_store.h"
 #include "bainwizard.h"
 #include "install_layout.h"
 #include "modlist_model.h"
@@ -533,9 +534,20 @@ void MainWindow::onDependenciesScanned(QListWidgetItem *item,
 // The wording for a file_pick verdict. Kept here, and kept literal: the
 // parity check reads T("...") out of the source, so a key assembled at
 // runtime would be reported as dead for as long as it exists.
-static QString filePickBadge(file_pick::Kind kind)
+static QString filePickBadge(const file_pick::Note &n, game_store::Store installed)
 {
-    switch (kind) {
+    // Which shop a build is for comes before what kind of file it is. On a
+    // page that ships one build per store that is the whole question, and
+    // "main download" is precisely the label that walks people into the
+    // wrong one.
+    if (n.store != game_store::Store::Unknown) {
+        const QString badge =
+            T("file_pick_badge_store").arg(game_store::name(n.store));
+        return n.store == installed
+            ? badge + QLatin1Char(' ') + T("file_pick_badge_store_yours")
+            : badge;
+    }
+    switch (n.kind) {
     case file_pick::Kind::Base:  return T("file_pick_badge_base");
     case file_pick::Kind::AddOn: return T("file_pick_badge_addon");
     case file_pick::Kind::Patch: return T("file_pick_badge_patch");
@@ -544,8 +556,17 @@ static QString filePickBadge(file_pick::Kind kind)
     }
 }
 
-static QString filePickDetail(const file_pick::Note &n)
+static QString filePickDetail(const file_pick::Note &n, game_store::Store installed)
 {
+    if (n.store != game_store::Store::Unknown) {
+        const QString build = game_store::name(n.store);
+        if (installed == game_store::Store::Unknown)
+            return T("file_pick_detail_store_unknown").arg(build);
+        if (n.store == installed)
+            return T("file_pick_detail_store_match").arg(build);
+        return T("file_pick_detail_store_other")
+                   .arg(build, game_store::name(installed));
+    }
     switch (n.kind) {
     case file_pick::Kind::Base:     return T("file_pick_detail_base");
     case file_pick::Kind::AddOn:    return T("file_pick_detail_addon").arg(n.detailArg);
@@ -624,7 +645,19 @@ void MainWindow::onFileListFetched(QListWidgetItem *item,
     }
     const QList<file_pick::Note> notes = file_pick::describe(picks);
 
-    int bestIdx = file_pick::defaultIndex(picks, notes, scores);
+    // Which shop this copy of the game came from, asked only when the page
+    // actually offers a build per store. The answer costs a read of Heroic's
+    // install list and a look at the game folder, and "Update All" comes
+    // through here once per mod, so a page without the choice never pays it.
+    game_store::Store installedStore = game_store::Store::Unknown;
+    for (const auto &n : notes) {
+        if (n.store == game_store::Store::Unknown) continue;
+        if (!m_profiles->isEmpty())
+            installedStore = GameProfileRegistry::detectStore(currentProfile().id);
+        break;
+    }
+
+    int bestIdx = file_pick::defaultIndex(picks, notes, scores, installedStore);
 
     // Dependency-variant recommendation.  Some Morrowind mods ship parallel
     // MAIN files for "OAAB" (uses OAAB Data assets) vs "No OAAB" - e.g. Sixth
@@ -726,7 +759,7 @@ void MainWindow::onFileListFetched(QListWidgetItem *item,
                             .arg(mb, 0, 'f', 1);
         // A few words on the row saying which of these the file is; the full
         // sentence waits in the panel for whichever row is selected.
-        const QString badge = filePickBadge(notes[i].kind);
+        const QString badge = filePickBadge(notes[i], installedStore);
         if (!badge.isEmpty()) label += QStringLiteral("  - ") + badge;
         if (i == recommendIdx) label += recommendNote;
         auto *li = new QListWidgetItem(label, fileList);
@@ -750,9 +783,9 @@ void MainWindow::onFileListFetched(QListWidgetItem *item,
     whatLay->addWidget(whatLbl);
 
     connect(fileList, &QListWidget::currentRowChanged, whatLbl,
-            [whatLbl, &notes, &files](int row) {
+            [whatLbl, &notes, &files, installedStore](int row) {
         if (row < 0 || row >= notes.size()) { whatLbl->clear(); return; }
-        QString text = filePickDetail(notes[row]);
+        QString text = filePickDetail(notes[row], installedStore);
         // The author's own words beat anything inferred from a category, so
         // they go last, where they read as the final say.
         const QString says = file_pick::plainDescription(files[row].description);

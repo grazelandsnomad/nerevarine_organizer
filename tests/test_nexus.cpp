@@ -1177,12 +1177,131 @@ static void testPlainDescription()
           file_pick::plainDescription("Short.", 40) == QLatin1String("Short."));
 }
 
+
+// The second page that prompted this: Skyrim's SKSE64, which ships one build
+// per store because the GOG release of the game is a different executable.
+//
+//   Skyrim Script Extender (SKSE64) GOG    [v2.2.6]  MAIN  0.9 MB
+//   Skyrim Script Extender (SKSE64) Steam  [v2.3.0]  MAIN  0.9 MB   <- primary
+//
+// The picker labelled the GOG one "separate add-on" and offered no hint that
+// the choice was about which shop the game came from.
+
+static QList<file_pick::FileInfo> sksePage()
+{
+    file_pick::FileInfo gog;
+    gog.name      = QStringLiteral("Skyrim Script Extender (SKSE64) GOG");
+    gog.version   = QStringLiteral("2.2.6");
+    gog.category  = QStringLiteral("MAIN");
+    gog.sizeBytes = 944128;
+
+    file_pick::FileInfo steam;
+    steam.name        = QStringLiteral("Skyrim Script Extender (SKSE64) Steam");
+    steam.version     = QStringLiteral("2.3.0");
+    steam.category    = QStringLiteral("MAIN");
+    steam.sizeBytes   = 944640;
+    steam.isPrimary   = true;
+    steam.description =
+        QStringLiteral("Compatible with Skyrim Special Edition 1.7.99 from Steam");
+
+    return { gog, steam };
+}
+
+static void testStoreBuildsAreNotAddOns()
+{
+    using game_store::Store;
+    std::cout << "\nfile_pick::describe with a build per store:\n";
+    const auto files = sksePage();
+    const auto notes = file_pick::describe(files);
+
+    check("each build is tied to its store",
+          notes[0].store == Store::Gog && notes[1].store == Store::Steam);
+
+    // The reported bug: the primary flag made the other store's build look
+    // like an extra, when it is the same mod for a different game exe.
+    check("the other store's build is not an add-on",
+          notes[0].kind != file_pick::Kind::AddOn);
+    check("it is a complete download in its own right",
+          notes[0].kind == file_pick::Kind::Main);
+    check("and nothing names it after the primary",
+          notes[0].detailArg.isEmpty());
+    check("the primary is still the page's own download",
+          notes[1].kind == file_pick::Kind::Base);
+
+    // A store word needs a counterpart to mean anything. On a page with one
+    // file that happens to say "Steam", it is just a word.
+    {
+        auto lone = sksePage();
+        lone.removeAt(0);
+        file_pick::FileInfo preset;
+        preset.name     = QStringLiteral("Steam Deck performance preset");
+        preset.category = QStringLiteral("OPTIONAL");
+        lone.append(preset);
+        const auto n = file_pick::describe(lone);
+        check("one store named on a page is no choice at all",
+              n[0].store == Store::Unknown && n[1].store == Store::Unknown);
+    }
+
+    // Same store twice is not a choice either.
+    {
+        auto both = sksePage();
+        both[0].name = QStringLiteral("Skyrim Script Extender (SKSE64) Steam AE");
+        const auto n = file_pick::describe(both);
+        check("two builds for the same shop are not store variants",
+              n[0].store == Store::Unknown && n[1].store == Store::Unknown);
+    }
+}
+
+static void testTheUsersOwnStoreDecides()
+{
+    using game_store::Store;
+    std::cout << "\nfile_pick::defaultIndex with a build per store:\n";
+    const auto files = sksePage();
+    const auto notes = file_pick::describe(files);
+
+    // The whole point. The author flagged the Steam build as the page's
+    // download; for somebody who bought the game on GOG that flag is wrong,
+    // and the file it points at loads nothing.
+    check("a GOG copy opens on the GOG build, primary flag or not",
+          file_pick::defaultIndex(files, notes, {}, Store::Gog) == 0,
+          QString::number(file_pick::defaultIndex(files, notes, {}, Store::Gog)));
+    check("a Steam copy opens on the Steam build",
+          file_pick::defaultIndex(files, notes, {}, Store::Steam) == 1);
+    check("knowing nothing falls back to the page's own answer",
+          file_pick::defaultIndex(files, notes, {}, Store::Unknown) == 1);
+
+    // Knowing the shop does not license installing a fragment: a patch is
+    // still never the opening selection, even the right shop's patch.
+    {
+        auto page = sksePage();
+        page[0].category = QStringLiteral("UPDATE");
+        const auto n = file_pick::describe(page);
+        check("the right store's patch is still a patch",
+              file_pick::defaultIndex(page, n, {}, Store::Gog) == 1);
+    }
+
+    // Nor a build for the wrong engine, which is a harder no than a store.
+    check("a negative engine score still overrules the store",
+          file_pick::defaultIndex(files, notes, { -1, 1 }, Store::Gog) == 1);
+
+    // A store we have no build for leaves the page's own answer standing.
+    {
+        auto page = sksePage();
+        page.removeAt(0);
+        const auto n = file_pick::describe(page);
+        check("a store with no build here changes nothing",
+              file_pick::defaultIndex(page, n, {}, Store::Gog) == 0);
+    }
+}
+
 static void run_file_pick()
 {
     testDescribesTheReportedPage();
     testNoPrimaryMeansNoRanking();
     testPatchPairingNeedsARealName();
     testDefaultIndexPrefersTheModItself();
+    testStoreBuildsAreNotAddOns();
+    testTheUsersOwnStoreDecides();
     testPlainDescription();
 }
 

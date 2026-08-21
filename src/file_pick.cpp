@@ -92,9 +92,34 @@ QList<Note> describe(const QList<FileInfo> &files)
     }
     if (primaryCount != 1) primaryIdx = -1;
 
+    // Which files are one store's build of something another store also has
+    // here. A name saying "Steam" proves nothing by itself; a name saying
+    // "Steam" next to the same name saying "GOG" is the page telling us it
+    // ships one build per store.
+    QList<game_store::Store> named;
+    QStringList              bare;
+    named.reserve(files.size());
+    bare.reserve(files.size());
+    for (const FileInfo &f : files) {
+        named.append(game_store::fromFileName(f.name));
+        bare.append(identityWords(game_store::stripStoreWords(f.name)));
+    }
+    QList<game_store::Store> storeBuild;
+    for (int i = 0; i < files.size(); ++i) {
+        game_store::Store mine = game_store::Store::Unknown;
+        for (int j = 0; j < files.size() && mine == game_store::Store::Unknown; ++j) {
+            if (j == i || named[i] == game_store::Store::Unknown) continue;
+            if (named[j] == game_store::Store::Unknown || named[j] == named[i]) continue;
+            if (bare[i].isEmpty() || bare[i] != bare[j]) continue;
+            mine = named[i];
+        }
+        storeBuild.append(mine);
+    }
+
     for (int i = 0; i < files.size(); ++i) {
         const FileInfo &f = files[i];
         Note n;
+        n.store = storeBuild[i];
 
         if (isPatchCategory(f.category)) {
             n.kind = Kind::Patch;
@@ -128,7 +153,7 @@ QList<Note> describe(const QList<FileInfo> &files)
         } else if (isCategory(f.category, "MAIN")) {
             if (i == primaryIdx) {
                 n.kind = Kind::Base;
-            } else if (primaryIdx >= 0) {
+            } else if (primaryIdx >= 0 && n.store == game_store::Store::Unknown) {
                 // Only an "add-on" because the page named something else its
                 // main download. With no primary flag there is nothing for
                 // this to be an add-on TO, and two MAIN files are just two
@@ -136,6 +161,10 @@ QList<Note> describe(const QList<FileInfo> &files)
                 n.kind      = Kind::AddOn;
                 n.detailArg = files[primaryIdx].name;
             } else {
+                // Including the other store's build, which is a whole mod and
+                // not an add-on to anything: the author flagged one of the two
+                // as the page's download, and that flag is about upload order,
+                // not about which one runs on your copy of the game.
                 n.kind = Kind::Main;
             }
         } else {
@@ -148,7 +177,7 @@ QList<Note> describe(const QList<FileInfo> &files)
 }
 
 int defaultIndex(const QList<FileInfo> &files, const QList<Note> &notes,
-                 const QList<int> &engineScores)
+                 const QList<int> &engineScores, game_store::Store installed)
 {
     if (files.isEmpty()) return 0;
 
@@ -165,6 +194,21 @@ int defaultIndex(const QList<FileInfo> &files, const QList<Note> &notes,
     // dropped rather than the list.
     bool anyWhole = false;
     for (int i = 0; i < files.size(); ++i) anyWhole |= wholeMod(i);
+
+    // Which store the game came from is a fact about the machine, not a
+    // preference, and it beats the author's flag: on a page with a build per
+    // store the primary is whichever one they uploaded first, and for
+    // everybody who bought the game elsewhere it points at a file that cannot
+    // load. Only among files that are whole mods and not for the wrong engine.
+    if (installed != game_store::Store::Unknown) {
+        int want = -1;
+        for (int i = 0; i < files.size(); ++i) {
+            if (i >= notes.size() || notes[i].store != installed) continue;
+            if (!wholeMod(i) || score(i) < 0) continue;
+            if (want < 0 || score(i) > score(want)) want = i;
+        }
+        if (want >= 0) return want;
+    }
 
     // The page's main download is the author's own answer, and it outranks
     // anything read out of a file name - which is the bug this fixes: a 2.3 MB

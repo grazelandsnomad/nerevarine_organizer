@@ -33,6 +33,8 @@
 // Everything below is pure: file metadata in, sentences and an index out, so
 // the wording and the ranking are testable without a network or a dialog.
 
+#include "game_store.h"
+
 #include <QList>
 #include <QString>
 
@@ -72,6 +74,14 @@ struct Note {
     // - a key assembled at runtime is invisible to the translation parity
     // check and would be reported dead forever.
     QString detailArg;
+    // Which store's build this is, when the page carries one per store.
+    //
+    // Only ever set for a file that has a counterpart: two names identical
+    // once the store word is taken out, naming different stores. A lone file
+    // with "Steam" in its name gets nothing, because that word is a word - a
+    // Steam Deck preset is not a store build - and the difference only
+    // matters where there is a choice to get wrong.
+    game_store::Store store = game_store::Store::Unknown;
 };
 
 // A file description as it can be shown in a dialog.
@@ -86,6 +96,11 @@ struct Note {
 QString plainDescription(const QString &raw, int maxChars = 400);
 
 // Classify and word every file on the page. Index-parallel with `files`.
+//
+// Per-store builds are recognised as such: the GOG build of a mod is not an
+// "add-on" to its Steam build, however the primary flag happens to fall, and
+// calling it one told the user to install the file that cannot work on their
+// copy of the game.
 QList<Note> describe(const QList<FileInfo> &files);
 
 // The row to select when the dialog opens, or 0 for a list that gives no
@@ -96,12 +111,18 @@ QList<Note> describe(const QList<FileInfo> &files);
 // module so it stays free of game-profile knowledge. Pass an empty list for
 // no opinion.
 //
+// `installed` is the store the user's own copy of the game came from, and it
+// outranks everything else on a page that offers a build per store: the
+// author's primary flag points at whichever build they upload first, and for
+// the other store's customers that flag is simply wrong.
+//
 // A patch is never the default: it is not a whole mod, and defaulting to one
 // installs a fragment. The page's primary file wins unless its engine score
 // is negative, since an author's main download still loses to "this build is
 // for MWSE and the profile is OpenMW".
 int defaultIndex(const QList<FileInfo> &files, const QList<Note> &notes,
-                 const QList<int> &engineScores);
+                 const QList<int> &engineScores,
+                 game_store::Store installed = game_store::Store::Unknown);
 
 } // namespace file_pick
 
