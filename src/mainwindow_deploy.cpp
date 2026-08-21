@@ -1576,6 +1576,18 @@ void MainWindow::refreshScriptExtenderFlags()
     }
 
     if (m_modList->viewport()) m_modList->viewport()->update();
+
+    // Logged because the report this feature exists for is "my mod is not
+    // marked" or "why is this one on the list", and the answer is which game
+    // version was read and how many rows matched a finding.
+    if (findings.game.valid)
+        qCInfo(logging::lcLaunch).nospace()
+            << "skse check: game=" << findings.game.shortString()
+            << " loader=" << (findings.loaderFile.isEmpty()
+                                  ? QStringLiteral("(none)") : findings.loaderFile)
+            << " dbFormat=" << findings.databaseFormat
+            << " stale=" << findings.stale.size()
+            << " marked=" << stale.size();
 }
 
 bool MainWindow::confirmLaunchIfWarnings()
