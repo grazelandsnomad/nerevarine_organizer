@@ -18,7 +18,9 @@
 #include <QLabel>
 #include <QPainter>
 #include <QPainterPath>
+#include <QMouseEvent>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWheelEvent>
@@ -220,7 +222,14 @@ void EdgeItem::refresh()
     setPath(p);
 }
 
-// Wheel zoom, because a 30-node graph does not fit a dialog at 1:1.
+// Wheel zoom, because a 30-node graph does not fit a dialog at 1:1, and
+// middle-button drag to shove the canvas around.
+//
+// The middle button rather than the left one because the left button is
+// already spoken for three times over: it drags a node to arrange it,
+// shift-drags one node onto another to add a dependency, and rubber-bands a
+// selection on empty space. Qt's own ScrollHandDrag would have taken the
+// first of those, so the panning is done by hand.
 class GraphView : public QGraphicsView {
 public:
     using QGraphicsView::QGraphicsView;
@@ -235,6 +244,63 @@ protected:
         }
         QGraphicsView::wheelEvent(ev);
     }
+
+    void mousePressEvent(QMouseEvent *ev) override
+    {
+        if (ev->button() == Qt::MiddleButton) {
+            m_panFrom = ev->position().toPoint();
+            m_panning = true;
+            // The cursor is the only thing that says a drag has started: no
+            // node moves, no rubber band appears.
+            viewport()->setCursor(Qt::ClosedHandCursor);
+            ev->accept();
+            return;
+        }
+        QGraphicsView::mousePressEvent(ev);
+    }
+
+    void mouseMoveEvent(QMouseEvent *ev) override
+    {
+        if (m_panning) {
+            // Scroll by the delta rather than jumping to an absolute
+            // position, so the point under the cursor stays under it however
+            // far the drag wanders outside the viewport.
+            const QPoint now   = ev->position().toPoint();
+            const QPoint delta = now - m_panFrom;
+            m_panFrom = now;
+            horizontalScrollBar()->setValue(horizontalScrollBar()->value() - delta.x());
+            verticalScrollBar()->setValue(verticalScrollBar()->value()   - delta.y());
+            ev->accept();
+            return;
+        }
+        QGraphicsView::mouseMoveEvent(ev);
+    }
+
+    void mouseReleaseEvent(QMouseEvent *ev) override
+    {
+        if (m_panning && ev->button() == Qt::MiddleButton) {
+            m_panning = false;
+            viewport()->unsetCursor();
+            ev->accept();
+            return;
+        }
+        QGraphicsView::mouseReleaseEvent(ev);
+    }
+
+    // A drag that leaves the window and has the button released out there
+    // never sends a release here, and the view would stay stuck in panning.
+    void leaveEvent(QEvent *ev) override
+    {
+        if (m_panning && !(QApplication::mouseButtons() & Qt::MiddleButton)) {
+            m_panning = false;
+            viewport()->unsetCursor();
+        }
+        QGraphicsView::leaveEvent(ev);
+    }
+
+private:
+    bool   m_panning = false;
+    QPoint m_panFrom;
 };
 
 } // namespace
