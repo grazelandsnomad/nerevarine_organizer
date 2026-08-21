@@ -12,6 +12,7 @@
 static constexpr const char *kKeychainService = "NerevarineOrganizer";
 static constexpr const char *kKeychainKey     = "nexus_api_key";
 #include "settings.h"
+#include "theme.h"
 #include "separatordialog.h"
 #include "modroles.h"
 #include "translator.h"
@@ -534,19 +535,39 @@ void MainWindow::onDependenciesScanned(QListWidgetItem *item,
 // The wording for a file_pick verdict. Kept here, and kept literal: the
 // parity check reads T("...") out of the source, so a key assembled at
 // runtime would be reported as dead for as long as it exists.
-static QString filePickBadge(const file_pick::Note &n, game_store::Store installed)
+
+// The mark for the row that matches this machine. Drawn, and drawn at the
+// front: as a "✅" on the end of the label it sat past the right edge of a
+// list too narrow to show it, so the one thing the row existed to say was the
+// one thing not on screen. Every row in the list gets a pixmap of the same
+// size, blank where there is nothing to mark, so the names stay lined up.
+static QIcon storeMatchIcon(bool matches)
+{
+    const qreal dpr = qApp ? qApp->devicePixelRatio() : 1.0;
+    QPixmap pm(qRound(16 * dpr), qRound(16 * dpr));
+    pm.setDevicePixelRatio(dpr);
+    pm.fill(Qt::transparent);
+    if (!matches) return QIcon(pm);
+
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    // The same green the mod list uses for "this one wins", light and dark.
+    p.setPen(QPen(theme::backgroundIsDark(Settings::uiDarkMode())
+                      ? QColor(120, 225, 145) : QColor(46, 160, 67),
+                  2.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    p.drawPolyline(QPolygonF({ QPointF(2.5, 8.5), QPointF(6.5, 12.5),
+                               QPointF(13.5, 3.5) }));
+    return QIcon(pm);
+}
+
+static QString filePickBadge(const file_pick::Note &n)
 {
     // Which shop a build is for comes before what kind of file it is. On a
     // page that ships one build per store that is the whole question, and
     // "main download" is precisely the label that walks people into the
-    // wrong one.
-    if (n.store != game_store::Store::Unknown) {
-        const QString badge =
-            T("file_pick_badge_store").arg(game_store::name(n.store));
-        return n.store == installed
-            ? badge + QLatin1Char(' ') + T("file_pick_badge_store_yours")
-            : badge;
-    }
+    // wrong one. Which of them is YOURS is the green tick, not more words.
+    if (n.store != game_store::Store::Unknown)
+        return T("file_pick_badge_store").arg(game_store::name(n.store));
     switch (n.kind) {
     case file_pick::Kind::Base:  return T("file_pick_badge_base");
     case file_pick::Kind::AddOn: return T("file_pick_badge_addon");
@@ -746,11 +767,27 @@ void MainWindow::onFileListFetched(QListWidgetItem *item,
     // Multiple files - show picker dialog.
     QDialog dlg(this);
     dlg.setWindowTitle(T("install_pick_file_title"));
-    dlg.setMinimumWidth(540);
+    // Wide enough for a file name plus what the row says about it; the rows
+    // on the SKSE page ran past 540 and took the verdict off screen with them.
+    dlg.setMinimumWidth(720);
     auto *layout = new QVBoxLayout(&dlg);
     layout->addWidget(new QLabel(T("install_pick_file_label")));
 
     auto *fileList = new QListWidget(&dlg);
+    // Names on this page run long. Left to itself the list grows a horizontal
+    // scrollbar and hides the end of every row off the right edge; eliding
+    // keeps the row inside the dialog, and the whole of it stays readable in
+    // the tooltip and in the panel below.
+    fileList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    fileList->setTextElideMode(Qt::ElideRight);
+
+    // Only mark rows when there is a match to mark: a blank icon column on a
+    // page that has nothing to say about stores is just an indent.
+    bool markStores = false;
+    for (const auto &n : notes)
+        markStores |= (n.store != game_store::Store::Unknown
+                       && n.store == installedStore);
+
     for (int i = 0; i < files.size(); ++i) {
         const auto &f = files[i];
         const double mb = f.sizeKb / 1024.0;
@@ -759,10 +796,15 @@ void MainWindow::onFileListFetched(QListWidgetItem *item,
                             .arg(mb, 0, 'f', 1);
         // A few words on the row saying which of these the file is; the full
         // sentence waits in the panel for whichever row is selected.
-        const QString badge = filePickBadge(notes[i], installedStore);
+        const QString badge = filePickBadge(notes[i]);
         if (!badge.isEmpty()) label += QStringLiteral("  - ") + badge;
         if (i == recommendIdx) label += recommendNote;
         auto *li = new QListWidgetItem(label, fileList);
+        if (markStores)
+            li->setIcon(storeMatchIcon(notes[i].store == installedStore));
+        // Whatever the width elides away is still one hover from view.
+        li->setToolTip(label + QStringLiteral("\n\n")
+                       + filePickDetail(notes[i], installedStore));
         li->setData(Qt::UserRole,       f.fileId);
         li->setData(Qt::UserRole + 1,   f.md5);
         li->setData(Qt::UserRole + 2,   f.sizeBytes);
