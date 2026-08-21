@@ -426,6 +426,9 @@ Result show(QWidget *parent,
 
     // Which section the canvas currently shows; empty means all of them.
     QString curSection;
+    // What the graph actually occupies, kept apart from the scene rect that
+    // surrounds it - see the rebuild lambda.
+    QRectF  contentRect;
 
     auto rememberPositions = [&] {
         for (NodeItem *n : items)
@@ -593,14 +596,25 @@ Result show(QWidget *parent,
                                       QString::number(visible.size() - core.size()),
                                       QString::number(edgeItems.size())));
 
-        view->setSceneRect(scene->itemsBoundingRect().adjusted(-80, -80, 80, 80));
+        // Two rectangles, deliberately: the content is what the view is fitted
+        // to, and the scene is that plus room to drag it around. Without the
+        // slack a fitted graph has no scroll range at all, so a middle-button
+        // pan would move nothing until the user had zoomed in - which is
+        // indistinguishable from the pan not working.
+        contentRect = scene->itemsBoundingRect().adjusted(-80, -80, 80, 80);
+        const qreal padX = qBound(400.0, contentRect.width(),  2500.0);
+        const qreal padY = qBound(400.0, contentRect.height(), 2500.0);
+        view->setSceneRect(contentRect.adjusted(-padX, -padY, padX, padY));
     };
 
     // Fitting has to wait for the view to have its real size: fitInView before
     // exec() scales against the default sizeHint, not the 1000px the dialog is
     // about to become, which shrank a 30-node graph to a smudge.
-    auto fitNow = [view] {
-        const QRectF r = view->sceneRect();
+    auto fitNow = [view, &contentRect] {
+        // The content, not the scene: the scene is padded so the canvas can be
+        // dragged, and fitting THAT would shrink the graph into the middle of
+        // a lot of empty space.
+        const QRectF r = contentRect;
         if (r.isEmpty()) return;
         view->resetTransform();
         view->fitInView(r, Qt::KeepAspectRatio);
