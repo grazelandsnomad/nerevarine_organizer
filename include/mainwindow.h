@@ -598,6 +598,8 @@ private:
     // Same for the untranslated-mods captions. Switching it ON kicks off the
     // scan; switching it OFF wipes the roles so nothing stale stays painted.
     void onToggleUntranslatedNotices();
+    // Put the untranslated notices back to off (game/profile switch).
+    void resetUntranslatedNotices();
     void updateUntranslatedButton();
     // Repaint m_themeBtn to name the theme it switches TO.
     void updateThemeButton();
@@ -688,6 +690,12 @@ private:
     QToolButton           *m_themeBtn                = nullptr;  // light/dark toggle
     QToolButton           *m_conflictNoticesBtn      = nullptr;  // show/hide overwrite notices
     QToolButton           *m_untranslatedBtn         = nullptr;  // show/hide untranslated notices
+    // Whether those notices are showing. Deliberately not persisted: the
+    // button starts off on every launch and resets on every game or profile
+    // switch, because turning it on runs a scan that reads and decompresses
+    // plugin record bodies, and inheriting that from a click made last week
+    // is not something the user asked for.
+    bool                   m_untranslatedNotices      = false;
     // Settings > Mod translation language. Held because the Settings menu is
     // built once in setupMenuBar() and never rebuilt, while the checkmark it
     // shows belongs to whichever modlist profile is active.

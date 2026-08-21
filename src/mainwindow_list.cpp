@@ -160,16 +160,31 @@ void MainWindow::onToggleConflictNotices()
 void MainWindow::updateUntranslatedButton()
 {
     if (!m_untranslatedBtn) return;
-    const bool on = Settings::untranslatedNoticesVisible();
+    const bool on = m_untranslatedNotices;
     m_untranslatedBtn->setText(on ? T("toolbar_untranslated_hide")
                                   : T("toolbar_untranslated_show"));
     m_untranslatedBtn->setToolTip(T("toolbar_untranslated_tip"));
 }
 
+// Back to off, without running anything. Both switches land here: a different
+// mod set means the captions on screen are about mods that are no longer in
+// the list, and re-deciding them costs a pass over every plugin - so the
+// button goes back to its resting state and waits to be asked again.
+void MainWindow::resetUntranslatedNotices()
+{
+    if (!m_untranslatedNotices) return;
+    m_untranslatedNotices = false;
+    if (m_delegate) m_delegate->setUntranslatedNoticesVisible(false);
+    updateUntranslatedButton();
+    clearTranslationMarks();
+    if (m_modList && m_modList->viewport())
+        m_modList->viewport()->update();
+}
+
 void MainWindow::onToggleUntranslatedNotices()
 {
-    const bool on = !Settings::untranslatedNoticesVisible();
-    Settings::setUntranslatedNoticesVisible(on);
+    const bool on = !m_untranslatedNotices;
+    m_untranslatedNotices = on;
     if (m_delegate) m_delegate->setUntranslatedNoticesVisible(on);
     updateUntranslatedButton();
 
@@ -1762,7 +1777,7 @@ void MainWindow::setProfileTranslationLanguage(const QString &token)
     // memory file the editor will open is named after the new one. Re-run the
     // scan the same way toggling the notices on does, but only when the user
     // is actually looking at them.
-    if (Settings::untranslatedNoticesVisible()) runTranslationScan();
+    if (m_untranslatedNotices) runTranslationScan();
 
     statusBar()->showMessage(
         T("translation_lang_set").arg(

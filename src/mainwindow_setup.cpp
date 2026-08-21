@@ -772,7 +772,7 @@ void MainWindow::setupCentralWidget()
 
     m_delegate = new ModListDelegate(m_modList);
     m_delegate->setConflictNoticesVisible(Settings::conflictNoticesVisible());
-    m_delegate->setUntranslatedNoticesVisible(Settings::untranslatedNoticesVisible());
+    m_delegate->setUntranslatedNoticesVisible(m_untranslatedNotices);
     m_modList->setItemDelegate(m_delegate);
     m_modList->setDragDropMode(QAbstractItemView::InternalMove);
     m_modList->setDefaultDropAction(Qt::MoveAction);
@@ -1864,6 +1864,7 @@ void MainWindow::switchToGame(int idx)
     // re-asking the question for the game we just switched TO.
     m_stickyKind = StickyKind::ViewSort;
     updateDeployHint();
+    resetUntranslatedNotices();
 
     statusBar()->showMessage(
         T("status_switched_game").arg(m_profiles->current().displayName), 3000);

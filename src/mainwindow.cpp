@@ -3121,6 +3121,7 @@ void MainWindow::switchToModlistProfile(int idx)
     m_stickyKind = StickyKind::ViewSort;
     updateDeployHint();
     refreshScriptExtenderFlags();
+    resetUntranslatedNotices();
 
     statusBar()->showMessage(
         T("status_switched_profile").arg(gp.activeModlist().name), 3000);
@@ -3397,13 +3398,13 @@ void MainWindow::scheduleTranslationScan()
 {
     // Opt-in: the scan reads and decompresses record bodies, so it must not run
     // for users who never asked the question.
-    if (!Settings::untranslatedNoticesVisible()) return;
+    if (!m_untranslatedNotices) return;
     if (m_translationTimer) m_translationTimer->start();
 }
 
 void MainWindow::runTranslationScan()
 {
-    if (!Settings::untranslatedNoticesVisible()) return;
+    if (!m_untranslatedNotices) return;
 
     // Same snapshot rule as runConflictScan: rowOrderForPersist(), never the
     // raw rows, so a temporary Size/Date view sort can't change who covers

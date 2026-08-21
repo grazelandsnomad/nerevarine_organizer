@@ -112,19 +112,17 @@ struct Settings {
     static bool    conflictNoticesVisible();     // default true
     static void    setConflictNoticesVisible(bool visible);
 
-    // "no translation" / "N strings untranslated" captions in the mod list.
-    // Default FALSE, unlike the conflict notices above: those come free from a
-    // scan that runs anyway, while this one reads and decompresses plugin
-    // record bodies, so it only happens for users who ask the question.
+    // The "no translation" / "N strings untranslated" captions are NOT here.
+    // They start off on every launch and on every profile switch, so the state
+    // lives on MainWindow and is not persisted: the scan reads and
+    // decompresses plugin record bodies, and quietly doing that at startup
+    // because of a click from last week is not what the button asked for.
     // Watch the browser's download folder and offer what lands there. Only
     // ever runs for a game with no mod-manager download route at all (see
     // GameAdapter::manualDownloadsOnly), so the default is on: for those games
     // there is no other way in but drag and drop.
     static bool    watchDownloads();             // default true
     static void    setWatchDownloads(bool on);
-
-    static bool    untranslatedNoticesVisible(); // default false
-    static void    setUntranslatedNoticesVisible(bool visible);
 
     // Mod-list column visibility (`ui/col_<col>`).
     static bool    colVisible(const QString &col, bool defaultVisible);
