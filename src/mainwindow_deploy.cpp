@@ -1294,6 +1294,8 @@ void MainWindow::onDeployBethesda()
             self->m_deployOverlay->finish();
             ui::info(self, T("deploy_title"), summary);
             self->updateDeployHint();  // a manifest exists now; banner comes down
+            // Data/ just changed, so which plugins can load may have too.
+            self->refreshScriptExtenderFlags();
         });
 }
 
@@ -1349,6 +1351,7 @@ void MainWindow::maybeDeployBeforeLaunch(const QString &id)
                         gatherScriptExtenderSources(m_modList, adapter, m_modsDir),
                         modlistPath(), m_loadOrder, {});
     if (statusBar()) statusBar()->showMessage(T("deploy_relaunch_synced"), 3000);
+    refreshScriptExtenderFlags();
 }
 
 // Read-only diagnostic for the experimental Bethesda deployment: shows every
@@ -1510,6 +1513,71 @@ static skse_check::Facts gatherSkseFacts(const QString &id,
                               dataDir + QStringLiteral("/SKSE/Plugins"), owners);
 }
 
+// The script-extender verdict for one profile, or an empty one when the game
+// does not deploy into a Data/ or has never been deployed - with no manifest
+// nothing in the game folder came from here.
+static skse_check::Findings skseFindingsFor(QWidget *parent, const QString &gameId,
+                                            const QString &modlistFile)
+{
+    const GameAdapter *adapter = GameAdapterRegistry::find(gameId);
+    if (!adapter || adapter->dataSubdir().isEmpty()) return {};
+    QString manifestPath, backupDir;
+    bethesdaStatePaths(modlistFile, manifestPath, backupDir);
+    if (!QFileInfo::exists(manifestPath)) return {};
+    const QString dataDir =
+        bethesdaResolveDataDir(parent, gameId, adapter, /*allowPrompt=*/false);
+    if (dataDir.isEmpty()) return {};
+    return skse_check::evaluate(gatherSkseFacts(gameId, dataDir, manifestPath));
+}
+
+// Stamp the rows whose script-extender DLL cannot load against the installed
+// game, so the list says it without being asked. Runs when Data/ changes, not
+// from a paint path: it reads every plugin DLL in the game folder.
+void MainWindow::refreshScriptExtenderFlags()
+{
+    if (m_profiles->isEmpty() || !m_modList) return;
+    const auto findings = skseFindingsFor(this, currentProfile().id, modlistPath());
+
+    QHash<QString, QString> stale;   // mod label -> tooltip detail
+    for (const skse_check::Stale &st : findings.stale) {
+        if (st.mod.isEmpty()) continue;
+        const QString when = st.built.toString(QStringLiteral("yyyy-MM-dd"));
+        stale.insert(st.mod,
+                     st.declaredFor.valid
+                         ? T("skse_row_detail_for").arg(st.file, when,
+                                                        st.declaredFor.shortString(),
+                                                        findings.game.shortString())
+                         : T("skse_row_detail").arg(st.file, when,
+                                                    findings.game.shortString()));
+    }
+
+    for (int i = 0; i < m_modList->count(); ++i) {
+        auto *item = m_modList->item(i);
+        if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        QString label = item->data(ModRole::CustomName).toString();
+        if (label.isEmpty()) label = item->text();
+
+        const auto hit    = stale.constFind(label);
+        const bool isStale = hit != stale.constEnd();
+        item->setData(ModRole::ScriptExtenderStale,  isStale);
+        item->setData(ModRole::ScriptExtenderDetail, isStale ? *hit : QString());
+
+        // Composed the same way the mod-properties dialog composes it, plus
+        // the detail. A later property edit rewrites it without this line;
+        // the next deploy puts it back, and a missing tooltip is better than
+        // a stale one that names the wrong game version.
+        QStringList tip;
+        const QString modPath = item->data(ModRole::ModPath).toString();
+        const QString annot   = item->data(ModRole::Annotation).toString();
+        if (!modPath.isEmpty()) tip << modPath;
+        if (!annot.isEmpty())   tip << annot;
+        if (isStale)            tip << *hit;
+        item->setToolTip(tip.join(QStringLiteral("\n\n")));
+    }
+
+    if (m_modList->viewport()) m_modList->viewport()->update();
+}
+
 bool MainWindow::confirmLaunchIfWarnings()
 {
     if (m_suppressLaunchSanityCheck) return true;
@@ -1518,29 +1586,18 @@ bool MainWindow::confirmLaunchIfWarnings()
         m_profiles->isEmpty() ? QString() : currentProfile().id;
     auto warnings = launch_warnings::scan(m_modList, m_forbidden, gameId);
 
-    // Script-extender plugins against the installed game. Only for a profile
-    // that deploys into a Data/ and has actually deployed: with no manifest
-    // there is nothing in the game folder that came from here, and nothing to
-    // hold anybody responsible for.
-    const GameAdapter *adapter = GameAdapterRegistry::find(gameId);
-    if (adapter && !adapter->dataSubdir().isEmpty()) {
-        QString manifestPath, backupDir;
-        bethesdaStatePaths(modlistPath(), manifestPath, backupDir);
-        if (QFileInfo::exists(manifestPath)) {
-            const QString dataDir =
-                bethesdaResolveDataDir(this, gameId, adapter, /*allowPrompt=*/false);
-            if (!dataDir.isEmpty())
-                launch_warnings::addScriptExtender(
-                    warnings,
-                    skse_check::evaluate(
-                        gatherSkseFacts(gameId, dataDir, manifestPath)));
-        }
-    }
+    // Script-extender plugins against the installed game.
+    launch_warnings::addScriptExtender(
+        warnings, skseFindingsFor(this, gameId, modlistPath()));
 
     if (warnings.total() == 0) return true;
 
     const auto choice = launch_warnings::showDialog(this, warnings);
     if (choice.suppress) m_suppressLaunchSanityCheck = true;
+    // Not a launch, and not a plain cancel either: the user asked whether the
+    // mods holding the game back have newer builds. Answering that is the
+    // point of the button, so it runs and the launch does not.
+    if (choice.checkUpdates) checkUpdatesForMods(warnings.scriptExtenderMods);
     return choice.proceed;
 }
 

@@ -22,6 +22,9 @@ struct Result {
     // the installed game, named by the mod that deployed it.
     QStringList scriptExtenderNotes;
     QStringList scriptExtenderStale;
+    // The mod labels behind those rows, in the same order, so the caller can
+    // find them in the list without picking a name back out of the text.
+    QStringList scriptExtenderMods;
     // Why those rows are there, said once. Not counted and not a row: it is a
     // paragraph, and it goes in a label that wraps rather than in the
     // monospace list, which does not.
@@ -47,8 +50,12 @@ Result scan(QListWidget *list,
 void addScriptExtender(Result &into, const skse_check::Findings &findings);
 
 struct Choice {
-    bool proceed;   // false → user picked Cancel
-    bool suppress;  // true → "don't warn me this session" was checked
+    bool proceed;      // false → user picked Cancel
+    bool suppress;     // true → "don't warn me this session" was checked
+    // true → the user asked to check the listed mods for updates. Implies
+    // proceed == false: the answer to "are there newer builds" is worth
+    // having before starting the game, not after.
+    bool checkUpdates = false;
 };
 
 // Modal "Launch with warnings" dialog. Each list caps at 15 entries with a

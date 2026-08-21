@@ -358,6 +358,13 @@ void testTheReportedProfile()
     const auto f = skse_check::evaluate(reportedProfile());
 
     check("SKSE itself is not blamed", !f.loaderMismatch);
+    // Carried even though it matches: the dialog says "the script extender is
+    // not the problem" and has to name the file it checked to have said
+    // anything at all.
+    check("the extender it checked is named",
+          f.loaderFile == QLatin1String("skse64_1_7_99.dll")
+              && f.loaderRuntime.shortString() == QLatin1String("1.7.99"),
+          f.loaderFile);
     check("nor is the address library called missing", !f.missingDatabase);
     check("the format that stops the game is named", f.databaseFormat == 5,
           QString::number(f.databaseFormat));

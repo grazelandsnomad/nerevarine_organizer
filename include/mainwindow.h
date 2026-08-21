@@ -82,6 +82,12 @@ private slots:
     void onMoveUp();
     void onMoveDown();
     void onCheckUpdates();
+    // The same check narrowed to named mods, for the launch dialog's "check
+    // these for updates". Labels are matched against each row's display name,
+    // which is what the deploy manifest recorded them as. Returns how many
+    // rows were actually checked, which is not always how many were asked
+    // for: a label with no matching row is skipped rather than counted.
+    int  checkUpdatesForMods(const QStringList &labels);
     void onCheckUpdatesFinished(int foundCount);
     void onTitleFetched(QListWidgetItem *item, const QString &name);
     // A download is under way for a file whose name says it is built for the
@@ -131,6 +137,10 @@ private slots:
     // Sums the four warning signals (missing masters/deps, empty installs,
     // forbidden enabled); summary dialog if any fire. False on Cancel.
     bool confirmLaunchIfWarnings();
+    // Mark the rows whose script-extender DLL predates the installed game.
+    // Called when Data/ changes (deploy, and the pre-launch re-sync), never
+    // from a paint path: it reads every plugin DLL in the game folder.
+    void refreshScriptExtenderFlags();
     // Block launch on a pending kernel reboot (true = abort). Arch pacman wipes
     // /usr/lib/modules/<running-kernel> on kernel upgrade, so DRM/input module
     // loads fail and OpenMW dies with no clear error.
@@ -717,6 +727,11 @@ private:
     // Pre-launch sanity check "don't warn again this session" - cleared on
     // restart so a new install pass re-validates.
     bool                       m_suppressLaunchSanityCheck = false;
+    // One shot: the next finished update check opens the review screen rather
+    // than only writing to the status bar. Set when the user asked the
+    // question from the launch dialog, where a list they can install from is
+    // the answer they were after.
+    bool                       m_reviewAfterCheck = false;
 
     // Conflict detection
     QTimer              *m_conflictTimer = nullptr;

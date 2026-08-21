@@ -125,6 +125,15 @@ namespace ModRole {
     // runtime. Session-only (not persisted): the warning is about one
     // download, not a property of the mod.
     constexpr int RuntimeMismatchWarned = Qt::UserRole + 50; // bool
+    // Set by refreshScriptExtenderFlags(): this mod deploys a script-extender
+    // DLL that was built before the game version now installed, so the game
+    // stops at startup until it is rebuilt. Session only, never persisted -
+    // it is a fact about the game on disk right now, not about the mod, and a
+    // stale copy of it would outlive the game update that caused it.
+    constexpr int ScriptExtenderStale   = Qt::UserRole + 51; // bool
+    // The tooltip line behind that flag: which DLL, when it was built, and
+    // the runtime it declares.
+    constexpr int ScriptExtenderDetail  = Qt::UserRole + 52; // QString
 }
 
 namespace ItemType {

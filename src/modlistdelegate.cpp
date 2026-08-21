@@ -664,6 +664,13 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
             statusText  = QString("%1 installing…").arg(kSpinner[m_animFrame % 10]);
             statusColor = sel ? option.palette.color(QPalette::HighlightedText)
                               : (updateRow ? QColor(Qt::white) : QColor(210, 130, 0));
+        } else if (installStatus == 1
+                   && index.data(ModRole::ScriptExtenderStale).toBool()) {
+            // Installed, deployed, and unable to load: the game shows one
+            // message box and quits. "installed" is true and useless here.
+            statusText  = T("status_older_than_game");
+            statusColor = sel ? option.palette.color(QPalette::HighlightedText)
+                              : (updateRow ? QColor(Qt::white) : QColor(210, 130, 0));
         } else if (installStatus == 1) {
             statusText  = "● installed";
             statusColor = sel ? option.palette.color(QPalette::HighlightedText)

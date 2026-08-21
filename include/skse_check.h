@@ -91,6 +91,10 @@ struct Findings {
     pe_info::Version game;
     QList<Stale>     stale;
     bool             loaderMismatch  = false;
+    // The script extender found beside the game, and the runtime it hooks.
+    // Carried even when it matches, because "the extender is not what is out
+    // of date here" is only worth saying with the file name behind it.
+    QString          loaderFile;
     pe_info::Version loaderRuntime;
     bool             missingDatabase = false;
     int              databaseFormat  = 0;   // the format that triggered `stale`

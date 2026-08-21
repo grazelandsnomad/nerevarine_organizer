@@ -331,6 +331,10 @@ MainWindow::MainWindow(QWidget *parent)
     // the game - that is true from the moment the window opens, not only once
     // something is edited.
     updateDeployHint();
+    // Same reasoning for a mod whose DLL the installed game cannot load: it
+    // is behind from the moment the window opens, and waiting for the user to
+    // press Start to say so is how they find out from the game instead.
+    refreshScriptExtenderFlags();
 
     // saveModList debounce (see scheduleSaveModList()). closeEvent stops it
     // before the synchronous flush.
@@ -1510,22 +1514,29 @@ void MainWindow::onMoveDown()
     scheduleSaveModList();   // debounced - hold Alt+↓ rapid-fires moves
 }
 
-void MainWindow::onCheckUpdates()
+// Collect installed rows that have a Nexus page. Widget-side work: pulling
+// ModRole fields + parsing the stored Nexus page URL lives here so the
+// controller never has to know about QListWidget or ModRole.
+//
+// `only` empty means every mod; otherwise just the rows whose display name is
+// in it - the labels the deploy manifest records, which is how the launch
+// dialog names the mods it lists.
+// File-local rather than a member: NexusController is only forward-declared
+// in mainwindow.h, and pulling its header into that one for a return type is
+// a poor trade.
+static QList<NexusController::CheckTarget>
+collectUpdateTargets(QListWidget *modList, const QStringList &only)
 {
-    if (m_apiKey.isEmpty()) {
-        ui::info(this, T("nxm_api_key_required_title"), T("nxm_api_key_required_body"));
-        onSetApiKey();
-        if (m_apiKey.isEmpty()) return;
-    }
-
-    // Collect installed mods that have a NexusUrl.  Widget-side work: pulling
-    // ModRole fields + parsing the stored Nexus page URL lives here so the
-    // controller never has to know about QListWidget or ModRole.
     QList<NexusController::CheckTarget> toCheck;
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *item = m_modList->item(i);
+    for (int i = 0; i < modList->count(); ++i) {
+        auto *item = modList->item(i);
         if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
         if (item->data(ModRole::InstallStatus).toInt() != 1) continue;
+        if (!only.isEmpty()) {
+            QString label = item->data(ModRole::CustomName).toString();
+            if (label.isEmpty()) label = item->text();
+            if (!only.contains(label)) continue;
+        }
         const QString nexusUrl = item->data(ModRole::NexusUrl).toString();
         if (nexusUrl.isEmpty()) continue;
 
@@ -1537,7 +1548,18 @@ void MainWindow::onCheckUpdates()
         item->setData(ModRole::UpdateAvailable, false);
         toCheck.append({item, ref->game, ref->modId});
     }
+    return toCheck;
+}
 
+void MainWindow::onCheckUpdates()
+{
+    if (m_apiKey.isEmpty()) {
+        ui::info(this, T("nxm_api_key_required_title"), T("nxm_api_key_required_body"));
+        onSetApiKey();
+        if (m_apiKey.isEmpty()) return;
+    }
+
+    const auto toCheck = collectUpdateTargets(m_modList, {});
     if (toCheck.isEmpty()) {
         statusBar()->showMessage(T("check_updates_no_mods"), 3000);
         return;
@@ -1547,6 +1569,32 @@ void MainWindow::onCheckUpdates()
     m_nexusCtl->checkForUpdates(toCheck, [](QListWidgetItem *item) {
         return item->data(ModRole::DateAdded).toDateTime();
     });
+}
+
+int MainWindow::checkUpdatesForMods(const QStringList &labels)
+{
+    if (labels.isEmpty()) return 0;
+    if (m_apiKey.isEmpty()) {
+        ui::info(this, T("nxm_api_key_required_title"), T("nxm_api_key_required_body"));
+        onSetApiKey();
+        if (m_apiKey.isEmpty()) return 0;
+    }
+
+    const auto toCheck = collectUpdateTargets(m_modList, labels);
+    if (toCheck.isEmpty()) {
+        statusBar()->showMessage(T("check_updates_no_mods"), 3000);
+        return 0;
+    }
+
+    // The count is what was checked, not what was asked for. A mod whose
+    // label no longer matches a row, or that has no Nexus page, is not
+    // something to claim was looked at.
+    statusBar()->showMessage(T("check_updates_checking").arg(toCheck.size()));
+    m_reviewAfterCheck = true;
+    m_nexusCtl->checkForUpdates(toCheck, [](QListWidgetItem *item) {
+        return item->data(ModRole::DateAdded).toDateTime();
+    });
+    return toCheck.size();
 }
 
 void MainWindow::onCheckUpdatesFinished(int foundCount)
@@ -1575,6 +1623,12 @@ void MainWindow::onCheckUpdatesFinished(int foundCount)
              T("window_title"),
              msg});
     }
+
+    // Asked from the launch dialog: the user wanted to know whether there are
+    // newer builds, and the useful answer is the list they can install from.
+    const bool review = m_reviewAfterCheck;
+    m_reviewAfterCheck = false;
+    if (review && foundCount > 0) onReviewUpdates();
 }
 
 // Batch-update review screen
@@ -3066,6 +3120,7 @@ void MainWindow::switchToModlistProfile(int idx)
     // modlist filename), so the answer changes with the profile.
     m_stickyKind = StickyKind::ViewSort;
     updateDeployHint();
+    refreshScriptExtenderFlags();
 
     statusBar()->showMessage(
         T("status_switched_profile").arg(gp.activeModlist().name), 3000);

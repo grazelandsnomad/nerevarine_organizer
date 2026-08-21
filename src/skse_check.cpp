@@ -115,7 +115,9 @@ Facts gather(const QString &gameExePath, const QString &gameRoot,
 Findings evaluate(const Facts &facts)
 {
     Findings out;
-    out.game = facts.game;
+    out.game          = facts.game;
+    out.loaderFile    = facts.loaderFile;
+    out.loaderRuntime = facts.loaderRuntime;
 
     // No version for the game means nothing to compare anything against, and
     // a guess would put mods on a list for no reason.
@@ -124,10 +126,8 @@ Findings evaluate(const Facts &facts)
     // The script extender itself names the runtime it hooks. When that is not
     // the runtime on disk, the game was updated and SKSE was not, and every
     // other finding below would be noise on top of it.
-    if (facts.loaderRuntime.valid && !facts.loaderRuntime.sameRuntime(facts.game)) {
+    if (facts.loaderRuntime.valid && !facts.loaderRuntime.sameRuntime(facts.game))
         out.loaderMismatch = true;
-        out.loaderRuntime  = facts.loaderRuntime;
-    }
 
     // Only plugins that say they use the address library are part of this. A
     // plugin with no version record at all says nothing, and silence is not

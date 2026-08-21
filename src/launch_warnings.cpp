@@ -139,11 +139,26 @@ void addScriptExtender(Result &into, const skse_check::Findings &f)
     }
     if (f.stale.isEmpty()) return;
 
-    // Said once, above the list, because it is the same reason for every row
-    // and it is the sentence the game's own dialog leaves out.
-    into.scriptExtenderExplain =
-        T("launch_warn_skse_explain").arg(f.game.shortString())
-                                     .arg(f.databaseFormat);
+    // Said once, above the list. Three sentences, in the order somebody acts
+    // on them, because the first version of this said the right things in the
+    // wrong order and got the script extender updated instead: the extender
+    // was already correct, the check had established that, and the dialog
+    // never mentioned it.
+    // "updated to" would be a claim about history nobody checked: all that is
+    // known is the version on disk now and that these mods are behind it.
+    QStringList explain;
+    explain << (f.stale.size() == 1
+                    ? T("launch_warn_skse_lead_one").arg(f.game.shortString())
+                    : T("launch_warn_skse_lead").arg(f.game.shortString())
+                                                 .arg(f.stale.size()));
+
+    // Only with the file name behind it, and only when the check actually
+    // looked: "the extender is fine" is a claim, not a reassurance.
+    if (!f.loaderMismatch && !f.loaderFile.isEmpty())
+        explain << T("launch_warn_skse_not_the_extender").arg(f.loaderFile);
+
+    explain << T("launch_warn_skse_each_is_a_mod").arg(f.game.shortString());
+    into.scriptExtenderExplain = explain.join(QStringLiteral("\n\n"));
 
     for (const skse_check::Stale &s : f.stale) {
         const QString mod  = s.mod.isEmpty() ? T("launch_warn_skse_no_mod") : s.mod;
@@ -153,6 +168,7 @@ void addScriptExtender(Result &into, const skse_check::Findings &f)
                     ? T("launch_warn_skse_stale_for")
                           .arg(mod, s.file, when, s.declaredFor.shortString())
                     : T("launch_warn_skse_stale").arg(mod, s.file, when));
+        into.scriptExtenderMods << s.mod;
     }
 }
 
@@ -184,7 +200,16 @@ Choice showDialog(QWidget *parent, const Result &warnings)
     dlg.setMinimumSize(680, 440);
     auto *v = new QVBoxLayout(&dlg);
 
-    auto *header = new QLabel(T("launch_warn_header").arg(warnings.total()), &dlg);
+    // A stale script-extender plugin does not "may misbehave": the game shows
+    // one message box and quits. When that is the whole of it, say so.
+    const bool onlySkse = warnings.missingDeps.isEmpty()
+                       && warnings.emptyInstalls.isEmpty()
+                       && warnings.forbiddenEnabled.isEmpty()
+                       && !warnings.scriptExtenderStale.isEmpty();
+    auto *header = new QLabel(onlySkse
+                                  ? T("launch_warn_header_skse")
+                                  : T("launch_warn_header").arg(warnings.total()),
+                              &dlg);
     header->setWordWrap(true);
     header->setStyleSheet("font-weight: bold; padding: 4px 2px;");
     v->addWidget(header);
@@ -214,15 +239,31 @@ Choice showDialog(QWidget *parent, const Result &warnings)
     v->addWidget(suppress);
 
     auto *btns = new QDialogButtonBox(&dlg);
+    // The step that was missing. Every row is a mod with a Nexus page, so
+    // "has the author shipped a build for this game version" is a question
+    // the manager can answer, and leaving the user to go and ask it by hand
+    // is how the wrong thing got updated.
+    QPushButton *checkBtn = nullptr;
+    if (!warnings.scriptExtenderStale.isEmpty()) {
+        checkBtn = btns->addButton(
+            T("launch_warn_skse_check_updates").arg(warnings.scriptExtenderStale.size()),
+            QDialogButtonBox::ActionRole);
+    }
     auto *launchBtn = btns->addButton(T("launch_warn_launch_anyway"),
                                        QDialogButtonBox::DestructiveRole);
     btns->addButton(QDialogButtonBox::Cancel);
+    bool wantsCheck = false;
+    if (checkBtn)
+        QObject::connect(checkBtn, &QPushButton::clicked, &dlg,
+                         [&wantsCheck, &dlg]() { wantsCheck = true; dlg.reject(); });
     QObject::connect(launchBtn, &QPushButton::clicked, &dlg, &QDialog::accept);
     QObject::connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
     v->addWidget(btns);
 
     const bool proceed = (dlg.exec() == QDialog::Accepted);
-    return Choice{proceed, proceed && suppress->isChecked()};
+    // Suppressing only counts when the user chose to go ahead: ticking the box
+    // and then cancelling is not a request to be told nothing next time.
+    return Choice{proceed, proceed && suppress->isChecked(), wantsCheck};
 }
 
 bool refuseIfRebootPending(QWidget *parent)
