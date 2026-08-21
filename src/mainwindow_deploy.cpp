@@ -13,6 +13,8 @@
 #include "fomodwizard.h"
 #include "bainwizard.h"
 #include "bethesda_deploy.h"
+#include "pe_info.h"
+#include "skse_check.h"
 #include "bethesda_loadorder.h"
 #include "bethesda_archives.h"
 #include "bethesda_custom_ini.h"
@@ -1480,13 +1482,61 @@ void MainWindow::launchProgram(QString &storedPath,
 // scanMissingDependencies + an on-the-fly `collectDataFolders` call -
 // no background work, no fresh scans.  If every bucket is empty the
 // dialog isn't shown at all.
+// The paths for skse_check::gather, which does the reading. Only the "where"
+// lives here: which exe this profile launches, where its Data/ is, and which
+// mod put each file there according to the deploy manifest.
+static skse_check::Facts gatherSkseFacts(const QString &id,
+                                         const QString &dataDir,
+                                         const QString &manifestPath)
+{
+    QString exe = Settings::gameExePath(id);
+    if (!QFileInfo::exists(exe)) exe = GameProfileRegistry::findSteamGameExe(id);
+    if (!QFileInfo::exists(exe)) exe = GameProfileRegistry::findGogGameExe(id);
+
+    // Data/ is one level under the game root for every game that has one, and
+    // a game without one has no script extender plugins to check.
+    const QString gameRoot = QFileInfo(dataDir).absolutePath();
+
+    QHash<QString, QString> owners;
+    QFile mf(manifestPath);
+    if (mf.open(QIODevice::ReadOnly)) {
+        const auto man =
+            bethesda_deploy::manifestFromJson(QString::fromUtf8(mf.readAll()));
+        for (const auto &df : man.files)
+            owners.insert(df.rel.toLower(), df.sourceMod);
+    }
+
+    return skse_check::gather(exe, gameRoot,
+                              dataDir + QStringLiteral("/SKSE/Plugins"), owners);
+}
+
 bool MainWindow::confirmLaunchIfWarnings()
 {
     if (m_suppressLaunchSanityCheck) return true;
 
     const QString gameId =
         m_profiles->isEmpty() ? QString() : currentProfile().id;
-    const auto warnings = launch_warnings::scan(m_modList, m_forbidden, gameId);
+    auto warnings = launch_warnings::scan(m_modList, m_forbidden, gameId);
+
+    // Script-extender plugins against the installed game. Only for a profile
+    // that deploys into a Data/ and has actually deployed: with no manifest
+    // there is nothing in the game folder that came from here, and nothing to
+    // hold anybody responsible for.
+    const GameAdapter *adapter = GameAdapterRegistry::find(gameId);
+    if (adapter && !adapter->dataSubdir().isEmpty()) {
+        QString manifestPath, backupDir;
+        bethesdaStatePaths(modlistPath(), manifestPath, backupDir);
+        if (QFileInfo::exists(manifestPath)) {
+            const QString dataDir =
+                bethesdaResolveDataDir(this, gameId, adapter, /*allowPrompt=*/false);
+            if (!dataDir.isEmpty())
+                launch_warnings::addScriptExtender(
+                    warnings,
+                    skse_check::evaluate(
+                        gatherSkseFacts(gameId, dataDir, manifestPath)));
+        }
+    }
+
     if (warnings.total() == 0) return true;
 
     const auto choice = launch_warnings::showDialog(this, warnings);
@@ -1872,6 +1922,14 @@ void MainWindow::onLaunchGame()
     // Deploy-on-launch: re-sync a previously-deployed Bethesda profile's Data/
     // to the current list before the game starts (best-effort, never blocks).
     maybeDeployBeforeLaunch(id);
+
+    // Then look at what that put there. This button never asked before - the
+    // launch warnings existed and only the two OpenMW launchers called them -
+    // which is how a profile whose every script-extender plugin predates the
+    // game got started with nothing said, and found out from the game.
+    // Deliberately after the re-sync, so the check reads a Data/ in sync with
+    // the list rather than the previous deployment.
+    if (!confirmLaunchIfWarnings()) return;
 
     // -- 0. OpenGothic - not a storefront launch at all -----------------
     //

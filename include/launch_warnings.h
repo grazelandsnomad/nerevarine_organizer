@@ -1,6 +1,8 @@
 #ifndef LAUNCH_WARNINGS_H
 #define LAUNCH_WARNINGS_H
 
+#include "skse_check.h"
+
 #include <QString>
 #include <QStringList>
 
@@ -14,9 +16,20 @@ struct Result {
     QStringList missingDeps;        // "Mod: Interface Reimagined - disabled"
     QStringList emptyInstalls;      // "Mod: no plugin files found on disk"
     QStringList forbiddenEnabled;   // "Mod: on the forbidden list (reason)"
+    // Script extender, filled in by addScriptExtender(). Notes are whole
+    // sentences about the setup (the extender is for another game version, no
+    // address library at all); stale rows are one per plugin that predates
+    // the installed game, named by the mod that deployed it.
+    QStringList scriptExtenderNotes;
+    QStringList scriptExtenderStale;
+    // Why those rows are there, said once. Not counted and not a row: it is a
+    // paragraph, and it goes in a label that wraps rather than in the
+    // monospace list, which does not.
+    QString     scriptExtenderExplain;
 
     int total() const {
-        return missingDeps.size() + emptyInstalls.size() + forbiddenEnabled.size();
+        return missingDeps.size() + emptyInstalls.size() + forbiddenEnabled.size()
+             + scriptExtenderNotes.size() + scriptExtenderStale.size();
     }
 };
 
@@ -26,6 +39,12 @@ struct Result {
 Result scan(QListWidget *list,
             const ForbiddenModsRegistry *forbidden,
             const QString &gameId);
+
+// Turn a skse_check verdict into rows for the dialog. The wording lives here
+// rather than in skse_check so the module stays pure and so every key stays a
+// literal T("...") the parity check can find. A verdict with nothing in it
+// adds nothing.
+void addScriptExtender(Result &into, const skse_check::Findings &findings);
 
 struct Choice {
     bool proceed;   // false → user picked Cancel

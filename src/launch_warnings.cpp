@@ -124,6 +124,38 @@ Result scan(QListWidget *list,
     return r;
 }
 
+void addScriptExtender(Result &into, const skse_check::Findings &f)
+{
+    if (f.empty()) return;
+
+    if (f.loaderMismatch) {
+        into.scriptExtenderNotes
+            << T("launch_warn_skse_loader").arg(f.loaderRuntime.shortString(),
+                                                f.game.shortString());
+    }
+    if (f.missingDatabase) {
+        into.scriptExtenderNotes
+            << T("launch_warn_skse_no_db").arg(f.game.shortString());
+    }
+    if (f.stale.isEmpty()) return;
+
+    // Said once, above the list, because it is the same reason for every row
+    // and it is the sentence the game's own dialog leaves out.
+    into.scriptExtenderExplain =
+        T("launch_warn_skse_explain").arg(f.game.shortString())
+                                     .arg(f.databaseFormat);
+
+    for (const skse_check::Stale &s : f.stale) {
+        const QString mod  = s.mod.isEmpty() ? T("launch_warn_skse_no_mod") : s.mod;
+        const QString when = s.built.toString(QStringLiteral("yyyy-MM-dd"));
+        into.scriptExtenderStale
+            << (s.declaredFor.valid
+                    ? T("launch_warn_skse_stale_for")
+                          .arg(mod, s.file, when, s.declaredFor.shortString())
+                    : T("launch_warn_skse_stale").arg(mod, s.file, when));
+    }
+}
+
 Choice showDialog(QWidget *parent, const Result &warnings)
 {
     auto formatSection = [](const QString &heading, const QStringList &rows) {
@@ -142,6 +174,10 @@ Choice showDialog(QWidget *parent, const Result &warnings)
     body += formatSection(T("launch_warn_section_deps"),      warnings.missingDeps);
     body += formatSection(T("launch_warn_section_empty"),     warnings.emptyInstalls);
     body += formatSection(T("launch_warn_section_forbidden"), warnings.forbiddenEnabled);
+    // Last, and closest to the buttons: it is the one that actually stops the
+    // game rather than degrading it.
+    body += formatSection(T("launch_warn_section_skse"),
+                          warnings.scriptExtenderStale);
 
     QDialog dlg(parent);
     dlg.setWindowTitle(T("launch_warn_title"));
@@ -152,6 +188,20 @@ Choice showDialog(QWidget *parent, const Result &warnings)
     header->setWordWrap(true);
     header->setStyleSheet("font-weight: bold; padding: 4px 2px;");
     v->addWidget(header);
+
+    // Sentences go here rather than into the list below. That list is
+    // monospace and deliberately does not wrap, which suits a column of mod
+    // names and cuts a paragraph off at the window edge.
+    QStringList prose = warnings.scriptExtenderNotes;
+    if (!warnings.scriptExtenderExplain.isEmpty())
+        prose << warnings.scriptExtenderExplain;
+    if (!prose.isEmpty()) {
+        auto *note = new QLabel(prose.join(QStringLiteral("\n\n")), &dlg);
+        note->setWordWrap(true);
+        note->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        note->setStyleSheet("padding: 2px 2px 6px 2px;");
+        v->addWidget(note);
+    }
 
     auto *txt = new QPlainTextEdit(&dlg);
     txt->setReadOnly(true);

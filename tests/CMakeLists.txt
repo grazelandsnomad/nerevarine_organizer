@@ -76,6 +76,16 @@ target_link_libraries(test_opengothic PRIVATE Qt6::Core)
 # Store detection: Heroic/GOG caches, Steam appmanifest, title normalisation.
 # game_adapters.cpp comes along so the shipped folder candidates are what the
 # match is tested against, not a copy of them.
+# Script-extender plugins against the installed game: PE version data, the
+# address library's format header, and the verdict over both.
+add_executable(test_skse
+    test_skse.cpp
+    ${CMAKE_SOURCE_DIR}/src/pe_info.cpp
+    ${CMAKE_SOURCE_DIR}/src/skse_check.cpp
+)
+target_include_directories(test_skse PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(test_skse PRIVATE Qt6::Core)
+
 add_executable(test_store_scan
     test_store_scan.cpp
     ${CMAKE_SOURCE_DIR}/src/store_scan.cpp
@@ -310,6 +320,7 @@ set(UNIT_TESTS
     test_bethesda
     test_opengothic
     test_store_scan
+    test_skse
     test_download_watch
     test_modlist
     test_profiles

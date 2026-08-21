@@ -93,6 +93,8 @@ set(SOURCES
     src/fomod_hint.cpp
     src/file_pick.cpp
     src/game_store.cpp
+    src/pe_info.cpp
+    src/skse_check.cpp
     src/mod_aliases.cpp
     src/fomod_install.cpp
     src/fomod_path.cpp
