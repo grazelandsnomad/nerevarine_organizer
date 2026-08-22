@@ -5,6 +5,7 @@
 #include "target_language.h"
 #include "google_translate.h"
 #include "lore_overrides.h"
+#include "markup_protect.h"
 #include "term_protect.h"
 #include "subprocess.h"
 
@@ -21,6 +22,7 @@
 #include <QNetworkRequest>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QPlainTextEdit>
 #include <QTableWidget>
 #include <QUrl>
 #include <QUrlQuery>
@@ -43,6 +45,10 @@ enum Col { ColSource = 0, ColTranslation = 1, ColCount = 2 };
 // the row can be re-rendered when the name's translation changes. Cleared when
 // the user edits the row by hand, which detaches it.
 constexpr int TemplateRole = Qt::UserRole + 1;
+// Set when the translator did not give the markup back and the row had to be
+// rebuilt from the source's own tags. The text is usable and it is a guess -
+// which is worth a mark, because a rebuilt row is the one to read first.
+constexpr int RepairedRole = Qt::UserRole + 2;
 
 // Marks a write to the table as OURS rather than the user's.
 //
@@ -123,8 +129,15 @@ void TranslateDialog::buildUi(const QString &modName)
         m_table->setItem(i, ColSource, src);
         m_table->setItem(i, ColTranslation, new QTableWidgetItem(QString()));
     }
+    // Double-click is taken for the row editor, so it is off the list of
+    // things that start the one-line inline editor. Typing and F2 still do,
+    // which is what a short string wants.
+    m_table->setEditTriggers(QAbstractItemView::EditKeyPressed
+                             | QAbstractItemView::AnyKeyPressed);
     connect(m_table, &QTableWidget::cellChanged,
             this, &TranslateDialog::onCellChanged);
+    connect(m_table, &QTableWidget::cellDoubleClicked,
+            this, &TranslateDialog::onRowDoubleClicked);
     lay->addWidget(m_table, 1);
 
     auto *row = new QHBoxLayout;
@@ -277,8 +290,24 @@ void TranslateDialog::pumpMachineTranslate()
 
         // A name is sent as itself: masking it would leave nothing to
         // translate, and asking about a bare token is what came back "Nrvaá".
-        const QString sent = isName ? source
-                                    : term_protect::mask(source, m_mtNames);
+        const QString named = isName ? source
+                                     : term_protect::mask(source, m_mtNames);
+
+        // Then the parts that are not prose at all - tags, %Name, escapes.
+        // Held back from the translator entirely rather than hoped over: it
+        // translates ALIGN, accents COLOR and moves a closing tag to wherever
+        // Spanish wants the noun it thinks the tag is.
+        const QStringList spans = markup_protect::findSpans(named);
+        const QString     sent  = markup_protect::mask(named, spans);
+
+        // A record that is nothing but markup has nothing to translate.
+        // Blank leaves the original in place, which is exactly right for it,
+        // and it costs no request.
+        if (markup_protect::isOnlySpans(sent)) {
+            --m_mtInFlight;
+            m_mtBar->setValue(++m_mtDone);
+            continue;
+        }
 
         QNetworkRequest req(google_translate::requestUrl(sent, isoFor(m_language)));
         req.setRawHeader("Accept", "application/json");
@@ -286,12 +315,20 @@ void TranslateDialog::pumpMachineTranslate()
 
         QNetworkReply *reply = m_net->get(req);
         connect(reply, &QNetworkReply::finished, this,
-                [this, reply, item, nameIdx, isName]() {
+                [this, reply, item, nameIdx, isName, named, spans]() {
             reply->deleteLater();
 
             QString text;
+            bool    repaired = false;
             if (reply->error() == QNetworkReply::NoError)
                 text = google_translate::parseResponse(reply->readAll());
+            if (!text.isEmpty() && !spans.isEmpty()) {
+                // Before the user's own after-rules, so those see the real
+                // markup rather than a row of tokens.
+                const auto restored = markup_protect::restore(named, text, spans);
+                text     = restored.text;
+                repaired = restored.repaired;
+            }
             if (!text.isEmpty())
                 text = translation_rules::applyAfter(text, m_rules);
 
@@ -313,7 +350,9 @@ void TranslateDialog::pumpMachineTranslate()
                 // storing it reads as a hand edit and blanks the row.
                 {
                     ProgrammaticEdit guard(m_expanding);
-                    m_table->item(item, ColTranslation)->setData(TemplateRole, text);
+                    auto *cell = m_table->item(item, ColTranslation);
+                    cell->setData(TemplateRole, text);
+                    cell->setData(RepairedRole, repaired);
                 }
                 expandRow(item);
             }
@@ -374,6 +413,104 @@ void TranslateDialog::expandRow(int row)
     cell->setText(term_protect::unmask(tmpl, subs));
 }
 
+void TranslateDialog::onRowDoubleClicked(int row, int column)
+{
+    Q_UNUSED(column);   // either column opens it: the original is worth reading too
+    openRowEditor(row);
+}
+
+// One row, big enough to read.
+//
+// These are not cells. A Morrowind book record is a paragraph inside two
+// tags, and the table shows the first forty characters of it - which for the
+// rows that need checking most is the markup and nothing else. So: the
+// original in full, the translation editable under it, and Previous/Next to
+// walk the list without closing and reopening the window for each one.
+void TranslateDialog::openRowEditor(int row)
+{
+    if (row < 0 || row >= m_table->rowCount()) return;
+
+    QDialog dlg(this);
+    // The parent's title already names the mod and the language; carrying it
+    // here means the window says what it is when it is the only one on screen.
+    dlg.setWindowTitle(windowTitle());
+    dlg.resize(760, 560);
+
+    auto *lay = new QVBoxLayout(&dlg);
+    auto *where = new QLabel(&dlg);
+    where->setStyleSheet(QStringLiteral("font-weight: bold;"));
+    lay->addWidget(where);
+
+    lay->addWidget(new QLabel(T("translate_col_source"), &dlg));
+    auto *srcBox = new QPlainTextEdit(&dlg);
+    srcBox->setReadOnly(true);
+    // The source is what the plugin says; this window reads it, never edits it.
+    srcBox->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+    lay->addWidget(srcBox, 1);
+
+    lay->addWidget(new QLabel(T("translate_col_translation"), &dlg));
+    auto *dstBox = new QPlainTextEdit(&dlg);
+    dstBox->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+    lay->addWidget(dstBox, 1);
+
+    // Walking the list is not accepting or rejecting anything, so the two
+    // navigation buttons get their own row on the left rather than being
+    // sorted in among OK and Cancel by button role.
+    auto *navRow = new QHBoxLayout;
+    auto *prev = new QPushButton(T("translate_row_prev"), &dlg);
+    auto *next = new QPushButton(T("translate_row_next"), &dlg);
+    navRow->addWidget(prev);
+    navRow->addWidget(next);
+    navRow->addStretch(1);
+
+    auto *btns = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
+                                      &dlg);
+    navRow->addWidget(btns);
+    lay->addLayout(navRow);
+
+    int current = row;
+
+    // Writing through the table rather than holding the text here: an edit
+    // made in this window has to take the same path as one typed into the
+    // cell, or it would not detach the row from its template and the next
+    // change to a linked name would silently overwrite it.
+    auto commit = [this, dstBox, &current] {
+        auto *cell = m_table->item(current, ColTranslation);
+        if (!cell) return;
+        const QString typed = dstBox->toPlainText();
+        if (typed != cell->text()) cell->setText(typed);
+    };
+
+    auto load = [this, srcBox, dstBox, where, prev, next, &current](int r) {
+        current = r;
+        srcBox->setPlainText(m_table->item(r, ColSource)->text());
+        dstBox->setPlainText(m_table->item(r, ColTranslation)->text());
+        where->setText(T("translate_row_of").arg(QString::number(r + 1),
+                                                 QString::number(m_table->rowCount())));
+        prev->setEnabled(r > 0);
+        next->setEnabled(r + 1 < m_table->rowCount());
+        dstBox->setFocus();
+    };
+
+    QObject::connect(prev, &QPushButton::clicked, &dlg, [&] {
+        commit();
+        if (current > 0) load(current - 1);
+    });
+    QObject::connect(next, &QPushButton::clicked, &dlg, [&] {
+        commit();
+        if (current + 1 < m_table->rowCount()) load(current + 1);
+    });
+    QObject::connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    QObject::connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+
+    load(row);
+    if (dlg.exec() == QDialog::Accepted) commit();
+
+    // Land the table on whatever row was last looked at, so closing the
+    // window leaves the list where the eye already is.
+    m_table->setCurrentCell(current, ColTranslation);
+}
+
 void TranslateDialog::restyleLinkedRows()
 {
     // A tint drawn from the palette so it survives both themes, and light
@@ -390,6 +527,19 @@ void TranslateDialog::restyleLinkedRows()
 
         const bool isName = nameRowIndex(row) >= 0;
         const bool linked = isName || !cell->data(TemplateRole).toString().isEmpty();
+
+        // A rebuilt row outranks a linked one: the tint is the only thing
+        // saying "the markup here was put back by us, not by the translator",
+        // and that is the row to read before saving.
+        if (cell->data(RepairedRole).toBool()) {
+            QColor warn(210, 130, 0);
+            warn.setAlpha(60);
+            cell->setBackground(QBrush(warn));
+            srcCell->setBackground(QBrush(warn));
+            cell->setToolTip(T("translate_repaired_tip"));
+            srcCell->setToolTip(T("translate_repaired_tip"));
+            continue;
+        }
 
         cell->setBackground(linked ? QBrush(tint) : none);
         srcCell->setBackground(linked ? QBrush(tint) : none);

@@ -69,6 +69,10 @@ private slots:
     void onEditRules();
     // A linked term was edited: re-expand every row that uses it.
     void onCellChanged(int row, int column);
+    // A row's own window. These strings are whole paragraphs wrapped in
+    // markup, and a one-line table cell is no place to read one, let alone
+    // check a machine translation against its original.
+    void onRowDoubleClicked(int row, int column);
 
 private:
     // Drains m_mtQueue while fewer than kMaxInFlight requests are outstanding;
@@ -85,6 +89,10 @@ private:
     // user has hand-edited away from their template.
     void restyleLinkedRows();
     void fillFromMemory();
+    // Open the row editor on `row` and stay open while the user walks the
+    // list with Previous/Next. Writes through the table, so an edit made here
+    // takes the same path as one typed into the cell.
+    void openRowEditor(int row);
 
     QList<TranslatableString> m_strings;
     // Row -> the source text it edits. Rows are unique source strings.

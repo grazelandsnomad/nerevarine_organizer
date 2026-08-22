@@ -289,6 +289,7 @@ set_target_properties(test_extract PROPERTIES AUTOMOC ON)
 add_executable(test_translate_ui
     test_translate_ui.cpp
     ${CMAKE_SOURCE_DIR}/src/translate_dialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/markup_protect.cpp
     ${CMAKE_SOURCE_DIR}/src/translation_store.cpp
     ${CMAKE_SOURCE_DIR}/src/translation_mod.cpp
     ${CMAKE_SOURCE_DIR}/src/translation_rules.cpp

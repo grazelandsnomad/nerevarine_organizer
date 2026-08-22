@@ -11,6 +11,7 @@
 // back BLANK. Nothing outside the dialog could see it: the network calls all
 // succeeded and the data was all correct.
 
+#include "markup_protect.h"
 #include "translate_dialog.h"
 #include "translation_store.h"
 
@@ -171,6 +172,124 @@ static void testHandEditingARowBreaksItsLink()
     delete d;
 }
 
+
+// -- What must never reach the translator ---------------------------------
+//
+// A Morrowind record out of Master Trainers, verbatim. Sent whole, the
+// endpoint translates ALIGN and LEFT, accents COLOR, moves the tag to where
+// Spanish wants the noun it thinks it is, and renames %Name - which is not a
+// name but the variable the game substitutes into.
+
+static const char *kRecord =
+    "<DIV ALIGN=\"LEFT\"><FONT COLOR=\"000000\" SIZE=\"3\">"
+    "%Name heard there is someone in the Temple who is a master of Restoration.";
+
+static void testMarkupIsLiftedOut()
+{
+    std::cout << "\n[markup_protect: what gets held back]\n";
+    const QString rec = QString::fromUtf8(kRecord);
+    const QStringList spans = markup_protect::findSpans(rec);
+
+    check("both tags and the variable are found", spans.size() == 3,
+          QString::number(spans.size()));
+    check("the tags come out whole, attributes and all",
+          spans[0] == QLatin1String("<DIV ALIGN=\"LEFT\">")
+              && spans[1] == QLatin1String("<FONT COLOR=\"000000\" SIZE=\"3\">"),
+          spans.join(QLatin1Char('|')));
+    check("and so does the substitution",
+          spans[2] == QLatin1String("%Name"));
+
+    const QString sent = markup_protect::mask(rec, spans);
+    check("what is sent is a sentence",
+          sent == QLatin1String("{0}{1}{2} heard there is someone in the Temple "
+                                "who is a master of Restoration."),
+          sent);
+
+    // A percentage is prose. Freezing "100%" would leave it in English inside
+    // a translated sentence, which is the mirror of the bug being fixed.
+    const QString pct = QStringLiteral("Deal 100% more damage with a 50% chance");
+    check("a percentage is not a variable",
+          markup_protect::findSpans(pct).isEmpty());
+    // A stray comparison is not a tag either: "<" with no closing ">" must not
+    // swallow the rest of the line.
+    check("an unclosed angle bracket is not markup",
+          markup_protect::findSpans(QStringLiteral("if a < b then run")).isEmpty());
+    check("an escape is held back",
+          markup_protect::findSpans(QStringLiteral("one\\ntwo"))
+              == QStringList{QStringLiteral("\\n")});
+
+    // Nothing but markup: there is no sentence in it, and asking anyway spends
+    // a request to get back a mangled tag.
+    check("a record of pure markup has nothing to translate",
+          markup_protect::isOnlySpans(
+              markup_protect::mask(QStringLiteral("<DIV ALIGN=\"LEFT\"><BR>"),
+                                   markup_protect::findSpans(
+                                       QStringLiteral("<DIV ALIGN=\"LEFT\"><BR>")))));
+    check("a record with words in it does not",
+          !markup_protect::isOnlySpans(sent));
+}
+
+static void testTheSpansComeBack()
+{
+    std::cout << "\n[markup_protect: putting them back]\n";
+    const QString rec = QString::fromUtf8(kRecord);
+    const QStringList spans = markup_protect::findSpans(rec);
+
+    {   // The ordinary case: every token came back where it was put.
+        const auto r = markup_protect::restore(
+            rec, QStringLiteral("{0}{1}{2} oyó que hay alguien en el Templo."), spans);
+        check("a clean round trip needs no repair", !r.repaired && !r.lostInside);
+        check("and the record opens exactly as it did",
+              r.text.startsWith(QLatin1String("<DIV ALIGN=\"LEFT\">"
+                                              "<FONT COLOR=\"000000\" SIZE=\"3\">%Name ")),
+              r.text);
+    }
+    {   // Measured shapes the endpoint returns: a space inside the braces, or
+        // the token spaced away from the words either side.
+        const auto r = markup_protect::restore(
+            rec, QStringLiteral("{ 0 }{1} {2} oyó que hay alguien."), spans);
+        check("a spaced token is still ours", !r.repaired, r.text);
+        check("and every tag is back",
+              r.text.contains(QLatin1String("<DIV ALIGN=\"LEFT\">"))
+                  && r.text.contains(QLatin1String("<FONT COLOR=\"000000\" SIZE=\"3\">"))
+                  && r.text.contains(QLatin1String("%Name")));
+    }
+    {   // The failure this is really for: the tokens are simply gone.
+        const auto r = markup_protect::restore(
+            rec, QStringLiteral("oyó que hay alguien en el Templo."), spans);
+        check("a lost token is noticed", r.repaired);
+        // fromUtf8, not QLatin1String: the accent is two bytes in this file
+        // and Latin-1 would read them as two characters.
+        check("the record is rebuilt from its own tags",
+              r.text == QString::fromUtf8("<DIV ALIGN=\"LEFT\"><FONT COLOR=\"000000\" "
+                                          "SIZE=\"3\">%Name oyó que hay alguien en el Templo."),
+              r.text);
+        check("and the space the source had is not eaten",
+              !r.text.contains(QLatin1String("%Nameoy")));
+    }
+    {   // A doubled token is as wrong as a missing one, and counting is what
+        // catches it - looking only for presence would call this intact.
+        const auto r = markup_protect::restore(
+            rec, QStringLiteral("{0}{0}{1}{2} oyó que hay alguien."), spans);
+        check("a doubled tag is caught too", r.repaired, r.text);
+    }
+    {   // A tag from the middle of a sentence has nowhere to go back to once
+        // the words around it have been reordered. Say so rather than guess.
+        const QString mid = QStringLiteral("Before <B>bold</B> after");
+        const auto sp = markup_protect::findSpans(mid);
+        const auto r  = markup_protect::restore(mid, QStringLiteral("Antes negrita despues"), sp);
+        check("a tag lost from mid-sentence is reported, not invented",
+              r.repaired && r.lostInside, r.text);
+    }
+    {   // Nothing to protect: the translation passes straight through.
+        const auto r = markup_protect::restore(
+            QStringLiteral("A great archer named Missun Akin."),
+            QStringLiteral("Un gran arquero llamado Missun Akin."), {});
+        check("a plain sentence is left alone",
+              !r.repaired && r.text == QLatin1String("Un gran arquero llamado Missun Akin."));
+    }
+}
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
@@ -181,6 +300,8 @@ int main(int argc, char **argv)
     testUnguardedWriteIsWhatBlankedIt();
     testEditingTheNameRerendersEveryRow();
     testHandEditingARowBreaksItsLink();
+    testMarkupIsLiftedOut();
+    testTheSpansComeBack();
 
     std::cout << "\n" << s_passed << " passed, " << s_failed << " failed\n";
     return s_failed == 0 ? 0 : 1;
