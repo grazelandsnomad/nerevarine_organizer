@@ -25,6 +25,7 @@
 class QLineEdit;
 class QNetworkAccessManager;
 class QProgressBar;
+class QTimer;
 class QPushButton;
 class QTableWidget;
 
@@ -93,6 +94,9 @@ private:
     // list with Previous/Next. Writes through the table, so an edit made here
     // takes the same path as one typed into the cell.
     void openRowEditor(int row);
+    // Mark a row queued (1), in flight (2) or done (0) for the spinner.
+    // Callers must hold a ProgrammaticEdit guard.
+    void setPending(int row, int state);
 
     QList<TranslatableString> m_strings;
     // Row -> the source text it edits. Rows are unique source strings.
@@ -129,6 +133,12 @@ private:
     int           m_mtDone     = 0;
     int           m_mtTotal    = 0;
     int           m_mtFailed   = 0;
+    // Drives the per-row spinner while a run is on. The bar at the bottom
+    // says how far along the whole run is; this says which rows are actually
+    // being fetched, which is the question somebody watching a 480-row list
+    // is really asking.
+    QTimer       *m_mtAnim  = nullptr;
+    int           m_mtFrame = 0;
 };
 
 #endif // TRANSLATE_DIALOG_H

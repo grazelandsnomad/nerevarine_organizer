@@ -36,6 +36,16 @@ struct TranslateDialogTestHook {
     static bool &expanding(TranslateDialog *d) { return d->m_expanding; }
     static void expand(TranslateDialog *d, int row) { d->expandRow(row); }
     static int  nameRow(TranslateDialog *d, int row) { return d->nameRowIndex(row); }
+    static void pending(TranslateDialog *d, int row, int state)
+    {
+        // Exactly as pumpMachineTranslate does it, guard and all.
+        const bool prev = d->m_expanding;
+        d->m_expanding = true;
+        d->setPending(row, state);
+        d->m_expanding = prev;
+    }
+    static void pendingUnguarded(TranslateDialog *d, int row, int state)
+    { d->setPending(row, state); }
 
     // Exactly what the network reply does when a row comes back.
     static void deliver(TranslateDialog *d, int row, const QString &masked)
@@ -290,6 +300,40 @@ static void testTheSpansComeBack()
     }
 }
 
+
+static void testTheSpinnerMarkDoesNotDetachTheRow()
+{
+    std::cout << "\n[the pending mark is not a user edit]\n";
+    translation_store::Memory mem;
+    auto *d = TranslateDialogTestHook::make(dungeonStrings(), &mem);
+    auto *t = TranslateDialogTestHook::table(d);
+    auto &names = TranslateDialogTestHook::names(d);
+    auto &rend  = TranslateDialogTestHook::renderings(d);
+    names = { QStringLiteral("Forfeoranna Heim") };
+    rend  = { QStringLiteral("Hogar Forfeoranna") };
+
+    const int cat = rowOf(t, QStringLiteral("Forfeoranna Heim Catacombs"));
+    TranslateDialogTestHook::deliver(d, cat, QStringLiteral("Catacumbas de Nrvaa"));
+
+    // The spinner writes to the same column the user types into. Marked
+    // properly, the row keeps following its name.
+    TranslateDialogTestHook::pending(d, cat, 2);
+    TranslateDialogTestHook::pending(d, cat, 0);
+    rend = { QStringLiteral("Hogar Precursor") };
+    TranslateDialogTestHook::expand(d, cat);
+    check("a guarded mark leaves the row following its name",
+          t->item(cat, 1)->text() == QStringLiteral("Catacumbas de Hogar Precursor"),
+          t->item(cat, 1)->text());
+
+    // And unguarded it is the old bug again: the mark reads as the user
+    // typing, the row detaches, and the next name change silently stops
+    // reaching it. This is why setPending exists rather than a bare setData.
+    TranslateDialogTestHook::pendingUnguarded(d, cat, 2);
+    check("an unguarded one is what detaching looks like",
+          t->item(cat, 1)->data(Qt::UserRole + 1).toString().isEmpty());
+    delete d;
+}
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
@@ -302,6 +346,7 @@ int main(int argc, char **argv)
     testHandEditingARowBreaksItsLink();
     testMarkupIsLiftedOut();
     testTheSpansComeBack();
+    testTheSpinnerMarkDoesNotDetachTheRow();
 
     std::cout << "\n" << s_passed << " passed, " << s_failed << " failed\n";
     return s_failed == 0 ? 0 : 1;

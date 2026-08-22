@@ -22,8 +22,11 @@
 #include <QNetworkRequest>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QPainter>
 #include <QPlainTextEdit>
+#include <QStyledItemDelegate>
 #include <QTableWidget>
+#include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
 #include <QVBoxLayout>
@@ -49,6 +52,57 @@ constexpr int TemplateRole = Qt::UserRole + 1;
 // rebuilt from the source's own tags. The text is usable and it is a guess -
 // which is worth a mark, because a rebuilt row is the one to read first.
 constexpr int RepairedRole = Qt::UserRole + 2;
+// 0 not in this run, 1 queued behind other rows, 2 being fetched right now.
+// Only ever written under a ProgrammaticEdit guard: a write to this column
+// reads as a hand edit and would detach the row from its template.
+constexpr int PendingRole  = Qt::UserRole + 3;
+
+// The per-row "still waiting" marker.
+//
+// The bar at the bottom counts the whole run, which on a 480-row mod tells
+// somebody watching almost nothing: rows come back out of order, and a row
+// that is simply empty looks the same whether it is queued, in flight, or
+// finished blank. Five requests are outstanding at a time, so five rows spin
+// and the rest say they are waiting - and that is the truth of it rather than
+// 480 spinners implying 480 requests.
+class PendingDelegate : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+    void setFrame(int f) { m_frame = f; }
+
+    void paint(QPainter *painter, const QStyleOptionViewItem &opt,
+               const QModelIndex &index) const override
+    {
+        QStyledItemDelegate::paint(painter, opt, index);
+
+        const int state = index.data(PendingRole).toInt();
+        if (state <= 0) return;
+        // A row that has already come back is not waiting for anything,
+        // whatever the flag still says.
+        if (!index.data(Qt::DisplayRole).toString().trimmed().isEmpty()) return;
+
+        // The same braille spinner the mod list uses while a mod installs, so
+        // "this is working" looks the same everywhere in the app.
+        static const char *kSpinner[] = {"⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"};
+        const QString text = state >= 2
+            ? QStringLiteral("%1 %2").arg(QString::fromUtf8(kSpinner[m_frame % 10]),
+                                          T("translate_row_working"))
+            : T("translate_row_waiting");
+
+        painter->save();
+        QColor fg = opt.palette.color(QPalette::Disabled, QPalette::Text);
+        painter->setPen(fg);
+        QFont f = opt.font;
+        f.setItalic(true);
+        painter->setFont(f);
+        painter->drawText(opt.rect.adjusted(6, 0, -4, 0),
+                          Qt::AlignVCenter | Qt::AlignLeft | Qt::TextSingleLine, text);
+        painter->restore();
+    }
+
+private:
+    int m_frame = 0;
+};
 
 // Marks a write to the table as OURS rather than the user's.
 //
@@ -138,6 +192,7 @@ void TranslateDialog::buildUi(const QString &modName)
             this, &TranslateDialog::onCellChanged);
     connect(m_table, &QTableWidget::cellDoubleClicked,
             this, &TranslateDialog::onRowDoubleClicked);
+    m_table->setItemDelegateForColumn(ColTranslation, new PendingDelegate(m_table));
     lay->addWidget(m_table, 1);
 
     auto *row = new QHBoxLayout;
@@ -260,6 +315,31 @@ void TranslateDialog::onMachineTranslate()
     m_mtNamePhase = !m_mtQueue.isEmpty();
     if (!m_mtNamePhase) { m_mtQueue = m_mtPending; m_mtPending.clear(); }
 
+    // Every row of this run says so before a single request goes out: a row
+    // that will be asked about in ten minutes should not look identical to one
+    // that came back empty.
+    {
+        ProgrammaticEdit guard(m_expanding);
+        for (int r : std::as_const(m_mtQueue))   if (r >= 0) setPending(r, 1);
+        for (int r : std::as_const(m_mtPending)) if (r >= 0) setPending(r, 1);
+    }
+
+    if (!m_mtAnim) {
+        m_mtAnim = new QTimer(this);
+        m_mtAnim->setInterval(120);   // the mod list's spinner rate
+        connect(m_mtAnim, &QTimer::timeout, this, [this] {
+            m_mtFrame = (m_mtFrame + 1) % 10;
+            // static_cast, not qobject_cast: this delegate has no Q_OBJECT
+            // (it has no signals or slots), and it is the one buildUi set on
+            // that column and the only thing that ever sets it.
+            if (auto *d = static_cast<PendingDelegate *>(
+                    m_table->itemDelegateForColumn(ColTranslation)))
+                d->setFrame(m_mtFrame);
+            m_table->viewport()->update();
+        });
+    }
+    m_mtAnim->start();
+
     if (!m_net) m_net = new QNetworkAccessManager(this);
     m_mtBtn->setEnabled(false);
     m_mtBar->setVisible(true);
@@ -304,9 +384,18 @@ void TranslateDialog::pumpMachineTranslate()
         // Blank leaves the original in place, which is exactly right for it,
         // and it costs no request.
         if (markup_protect::isOnlySpans(sent)) {
+            if (item >= 0) {
+                ProgrammaticEdit guard(m_expanding);
+                setPending(item, 0);
+            }
             --m_mtInFlight;
             m_mtBar->setValue(++m_mtDone);
             continue;
+        }
+
+        if (item >= 0) {
+            ProgrammaticEdit guard(m_expanding);
+            setPending(item, 2);        // on the wire now, not merely queued
         }
 
         QNetworkRequest req(google_translate::requestUrl(sent, isoFor(m_language)));
@@ -357,6 +446,11 @@ void TranslateDialog::pumpMachineTranslate()
                 expandRow(item);
             }
 
+            if (item >= 0) {
+                ProgrammaticEdit guard(m_expanding);
+                setPending(item, 0);    // answered, whatever the answer was
+            }
+
             --m_mtInFlight;
             m_mtBar->setValue(++m_mtDone);
 
@@ -375,6 +469,14 @@ void TranslateDialog::pumpMachineTranslate()
 
             m_mtBar->setVisible(false);
             m_mtBtn->setEnabled(true);
+            if (m_mtAnim) m_mtAnim->stop();
+            {
+                // Nothing is waiting any more, including rows a failed run
+                // never reached.
+                ProgrammaticEdit guard(m_expanding);
+                for (int r = 0; r < m_table->rowCount(); ++r) setPending(r, 0);
+            }
+            m_table->viewport()->update();
             restyleLinkedRows();
             if (m_mtFailed > 0)
                 ui::warn(this, T("translate_machine"),
@@ -411,6 +513,16 @@ void TranslateDialog::expandRow(int row)
 
     ProgrammaticEdit guard(m_expanding);
     cell->setText(term_protect::unmask(tmpl, subs));
+}
+
+// The pending mark, always through here so the guard is never forgotten: a
+// write to this column that is not guarded reads as the user typing, and the
+// row silently detaches from the template its answer is coming back as.
+void TranslateDialog::setPending(int row, int state)
+{
+    if (row < 0 || row >= m_table->rowCount()) return;
+    if (auto *cell = m_table->item(row, ColTranslation))
+        cell->setData(PendingRole, state);
 }
 
 void TranslateDialog::onRowDoubleClicked(int row, int column)
