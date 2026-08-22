@@ -11,7 +11,11 @@ QUrl requestUrl(const QString &text, const QString &targetIso)
     QUrl url(QStringLiteral("https://translate.googleapis.com/translate_a/single"));
     QUrlQuery q;
     q.addQueryItem(QStringLiteral("client"), QStringLiteral("gtx"));
-    q.addQueryItem(QStringLiteral("sl"),     QStringLiteral("auto"));
+    // "en", not "auto". The editor only ever translates English mods, and
+    // auto-detection handed a name-shaped string with no sentence around it
+    // decides it is some other language and paraphrases: "Dagoth Andas" came
+    // back "sin respirar", "Dagoth Faras" as "apenas lo hace".
+    q.addQueryItem(QStringLiteral("sl"),     QStringLiteral("en"));
     q.addQueryItem(QStringLiteral("tl"),     targetIso);
     q.addQueryItem(QStringLiteral("dt"),     QStringLiteral("t"));
     q.addQueryItem(QStringLiteral("q"),      text);

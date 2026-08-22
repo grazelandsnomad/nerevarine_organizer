@@ -76,6 +76,24 @@ QString unmask(const QString &text, const QStringList &terms);
 // nothing in it to translate, and asking anyway is what produced "Nrvaá".
 bool isOnlyNames(const QString &masked, int termCount);
 
+// True when the whole of `text` reads as somebody's name rather than as a
+// description of something. Every word must be either part of a found term or
+// a word this module does not recognise as ordinary English.
+//
+// The case it exists for: Sixth House Obsidian Weapon names nine creatures
+// "Dagoth Andas", "Dagoth Balen", "Dagoth Faras". "Dagoth" repeats, so it is
+// found and masked; "Andas" appears once and is not, so the row is not
+// isOnlyNames and went to the translator anyway - which returned "sin
+// respirar" and "apenas lo hace". Nothing in that row was ever going to be
+// translatable.
+//
+// The judgement is made by ordinaryWords() plus `extraOrdinary`, so it is
+// only as good as that list: a real phrase built from words the list does not
+// know is held back too. That is the trade, and `[ordinary]` in the rules
+// file is the correction for it.
+bool looksLikeName(const QString &text, const QStringList &terms,
+                   const QSet<QString> &extraOrdinary = {});
+
 } // namespace term_protect
 
 #endif // TERM_PROTECT_H

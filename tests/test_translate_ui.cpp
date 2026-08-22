@@ -12,6 +12,7 @@
 // succeeded and the data was all correct.
 
 #include "lore_overrides.h"
+#include "term_protect.h"
 #include "markup_protect.h"
 #include "translate_dialog.h"
 #include "translation_rules.h"
@@ -456,6 +457,98 @@ static void testUserPatternsFromTheRulesFile()
           QString::fromUtf8(tf.readAll()).contains(QLatin1String("[patterns]")));
 }
 
+
+// -- A name is not a phrase -----------------------------------------------
+//
+// Sixth House Obsidian Weapon names nine creatures "Dagoth <something>".
+// "Dagoth" repeats, so it was found and masked; the second word appears once
+// and was not, so the row went to the translator anyway. Measured against the
+// live endpoint, that is what it does with them:
+//
+//   sl=auto  "Dagoth Andas" -> "Dagoth respira"
+//   sl=auto  "Nrvaa Andas"  -> "Relajate Respira"
+//   sl=en    "Dagoth Andas" -> "Dagoth Andas"
+//   sl=en    "Nrvaa Andas"  -> "Nrvaa Andas"
+
+static void testWhatReadsAsAName()
+{
+    std::cout << "\n[term_protect::looksLikeName]\n";
+    const QStringList names = { QStringLiteral("Dagoth") };
+
+    check("a found name beside an unknown word",
+          term_protect::looksLikeName(QStringLiteral("Dagoth Andas"), names));
+    check("two unknown words with no found name between them",
+          term_protect::looksLikeName(QStringLiteral("Akin Benammu"), {}));
+    check("and a faction nobody has heard of",
+          term_protect::looksLikeName(QStringLiteral("Camonna Tong"), {}));
+
+    // The other half, and the half that matters more: these have to keep
+    // going to the translator.
+    check("a description made of known words does not",
+          !term_protect::looksLikeName(QStringLiteral("Chest Key"), names));
+    check("nor a longer one",
+          !term_protect::looksLikeName(QStringLiteral("Common Hooded Robe"), names));
+    check("nor a creature type",
+          !term_protect::looksLikeName(QStringLiteral("Ash Slave"), names));
+    check("nor a rank",
+          !term_protect::looksLikeName(QStringLiteral("House Brother"), names));
+    check("nor a race",
+          !term_protect::looksLikeName(QStringLiteral("Dark Elf"), names));
+    check("nor a sentence",
+          !term_protect::looksLikeName(
+              QStringLiteral("Dagoth Andas guards the shrine."), names));
+
+    // One unknown word on its own is not evidence, and it must not become
+    // evidence merely because some OTHER row in the mod held a name.
+    check("a lone unknown word is not a name",
+          !term_protect::looksLikeName(QStringLiteral("Abinabi"), {}));
+    check("and having found a name elsewhere does not change that",
+          !term_protect::looksLikeName(QStringLiteral("Abinabi"), names));
+
+    // The escape hatch when the judgement is wrong for a language.
+    QSet<QString> ordinary;
+    ordinary.insert(QStringLiteral("andas"));
+    check("[ordinary] turns a held-back word back into a word",
+          !term_protect::looksLikeName(QStringLiteral("Dagoth Andas"), names, ordinary));
+}
+
+static void testTheMorrowindNamingFamilies()
+{
+    std::cout << "\n[lore_overrides: naming families]\n";
+    const auto pats = lore_overrides::patternsFor(QStringLiteral("spanish"));
+    auto shaped = [&pats](const char *src) {
+        return translation_rules::applyPatterns(QString::fromUtf8(src), pats);
+    };
+
+    // Each maps to itself: there is no Spanish in these to get wrong, and
+    // that is the point. Counted across the author's mods, the second word is
+    // different nearly every time - Dagoth 17, Tel 24, Ald 15, Clan 9.
+    check("the reported rows are left alone",
+          shaped("Dagoth Andas") == QLatin1String("Dagoth Andas")
+              && shaped("Dagoth Balen") == QLatin1String("Dagoth Balen")
+              && shaped("Dagoth Ilet") == QLatin1String("Dagoth Ilet"));
+    check("and the other three families",
+          shaped("Tel Fyr") == QLatin1String("Tel Fyr")
+              && shaped("Ald Velothi") == QLatin1String("Ald Velothi")
+              && shaped("Clan Aundae") == QLatin1String("Clan Aundae"),
+          shaped("Tel Fyr"));
+
+    // Deliberately not a family: "House" carries both places and ranks, so a
+    // shape would freeze the half that has to be translated.
+    check("House is not a shape", shaped("House Brother").isEmpty());
+    check("but the great houses are entries",
+          lore_overrides::lookup(QStringLiteral("House Hlaalu"),
+                                 QStringLiteral("spanish"))
+              == QLatin1String("Casa Hlaalu"));
+    check("and House Brother is not one of them",
+          lore_overrides::lookup(QStringLiteral("House Brother"),
+                                 QStringLiteral("spanish")).isEmpty());
+
+    // A sentence is still a sentence.
+    check("prose is untouched by any of them",
+          shaped("Dagoth Ur waits in the heart of Red Mountain.").isEmpty());
+}
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
@@ -472,6 +565,8 @@ int main(int argc, char **argv)
     testTheDevoteeShape();
     testTheTwoThatTheShapeGetsWrong();
     testUserPatternsFromTheRulesFile();
+    testWhatReadsAsAName();
+    testTheMorrowindNamingFamilies();
 
     std::cout << "\n" << s_passed << " passed, " << s_failed << " failed\n";
     return s_failed == 0 ? 0 : 1;

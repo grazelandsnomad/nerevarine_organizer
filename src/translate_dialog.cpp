@@ -244,10 +244,40 @@ void TranslateDialog::onMachineTranslate()
     const QString iso = isoFor(m_language);
     if (iso.isEmpty()) return;
 
+    // The mod's recurring proper nouns, and what each one should say.
+    //
+    // Asked in order and answered by the first that has an opinion: what the
+    // user typed, what their rules file says, what the lore table knows -
+    // and failing all three, the name itself.
+    //
+    // That last one used to be "ask the translator". It is why nine rows of
+    // Sixth House Obsidian Weapon came back saying "dagoth Balen": "Dagoth"
+    // repeats across the mod, so it was found, nothing knew it, it was sent
+    // on its own, and Google lowercased it into a common noun - which was
+    // then carried into every row that mentions it. A proper noun nobody has
+    // an opinion about is worth exactly itself, which is also what
+    // term_protect.h says protection means. Consistency, which is what the
+    // one-answer-everywhere rule was ever after, holds either way.
+    m_mtNames = term_protect::findNames(m_rowSource, m_rules.protect,
+                                        m_rules.ordinary);
+    m_nameRendering = QStringList();
+    for (int i = 0; i < m_mtNames.size(); ++i) {
+        // A name the user has already decided about keeps that decision.
+        QString known = m_memory ? m_memory->lookup(m_mtNames[i]) : QString();
+        if (known.isEmpty())
+            known = m_rules.terms.value(m_mtNames[i].trimmed().toLower());
+        if (known.isEmpty())
+            known = lore_overrides::lookup(m_mtNames[i], m_language);
+        if (known.isEmpty())
+            known = m_mtNames[i];      // nobody knows better: it is a name
+        m_nameRendering << known;
+    }
+
     // Rows already answered are left alone; a lore term or a user rule is a
     // decision and never goes to a machine translator.
     QList<int> todo;
-    int lore = 0;
+    int lore  = 0;
+    int names = 0;
     for (int i = 0; i < m_rowSource.size(); ++i) {
         if (!m_table->item(i, ColTranslation)->text().trimmed().isEmpty())
             continue;
@@ -270,35 +300,29 @@ void TranslateDialog::onMachineTranslate()
             ++lore;
             continue;
         }
+        // A row that is somebody's name has nothing in it to translate, and
+        // asking anyway is what returned "sin respirar" for "Dagoth Andas".
+        // Left blank, which onAccept drops, so the string stays as it is.
+        if (term_protect::looksLikeName(m_rowSource[i], m_mtNames, m_rules.ordinary)) {
+            ++names;
+            continue;
+        }
         todo << i;
     }
 
     if (todo.isEmpty()) {
         ui::info(this, T("translate_machine"),
-                 lore > 0 ? T("translate_lore_only").arg(lore)
-                          : T("translate_machine_nothing"));
+                 (lore + names) > 0
+                     ? T("translate_lore_only").arg(lore + names)
+                     : T("translate_machine_nothing"));
         return;
     }
     if (!ui::confirm(this, T("translate_machine"),
-                     T("translate_machine_confirm").arg(todo.size())))
+                     names > 0
+                         ? T("translate_machine_confirm_names").arg(todo.size())
+                                                               .arg(names)
+                         : T("translate_machine_confirm").arg(todo.size())))
         return;
-
-    // The mod's recurring proper nouns. They are not frozen - they are
-    // translated ONCE and that one answer is carried into every row that
-    // mentions them, which is what stopped Forfeoranna Heim SSE from calling
-    // its dungeon three different things.
-    m_mtNames = term_protect::findNames(m_rowSource, m_rules.protect,
-                                        m_rules.ordinary);
-    m_nameRendering = QStringList();
-    for (int i = 0; i < m_mtNames.size(); ++i) {
-        // A name the user has already decided about keeps that decision.
-        QString known = m_memory ? m_memory->lookup(m_mtNames[i]) : QString();
-        if (known.isEmpty())
-            known = m_rules.terms.value(m_mtNames[i].trimmed().toLower());
-        if (known.isEmpty())
-            known = lore_overrides::lookup(m_mtNames[i], m_language);
-        m_nameRendering << known;
-    }
 
     // Split the work in two passes. The names have to be answered FIRST,
     // because every other row needs their rendering to substitute back in.

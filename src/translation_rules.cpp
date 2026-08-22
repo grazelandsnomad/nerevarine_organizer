@@ -150,7 +150,12 @@ QString applyPatterns(const QString &text,
             const auto m = it.next();
             rx += QRegularExpression::escape(
                       shape.mid(last, m.capturedStart() - last));
-            rx += QStringLiteral("(.+?)");
+            // One to four whitespace-separated tokens, never more. A name is
+            // short: "Tiber Septim", "St. Pelinal". A capture allowed to run
+            // on swallows prose - "Dagoth %1" matched "Dagoth Ur waits in the
+            // heart of Red Mountain." and answered it with itself, which
+            // quietly kept a whole sentence out of the translator.
+            rx += QStringLiteral("(\\S+(?:\\s+\\S+){0,3})");
             order << m.captured(1).toInt();
             last = m.capturedEnd();
         }

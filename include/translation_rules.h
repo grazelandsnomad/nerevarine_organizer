@@ -97,7 +97,8 @@ QString applyAfter(const QString &text, const Rules &r);
 // lore_overrides sets on itself.
 //
 // The literal parts match without regard to case. What %1 captures keeps its
-// own, because what it captures is a name.
+// own, because what it captures is a name - and it may be at most four words,
+// because a name is short and a capture allowed to run on swallows prose.
 QString applyPatterns(const QString &text,
                       const QList<QPair<QString, QString>> &patterns);
 

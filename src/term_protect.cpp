@@ -31,6 +31,16 @@ const QSet<QString> &ordinaryWords()
         "ancient","old","new","great","greater","lesser","small","large",
         "iron","steel","gold","golden","silver","glass","ebony","leather",
         "north","south","east","west","upper","lower","inner","outer",
+        // Creatures, ranks and materials that recur across the Morrowind
+        // mods here. They earn their place through looksLikeName(): without
+        // them "Ash Slave" and "House Brother" read as somebody's name and
+        // never reach the translator at all.
+        "ash","blight","slave","zombie","ghoul","sleeper","dreamer","prophet",
+        "guard","trader","savant","brother","sister","father","mother",
+        "cousin","officer","peer","elf","elves","orc","human","humanoid",
+        "banner","staff","spear","arrow","cloak","hood","hooded",
+        "common","fine","expensive","extravagant","exquisite","raw","short",
+        "long","wooden","twin","clan","blood","bone","skull",
     };
     return kWords;
 }
@@ -212,6 +222,42 @@ QString unmask(const QString &text, const QStringList &terms)
     }
     out += text.mid(last);
     return out;
+}
+
+bool looksLikeName(const QString &text, const QStringList &terms,
+                   const QSet<QString> &extraOrdinary)
+{
+    const QString subject = text.trimmed();
+    if (subject.isEmpty()) return false;
+
+    // Words already covered by a found term are names by definition; the
+    // question is only about what is left over.
+    QString rest = subject;
+    for (const QString &t : terms) {
+        if (t.trimmed().isEmpty()) continue;
+        rest.remove(t, Qt::CaseInsensitive);
+    }
+
+    static const QRegularExpression kSplit(QStringLiteral("[^\\p{L}\\p{N}']+"),
+                                           QRegularExpression::UseUnicodePropertiesOption);
+    const QStringList words = rest.split(kSplit, Qt::SkipEmptyParts);
+
+    // Nothing left but the terms: isOnlyNames territory, and a name.
+    if (words.isEmpty()) return !terms.isEmpty();
+
+    // Evidence has to come from THIS row. One unknown word on its own says
+    // nothing - it is as likely to be "Dreamer" as "Balen" - so it takes
+    // either a found term standing beside it or a second unknown word. That
+    // some other row in the mod contained a name is not evidence about this
+    // one, which is what keying this off `terms` being non-empty would mean.
+    if (rest.size() == subject.size() && words.size() < 2) return false;
+
+    for (const QString &w : words) {
+        if (isOrdinary(w, extraOrdinary)) return false;   // a description
+        // A lowercase leftover is prose, not part of a name.
+        if (!w.isEmpty() && !w.front().isUpper()) return false;
+    }
+    return true;
 }
 
 bool isOnlyNames(const QString &masked, int termCount)

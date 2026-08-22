@@ -1776,8 +1776,12 @@ static void testRequestShape()
     check("hits the free endpoint",
           url.host() == QLatin1String("translate.googleapis.com"), url.host());
     check("carries the target language", s.contains(QStringLiteral("tl=es")), s);
-    check("lets Google detect the source",
-          s.contains(QStringLiteral("sl=auto")), s);
+    // Pinned to English, not detected. The editor only ever translates
+    // English mods, and auto-detection handed a name with no sentence around
+    // it decides it is some other language and paraphrases: "Dagoth Andas"
+    // came back "sin respirar", "Dagoth Faras" as "apenas lo hace".
+    check("pins the source language to English",
+          s.contains(QStringLiteral("sl=en")), s);
     check("carries the text", s.contains(QStringLiteral("Bandit Chief")), s);
 
     // A string with URL metacharacters must survive as a query VALUE, not

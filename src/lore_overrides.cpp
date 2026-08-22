@@ -54,6 +54,25 @@ const QHash<QString, QHash<QString, QString>> &table()
         {QStringLiteral("soul gem"),
          {{QStringLiteral("spanish"), QStringLiteral("Gema de almas")}}},
 
+        // -- Great houses -----------------------------------------------
+        // Exact entries rather than a "House %1" shape, because that shape
+        // would also catch the rank titles ("House Brother", "House Father")
+        // which do have to be translated.
+        //
+        // These five are the only entries here the author has not verified
+        // for me. Correct any that read wrong; the form used in Spanish TES
+        // material is "Casa <name>", with the house name left alone.
+        {QStringLiteral("house hlaalu"),
+         {{QStringLiteral("spanish"), QStringLiteral("Casa Hlaalu")}}},
+        {QStringLiteral("house redoran"),
+         {{QStringLiteral("spanish"), QStringLiteral("Casa Redoran")}}},
+        {QStringLiteral("house telvanni"),
+         {{QStringLiteral("spanish"), QStringLiteral("Casa Telvanni")}}},
+        {QStringLiteral("house indoril"),
+         {{QStringLiteral("spanish"), QStringLiteral("Casa Indoril")}}},
+        {QStringLiteral("house dres"),
+         {{QStringLiteral("spanish"), QStringLiteral("Casa Dres")}}},
+
         // -- Worship titles (Varieties of Faith) ------------------------
         // The shape "%1 Devotee" in patternsFor() answers the other
         // seventeen. These two are here because the shape gets them wrong.
@@ -113,6 +132,26 @@ QList<QPair<QString, QString>> patternsFor(const QString &token)
     // substitution to carry the other one.
     static const QList<QPair<QString, QString>> kSpanish = {
         {QStringLiteral("%1 Devotee"), QStringLiteral("Devoto de %1")},
+
+        // Morrowind naming families, each mapping to ITSELF. There is no
+        // Spanish in these to get wrong: they exist to keep a name out of the
+        // translator's hands, the same job the self-mapping entries in the
+        // table above do for "Skooma" and "Dwemer".
+        //
+        // Counted across the author's Morrowind mods, the second word is
+        // different nearly every time, which is what makes a shape the only
+        // way to say it: Dagoth 17, Tel 24, Ald 15, Clan 9 distinct names.
+        // Every one of them was going to the translator, and "Dagoth Andas"
+        // came back "sin respirar".
+        {QStringLiteral("Dagoth %1"), QStringLiteral("Dagoth %1")},
+        {QStringLiteral("Tel %1"),    QStringLiteral("Tel %1")},
+        {QStringLiteral("Ald %1"),    QStringLiteral("Ald %1")},
+        {QStringLiteral("Clan %1"),   QStringLiteral("Clan %1")},
+        // Deliberately NOT "House %1". The same scan finds it carrying both
+        // place names (Hlaalu, Redoran, Telvanni) and rank titles that have
+        // to translate (House Brother, House Father, House Officer), so a
+        // shape would freeze the wrong half. The five great houses are exact
+        // entries in the table instead.
     };
     return norm(token) == QLatin1String("spanish") ? kSpanish
                                                    : QList<QPair<QString, QString>>{};
