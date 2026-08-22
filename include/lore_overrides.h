@@ -39,6 +39,8 @@
 // canonical name; the same words inside a longer sentence go to the machine
 // translator, which needs the surrounding grammar to produce anything usable.
 
+#include <QList>
+#include <QPair>
 #include <QString>
 #include <QStringList>
 
@@ -52,6 +54,20 @@ QString lookup(const QString &text, const QString &token);
 // Every source term the table holds for a language, for tests and for a
 // future management UI. Empty for a language with no entries.
 QStringList termsFor(const QString &token);
+
+// Whole-cell shapes rather than whole-cell strings: {"%1 Devotee",
+// "Devoto de %1"}, run through translation_rules::applyPatterns.
+//
+// A table of strings cannot say what Varieties of Faith needs. It names
+// nineteen worship titles "<Deity> Devotee", Google keeps the English word
+// order and returns "Akatosh Devoto", and listing all nineteen here would
+// still be wrong for the next mod's deity. The shape covers the ones nobody
+// listed.
+//
+// Consulted AFTER the exact table above, which is what lets a name the shape
+// gets wrong have an entry of its own - "Talos Cult Devotee" is a faction,
+// not a deity, and "Devoto de Talos Cult" would be half English.
+QList<QPair<QString, QString>> patternsFor(const QString &token);
 
 } // namespace lore_overrides
 

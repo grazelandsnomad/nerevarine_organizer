@@ -35,6 +35,10 @@
 //   [after]      plain-text fixes applied to the machine result, written
 //                LEFT=>RIGHT. For wording inside a sentence, which a
 //                whole-cell term cannot reach.
+//   [patterns]   whole-cell replacements with a hole in them, written
+//                LEFT=RIGHT with %1..%9 standing for whatever the name is.
+//                For a mod that names a hundred things the same way and puts
+//                the words in an order the target language does not use.
 //
 // Blank lines and lines starting with # are ignored. Keys keep their spaces
 // and case; matching is case-insensitive.
@@ -54,10 +58,12 @@ struct Rules {
     QStringList                   protect;
     QSet<QString>                 ordinary;    // lowercased
     QList<QPair<QString, QString>> after;      // applied in file order
+    // Whole-cell shapes: {"%1 Devotee", "Devoto de %1"}, in file order.
+    QList<QPair<QString, QString>> patterns;
 
     bool isEmpty() const
     { return terms.isEmpty() && protect.isEmpty()
-          && ordinary.isEmpty() && after.isEmpty(); }
+          && ordinary.isEmpty() && after.isEmpty() && patterns.isEmpty(); }
 };
 
 // Reads `path`. A missing file is an empty rule set, not an error - the file
@@ -71,6 +77,29 @@ bool ensureTemplate(const QString &path, const QString &language);
 
 // Apply the [after] fixes to a machine-translated string.
 QString applyAfter(const QString &text, const Rules &r);
+
+// The answer the first matching pattern gives for `text`, or empty when none
+// matches. Free-standing rather than a Rules method because the built-in
+// table hands over patterns of its own (lore_overrides::patternsFor) and both
+// lists have to go through one matcher.
+//
+// -- Why the whole cell and nothing less -------------------------------
+//
+// Varieties of Faith calls its worship titles "Akatosh Devotee", and Google
+// keeps the English word order: "Akatosh Devoto", which is not Spanish. The
+// shape "%1 Devotee = Devoto de %1" fixes every deity in the mod, including
+// the ones nobody thought to list.
+//
+// Loose inside a sentence it would be a menace. "He is an Akatosh Devotee,
+// you know" is prose, and prose needs the translator that can see the grammar
+// around it; a pattern firing there would hand back a half-translated
+// sentence. So the match is anchored to the entire string, the same limit
+// lore_overrides sets on itself.
+//
+// The literal parts match without regard to case. What %1 captures keeps its
+// own, because what it captures is a name.
+QString applyPatterns(const QString &text,
+                      const QList<QPair<QString, QString>> &patterns);
 
 } // namespace translation_rules
 

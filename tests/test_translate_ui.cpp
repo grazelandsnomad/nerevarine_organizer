@@ -11,12 +11,16 @@
 // back BLANK. Nothing outside the dialog could see it: the network calls all
 // succeeded and the data was all correct.
 
+#include "lore_overrides.h"
 #include "markup_protect.h"
 #include "translate_dialog.h"
+#include "translation_rules.h"
 #include "translation_store.h"
 
 #include <QApplication>
+#include <QFile>
 #include <QTableWidget>
+#include <QTemporaryDir>
 
 #include <iostream>
 
@@ -334,6 +338,124 @@ static void testTheSpinnerMarkDoesNotDetachTheRow()
     delete d;
 }
 
+
+// -- Naming a hundred things the same way ---------------------------------
+//
+// Varieties of Faith calls its worship titles "<Deity> Devotee" nineteen
+// times over. Google keeps the English word order and answers "Akatosh
+// Devoto", which is not Spanish - it is "Devoto de Akatosh". A table of
+// strings would have to list all nineteen and would still be wrong for the
+// next mod's deity, so the rule is a shape.
+
+static void testTheDevoteeShape()
+{
+    std::cout << "\n[translation_rules: whole-cell shapes]\n";
+    const auto pats = lore_overrides::patternsFor(QStringLiteral("spanish"));
+    check("Spanish has the shape", !pats.isEmpty());
+    check("and a language with no table has none",
+          lore_overrides::patternsFor(QStringLiteral("klingon")).isEmpty());
+
+    auto shaped = [&pats](const char *src) {
+        return translation_rules::applyPatterns(QString::fromUtf8(src), pats);
+    };
+
+    check("the reported case",
+          shaped("Akatosh Devotee") == QString::fromUtf8("Devoto de Akatosh"),
+          shaped("Akatosh Devotee"));
+    check("and every other deity in the mod, unlisted",
+          shaped("Cuhlecain Devotee") == QString::fromUtf8("Devoto de Cuhlecain")
+              && shaped("Dibella Devotee") == QString::fromUtf8("Devoto de Dibella")
+              && shaped("Zenithar Devotee") == QString::fromUtf8("Devoto de Zenithar"));
+
+    // The capture is a name: it comes back exactly as written, punctuation,
+    // spaces and capitals included.
+    check("a name of two words survives whole",
+          shaped("Tiber Septim Devotee") == QString::fromUtf8("Devoto de Tiber Septim"),
+          shaped("Tiber Septim Devotee"));
+    check("and one with a full stop in it",
+          shaped("St. Pelinal Devotee") == QString::fromUtf8("Devoto de St. Pelinal"),
+          shaped("St. Pelinal Devotee"));
+
+    // The property that makes a shape safe to have at all. Prose needs the
+    // translator that can see the grammar around it.
+    check("a sentence that merely contains the words is left alone",
+          shaped("He is an Akatosh Devotee, you know.").isEmpty());
+    check("and so is one that ends elsewhere",
+          shaped("The Akatosh Devotee said nothing.").isEmpty());
+    check("a cell with nothing to capture does not match",
+          shaped("Devotee").isEmpty());
+}
+
+static void testTheTwoThatTheShapeGetsWrong()
+{
+    std::cout << "\n[lore_overrides: exact entries beat the shape]\n";
+    const QString sp = QStringLiteral("spanish");
+
+    // "Talos Cult" is a faction, not a deity - the mod also has "Abandon the
+    // Talos Cult" - so the shape would leave half of it in English.
+    check("the faction gets its own answer",
+          lore_overrides::lookup(QStringLiteral("Talos Cult Devotee"), sp)
+              == QString::fromUtf8("Devoto del Culto de Talos"),
+          lore_overrides::lookup(QStringLiteral("Talos Cult Devotee"), sp));
+    // Written the other way round in the first place, so the shape never
+    // matches it and it would have gone to the translator.
+    check("and so does the one already in the of-form",
+          lore_overrides::lookup(QStringLiteral("Devotee of The One"), sp)
+              == QString::fromUtf8("Devoto del Único"));
+    check("the shape does not match that one",
+          translation_rules::applyPatterns(
+              QStringLiteral("Devotee of The One"),
+              lore_overrides::patternsFor(sp)).isEmpty());
+}
+
+static void testUserPatternsFromTheRulesFile()
+{
+    std::cout << "\n[translation_rules: patterns from the file]\n";
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("spanish.txt"));
+
+    {
+        QFile f(path);
+        f.open(QIODevice::WriteOnly | QIODevice::Text);
+        f.write("[patterns]\n"
+                "%1 Devotee = Fiel de %1\n"
+                "Altar of %1=Altar de %1\n"
+                "# a shape with no hole is a [terms] entry in the wrong place\n"
+                "Chest = Cofre\n");
+    }
+    const auto rules = translation_rules::load(path);
+    check("both shapes are read", rules.patterns.size() == 2,
+          QString::number(rules.patterns.size()));
+    check("a line with no hole in it is not taken as one",
+          !rules.isEmpty() && rules.patterns.size() == 2);
+
+    check("the user's shape answers",
+          translation_rules::applyPatterns(QStringLiteral("Akatosh Devotee"),
+                                           rules.patterns)
+              == QStringLiteral("Fiel de Akatosh"));
+    check("and so does a second one",
+          translation_rules::applyPatterns(QStringLiteral("Altar of Mara"),
+                                           rules.patterns)
+              == QStringLiteral("Altar de Mara"));
+    // The dialog tries the user's list before the built-in one, so a user who
+    // prefers "Fiel" gets it everywhere without touching the binary.
+    check("the user's wording differs from the built-in on purpose",
+          translation_rules::applyPatterns(
+              QStringLiteral("Akatosh Devotee"),
+              lore_overrides::patternsFor(QStringLiteral("spanish")))
+              == QString::fromUtf8("Devoto de Akatosh"));
+
+    // The template the "Edit rules..." button writes has to parse back, or
+    // the section it advertises does not exist as far as load() is concerned.
+    const QString tpl = dir.filePath(QStringLiteral("template.txt"));
+    check("the written template mentions the section",
+          translation_rules::ensureTemplate(tpl, QStringLiteral("spanish")));
+    QFile tf(tpl);
+    tf.open(QIODevice::ReadOnly | QIODevice::Text);
+    check("and it is spelled the way load() looks for it",
+          QString::fromUtf8(tf.readAll()).contains(QLatin1String("[patterns]")));
+}
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
@@ -347,6 +469,9 @@ int main(int argc, char **argv)
     testMarkupIsLiftedOut();
     testTheSpansComeBack();
     testTheSpinnerMarkDoesNotDetachTheRow();
+    testTheDevoteeShape();
+    testTheTwoThatTheShapeGetsWrong();
+    testUserPatternsFromTheRulesFile();
 
     std::cout << "\n" << s_passed << " passed, " << s_failed << " failed\n";
     return s_failed == 0 ? 0 : 1;

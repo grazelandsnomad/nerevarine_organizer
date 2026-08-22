@@ -1,6 +1,7 @@
 #include "translation_rules.h"
 
 #include <QFile>
+#include <QRegularExpression>
 #include <QSaveFile>
 #include <QTextStream>
 
@@ -37,6 +38,18 @@ Rules load(const QString &path)
             r.protect << line;
         } else if (section == QLatin1String("ordinary")) {
             r.ordinary.insert(line.toLower());
+        } else if (section == QLatin1String("patterns")) {
+            // '=' like [terms], not '=>' like [after]: these are whole-cell
+            // shapes rather than sentence fragments, so the same split the
+            // whole-cell section uses is the one that reads consistently.
+            const int sep = line.indexOf(QLatin1Char('='));
+            if (sep <= 0) continue;
+            const QString from = line.left(sep).trimmed();
+            const QString to   = line.mid(sep + 1).trimmed();
+            // A pattern with no hole in it is a [terms] entry written in the
+            // wrong section; taking it here would silently shadow one.
+            if (!from.isEmpty() && !to.isEmpty() && from.contains(QLatin1Char('%')))
+                r.patterns.append({from, to});
         } else if (section == QLatin1String("after")) {
             // "=>" rather than "=": these are phrases, and a phrase is far
             // more likely to contain "=" than the arrow.
@@ -94,7 +107,16 @@ bool ensureTemplate(const QString &path, const QString &language)
         << "# inside a sentence that a whole-string rule cannot reach.\n"
         << "# Written as LEFT=>RIGHT.\n"
         << "#\n"
-        << "#   Gran espada=>Mandoble\n";
+        << "#   Gran espada=>Mandoble\n"
+        << "\n"
+        << "[patterns]\n"
+        << "# Whole-string shapes, for a mod that names many things the same\n"
+        << "# way. %1 stands for whatever the name is, and comes back\n"
+        << "# untranslated on the other side. Only matches a WHOLE string, so\n"
+        << "# the same words inside a sentence are left to the translator.\n"
+        << "#\n"
+        << "#   %1 Devotee=Devoto de %1\n"
+        << "#   Altar of %1=Altar de %1\n";
     out.flush();
     return f.commit();
 }
@@ -105,6 +127,61 @@ QString applyAfter(const QString &text, const Rules &r)
     for (const auto &[from, to] : r.after)
         out.replace(from, to, Qt::CaseInsensitive);
     return out;
+}
+
+QString applyPatterns(const QString &text,
+                      const QList<QPair<QString, QString>> &patterns)
+{
+    const QString subject = text.trimmed();
+    if (subject.isEmpty() || patterns.isEmpty()) return {};
+
+    // "%1 Devotee" becomes ^\s*(.+?)\s+Devotee\s*$ - the literal parts
+    // escaped so a name with a "." or "(" in it cannot turn into a regex, the
+    // holes non-greedy so two of them split at the first opportunity rather
+    // than the last.
+    static const QRegularExpression kHole(QStringLiteral("%([1-9])"));
+
+    for (const auto &[shape, replacement] : patterns) {
+        QString rx = QStringLiteral("^\\s*");
+        QList<int> order;            // which %n each capture group carries
+        qsizetype last = 0;
+        auto it = kHole.globalMatch(shape);
+        while (it.hasNext()) {
+            const auto m = it.next();
+            rx += QRegularExpression::escape(
+                      shape.mid(last, m.capturedStart() - last));
+            rx += QStringLiteral("(.+?)");
+            order << m.captured(1).toInt();
+            last = m.capturedEnd();
+        }
+        if (order.isEmpty()) continue;          // no hole: not a pattern
+        rx += QRegularExpression::escape(shape.mid(last));
+        rx += QStringLiteral("\\s*$");
+
+        const QRegularExpression re(rx, QRegularExpression::CaseInsensitiveOption
+                                        | QRegularExpression::UseUnicodePropertiesOption);
+        if (!re.isValid()) continue;
+        const auto m = re.match(subject);
+        if (!m.hasMatch()) continue;
+
+        // Every hole has to have caught something worth the name.
+        QHash<int, QString> caught;
+        bool ok = true;
+        for (int i = 0; i < order.size(); ++i) {
+            const QString c = m.captured(i + 1).trimmed();
+            if (c.isEmpty()) { ok = false; break; }
+            caught.insert(order[i], c);
+        }
+        if (!ok) continue;
+
+        // The capture goes back exactly as it was written: it is a name, and
+        // the case of a name is part of it.
+        QString out = replacement;
+        for (auto k = caught.cbegin(); k != caught.cend(); ++k)
+            out.replace(QStringLiteral("%%1").arg(k.key()), k.value());
+        return out;
+    }
+    return {};
 }
 
 } // namespace translation_rules

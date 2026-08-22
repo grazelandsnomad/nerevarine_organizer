@@ -54,6 +54,18 @@ const QHash<QString, QHash<QString, QString>> &table()
         {QStringLiteral("soul gem"),
          {{QStringLiteral("spanish"), QStringLiteral("Gema de almas")}}},
 
+        // -- Worship titles (Varieties of Faith) ------------------------
+        // The shape "%1 Devotee" in patternsFor() answers the other
+        // seventeen. These two are here because the shape gets them wrong.
+        {QStringLiteral("talos cult devotee"),
+         // "Talos Cult" is a faction, not a deity - the mod also has "Abandon
+         // the Talos Cult" - so the shape's "Devoto de Talos Cult" would
+         // leave half of it in English.
+         {{QStringLiteral("spanish"), QStringLiteral("Devoto del Culto de Talos")}}},
+        {QStringLiteral("devotee of the one"),
+         // Already written the other way round, so the shape never matches it.
+         {{QStringLiteral("spanish"), QStringLiteral("Devoto del Único")}}},
+
         // -- Proper nouns that must survive untouched -------------------
         // Mapped to themselves on purpose: this is how a name is protected
         // from a translator that would otherwise invent something. See the
@@ -92,6 +104,18 @@ QString lookup(const QString &text, const QString &token)
     if (outer == table().constEnd()) return {};
 
     return outer->value(norm(token));
+}
+
+QList<QPair<QString, QString>> patternsFor(const QString &token)
+{
+    // "Devoto", masculine, because one form has to be picked: the title is
+    // the player's rather than the deity's, and Morrowind has no gendered
+    // substitution to carry the other one.
+    static const QList<QPair<QString, QString>> kSpanish = {
+        {QStringLiteral("%1 Devotee"), QStringLiteral("Devoto de %1")},
+    };
+    return norm(token) == QLatin1String("spanish") ? kSpanish
+                                                   : QList<QPair<QString, QString>>{};
 }
 
 QStringList termsFor(const QString &token)

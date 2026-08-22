@@ -256,6 +256,15 @@ void TranslateDialog::onMachineTranslate()
         QString canonical = m_rules.terms.value(m_rowSource[i].trimmed().toLower());
         if (canonical.isEmpty())
             canonical = lore_overrides::lookup(m_rowSource[i], m_language);
+        // Then the same two sources again as SHAPES, for the mod that names a
+        // hundred things one way. Exact entries are tried first on purpose:
+        // that is what lets a name the shape gets wrong keep its own answer.
+        if (canonical.isEmpty())
+            canonical = translation_rules::applyPatterns(m_rowSource[i],
+                                                         m_rules.patterns);
+        if (canonical.isEmpty())
+            canonical = translation_rules::applyPatterns(
+                m_rowSource[i], lore_overrides::patternsFor(m_language));
         if (!canonical.isEmpty()) {
             m_table->item(i, ColTranslation)->setText(canonical);
             ++lore;
