@@ -18,6 +18,7 @@
 #include <QList>
 #include <QString>
 
+#include "google_translate.h"
 #include "translation_mod.h"
 #include "translation_store.h"
 #include "translation_rules.h"
@@ -132,7 +133,14 @@ private:
     int           m_mtInFlight = 0;
     int           m_mtDone     = 0;
     int           m_mtTotal    = 0;
-    int           m_mtFailed   = 0;
+    // What went wrong, per outcome, rather than one "it was empty" counter.
+    // Every failure used to look identical, so the summary had to guess - and
+    // it guessed rate-limiting, which is wrong for a machine with no network.
+    google_translate::FailureTally m_mtTally;
+    // The first failure's own words. errorString() is the only thing that
+    // separates DNS from TLS from no-route.
+    QString       m_mtFirstError;
+    int           m_mtFirstHttpStatus = 0;
     // Drives the per-row spinner while a run is on. The bar at the bottom
     // says how far along the whole run is; this says which rows are actually
     // being fetched, which is the question somebody watching a 480-row list

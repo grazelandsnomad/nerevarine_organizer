@@ -2532,12 +2532,112 @@ static void run_target_language()
     std::cout << "\n";
 }
 
+namespace gt_test {
+
+// The bug this replaces: every outcome became "came back empty", and the
+// summary then guessed rate-limiting. Right for a 429, actively misleading
+// for a machine with no network.
+static void testClassifiesTheRealFailure()
+{
+    std::cout << "\n[one request, and what actually went wrong with it]\n";
+    using F = google_translate::Failure;
+    const auto cl = google_translate::classify;
+
+    // Qt reports a 429 as an error of its own, so the status has to be read
+    // first or every block lands in the generic branch.
+    check("a 429 is a block whatever Qt called the error",
+          cl(299, 429, false) == F::Blocked && cl(0, 429, false) == F::Blocked);
+    // Load-bearing: only a block arms the fifteen-minute cooloff.
+    check("a 403 is a refusal, not a block", cl(201, 403, false) == F::Refused);
+    check("so is a 401", cl(204, 401, false) == F::Refused);
+    check("no HTTP answer at all is offline",
+          cl(3, 0, false) == F::Offline && cl(1, 0, false) == F::Offline);
+    // THE bug: a clean 200 that parses to nothing used to be reported as
+    // rate-limiting, which sends somebody away to wait for something waiting
+    // cannot fix.
+    check("a clean 200 that parses to nothing is a bad response, not a block",
+          cl(0, 200, false) == F::BadResponse);
+    check("a 200 with text is fine", cl(0, 200, true) == F::Ok);
+    check("a 500 is neither a block nor offline",
+          cl(0, 500, false) == F::HttpError);
+    check("an errored 2xx is still an http error",
+          cl(99, 200, false) == F::HttpError);
+    // Branch order: the 429 must win before gotText is ever consulted.
+    check("an empty body on a 429 does not become a bad response",
+          cl(0, 429, false) == F::Blocked);
+}
+
+static void testTheRunSaysOneThing()
+{
+    std::cout << "\n[a whole run, and the one thing worth saying about it]\n";
+    using F = google_translate::Failure;
+    auto tally = [](int ok, int blocked, int refused, int offline,
+                    int bad, int http) {
+        google_translate::FailureTally t;
+        t.ok = ok; t.blocked = blocked; t.refused = refused;
+        t.offline = offline; t.badResponse = bad; t.httpError = http;
+        return t;
+    };
+
+    check("one 429 among a hundred successes is still a blocked run",
+          google_translate::worstOf(tally(100, 1, 0, 0, 0, 0)) == F::Blocked);
+    check("a block outranks everything else",
+          google_translate::worstOf(tally(0, 1, 2, 9, 3, 4)) == F::Blocked);
+    // A 403 is an ANSWER - the connection provably worked, so "check your
+    // network" would be a lie.
+    check("a refusal outranks offline",
+          google_translate::worstOf(tally(0, 0, 1, 4, 0, 0)) == F::Refused);
+    check("offline outranks an unreadable body",
+          google_translate::worstOf(tally(0, 0, 0, 2, 5, 0)) == F::Offline);
+    check("nothing failed says nothing",
+          google_translate::worstOf(tally(164, 0, 0, 0, 0, 0)) == F::Ok
+              && tally(164, 0, 0, 0, 0, 0).failed() == 0);
+    check("failed() counts every outcome that is not ok",
+          tally(7, 1, 1, 1, 1, 1).failed() == 5);
+
+    google_translate::FailureTally counted;
+    counted.count(F::Ok);
+    counted.count(F::Blocked);
+    counted.count(F::Blocked);
+    check("count() lands in the right bucket",
+          counted.ok == 1 && counted.blocked == 2 && counted.failed() == 2);
+}
+
+static void testTheCooloffArithmetic()
+{
+    std::cout << "\n[how long is left of a fifteen-minute block]\n";
+    const auto left = google_translate::cooloffSecondsLeft;
+    constexpr qint64 t = 1'700'000'000;
+    const int total = google_translate::kBlockCooloffMinutes * 60;
+
+    check("no stamp means no wait", left(0, t) == 0);
+    check("a fresh block waits the whole fifteen", left(t, t) == total);
+    check("and it drains", left(t, t + 60) == total - 60);
+    check("one second short still waits", left(t, t + total - 1) == 1);
+    check("at the end it is over", left(t, t + total) == 0);
+    check("and never goes negative", left(t, t + 10000) == 0);
+    // No UI anywhere clears this, so a clock that jumped forward and was then
+    // corrected must not lock machine translation out for good.
+    check("a stamp from the future fails OPEN", left(t + 3600, t) == 0);
+
+    check("the cooloff is the fifteen minutes asked for",
+          google_translate::kBlockCooloffMinutes == 15);
+    check("and the spacing is a real gap between requests",
+          google_translate::kRequestSpacingMs >= 200
+              && google_translate::kRequestSpacingMs <= 1000);
+}
+
+} // namespace gt_test
+
 static void run_google_translate()
 {
     std::cout << "=== google_translate ===\n";
     gt_test::testParsesSegments();
     gt_test::testFailsSoft();
     gt_test::testRequestShape();
+    gt_test::testClassifiesTheRealFailure();
+    gt_test::testTheRunSaysOneThing();
+    gt_test::testTheCooloffArithmetic();
     std::cout << "\n";
 }
 

@@ -380,7 +380,9 @@ void TranslateDialog::onMachineTranslate()
     m_mtBar->setRange(0, m_mtTotal);
     m_mtBar->setValue(0);
     m_mtDone   = 0;
-    m_mtFailed = 0;
+    m_mtTally  = {};
+    m_mtFirstError.clear();
+    m_mtFirstHttpStatus = 0;
     m_mtInFlight = 0;
 
     pumpMachineTranslate();
@@ -440,10 +442,28 @@ void TranslateDialog::pumpMachineTranslate()
                 [this, reply, item, nameIdx, isName, named, spans]() {
             reply->deleteLater();
 
+            const int http = reply->attribute(
+                QNetworkRequest::HttpStatusCodeAttribute).toInt();
+
             QString text;
             bool    repaired = false;
+            // Left guarded: on a 429 the body is an HTML "Sorry..." page, and
+            // there is nothing to gain from putting that through a JSON parser.
             if (reply->error() == QNetworkReply::NoError)
                 text = google_translate::parseResponse(reply->readAll());
+
+            // Classified on the RAW answer, before restore() and the user's
+            // after-rules touch it: this is a statement about the endpoint, and
+            // a rule of the user's own that blanks a row must not read as
+            // Google having failed.
+            const auto outcome = google_translate::classify(
+                int(reply->error()), http, !text.isEmpty());
+            m_mtTally.count(outcome);
+            if (outcome != google_translate::Failure::Ok
+                && m_mtFirstError.isEmpty()) {
+                m_mtFirstError      = reply->errorString();
+                m_mtFirstHttpStatus = http;
+            }
             if (!text.isEmpty() && !spans.isEmpty()) {
                 // Before the user's own after-rules, so those see the real
                 // markup rather than a row of tokens.
@@ -455,7 +475,7 @@ void TranslateDialog::pumpMachineTranslate()
                 text = translation_rules::applyAfter(text, m_rules);
 
             if (text.isEmpty()) {
-                ++m_mtFailed;
+                // Counted by the tally above; nothing to write.
             } else if (isName) {
                 // The answer for this name, reused everywhere from here on.
                 if (nameIdx >= 0 && nameIdx < m_nameRendering.size())
@@ -511,10 +531,44 @@ void TranslateDialog::pumpMachineTranslate()
             }
             m_table->viewport()->update();
             restyleLinkedRows();
-            if (m_mtFailed > 0)
-                ui::warn(this, T("translate_machine"),
-                         T("translate_machine_failed")
-                             .arg(m_mtTotal - m_mtFailed).arg(m_mtFailed));
+            // One message, naming what actually happened. This used to be a
+            // single string that blamed rate-limiting for every failure -
+            // right for a 429, and advice to "try again in a moment" that
+            // could be repeated forever on a machine with no network.
+            if (m_mtTally.failed() > 0) {
+                const int done = m_mtTally.ok;
+                QString body;
+                switch (google_translate::worstOf(m_mtTally)) {
+                    case google_translate::Failure::Blocked:
+                        body = T("translate_mt_blocked")
+                                   .arg(done)
+                                   .arg(google_translate::kBlockCooloffMinutes);
+                        break;
+                    case google_translate::Failure::Refused:
+                        body = T("translate_mt_refused").arg(done);
+                        break;
+                    case google_translate::Failure::Offline:
+                        body = T("translate_mt_offline")
+                                   .arg(done).arg(m_mtFirstError);
+                        break;
+                    case google_translate::Failure::HttpError:
+                        body = T("translate_mt_http_error")
+                                   .arg(m_mtFirstHttpStatus)
+                                   .arg(m_mtTally.failed()).arg(done);
+                        break;
+                    default:
+                        body = T("translate_machine_failed")
+                                   .arg(done).arg(m_mtTally.failed());
+                        break;
+                }
+                // Rows the run never reached - a stopped run leaves some
+                // untouched, and they are blank for a different reason than
+                // the ones that were asked about and came back unusable.
+                const int neverSent = m_mtTotal - m_mtDone;
+                if (neverSent > 0)
+                    body += T("translate_mt_not_sent").arg(neverSent);
+                ui::warn(this, T("translate_machine"), body);
+            }
         });
     }
 }
