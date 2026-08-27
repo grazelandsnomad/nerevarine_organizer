@@ -14,6 +14,7 @@
 #include "lore_overrides.h"
 #include "term_protect.h"
 #include "markup_protect.h"
+#include "translation_progress.h"
 #include "translate_dialog.h"
 
 #include <QPushButton>
@@ -725,6 +726,139 @@ static void testTheCountdownSaysHowLong()
     delete d;
 }
 
+// -- translation_progress: half-finished work that survives a month -----
+
+static void testProgressRoundTripsBothFlags()
+{
+    std::cout << "\n[an answer, and whether anybody has read it]\n";
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("p.json"));
+
+    translation_progress::Progress out;
+    out.setMod(QStringLiteral("Project Cyrodiil"), QStringLiteral("spanish"));
+    out.record(QStringLiteral("Bandit Chief"), QStringLiteral("Líder Bandido"), true);
+    out.record(QStringLiteral("Nibenay Basin"), QStringLiteral("Cuenca"), false);
+    check("it writes", out.save(path));
+
+    translation_progress::Progress back;
+    check("and reads", back.load(path));
+    check("the reviewed answer survives",
+          back.lookup(QStringLiteral("Bandit Chief")).translation
+              == QStringLiteral("Líder Bandido"));
+    check("still marked read",
+          back.lookup(QStringLiteral("Bandit Chief")).reviewed);
+    // The whole point of the flag: a machine guess must stay flagged across a
+    // month of sessions, or it slips into the shared memory unread.
+    check("and the unread one is still unread",
+          !back.lookup(QStringLiteral("Nibenay Basin")).reviewed);
+    check("the mod is named in the file",
+          back.mod() == QStringLiteral("Project Cyrodiil")
+              && back.language() == QStringLiteral("spanish"));
+}
+
+static void testProgressResumesByTextNotByRow()
+{
+    std::cout << "\n[the mod was updated and every row moved]\n";
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("p.json"));
+
+    translation_progress::Progress out;
+    out.record(QStringLiteral("Bandit Chief"), QStringLiteral("Líder"), true);
+    out.record(QStringLiteral("Zealot"), QStringLiteral("Fanático"), true);
+    out.save(path);
+
+    // The mod gains "Alit", which sorts first - so every row index shifts by
+    // one. Anything keyed on the row would now answer the wrong string.
+    translation_progress::Progress back;
+    back.load(path);
+    check("the first answer still finds its string",
+          back.lookup(QStringLiteral("Bandit Chief")).translation
+              == QStringLiteral("Líder"));
+    check("and so does the second",
+          back.lookup(QStringLiteral("Zealot")).translation
+              == QStringLiteral("Fanático"));
+    check("the new string is simply unanswered",
+          back.lookup(QStringLiteral("Alit")).translation.isEmpty());
+}
+
+static void testAnAnswerForAVanishedStringIsKept()
+{
+    std::cout << "\n[a string the mod no longer has]\n";
+    translation_progress::Progress p;
+    p.record(QStringLiteral("Bandit Chief"), QStringLiteral("Líder"), true);
+    p.record(QStringLiteral("Cut Content"), QStringLiteral("Recortado"), true);
+
+    const QStringList live = {QStringLiteral("Bandit Chief")};
+    check("it is counted as stale", p.staleAgainst(live) == 1);
+    // Never pruned: the next update may bring it back, and a month of typing
+    // is worth more than the bytes.
+    check("but the answer is still there",
+          !p.lookup(QStringLiteral("Cut Content")).translation.isEmpty());
+    check("nothing stale means nothing reported",
+          p.staleAgainst({QStringLiteral("Bandit Chief"),
+                          QStringLiteral("Cut Content")}) == 0);
+}
+
+static void testProgressNormalisesLikeTheMemory()
+{
+    std::cout << "\n[case and stray spaces are the same string]\n";
+    translation_progress::Progress p;
+    p.record(QStringLiteral("Bandit Chief"), QStringLiteral("Líder"), true);
+    check("case-folded", !p.lookup(QStringLiteral("bandit chief")).translation.isEmpty());
+    check("and trimmed", !p.lookup(QStringLiteral("  Bandit Chief ")).translation.isEmpty());
+    check("one entry, not three", p.size() == 1);
+
+    // A blank answer is not an answer - storing one would make the row read as
+    // done to the counter and the filter.
+    p.record(QStringLiteral("Bandit Chief"), QString(), true);
+    check("blanking an answer forgets it", p.empty());
+}
+
+static void testProgressFileNamesCannotCollide()
+{
+    std::cout << "\n[two mods whose names fold together]\n";
+    const QString a = translation_progress::fileNameFor(
+        QStringLiteral("Mod: A"), QStringLiteral("spanish"));
+    const QString b = translation_progress::fileNameFor(
+        QStringLiteral("Mod  A"), QStringLiteral("spanish"));
+    check("they get different files", a != b, a + " vs " + b);
+    check("and different languages do too",
+          a != translation_progress::fileNameFor(QStringLiteral("Mod: A"),
+                                                 QStringLiteral("french")));
+    check("the name is filesystem-safe",
+          !a.contains(QLatin1Char('/')) && !a.contains(QLatin1Char(':')), a);
+    check("and the same input is stable",
+          a == translation_progress::fileNameFor(QStringLiteral("Mod: A"),
+                                                 QStringLiteral("spanish")));
+}
+
+static void testAProgressFileReadsAsAMemory()
+{
+    std::cout << "\n[a half-finished job is a memory with a to-do list]\n";
+    // Deliberate schema compatibility - a later refactor must not quietly
+    // break it, because renaming one file is how a memory is recovered from
+    // an abandoned translation.
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("p.json"));
+    translation_progress::Progress p;
+    p.record(QStringLiteral("Bandit Chief"), QStringLiteral("Líder"), true);
+    p.save(path);
+
+    translation_store::Memory mem;
+    check("a memory can read it", mem.load(path));
+    check("and finds the answer",
+          mem.lookup(QStringLiteral("Bandit Chief")) == QStringLiteral("Líder"));
+}
+
+static void testMissingProgressIsNotAnError()
+{
+    std::cout << "\n[nothing saved yet]\n";
+    translation_progress::Progress p;
+    check("a missing file loads as empty progress",
+          p.load(QStringLiteral("/nonexistent/nrv_progress_test.json")));
+    check("and it is empty", p.empty());
+}
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
@@ -746,6 +880,13 @@ int main(int argc, char **argv)
     testARunThatSendsNothingStillEnds();
     testABlockArmsTheCooloff();
     testTheCountdownSaysHowLong();
+    testProgressRoundTripsBothFlags();
+    testProgressResumesByTextNotByRow();
+    testAnAnswerForAVanishedStringIsKept();
+    testProgressNormalisesLikeTheMemory();
+    testProgressFileNamesCannotCollide();
+    testAProgressFileReadsAsAMemory();
+    testMissingProgressIsNotAnError();
     testEditingTheNameRerendersEveryRow();
     testHandEditingARowBreaksItsLink();
     testMarkupIsLiftedOut();

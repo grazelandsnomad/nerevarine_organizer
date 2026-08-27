@@ -184,6 +184,7 @@ set(SOURCES
     src/translation_rules.cpp
     src/google_translate.cpp
     src/translation_store.cpp
+    src/translation_progress.cpp
     src/translation_mod.cpp
     src/translate_dialog.cpp
     src/conflict_inspector.cpp

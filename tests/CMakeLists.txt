@@ -300,6 +300,7 @@ add_executable(test_translate_ui
     ${CMAKE_SOURCE_DIR}/src/translate_dialog.cpp
     ${CMAKE_SOURCE_DIR}/src/markup_protect.cpp
     ${CMAKE_SOURCE_DIR}/src/translation_store.cpp
+    ${CMAKE_SOURCE_DIR}/src/translation_progress.cpp
     ${CMAKE_SOURCE_DIR}/src/translation_mod.cpp
     ${CMAKE_SOURCE_DIR}/src/translation_rules.cpp
     ${CMAKE_SOURCE_DIR}/src/term_protect.cpp
