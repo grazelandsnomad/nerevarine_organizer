@@ -1,4 +1,7 @@
 #include "translate_dialog.h"
+#include <QTime>
+#include <QDateTime>
+#include "settings.h"
 
 #include "prompts.h"
 #include "translator.h"
@@ -218,6 +221,10 @@ void TranslateDialog::buildUi(const QString &modName)
     row->addWidget(m_mtBar, 1);
     lay->addLayout(row);
 
+    // Reopening the dialog inside a cooloff should say so without a click.
+    // After the bar exists, not beside the button: it paints onto both.
+    updateCooloffDisplay();
+
     auto *box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     box->button(QDialogButtonBox::Ok)->setText(T("translate_apply"));
     connect(box, &QDialogButtonBox::accepted, this, &TranslateDialog::onAccept);
@@ -239,10 +246,79 @@ void TranslateDialog::fillFromMemory()
         setWindowTitle(windowTitle() + T("translate_memory_suffix").arg(hits));
 }
 
+namespace {
+
+// "14:32" - a countdown, not a clock time. The cooloff is fifteen minutes, so
+// hours never appear.
+QString mmss(int seconds)
+{
+    return QTime(0, 0).addSecs(seconds).toString(QStringLiteral("m:ss"));
+}
+
+} // namespace
+
+int TranslateDialog::cooloffLeftSeconds() const
+{
+    const QDateTime blocked = Settings::translateBlockedAt();
+    if (!blocked.isValid()) return 0;
+    return google_translate::cooloffSecondsLeft(
+        blocked.toSecsSinceEpoch(), QDateTime::currentSecsSinceEpoch());
+}
+
+// The bar is either a run's progress or a cooloff countdown, never both - a run
+// cannot start during a cooloff, and the button being disabled is exactly the
+// window in which the bar belongs to a run.
+void TranslateDialog::updateCooloffDisplay()
+{
+    // buildUi calls this while it is still assembling the row, and the 1 Hz
+    // tick can outlive a teardown; neither is worth a crash.
+    if (!m_mtBtn || !m_mtBar) return;
+    if (!m_mtBtn->isEnabled()) return;
+
+    const int left = cooloffLeftSeconds();
+    if (left <= 0) {
+        if (m_mtCooloffTick) m_mtCooloffTick->stop();
+        m_mtBar->setVisible(false);
+        m_mtBar->resetFormat();
+        m_mtBtn->setToolTip(T("translate_machine_tip"));
+        return;
+    }
+
+    if (!m_mtCooloffTick) {
+        m_mtCooloffTick = new QTimer(this);
+        m_mtCooloffTick->setInterval(1000);
+        connect(m_mtCooloffTick, &QTimer::timeout,
+                this, &TranslateDialog::updateCooloffDisplay);
+    }
+    const int total = google_translate::kBlockCooloffMinutes * 60;
+    m_mtBar->setRange(0, total);
+    m_mtBar->setValue(total - left);     // fills as the wait drains
+    // No literal '%' in the format: QProgressBar reads %p, %v and %m out of it,
+    // and m:ss has none.
+    m_mtBar->setFormat(T("translate_mt_cooloff_bar").arg(mmss(left)));
+    m_mtBar->setVisible(true);
+    m_mtBtn->setToolTip(T("translate_mt_cooloff_tip").arg(mmss(left)));
+    if (!m_mtCooloffTick->isActive()) m_mtCooloffTick->start();
+}
+
 void TranslateDialog::onMachineTranslate()
 {
     const QString iso = isoFor(m_language);
     if (iso.isEmpty()) return;
+
+    // Before anything is written. The lore/rule pass below fills answers into
+    // the table as it goes, so a gate placed after it would leave half a run's
+    // results on screen for a run that never happened.
+    //
+    // The arithmetic and the display live in helpers on purpose: ui::warn is a
+    // blocking QMessageBox, so a test can never call this function, and those
+    // two carry the half worth testing.
+    if (const int wait = cooloffLeftSeconds(); wait > 0) {
+        updateCooloffDisplay();
+        ui::warn(this, T("translate_machine"),
+                 T("translate_mt_cooloff").arg(mmss(wait)));
+        return;
+    }
 
     // The mod's recurring proper nouns, and what each one should say.
     //
@@ -385,6 +461,8 @@ void TranslateDialog::onMachineTranslate()
     }
     m_mtStopped = false;
     m_mtBtn->setEnabled(false);
+    if (m_mtCooloffTick) m_mtCooloffTick->stop();
+    m_mtBar->resetFormat();          // no stale "Blocked - 0:00" into a run
     m_mtBar->setVisible(true);
     m_mtTotal  = int(m_mtQueue.size()) + int(m_mtPending.size());
     m_mtBar->setRange(0, m_mtTotal);
@@ -498,6 +576,9 @@ void TranslateDialog::pumpMachineTranslate()
                 m_mtQueue.clear();
                 m_mtPending.clear();
                 if (m_mtPace) m_mtPace->stop();
+                // Stamped here, not at teardown: closing the dialog between
+                // the block and the last reply must not lose it.
+                Settings::setTranslateBlockedAt(QDateTime::currentDateTimeUtc());
             }
             if (!text.isEmpty() && !spans.isEmpty()) {
                 // Before the user's own after-rules, so those see the real
@@ -604,6 +685,7 @@ void TranslateDialog::finishMachineTranslate()
     // the dialog's life, with nothing on screen to say why.
     m_mtStopped = false;
     m_mtBar->setVisible(false);
+    updateCooloffDisplay();
 
     // One message, naming what actually happened. This used to be a
     // single string that blamed rate-limiting for every failure -

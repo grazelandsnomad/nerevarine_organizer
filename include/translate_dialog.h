@@ -84,6 +84,11 @@ private:
     void advanceMachineTranslate();
     // The one teardown; see the comment on the definition.
     void finishMachineTranslate();
+    // Seconds left of a block, 0 when there is none. Side-effect free
+    // so it can be tested; onMachineTranslate cannot be.
+    int  cooloffLeftSeconds() const;
+    // Paints the countdown onto the progress bar and the tooltip.
+    void updateCooloffDisplay();
 
 private:
     void buildUi(const QString &modName);
@@ -154,6 +159,7 @@ private:
     // Nexus installs. Never singleShot-per-request: see notify_banner.h for why
     // one timer beats a fleet of them.
     QTimer       *m_mtPace  = nullptr;
+    QTimer       *m_mtCooloffTick = nullptr;   // 1 Hz, drives the countdown
     // A block cleared the queues. Nothing restarts them until the run is torn
     // down, and finishMachineTranslate is what puts this back to false.
     bool          m_mtStopped = false;

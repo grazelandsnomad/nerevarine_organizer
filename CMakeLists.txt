@@ -49,6 +49,11 @@ endif()
 if(TARGET test_settings)
     add_dependencies(test_settings translation_keys_header)
 endif()
+# translate_dialog.cpp reaches T() too, so this target has always needed the
+# generated header - it has been getting it by build-order luck.
+if(TARGET test_translate_ui)
+    add_dependencies(test_translate_ui translation_keys_header)
+endif()
 
 # Optional: qt6keychain for secure API-key storage (libsecret / KWallet /
 # DPAPI backend).  When present, the Nexus API key is stored there instead

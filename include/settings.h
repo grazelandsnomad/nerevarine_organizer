@@ -11,6 +11,7 @@
 // settings_migrations.cpp uses raw key LITERALS (not these constants) so
 // it can rewrite an old key even after its accessor is dropped here.
 
+#include <QDateTime>
 #include <QString>
 #include <QStringList>
 
@@ -102,6 +103,15 @@ struct Settings {
     // target_language.h for why conflating the two was a bug.
     static QString translationLanguage();
     static void    setTranslationLanguage(const QString &lang);
+
+    // -- Machine translation ---
+    //
+    // When Google last answered the machine translator with HTTP 429. An
+    // invalid/absent value means it never has. Stored UTC ISO-8601 so a
+    // timezone change cannot move the deadline; see
+    // google_translate::cooloffSecondsLeft for what is done with it.
+    static QDateTime translateBlockedAt();
+    static void      setTranslateBlockedAt(const QDateTime &whenUtc);
     static bool    utilityExplainerSeen();
     static void    setUtilityExplainerSeen(bool seen);
     static bool    uiDarkMode();                 // default false (light)

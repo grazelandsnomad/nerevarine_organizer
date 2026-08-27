@@ -18,6 +18,11 @@
 
 #include <QPushButton>
 #include <QTimer>
+#include <QProgressBar>
+#include <QStandardPaths>
+#include <QSettings>
+#include <QDateTime>
+#include "settings.h"
 #include "translation_rules.h"
 #include "translation_store.h"
 
@@ -92,14 +97,18 @@ struct TranslateDialogTestHook {
         d->m_mtTally     = {};
         d->m_mtBtn->setEnabled(false);      // as a live run leaves it
     }
-    // What the reply handler does when the endpoint answers 429.
+    // What the reply handler does when the endpoint answers 429, stamp included.
     static void blockNow(TranslateDialog *d)
     {
         d->m_mtStopped = true;
         d->m_mtQueue.clear();
         d->m_mtPending.clear();
         if (d->m_mtPace) d->m_mtPace->stop();
+        Settings::setTranslateBlockedAt(QDateTime::currentDateTimeUtc());
     }
+    static int  cooloffLeft(TranslateDialog *d) { return d->cooloffLeftSeconds(); }
+    static void refreshCooloff(TranslateDialog *d) { d->updateCooloffDisplay(); }
+    static QString barFormat(TranslateDialog *d) { return d->m_mtBar->format(); }
     static void advance(TranslateDialog *d) { d->advanceMachineTranslate(); }
     static void finish(TranslateDialog *d)  { d->finishMachineTranslate(); }
     static bool stopped(TranslateDialog *d) { return d->m_mtStopped; }
@@ -657,10 +666,77 @@ static void testARunThatSendsNothingStillEnds()
     delete d;
 }
 
+static void testABlockArmsTheCooloff()
+{
+    std::cout << "\n[a block is remembered, and it runs out]\n";
+    translation_store::Memory mem;
+    Settings::setTranslateBlockedAt(QDateTime());        // clean slate
+    auto *d = TranslateDialogTestHook::make(dungeonStrings(), &mem);
+
+    check("nothing is blocked to begin with",
+          TranslateDialogTestHook::cooloffLeft(d) == 0);
+
+    TranslateDialogTestHook::arm(d, {0}, {}, false);
+    TranslateDialogTestHook::blockNow(d);
+    const int left = TranslateDialogTestHook::cooloffLeft(d);
+    check("a block starts the wait", left > 0, QString::number(left));
+    check("and it is the fifteen minutes asked for, not more",
+          left <= google_translate::kBlockCooloffMinutes * 60,
+          QString::number(left));
+
+    // The block outlives the dialog, so it is stored rather than held here.
+    check("it survives into Settings",
+          Settings::translateBlockedAt().isValid());
+
+    // A block from before the window closed must not gate a fresh run.
+    Settings::setTranslateBlockedAt(
+        QDateTime::currentDateTimeUtc().addSecs(
+            -(google_translate::kBlockCooloffMinutes * 60 + 60)));
+    check("a lapsed block gates nothing",
+          TranslateDialogTestHook::cooloffLeft(d) == 0);
+    delete d;
+}
+
+static void testTheCountdownSaysHowLong()
+{
+    std::cout << "\n[the wait is shown, not just enforced]\n";
+    translation_store::Memory mem;
+    auto *d = TranslateDialogTestHook::make(dungeonStrings(), &mem);
+
+    // Asserted against QProgressBar's own default rather than against wording:
+    // Translator::init never runs here, so T() hands back the key itself and a
+    // test that looked for "14:32" would only be testing the ini file.
+    //
+    // format(), not isVisible(): the dialog is never show()n in these tests, so
+    // every child reports invisible and the check would pass vacuously.
+    const QString kDefault = QStringLiteral("%p%");
+
+    Settings::setTranslateBlockedAt(QDateTime::currentDateTimeUtc());
+    TranslateDialogTestHook::refreshCooloff(d);
+    const QString fmt = TranslateDialogTestHook::barFormat(d);
+    check("the bar stops showing a percentage and says something else",
+          !fmt.isEmpty() && fmt != kDefault, fmt);
+
+    Settings::setTranslateBlockedAt(QDateTime());
+    TranslateDialogTestHook::refreshCooloff(d);
+    check("and goes back to normal once the block lapses",
+          TranslateDialogTestHook::barFormat(d) == kDefault,
+          TranslateDialogTestHook::barFormat(d));
+    delete d;
+}
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
     QApplication app(argc, argv);
+
+    // The dialog reads and writes Settings now (the machine-translate cooloff).
+    // Without this the suite would stamp a real block into the developer's own
+    // config and lock their machine translation for fifteen minutes.
+    QCoreApplication::setOrganizationName(QStringLiteral("nerevarine-test"));
+    QCoreApplication::setApplicationName(QStringLiteral("translate-ui-test"));
+    QStandardPaths::setTestModeEnabled(true);
+    QSettings().clear();
 
     std::cout << "=== translate dialog UI ===\n";
     testDeliveredRowIsNotBlank();
@@ -668,6 +744,8 @@ int main(int argc, char **argv)
     testABlockEmptiesBothQueues();
     testTeardownPutsEverythingBack();
     testARunThatSendsNothingStillEnds();
+    testABlockArmsTheCooloff();
+    testTheCountdownSaysHowLong();
     testEditingTheNameRerendersEveryRow();
     testHandEditingARowBreaksItsLink();
     testMarkupIsLiftedOut();

@@ -1,6 +1,7 @@
 #include "settings.h"
 
 #include <QByteArray>
+#include <QDateTime>
 #include <QSettings>
 #include <QStringLiteral>
 #include <QVariant>
@@ -24,6 +25,11 @@ constexpr auto kUiLanguage            = "ui/language";
 // The language MODS should be in, which is not the language the app is drawn
 // in (kUiLanguage). Shared default; a modlist profile may override it.
 constexpr auto kTranslationLanguage   = "ui/translation_language";
+// When Google last answered the machine translator with HTTP 429. Persisted
+// rather than kept on the dialog because the block outlives the dialog, the
+// mod and the app - closing the window and reopening it is the first thing
+// anybody tries.
+constexpr auto kTranslateBlockedAt    = "translate/blocked_at";
 constexpr auto kUiUtilityExplainer    = "ui/utility_explainer_seen";
 constexpr auto kUiDarkMode            = "ui/dark_mode";
 constexpr auto kUiConflictNotices     = "ui/conflict_notices";
@@ -352,6 +358,21 @@ QString Settings::translationLanguage()
 void Settings::setTranslationLanguage(const QString &lang)
 {
     QSettings().setValue(kTranslationLanguage, lang);
+}
+
+QDateTime Settings::translateBlockedAt()
+{
+    return QDateTime::fromString(
+        QSettings().value(kTranslateBlockedAt).toString(), Qt::ISODate);
+}
+
+void Settings::setTranslateBlockedAt(const QDateTime &whenUtc)
+{
+    // ISO-8601 in UTC, the same shape the modlist writes its dates in. Storing
+    // a QDateTime QVariant would leave QSettings to quote it into the INI its
+    // own way; storing local time would let a DST shift move the deadline.
+    QSettings().setValue(kTranslateBlockedAt,
+                         whenUtc.toUTC().toString(Qt::ISODate));
 }
 
 QString Settings::uiLanguage()
