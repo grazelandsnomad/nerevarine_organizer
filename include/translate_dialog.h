@@ -80,6 +80,10 @@ private:
     // Drains m_mtQueue while fewer than kMaxInFlight requests are outstanding;
     // each reply calls back in to keep the queue moving.
     void pumpMachineTranslate();
+    // Advance to pass two, or end the run.
+    void advanceMachineTranslate();
+    // The one teardown; see the comment on the definition.
+    void finishMachineTranslate();
 
 private:
     void buildUi(const QString &modName);
@@ -146,6 +150,13 @@ private:
     // being fetched, which is the question somebody watching a 480-row list
     // is really asking.
     QTimer       *m_mtAnim  = nullptr;
+    // One restartable timer paces dispatch, the way BulkInstallQueue drip-feeds
+    // Nexus installs. Never singleShot-per-request: see notify_banner.h for why
+    // one timer beats a fleet of them.
+    QTimer       *m_mtPace  = nullptr;
+    // A block cleared the queues. Nothing restarts them until the run is torn
+    // down, and finishMachineTranslate is what puts this back to false.
+    bool          m_mtStopped = false;
     int           m_mtFrame = 0;
 };
 

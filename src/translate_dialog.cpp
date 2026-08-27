@@ -374,6 +374,16 @@ void TranslateDialog::onMachineTranslate()
     m_mtAnim->start();
 
     if (!m_net) m_net = new QNetworkAccessManager(this);
+    if (!m_mtPace) {
+        // One request per tick, at google_translate::kRequestSpacingMs. The
+        // old dispatcher let every reply fire the next, which on a fast link
+        // is tens of requests a second - and that is what earns the 429.
+        m_mtPace = new QTimer(this);
+        m_mtPace->setInterval(google_translate::kRequestSpacingMs);
+        connect(m_mtPace, &QTimer::timeout,
+                this, &TranslateDialog::pumpMachineTranslate);
+    }
+    m_mtStopped = false;
     m_mtBtn->setEnabled(false);
     m_mtBar->setVisible(true);
     m_mtTotal  = int(m_mtQueue.size()) + int(m_mtPending.size());
@@ -390,13 +400,19 @@ void TranslateDialog::onMachineTranslate()
 
 void TranslateDialog::pumpMachineTranslate()
 {
-    // A queue, not a fan-out. The free endpoint starts refusing when a whole
-    // mod's worth of strings arrives at once, and 164 strings in one mod is an
-    // ordinary size here.
-    while (!m_mtQueue.isEmpty()
-           && m_mtInFlight < google_translate::kMaxInFlight) {
+    // Stopped for a reason - DownloadQueue::processDownloadQueue opens the same
+    // way. A block clears the queues, and a tick already in the loop must not
+    // start them up again.
+    if (m_mtStopped)         { if (m_mtPace) m_mtPace->stop(); return; }
+    if (m_mtQueue.isEmpty()) { if (m_mtPace) m_mtPace->stop(); return; }
+
+    // The cap no longer sets the pace, the timer does; this only stops replies
+    // piling up when the endpoint is slow. The timer keeps ticking and the next
+    // tick tries again.
+    if (m_mtInFlight >= google_translate::kMaxInFlight) return;
+
+    while (!m_mtQueue.isEmpty()) {
         const int item = m_mtQueue.takeFirst();
-        ++m_mtInFlight;
 
         // Negative encodes "this is a bare name with no row of its own".
         const int nameIdx = item < 0 ? (-1 - item) : nameRowIndex(item);
@@ -423,11 +439,13 @@ void TranslateDialog::pumpMachineTranslate()
                 ProgrammaticEdit guard(m_expanding);
                 setPending(item, 0);
             }
-            --m_mtInFlight;
             m_mtBar->setValue(++m_mtDone);
+            // Costs no request, so it costs no tick either: spending 350 ms on
+            // a row nothing is asked about would be a wait for nothing.
             continue;
         }
 
+        ++m_mtInFlight;                 // below the free skip, which sends nothing
         if (item >= 0) {
             ProgrammaticEdit guard(m_expanding);
             setPending(item, 2);        // on the wire now, not merely queued
@@ -463,6 +481,23 @@ void TranslateDialog::pumpMachineTranslate()
                 && m_mtFirstError.isEmpty()) {
                 m_mtFirstError      = reply->errorString();
                 m_mtFirstHttpStatus = http;
+            }
+
+            // A 429 means the endpoint has stopped answering this client, so
+            // the other 163 requests will 429 too - and sending them is what
+            // makes the block last longer. Only a 429: a 403 is a refusal, not
+            // a rate limit, and the run is allowed to finish and report it.
+            //
+            // Requests already in flight are left alone. They are paid for and
+            // may still answer, and cancelling would manufacture status-0
+            // replies that classify() would read as Offline - the run would
+            // then blame the user's network for our own abort.
+            if (!m_mtStopped
+                && outcome == google_translate::Failure::Blocked) {
+                m_mtStopped = true;
+                m_mtQueue.clear();
+                m_mtPending.clear();
+                if (m_mtPace) m_mtPace->stop();
             }
             if (!text.isEmpty() && !spans.isEmpty()) {
                 // Before the user's own after-rules, so those see the real
@@ -507,71 +542,109 @@ void TranslateDialog::pumpMachineTranslate()
             --m_mtInFlight;
             m_mtBar->setValue(++m_mtDone);
 
-            if (!m_mtQueue.isEmpty()) { pumpMachineTranslate(); return; }
-            if (m_mtInFlight > 0) return;
-
-            // Names are in; now the rows that need them.
-            if (m_mtNamePhase && !m_mtPending.isEmpty()) {
-                m_mtNamePhase = false;
-                m_mtQueue = m_mtPending;
-                m_mtPending.clear();
-                pumpMachineTranslate();
-                return;
-            }
-            m_mtNamePhase = false;
-
-            m_mtBar->setVisible(false);
-            m_mtBtn->setEnabled(true);
-            if (m_mtAnim) m_mtAnim->stop();
-            {
-                // Nothing is waiting any more, including rows a failed run
-                // never reached.
-                ProgrammaticEdit guard(m_expanding);
-                for (int r = 0; r < m_table->rowCount(); ++r) setPending(r, 0);
-            }
-            m_table->viewport()->update();
-            restyleLinkedRows();
-            // One message, naming what actually happened. This used to be a
-            // single string that blamed rate-limiting for every failure -
-            // right for a 429, and advice to "try again in a moment" that
-            // could be repeated forever on a machine with no network.
-            if (m_mtTally.failed() > 0) {
-                const int done = m_mtTally.ok;
-                QString body;
-                switch (google_translate::worstOf(m_mtTally)) {
-                    case google_translate::Failure::Blocked:
-                        body = T("translate_mt_blocked")
-                                   .arg(done)
-                                   .arg(google_translate::kBlockCooloffMinutes);
-                        break;
-                    case google_translate::Failure::Refused:
-                        body = T("translate_mt_refused").arg(done);
-                        break;
-                    case google_translate::Failure::Offline:
-                        body = T("translate_mt_offline")
-                                   .arg(done).arg(m_mtFirstError);
-                        break;
-                    case google_translate::Failure::HttpError:
-                        body = T("translate_mt_http_error")
-                                   .arg(m_mtFirstHttpStatus)
-                                   .arg(m_mtTally.failed()).arg(done);
-                        break;
-                    default:
-                        body = T("translate_machine_failed")
-                                   .arg(done).arg(m_mtTally.failed());
-                        break;
-                }
-                // Rows the run never reached - a stopped run leaves some
-                // untouched, and they are blank for a different reason than
-                // the ones that were asked about and came back unusable.
-                const int neverSent = m_mtTotal - m_mtDone;
-                if (neverSent > 0)
-                    body += T("translate_mt_not_sent").arg(neverSent);
-                ui::warn(this, T("translate_machine"), body);
-            }
+            // Dispatch belongs to the pace timer now. A reply firing the next
+            // request itself is exactly what made this a burst.
+            advanceMachineTranslate();
         });
+        break;                          // one request per tick
+    }
+
+    // Whatever is left goes at the spacing, not as fast as replies land.
+    if (!m_mtQueue.isEmpty() && m_mtPace && !m_mtPace->isActive())
+        m_mtPace->start();
+    // A tick that dispatched nothing - every remaining row was markup-only -
+    // still has to be able to end the run.
+    advanceMachineTranslate();
+}
+
+// Called whenever the run might be over: after a reply lands, and after a tick
+// that dispatched nothing.
+//
+// Split out because the markup-only skip can empty the queue with nothing in
+// flight, and the completion path used to live only inside the reply handler -
+// so a run whose last rows were all markup left the button disabled and the
+// spinner turning, with no reply left to come and finish it.
+void TranslateDialog::advanceMachineTranslate()
+{
+    if (!m_mtQueue.isEmpty()) return;   // the pace timer has more to send
+    if (m_mtInFlight > 0)     return;   // waiting on what is already out
+
+    if (!m_mtStopped && m_mtNamePhase && !m_mtPending.isEmpty()) {
+        // Names are in; now the rows that need them. The first goes at once
+        // and the rest are paced - BulkInstallQueue::enqueue's shape.
+        m_mtNamePhase = false;
+        m_mtQueue     = m_mtPending;
+        m_mtPending.clear();
+        pumpMachineTranslate();
+        return;
+    }
+    m_mtNamePhase = false;
+    finishMachineTranslate();
+}
+
+// The one teardown, with three callers. Every one of them needs all of it: a
+// half-torn-down run leaves the button disabled for good.
+void TranslateDialog::finishMachineTranslate()
+{
+    m_mtQueue.clear();              // both, always - a surviving m_mtPending
+    m_mtPending.clear();            // would start pass two after an abort
+    m_mtNamePhase = false;
+    if (m_mtPace) m_mtPace->stop();
+    if (m_mtAnim) m_mtAnim->stop();
+    m_mtBtn->setEnabled(true);      // still the only place this happens
+    {
+        // Nothing is waiting any more, including rows a stopped run never
+        // reached.
+        ProgrammaticEdit guard(m_expanding);
+        for (int r = 0; r < m_table->rowCount(); ++r) setPending(r, 0);
+    }
+    m_table->viewport()->update();
+    restyleLinkedRows();
+    // Forget this and pumpMachineTranslate returns immediately for the rest of
+    // the dialog's life, with nothing on screen to say why.
+    m_mtStopped = false;
+    m_mtBar->setVisible(false);
+
+    // One message, naming what actually happened. This used to be a
+    // single string that blamed rate-limiting for every failure -
+    // right for a 429, and advice to "try again in a moment" that
+    // could be repeated forever on a machine with no network.
+    if (m_mtTally.failed() > 0) {
+        const int done = m_mtTally.ok;
+        QString body;
+        switch (google_translate::worstOf(m_mtTally)) {
+            case google_translate::Failure::Blocked:
+                body = T("translate_mt_blocked")
+                           .arg(done)
+                           .arg(google_translate::kBlockCooloffMinutes);
+                break;
+            case google_translate::Failure::Refused:
+                body = T("translate_mt_refused").arg(done);
+                break;
+            case google_translate::Failure::Offline:
+                body = T("translate_mt_offline")
+                           .arg(done).arg(m_mtFirstError);
+                break;
+            case google_translate::Failure::HttpError:
+                body = T("translate_mt_http_error")
+                           .arg(m_mtFirstHttpStatus)
+                           .arg(m_mtTally.failed()).arg(done);
+                break;
+            default:
+                body = T("translate_machine_failed")
+                           .arg(done).arg(m_mtTally.failed());
+                break;
+        }
+        // Rows the run never reached - a stopped run leaves some
+        // untouched, and they are blank for a different reason than
+        // the ones that were asked about and came back unusable.
+        const int neverSent = m_mtTotal - m_mtDone;
+        if (neverSent > 0)
+            body += T("translate_mt_not_sent").arg(neverSent);
+        ui::warn(this, T("translate_machine"), body);
     }
 }
+
 
 int TranslateDialog::nameRowIndex(int row) const
 {

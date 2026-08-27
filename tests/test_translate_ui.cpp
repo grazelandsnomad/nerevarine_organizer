@@ -15,6 +15,9 @@
 #include "term_protect.h"
 #include "markup_protect.h"
 #include "translate_dialog.h"
+
+#include <QPushButton>
+#include <QTimer>
 #include "translation_rules.h"
 #include "translation_store.h"
 
@@ -70,6 +73,45 @@ struct TranslateDialogTestHook {
         d->m_table->item(row, 1)->setData(Qt::UserRole + 1, masked);
         d->expandRow(row);
     }
+
+    // -- the machine-translate run's own state ------------------------
+    //
+    // onMachineTranslate() itself is off limits: it ends in a blocking
+    // QMessageBox, which in a headless run would simply hang. These reach the
+    // pieces around it.
+    static void arm(TranslateDialog *d, const QList<int> &queue,
+                    const QList<int> &pending, bool namePhase)
+    {
+        d->m_mtQueue     = queue;
+        d->m_mtPending   = pending;
+        d->m_mtNamePhase = namePhase;
+        d->m_mtTotal     = int(queue.size() + pending.size());
+        d->m_mtDone      = 0;
+        d->m_mtInFlight  = 0;
+        d->m_mtStopped   = false;
+        d->m_mtTally     = {};
+        d->m_mtBtn->setEnabled(false);      // as a live run leaves it
+    }
+    // What the reply handler does when the endpoint answers 429.
+    static void blockNow(TranslateDialog *d)
+    {
+        d->m_mtStopped = true;
+        d->m_mtQueue.clear();
+        d->m_mtPending.clear();
+        if (d->m_mtPace) d->m_mtPace->stop();
+    }
+    static void advance(TranslateDialog *d) { d->advanceMachineTranslate(); }
+    static void finish(TranslateDialog *d)  { d->finishMachineTranslate(); }
+    static bool stopped(TranslateDialog *d) { return d->m_mtStopped; }
+    static int  queued(TranslateDialog *d)  { return int(d->m_mtQueue.size()); }
+    static int  pendingRows(TranslateDialog *d) { return int(d->m_mtPending.size()); }
+    static bool buttonOn(TranslateDialog *d) { return d->m_mtBtn->isEnabled(); }
+    static bool paceOn(TranslateDialog *d)
+    { return d->m_mtPace && d->m_mtPace->isActive(); }
+    static bool animOn(TranslateDialog *d)
+    { return d->m_mtAnim && d->m_mtAnim->isActive(); }
+    static int  pendingState(TranslateDialog *d, int row)
+    { return d->m_table->item(row, 1)->data(Qt::UserRole + 3).toInt(); }
 };
 
 static QList<TranslatableString> dungeonStrings()
@@ -549,6 +591,72 @@ static void testTheMorrowindNamingFamilies()
           shaped("Dagoth Ur waits in the heart of Red Mountain.").isEmpty());
 }
 
+// -- the run's own bookkeeping ----------------------------------------
+
+static void testABlockEmptiesBothQueues()
+{
+    std::cout << "\n[a block stops the run, not just the current pass]\n";
+    translation_store::Memory mem;
+    auto *d = TranslateDialogTestHook::make(dungeonStrings(), &mem);
+
+    TranslateDialogTestHook::arm(d, {0, 1}, {2, 3}, /*namePhase=*/true);
+    TranslateDialogTestHook::blockNow(d);
+    check("the queue is empty", TranslateDialogTestHook::queued(d) == 0);
+    // The one that bites: a surviving m_mtPending lets the phase switch start
+    // pass two straight after pass one was abandoned.
+    check("and so is the second pass", TranslateDialogTestHook::pendingRows(d) == 0);
+    check("the run is marked stopped", TranslateDialogTestHook::stopped(d));
+
+    TranslateDialogTestHook::advance(d);
+    check("advancing does not start pass two",
+          TranslateDialogTestHook::queued(d) == 0);
+    check("it ends the run instead", TranslateDialogTestHook::buttonOn(d));
+    delete d;
+}
+
+static void testTeardownPutsEverythingBack()
+{
+    std::cout << "\n[the teardown leaves nothing running]\n";
+    translation_store::Memory mem;
+    auto *d = TranslateDialogTestHook::make(dungeonStrings(), &mem);
+
+    TranslateDialogTestHook::arm(d, {0, 1}, {}, false);
+    TranslateDialogTestHook::pending(d, 0, 1);
+    TranslateDialogTestHook::pending(d, 1, 2);
+    TranslateDialogTestHook::blockNow(d);
+    TranslateDialogTestHook::finish(d);
+
+    check("the button works again", TranslateDialogTestHook::buttonOn(d));
+    check("the pacer is stopped", !TranslateDialogTestHook::paceOn(d));
+    check("so is the spinner", !TranslateDialogTestHook::animOn(d));
+    // Rows a stopped run never reached would otherwise spin forever.
+    check("no row is left waiting",
+          TranslateDialogTestHook::pendingState(d, 0) == 0
+              && TranslateDialogTestHook::pendingState(d, 1) == 0);
+    // Forget this one and the button never does anything again for the rest
+    // of the dialog's life.
+    check("and the stopped flag is cleared for the next run",
+          !TranslateDialogTestHook::stopped(d));
+    delete d;
+}
+
+static void testARunThatSendsNothingStillEnds()
+{
+    std::cout << "\n[a run with nothing left to send still finishes]\n";
+    // The latent bug: markup-only rows are skipped without a request, so a run
+    // whose remaining rows are all markup emptied the queue with nothing in
+    // flight - and the completion path lived only in the reply handler, which
+    // no longer had a reply coming. Button disabled, spinner turning, forever.
+    translation_store::Memory mem;
+    auto *d = TranslateDialogTestHook::make(dungeonStrings(), &mem);
+
+    TranslateDialogTestHook::arm(d, {}, {}, false);
+    TranslateDialogTestHook::advance(d);
+    check("the run ends", TranslateDialogTestHook::buttonOn(d));
+    check("with nothing left ticking", !TranslateDialogTestHook::paceOn(d));
+    delete d;
+}
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
@@ -557,6 +665,9 @@ int main(int argc, char **argv)
     std::cout << "=== translate dialog UI ===\n";
     testDeliveredRowIsNotBlank();
     testUnguardedWriteIsWhatBlankedIt();
+    testABlockEmptiesBothQueues();
+    testTeardownPutsEverythingBack();
+    testARunThatSendsNothingStillEnds();
     testEditingTheNameRerendersEveryRow();
     testHandEditingARowBreaksItsLink();
     testMarkupIsLiftedOut();
