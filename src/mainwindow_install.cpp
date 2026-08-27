@@ -274,10 +274,14 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
     // runs inside the onDone callback; we return immediately after show().
     if (FomodWizard::hasFomod(modPath)) {
         const QString priorChoices = placeholder->data(ModRole::FomodChoices).toString();
-        // Existing mod names for the wizard's duplicate-name detection (model
-        // read; see confirmReinstallIfInstalled for the migration rationale).
+        // What the user actually HAS, for the wizard's modlist verdicts. Every
+        // pass that reads this asks "is this mod present?", and two of them
+        // untick an option when the answer is no - so a row that is only
+        // queued to download must not answer yes. It also puts the name passes
+        // on the same footing as Pass E, which has always matched against
+        // installedNexusUrls() below.
         const QStringList installedModNames =
-            m_model ? m_model->modDisplayNames() : QStringList();
+            m_model ? m_model->installedModDisplayNames() : QStringList();
         // Nexus URLs of what's installed, so the wizard can warn about
         // compatibility options whose target mod the user doesn't have
         // (Pass E). Matched by mod id, hence URLs rather than names.
