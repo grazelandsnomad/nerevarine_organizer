@@ -11,6 +11,14 @@
 // API-key storage constants (used only by the keychain-backed API-key slots).
 static constexpr const char *kKeychainService = "NerevarineOrganizer";
 static constexpr const char *kKeychainKey     = "nexus_api_key";
+
+// How long loadApiKey() waits for the keyring before giving up and using
+// whatever QSettings holds. Generous on purpose: a cold wallet - the first
+// unlock after login, or the first read after the app has been closed a while -
+// can take seconds, and timing out early would prompt for a key that is stored
+// and simply slow to arrive.
+static constexpr int kKeychainReadTimeoutMs = 10000;
+
 #include "settings.h"
 #include "theme.h"
 #include "separatordialog.h"
@@ -900,32 +908,76 @@ void MainWindow::loadApiKey()
 #ifdef HAVE_QTKEYCHAIN
     auto *job = new QKeychain::ReadPasswordJob(kKeychainService, this);
     job->setKey(kKeychainKey);
-    // Synchronous-ish: we wait via a local event loop so m_apiKey is
-    // populated before the first Nexus request could use it.  The read is
-    // fast (keyring daemons are local IPC) - typically a few ms.
-    QEventLoop loop;
-    connect(job, &QKeychain::Job::finished, &loop, &QEventLoop::quit);
-    job->start();
-    loop.exec();
 
-    if (job->error() == QKeychain::NoError) {
-        m_apiKey = job->textData();
-    } else if (job->error() == QKeychain::EntryNotFound) {
+    // We wait via a local event loop so m_apiKey is populated before the first
+    // Nexus request could use it. Two things this loop must not do:
+    //
+    //  - Deliver user input. Every Nexus entry point guards on
+    //    m_apiKey.isEmpty(), so anything dispatched before the assignment below
+    //    would see a blank key and pop "paste your API key" over one that is
+    //    stored and merely still loading. No window is visible this early today,
+    //    so this is belt-and-braces - but the loop does run queued work, and the
+    //    guard costs nothing. ExcludeUserInputEvents defers input rather than
+    //    dropping it, so it simply arrives once the read is done.
+    //  - Hang forever. Warm, the read is a couple of ms (keyring daemons are
+    //    local IPC), but a cold wallet is seconds and a wedged one never
+    //    answers - which would freeze startup with no window on screen yet.
+    //
+    // Copy the result out inside the handler: once the timeout fires the job is
+    // still in flight, so nothing after the loop may touch it.
+    bool             finished = false;
+    QKeychain::Error err      = QKeychain::NoError;
+    QString          errStr;
+    QString          text;
+    QEventLoop loop;
+    connect(job, &QKeychain::Job::finished, &loop, [&]{
+        finished = true;
+        err      = job->error();
+        errStr   = job->errorString();
+        text     = job->textData();
+        loop.quit();
+    });
+    connect(job, &QKeychain::Job::finished, job, &QObject::deleteLater);
+    job->start();
+    QTimer::singleShot(kKeychainReadTimeoutMs, &loop, &QEventLoop::quit);
+    loop.exec(QEventLoop::ExcludeUserInputEvents);
+
+    // A read that never finished leaves err at its NoError default, so it has to
+    // be handled before the NoError branch below - otherwise a stored key looks
+    // like a successfully-read empty one and gets silently dropped.
+    if (!finished) {
+        qCWarning(logging::lcApp,
+                  "Keychain read still pending after %d ms; falling back to "
+                  "settings for this session.", kKeychainReadTimeoutMs);
+        m_apiKey = Settings::nexusApiKey();
+        return;
+    }
+
+    // NoError with an empty string means the entry exists but holds nothing,
+    // which is indistinguishable from having no key at all - treat it as
+    // EntryNotFound instead of accepting the blank and skipping the migration.
+    if (err == QKeychain::NoError && !text.isEmpty()) {
+        m_apiKey = text;
+        // Scrub any plain-text copy left over from before the migration. The
+        // EntryNotFound branch only scrubs when the keychain had no entry, so a
+        // key already in the keyring left its QSettings original sitting in
+        // cleartext on disk indefinitely.
+        if (!Settings::nexusApiKey().isEmpty())
+            Settings::removeNexusApiKey();
+    } else if (err == QKeychain::NoError || err == QKeychain::EntryNotFound) {
         // Migrate from old plain-text QSettings storage, if present.
         QString legacy = Settings::nexusApiKey();
         if (!legacy.isEmpty()) {
             m_apiKey = legacy;
-            saveApiKey(legacy);          // writes to keychain
-            Settings::removeNexusApiKey(); // then scrub plain-text copy
+            saveApiKey(legacy);   // writes to keychain, scrubs the plain text
         }
     } else {
         // Backend error (no available service, user denied access, …).
         // Fall back to QSettings so the app still works this session.
         qCWarning(logging::lcApp, "Keychain read failed: %s",
-                  qUtf8Printable(job->errorString()));
+                  qUtf8Printable(errStr));
         m_apiKey = Settings::nexusApiKey();
     }
-    job->deleteLater();
 #else
     m_apiKey = Settings::nexusApiKey();
 #endif
