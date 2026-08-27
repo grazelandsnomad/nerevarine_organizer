@@ -757,6 +757,9 @@ void MainWindow::setupCentralWidget()
             this, [this](QListWidgetItem *sep) { collapseSection(sep, true); });
     connect(m_undoStack, &UndoStack::stateApplied,
             this, [this]() {
+        // The list was rebuilt from scratch; any queued row is a stale index
+        // pointing at whatever now occupies that position.
+        m_pendingDisables.clear();
         updateModCount();
         saveModList();
         scheduleConflictScan();
@@ -952,6 +955,23 @@ void MainWindow::setupCentralWidget()
             updateModCount();
             updateSectionCounts();
             scheduleConflictScan();
+
+            // Someone just turned a mod off. Queue it; the check runs on the
+            // next turn of the event loop (see m_depWarnTimer) so no dialog is
+            // ever exec'd from inside setData, and a bulk section toggle asks
+            // once instead of once per row.
+            //
+            // Only Unchecked is hooked, and that is what bounds this to the
+            // three real disable paths: every other live-row setCheckState in
+            // the app sets Checked, and every path that unchecks - loading,
+            // importing, undo - does it before addItem, which emits nothing.
+            if (item->checkState() == Qt::Unchecked && !m_depWarnSuspended
+                && m_depWarnTimer
+                && (!m_undoStack || !m_undoStack->isApplyingState())) {
+                m_pendingDisables.append(
+                    QPersistentModelIndex(m_modList->indexFromItem(item)));
+                m_depWarnTimer->start();
+            }
         }
     });
 

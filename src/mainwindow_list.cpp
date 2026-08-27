@@ -286,6 +286,127 @@ void MainWindow::addSeparatorAtRow(int targetRow)
     saveModList();
 }
 
+// -- Breaking someone else's declared dependency -----------------------
+
+MainWindow::DepBreak MainWindow::confirmDependencyBreakage(
+    const QList<deps::ModEntry> &before,
+    const QList<deps::ModEntry> &after,
+    const QString &body,
+    const QString &cascadeLabel,
+    const QString &leaveLabel,
+    bool includeDisabled,
+    const std::function<void(deps::ModEntry &)> &disable,
+    QList<int> *cascadeRows)
+{
+    if (cascadeRows) cascadeRows->clear();
+
+    // The closure, not just the first level: acting on the dependents can
+    // break THEIR dependents, and offering to disable 26 while actually
+    // disabling 31 would be worse than not offering it at all.
+    const QList<deps::Breakage> broken =
+        deps::expandBreakageClosure(before, after, includeDisabled, disable);
+    if (broken.isEmpty()) return DepBreak::Proceed;
+
+    QStringList names;
+    for (const deps::Breakage &b : broken) names << b.displayName;
+
+    QMessageBox box(this);
+    box.setWindowTitle(T("dep_break_title"));
+    box.setIcon(QMessageBox::Warning);
+    // The second line is what makes this legible. Without it the manager
+    // appears to be asserting something it scraped, and the first reaction is
+    // "no they don't" - naming the user as the source turns it into a
+    // reminder.
+    box.setText(body.arg(broken.size()) + QStringLiteral("\n\n") + T("dep_break_why"));
+
+    // A dozen inline, the rest in Qt's own scrollable details pane, so a
+    // library with twenty-six dependents does not grow the dialog off-screen.
+    constexpr int kInline = 12;
+    QStringList shown;
+    for (int i = 0; i < names.size() && i < kInline; ++i)
+        shown << QStringLiteral("  • ") + names[i];
+    if (names.size() > kInline)
+        shown << QStringLiteral("  ")
+                 + T("launch_warn_entry_more").arg(names.size() - kInline);
+    box.setInformativeText(shown.join(QLatin1Char('\n')));
+    if (names.size() > kInline) box.setDetailedText(names.join(QLatin1Char('\n')));
+
+    auto *alsoBtn   = box.addButton(cascadeLabel, QMessageBox::DestructiveRole);
+    auto *leaveBtn  = box.addButton(leaveLabel,   QMessageBox::AcceptRole);
+    auto *cancelBtn = box.addButton(QMessageBox::Cancel);
+    // Leaving them is the default: cascading on a stray Enter is the failure
+    // mode worth designing against, and an orphaned dependent is already
+    // surfaced by the yellow ! icon and the launch warning.
+    box.setDefaultButton(leaveBtn);
+    box.exec();
+
+    if (box.clickedButton() == cancelBtn) return DepBreak::Cancel;
+    if (box.clickedButton() == alsoBtn) {
+        if (cascadeRows)
+            for (const deps::Breakage &b : broken) cascadeRows->append(b.idx);
+        return DepBreak::ProceedAndCascade;
+    }
+    return DepBreak::Proceed;
+}
+
+void MainWindow::checkPendingDisables()
+{
+    if (m_depWarnSuspended) return;
+    const QList<QPersistentModelIndex> pending = m_pendingDisables;
+    m_pendingDisables.clear();
+    if (pending.isEmpty() || !m_modList) return;
+
+    // Re-validate. Between the signal and this turn of the event loop the rows
+    // may have been reordered, removed, or ticked back on.
+    QList<int> rows;
+    for (const QPersistentModelIndex &pi : pending) {
+        if (!pi.isValid()) continue;
+        auto *it = m_modList->item(pi.row());
+        if (!it) continue;
+        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (it->checkState() != Qt::Unchecked) continue;
+        if (!rows.contains(pi.row())) rows.append(pi.row());
+    }
+    if (rows.isEmpty()) return;
+
+    // `after` is the list as it stands; `before` is that with these rows still
+    // ticked. The diff is what the user just did.
+    const QList<deps::ModEntry> after = deps::snapshot(m_modList);
+    QList<deps::ModEntry> before = after;
+    for (int r : rows)
+        if (r >= 0 && r < before.size()) before[r].enabled = true;
+
+    QList<int> cascade;
+    const DepBreak choice = confirmDependencyBreakage(
+        before, after, T("dep_break_disable_body"),
+        T("dep_break_disable_also"), T("dep_break_disable_leave"),
+        /*includeDisabled=*/false,
+        [](deps::ModEntry &m) { m.enabled = false; },
+        &cascade);
+
+    if (choice == DepBreak::Proceed) return;   // "leave them", or nothing broke
+
+    m_depWarnSuspended = true;
+    {
+        // Blocked so the revert/cascade does not come straight back through
+        // itemChanged; its three jobs are done by hand below.
+        const QSignalBlocker blocker(m_modList);
+        if (choice == DepBreak::Cancel) {
+            for (int r : rows)
+                if (auto *it = m_modList->item(r)) it->setCheckState(Qt::Checked);
+        } else {
+            for (int r : cascade)
+                if (auto *it = m_modList->item(r)) it->setCheckState(Qt::Unchecked);
+        }
+    }
+    m_depWarnSuspended = false;
+
+    updateModCount();
+    updateSectionCounts();
+    scheduleConflictScan();
+    saveModList();
+}
+
 void MainWindow::onRemoveSelected()
 {
     const auto selected = m_modList->selectedItems();
@@ -746,12 +867,17 @@ void MainWindow::buildConflictMenu(QMenu *menu, QListWidgetItem *item)
     for (const auto &c : clashes) {
         sub->addAction(T("ctx_conflict_disable_other").arg(c.modName), this,
                        [this, target = c.modPath] {
+            m_undoStack->pushUndo();
             for (int i = 0; i < m_modList->count(); ++i) {
                 auto *row = m_modList->item(i);
                 if (row->data(ModRole::ModPath).toString() != target) continue;
-                row->setCheckState(Qt::Unchecked);   // itemChanged does the rest
+                row->setCheckState(Qt::Unchecked);
                 break;
             }
+            // itemChanged refreshes the counts and schedules the conflict
+            // scan, but it has never saved. The toggle was being lost until
+            // some later mutation happened to write the list out.
+            saveModList();
         });
         reveal << qMakePair(c.modName, c.modPath);
     }
@@ -953,10 +1079,44 @@ void MainWindow::onContextMenu(const QPoint &pos)
                     if (name.isEmpty()) name = item->text();
                     if (!ui::confirm(this, T("ctx_uninstall"),
                         T("uninstall_confirm").arg(name))) return;
+
+                    // Uninstall is remove plus rmdir, so it must not be less
+                    // protective than remove. The row goes either way, so the
+                    // hypothetical is the same shape: this row, gone.
+                    {
+                        const QList<deps::ModEntry> before =
+                            deps::snapshot(m_modList);
+                        QList<deps::ModEntry> after = before;
+                        const int row = m_modList->row(item);
+                        if (row >= 0 && row < after.size())
+                            after[row] = deps::ModEntry{};
+                        QList<int> cascade;
+                        const DepBreak choice = confirmDependencyBreakage(
+                            before, after, T("dep_break_uninstall_body"),
+                            T("dep_break_uninstall_also"), T("dep_break_leave"),
+                            /*includeDisabled=*/true, {}, &cascade);
+                        if (choice == DepBreak::Cancel) return;
+                        // The cascade only turns the dependents off. Deleting
+                        // somebody else's files off the back of one uninstall
+                        // is a bigger promise than the button makes, and the
+                        // rows stay in the list where the user can act on them.
+                        if (choice == DepBreak::ProceedAndCascade) {
+                            for (int r : cascade)
+                                if (auto *dep = m_modList->item(r))
+                                    dep->setCheckState(Qt::Unchecked);
+                        }
+                    }
+
                     // Shared with another profile? Drop the row here but KEEP the
                     // files - another profile still points at this folder.
                     if (!path.isEmpty()
                         && modPathReferencedByOtherProfile(mod_sharing::cleanModPath(path))) {
+                        // Undoable: the files are still there, so restoring the
+                        // row restores the truth. The rmdir branch below is
+                        // deliberately not - undo cannot un-delete a folder, and
+                        // a restored row would claim "installed" while pointing
+                        // at nothing.
+                        m_undoStack->pushUndo();
                         delete m_modList->takeItem(m_modList->row(item));
                         saveModList();
                         ui::info(this, T("ctx_uninstall"), T("share_uninstall_kept_shared"));
@@ -1107,6 +1267,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                     item->checkState() == Qt::Checked
                         ? T("ctx_disable") : T("ctx_enable"),
                     this, [this, item]{
+                    m_undoStack->pushUndo();
                     item->setCheckState(item->checkState() == Qt::Checked
                         ? Qt::Unchecked : Qt::Checked);
                     saveModList();

@@ -446,6 +446,18 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_conflictTimer, &QTimer::timeout, this, &MainWindow::runConflictScan);
     scheduleConflictScan();
 
+    // Disable-warning batching. Zero-shot rather than immediate on purpose:
+    // itemChanged is emitted from inside QListModel::setData, so a dialog
+    // exec'd from that slot would re-enter the event loop mid-emission and a
+    // reorder could move rows out from under the item pointers. Deferring by
+    // one turn also coalesces "disable all in section" into a single dialog
+    // instead of one per row.
+    m_depWarnTimer = new QTimer(this);
+    m_depWarnTimer->setSingleShot(true);
+    m_depWarnTimer->setInterval(0);
+    connect(m_depWarnTimer, &QTimer::timeout,
+            this, &MainWindow::checkPendingDisables);
+
     // Drip-feed: one onInstallFromNexus at a time so the Nexus rate-limiter and
     // the modal file pickers don't pile up.
     m_bulkInstall = new BulkInstallQueue(m_modList,

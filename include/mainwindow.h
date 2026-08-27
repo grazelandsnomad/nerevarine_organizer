@@ -5,6 +5,7 @@
 #include <QDateTime>
 #include <QJsonObject>
 #include <QList>
+#include <QPersistentModelIndex>
 #include <QMainWindow>
 #include <QHash>
 #include <QSet>
@@ -24,7 +25,8 @@
 #include "nexusclient.h"
 #include "game_profiles.h"
 #include "download_watch.h"   // Watcher* member, and StickyKind routing
-#include "modentry.h"            // ModEntry complete type: QList<ModEntry> by value below
+#include "modentry.h"
+#include "deps_resolver.h"            // ModEntry complete type: QList<ModEntry> by value below
 
 class QAction;
 class QCloseEvent;
@@ -193,6 +195,7 @@ private slots:
     // QtConcurrent worker and posts results back to the UI.
     void scanMissingMasters();   // schedule a missing-master rescan
     void scanMissingDependencies(); // in-memory DependsOn -> warning-icon sweep
+
     void switchToGame(int idx);
     // Switch modlist profile within the current game: save current modlist +
     // load order to the OLD profile, flip the active index, point m_modsDir at
@@ -252,6 +255,32 @@ private slots:
     void resizeEvent(QResizeEvent *event) override;
 
 private:
+    // -- Breaking someone else's declared dependency ------------------
+    //
+    // What the user chose when told an action leaves declared dependencies
+    // unmet. ProceedAndCascade means they asked for the dependents to be
+    // dealt with too, and `cascadeRows` says which.
+    enum class DepBreak { Cancel, Proceed, ProceedAndCascade };
+
+    // Front an action that would newly break dependents. `after` is the
+    // hypothetical modlist the action would produce. Returns Proceed
+    // immediately when nothing breaks, so callers need no guard of their own.
+    //
+    // `disable` applies the same action to a row when computing the cascade
+    // closure; pass {} for actions with no in-place equivalent.
+    DepBreak confirmDependencyBreakage(
+        const QList<deps::ModEntry> &before,
+        const QList<deps::ModEntry> &after,
+        const QString &body,
+        const QString &cascadeLabel,
+        const QString &leaveLabel,
+        bool includeDisabled,
+        const std::function<void(deps::ModEntry &)> &disable,
+        QList<int> *cascadeRows);
+
+    // Rows unticked since the last event-loop turn, checked in one batch.
+    void checkPendingDisables();
+
     void setupMenuBar();
     void setupToolbar();
     void setupCentralWidget();
@@ -743,6 +772,14 @@ private:
 
     // Conflict detection
     QTimer              *m_conflictTimer = nullptr;
+    // Disable-warning batching. NEVER exec a dialog straight from
+    // itemChanged: that signal is emitted from inside QListModel::setData,
+    // and re-entering the event loop there lets a reorder move rows out from
+    // under the item pointers. A zero-shot timer also coalesces "disable all
+    // in section" into one dialog instead of one per row.
+    QTimer                     *m_depWarnTimer = nullptr;
+    QList<QPersistentModelIndex> m_pendingDisables;
+    bool                        m_depWarnSuspended = false;
     LoadOrderController *m_loadCtl       = nullptr;
     // Last scan's directed conflicts, keyed by mod path. Counterparts carry
     // their own path, so the row lookup survives duplicate and edited display
