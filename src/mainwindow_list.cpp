@@ -11,6 +11,7 @@
 #include "mod_package.h"
 #include "dep_graph.h"
 #include "deps_resolver.h"
+#include "deps_snapshot.h"
 #include "async_guarded.h"
 #include "mainwindow_internal.h"
 #include "settings.h"
@@ -302,25 +303,46 @@ void MainWindow::onRemoveSelected()
     // split - removing "Interface Reimagined" (base) while leaving its
     // OpenMW 0.50 patch in the list would quietly turn the patch's icon
     // yellow; surface that up front so the user makes the call explicitly.
-    QSet<QString> goingAway;
+    //
+    // Asked as a before/after diff rather than "who names this URL". One Nexus
+    // URL maps to several rows - the MAIN, UPDATE and PATCH files of one mod
+    // page all carry it - so removing the PATCH row of a library breaks
+    // nothing while its MAIN row stays. The URL scan this replaces named every
+    // dependent anyway, which on a 26-dependent library was a false alarm.
     QSet<QListWidgetItem*> selectedSet;
+    for (auto *item : selected) selectedSet.insert(item);
+
+    const QList<deps::ModEntry> before = deps::snapshot(m_modList);
+    QList<deps::ModEntry> after = before;
     for (auto *item : selected) {
-        selectedSet.insert(item);
-        const QString u = item->data(ModRole::NexusUrl).toString();
-        if (!u.isEmpty()) goingAway.insert(u);
+        const int row = m_modList->row(item);
+        if (row >= 0 && row < after.size()) after[row] = deps::ModEntry{};
     }
 
     QList<QListWidgetItem*> dependents;
-    if (!goingAway.isEmpty()) {
-        for (int i = 0; i < m_modList->count(); ++i) {
+    // includeDisabled: a row leaving the list matters to whoever declared it
+    // whether or not that dependent happens to be ticked right now.
+    for (const deps::Breakage &b :
+             deps::findNewlyBroken(before, after, /*includeDisabled=*/true)) {
+        auto *cand = m_modList->item(b.idx);
+        if (cand && !selectedSet.contains(cand)) dependents.append(cand);
+    }
+
+    // URLs that really leave with this removal, for the stale-reference prune
+    // further down. Same reasoning as above: a URL is only gone when no
+    // surviving row still carries it, so removing the PATCH row of a mod page
+    // does not delete a dependent's still-valid declaration of it.
+    QSet<QString> goingAway;
+    for (auto *item : selected) {
+        const QString u = item->data(ModRole::NexusUrl).toString();
+        if (u.isEmpty()) continue;
+        bool survives = false;
+        for (int i = 0; i < m_modList->count() && !survives; ++i) {
             auto *cand = m_modList->item(i);
-            if (cand->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
             if (selectedSet.contains(cand)) continue;
-            const QStringList deps = cand->data(ModRole::DependsOn).toStringList();
-            for (const QString &u : deps) {
-                if (goingAway.contains(u)) { dependents.append(cand); break; }
-            }
+            if (cand->data(ModRole::NexusUrl).toString() == u) survives = true;
         }
+        if (!survives) goingAway.insert(u);
     }
 
     QList<QListWidgetItem*> toRemove = selected;
@@ -1309,15 +1331,18 @@ void MainWindow::onItemDoubleClicked(QListWidgetItem *item)
             delete depsList->currentItem();
         });
 
-        // "Required by" - read-only reverse lookup
+        // "Required by" - read-only reverse lookup. Shared with the
+        // break-warning so the dialog and the warning never disagree about
+        // who declared what; it also matches a query-string variant of the
+        // same mod page, which the raw string compare here used to miss.
         QStringList usedBy;
-        for (int i = 0; i < m_modList->count(); ++i) {
-            auto *it = m_modList->item(i);
-            if (it == item) continue;
-            if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
-            if (!nexusUrl.isEmpty() &&
-                it->data(ModRole::DependsOn).toStringList().contains(nexusUrl))
-                usedBy << it->text();
+        {
+            const QList<deps::ModEntry> snap = deps::snapshot(m_modList);
+            for (int idx : deps::findDeclaredDependents(
+                     snap, {m_modList->row(item)})) {
+                auto *dep = m_modList->item(idx);
+                if (dep) usedBy << dep->text();
+            }
         }
         if (!usedBy.isEmpty()) {
             auto *usedGroup = new QGroupBox(T("mod_edit_required_by"));

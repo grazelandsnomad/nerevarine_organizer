@@ -17,6 +17,8 @@
 #include <QString>
 #include <QStringList>
 
+#include <functional>
+
 namespace deps {
 
 // One modlist row, snapshotted from m_modList on the UI thread, passed by value.
@@ -160,6 +162,74 @@ enum class Highlight : int {
 // "who depends on this library". Dep wins ties.
 QList<Highlight>
 computeSelectionHighlights(const QList<ModEntry> &allMods, int selectedIdx);
+
+// -- Who breaks if I do this? -----------------------------------------
+//
+// The reverse of resolveDependencies. Asked before disabling, uninstalling or
+// removing a mod, so the user finds out from the manager rather than from
+// OpenMW.
+//
+// Phrased as a diff between two whole modlists rather than as "who names this
+// URL", and that is the point. One Nexus URL maps to SEVERAL rows (the MAIN,
+// UPDATE and PATCH files of one mod page all carry it), so disabling the PATCH
+// row of a library breaks nothing while its MAIN row still stands. A URL scan
+// names every dependent anyway, and a warning that cries wolf on a 26-dependent
+// library is worse than no warning.
+
+// A row that the proposed change would newly leave with an unmet dependency.
+struct Breakage {
+    int         idx = -1;      // row index, as in `before`
+    QString     displayName;
+    bool        enabled = false;
+    QStringList nowMissing;    // resolveDependencies' own labels
+};
+
+// Rows satisfied in `before` and unsatisfied in `after`. Both lists must be
+// index-parallel - same rows, same order; the caller builds `after` by copying
+// `before` and applying the pending action to it. Mismatched sizes give {}.
+//
+// A row already broken BEFORE the change is not reported: the user is being
+// asked about the change, not about the state of their list.
+//
+// Matching is resolveDependencies', i.e. raw URL equality, deliberately: this
+// has to agree with the yellow ! icon and the launch warning the user is
+// already looking at. buildGraph's normalisation is not used here for that
+// reason.
+//
+// includeDisabled reports a dependent that is itself currently disabled.
+// "Will break" normally means enabled-only, so disable/uninstall pass false;
+// remove passes true, because a row being taken out of the list matters to a
+// dependent whether or not it happens to be ticked right now.
+QList<Breakage> findNewlyBroken(const QList<ModEntry> &before,
+                                const QList<ModEntry> &after,
+                                bool includeDisabled = false);
+
+// findNewlyBroken to a fixed point: if disabling A breaks B, and the user
+// takes the offer to disable B too, that can break C. `disable` applies the
+// same action to each newly-found row. Round-capped, since a hand-built cycle
+// in the data would otherwise spin - see layerOf for the same tolerance.
+//
+// Showing the first level and then acting on the closure would be worse than
+// not offering the cascade at all, so the caller shows what this returns.
+QList<Breakage> expandBreakageClosure(const QList<ModEntry> &before,
+                                      QList<ModEntry> after,
+                                      bool includeDisabled,
+                                      const std::function<void(ModEntry &)> &disable);
+
+// Rows whose declared DependsOn names any of `targetIdxs`, whether or not the
+// dependency is currently satisfied. The "Required by" question, which is not
+// the same as "who would break" - a dependent that is already broken still
+// declared the dependency and still belongs in that list.
+//
+// Normalised through urlKey(), unlike findNewlyBroken: this one only ever
+// shows names, so a wider net costs nothing.
+QList<int> findDeclaredDependents(const QList<ModEntry> &allMods,
+                                  const QList<int> &targetIdxs);
+
+// A dependency URL reduced to what identifies the mod ("morrowind/49042"), so
+// ".../mods/49042" and ".../mods/49042?tab=files" compare equal. Unparseable
+// URLs fall back to their trimmed selves.
+QString urlKey(const QString &url);
 
 } // namespace deps
 

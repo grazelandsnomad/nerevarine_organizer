@@ -144,6 +144,7 @@ set(SOURCES
     src/bsareader.cpp
     src/safe_fs.cpp
     src/deps_resolver.cpp
+    src/deps_snapshot.cpp
     src/dep_graph.cpp
     src/installcontroller.cpp
     src/install_layout.cpp

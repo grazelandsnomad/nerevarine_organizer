@@ -929,6 +929,200 @@ static void testCycleRefusalAndTolerance()
     check("layerOf terminates on a cycle", d.size() == gl.nodes.size());
 }
 
+
+// -- who breaks if I do this -------------------------------------------
+
+// Disable one row by idx and hand back the modified list.
+static QList<ModEntry> withDisabled(QList<ModEntry> mods, int idx)
+{
+    for (ModEntry &m : mods) if (m.idx == idx) m.enabled = false;
+    return mods;
+}
+
+static void testBreakNamesTheDependent()
+{
+    std::cout << "\n[disabling a mod names what declared it]\n";
+    const QList<ModEntry> before = {
+        mk(0, "Lua Physics Engine", URL_BASE),
+        mk(1, "Oblivion Style Spellcasting", URL_OTHER, true, true, {URL_BASE}),
+    };
+    const auto broken = deps::findNewlyBroken(before, withDisabled(before, 0));
+    check("one dependent reported", broken.size() == 1,
+          QString::number(broken.size()));
+    check("and it is named",
+          broken.size() == 1
+              && broken[0].displayName == "Oblivion Style Spellcasting",
+          broken.isEmpty() ? QString() : broken[0].displayName);
+    check("with a reason", broken.size() == 1 && !broken[0].nowMissing.isEmpty(),
+          broken.isEmpty() ? QString() : broken[0].nowMissing.join(','));
+}
+
+static void testBreakSurvivingSiblingIsSilent()
+{
+    std::cout << "\n[a same-URL sibling still satisfying it says nothing]\n";
+    // MAIN and PATCH of one mod page share a nexusUrl. Disabling the PATCH
+    // breaks nothing while MAIN is still on - the old hand-rolled URL scan
+    // named the dependent anyway, which on a 26-dependent library is the
+    // difference between a warning and a nuisance.
+    const QList<ModEntry> before = {
+        mk(0, "OAAB Data (MAIN)",  URL_BASE),
+        mk(1, "OAAB Data (PATCH)", URL_BASE),
+        mk(2, "OAAB Grazelands",   URL_OTHER, true, true, {URL_BASE}),
+    };
+    check("disabling the patch row is silent",
+          deps::findNewlyBroken(before, withDisabled(before, 1)).isEmpty());
+    check("disabling the main row is silent too, the patch still answers",
+          deps::findNewlyBroken(before, withDisabled(before, 0)).isEmpty());
+
+    auto both = withDisabled(before, 0);
+    both = withDisabled(both, 1);
+    check("but disabling both does report it",
+          deps::findNewlyBroken(before, both).size() == 1);
+}
+
+static void testBreakAlreadyBrokenNotReported()
+{
+    std::cout << "\n[a mod that was already broken is not re-reported]\n";
+    const QList<ModEntry> before = {
+        mk(0, "Base",  URL_BASE, false),                    // already off
+        mk(1, "Other", URL_OTHER),
+        mk(2, "Dependent", "", true, true, {URL_BASE, URL_OTHER}),
+    };
+    const auto broken = deps::findNewlyBroken(before, withDisabled(before, 1));
+    check("only the newly unmet dependency is reported", broken.size() == 1);
+    check("and the label names the one that just went",
+          broken.size() == 1 && broken[0].nowMissing.size() == 1
+              && broken[0].nowMissing.first().contains("Other"),
+          broken.isEmpty() ? QString() : broken[0].nowMissing.join(','));
+}
+
+static void testBreakDisabledDependentFlag()
+{
+    std::cout << "\n[a dependent that is itself off]\n";
+    const QList<ModEntry> before = {
+        mk(0, "Base", URL_BASE),
+        mk(1, "Dependent", URL_OTHER, false, true, {URL_BASE}),   // off
+    };
+    const auto after = withDisabled(before, 0);
+    check("skipped by default - it is not going to load anyway",
+          deps::findNewlyBroken(before, after, false).isEmpty());
+    check("reported when the caller asks for it (remove does)",
+          deps::findNewlyBroken(before, after, true).size() == 1);
+}
+
+static void testBreakSelfDependencyIgnored()
+{
+    std::cout << "\n[a mod declaring its own URL cannot break itself]\n";
+    const QList<ModEntry> before = { mk(0, "Solo", URL_BASE, true, true, {URL_BASE}) };
+    check("silent", deps::findNewlyBroken(before, withDisabled(before, 0)).isEmpty());
+}
+
+static void testBreakOneDependentTwoTargets()
+{
+    std::cout << "\n[one dependent losing two mods appears once]\n";
+    const QList<ModEntry> before = {
+        mk(0, "Lua Physics",      URL_BASE),
+        mk(1, "Magicka Expanded", URL_OTHER),
+        mk(2, "Quickcasting", "", true, true, {URL_BASE, URL_OTHER}),
+    };
+    auto after = withDisabled(before, 0);
+    after = withDisabled(after, 1);
+    const auto broken = deps::findNewlyBroken(before, after);
+    check("listed once", broken.size() == 1, QString::number(broken.size()));
+    check("with both reasons",
+          broken.size() == 1 && broken[0].nowMissing.size() == 2,
+          broken.isEmpty() ? QString() : broken[0].nowMissing.join(" | "));
+}
+
+static void testBreakDegenerateInputs()
+{
+    std::cout << "\n[degenerate input answers nothing]\n";
+    const QList<ModEntry> before = {
+        mk(0, "Base", URL_BASE),
+        mk(1, "Dependent", URL_OTHER, true, true, {URL_BASE}),
+    };
+    check("no change means no breakage",
+          deps::findNewlyBroken(before, before).isEmpty());
+    check("mismatched sizes are refused, not guessed",
+          deps::findNewlyBroken(before, {mk(0, "Base", URL_BASE)}).isEmpty());
+    check("an empty list is fine", deps::findNewlyBroken({}, {}).isEmpty());
+}
+
+static void testBreakClosureReachesSecondLevel()
+{
+    std::cout << "\n[cascading onto the dependents can break THEIR dependents]\n";
+    const QString URL_MID = "https://www.nexusmods.com/morrowind/mods/999";
+    const QList<ModEntry> before = {
+        mk(0, "A base",   URL_BASE),
+        mk(1, "B needs A", URL_MID,  true, true, {URL_BASE}),
+        mk(2, "C needs B", URL_OTHER, true, true, {URL_MID}),
+    };
+    auto disable = [](ModEntry &m) { m.enabled = false; };
+
+    check("the first level alone stops at B",
+          deps::findNewlyBroken(before, withDisabled(before, 0)).size() == 1);
+
+    const auto closure = deps::expandBreakageClosure(
+        before, withDisabled(before, 0), false, disable);
+    check("the closure reaches C as well", closure.size() == 2,
+          QString::number(closure.size()));
+    check("and names both",
+          closure.size() == 2 && closure[0].displayName == "B needs A"
+              && closure[1].displayName == "C needs B");
+}
+
+static void testBreakClosureTerminatesOnACycle()
+{
+    std::cout << "\n[a cycle in hand-entered data still terminates]\n";
+    const QList<ModEntry> before = {
+        mk(0, "A", URL_BASE,  true, true, {URL_OTHER}),
+        mk(1, "B", URL_OTHER, true, true, {URL_BASE}),
+    };
+    auto disable = [](ModEntry &m) { m.enabled = false; };
+    const auto closure = deps::expandBreakageClosure(
+        before, withDisabled(before, 0), false, disable);
+    check("it settles rather than spinning", closure.size() <= 2,
+          QString::number(closure.size()));
+}
+
+static void testDeclaredDependents()
+{
+    std::cout << "\n[who declared they need this, satisfied or not]\n";
+    const QList<ModEntry> mods = {
+        mk(0, "Base", URL_BASE),
+        mk(1, "Needs it, on",  URL_OTHER, true,  true, {URL_BASE}),
+        mk(2, "Needs it, off", "",        false, true, {URL_BASE}),
+        mk(3, "Unrelated",     "",        true,  true, {}),
+        // Same mod page as the base and declaring it - the shape
+        // autoLinkSameModpage creates when a patch is installed beside its
+        // MAIN file. A real dependent, not a self-reference.
+        mk(4, "Patch sibling", URL_BASE,  true,  true, {URL_BASE}),
+    };
+    const auto found = deps::findDeclaredDependents(mods, {0});
+    check("every declarer is listed, enabled or not", found.size() == 3,
+          QString::number(found.size()));
+    check("the unrelated row is not", !found.contains(3));
+    check("and a row is never its own dependent", !found.contains(0));
+
+    check("no targets means no answer",
+          deps::findDeclaredDependents(mods, {}).isEmpty());
+    check("a target with no URL can have no dependents",
+          deps::findDeclaredDependents(mods, {3}).isEmpty());
+}
+
+static void testDeclaredDependentsNormalisesUrls()
+{
+    std::cout << "\n[a query-string variant is the same mod page]\n";
+    const QList<ModEntry> mods = {
+        mk(0, "Base", URL_BASE),
+        mk(1, "Dependent", URL_OTHER, true, true, {URL_BASE + "?tab=files"}),
+    };
+    check("matched through urlKey", deps::findDeclaredDependents(mods, {0}).size() == 1);
+    check("urlKey collapses the variants",
+          deps::urlKey(URL_BASE) == deps::urlKey(URL_BASE + "?tab=files"),
+          deps::urlKey(URL_BASE + "?tab=files"));
+}
+
 static void run_deps_resolver()
 {
     testResolveEmptyDepsIsSilent();
@@ -969,6 +1163,18 @@ static void run_deps_resolver()
     testSectionTravelsToTheNodes();
     testNoSelfEdge();
     testCycleRefusalAndTolerance();
+
+    testBreakNamesTheDependent();
+    testBreakSurvivingSiblingIsSilent();
+    testBreakAlreadyBrokenNotReported();
+    testBreakDisabledDependentFlag();
+    testBreakSelfDependencyIgnored();
+    testBreakOneDependentTwoTargets();
+    testBreakDegenerateInputs();
+    testBreakClosureReachesSecondLevel();
+    testBreakClosureTerminatesOnACycle();
+    testDeclaredDependents();
+    testDeclaredDependentsNormalisesUrls();
 }
 
 // -- file_pick: what each file on a mod page is ------------------------

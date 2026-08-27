@@ -169,8 +169,6 @@ parseDescriptionDeps(const QString &description,
 
 // -- The dependency web, as a graph -----------------------------------
 
-namespace {
-
 // A dependency URL reduced to what actually identifies the mod. Raw string
 // equality would treat ".../mods/146873" and ".../mods/146873?tab=files" as
 // different mods; the existing lookups do exactly that and miss the match.
@@ -181,8 +179,6 @@ QString urlKey(const QString &url)
     if (ref) return ref->game + QLatin1Char('/') + QString::number(ref->modId);
     return url.trimmed();
 }
-
-} // namespace
 
 Graph buildGraph(const QList<ModEntry> &allMods)
 {
@@ -313,6 +309,104 @@ QList<int> layerOf(const Graph &g)
         }
     }
     return depth;
+}
+
+QList<Breakage> findNewlyBroken(const QList<ModEntry> &before,
+                                const QList<ModEntry> &after,
+                                bool includeDisabled)
+{
+    QList<Breakage> out;
+    if (before.size() != after.size()) return out;
+
+    for (int i = 0; i < before.size(); ++i) {
+        const ModEntry &b = before[i];
+        if (b.dependsOn.isEmpty()) continue;
+        if (!includeDisabled && !b.enabled) continue;
+
+        // resolveDependencies only reports for an enabled target, so evaluate
+        // the candidate as if it were on. Whether the DEPENDENT is ticked is
+        // the caller's filter (includeDisabled), not a reason to go blind to
+        // what its dependency list says.
+        ModEntry probeBefore = b;
+        ModEntry probeAfter  = after[i];
+        probeBefore.enabled = true;
+        probeAfter.enabled  = true;
+
+        const QStringList wasMissing =
+            resolveDependencies(probeBefore, before).missingLabels;
+        const QStringList nowMissing =
+            resolveDependencies(probeAfter, after).missingLabels;
+        if (nowMissing.size() <= wasMissing.size()) continue;
+
+        // Report only what this change broke. A mod already missing dep A and
+        // now missing A and B is newly broken, but the dialog should say B.
+        QStringList added;
+        for (const QString &m : nowMissing)
+            if (!wasMissing.contains(m)) added << m;
+        if (added.isEmpty()) continue;
+
+        Breakage br;
+        br.idx         = b.idx;
+        br.displayName = b.displayName;
+        br.enabled     = b.enabled;
+        br.nowMissing  = added;
+        out.append(br);
+    }
+    return out;
+}
+
+QList<Breakage> expandBreakageClosure(const QList<ModEntry> &before,
+                                      QList<ModEntry> after,
+                                      bool includeDisabled,
+                                      const std::function<void(ModEntry &)> &disable)
+{
+    // Enough rounds for any real chain; a cycle in hand-entered data would
+    // otherwise never settle. layerOf tolerates the same shape.
+    constexpr int kMaxRounds = 10;
+
+    QList<Breakage> all;
+    QSet<int> seen;
+    for (int round = 0; round < kMaxRounds; ++round) {
+        const QList<Breakage> found = findNewlyBroken(before, after, includeDisabled);
+        bool grew = false;
+        for (const Breakage &br : found) {
+            if (seen.contains(br.idx)) continue;
+            seen.insert(br.idx);
+            all.append(br);
+            grew = true;
+            if (disable) {
+                for (ModEntry &m : after)
+                    if (m.idx == br.idx) { disable(m); break; }
+            }
+        }
+        if (!grew || !disable) break;
+    }
+    return all;
+}
+
+QList<int> findDeclaredDependents(const QList<ModEntry> &allMods,
+                                  const QList<int> &targetIdxs)
+{
+    QList<int> out;
+    if (targetIdxs.isEmpty()) return out;
+
+    QSet<QString> targetKeys;
+    QSet<int> targetSet;
+    for (int idx : targetIdxs) {
+        targetSet.insert(idx);
+        for (const ModEntry &m : allMods)
+            if (m.idx == idx && !m.nexusUrl.isEmpty())
+                targetKeys.insert(urlKey(m.nexusUrl));
+    }
+    if (targetKeys.isEmpty()) return out;
+
+    for (const ModEntry &m : allMods) {
+        if (targetSet.contains(m.idx)) continue;   // never itself
+        for (const QString &u : m.dependsOn) {
+            if (targetKeys.contains(urlKey(u))) { out.append(m.idx); break; }
+        }
+    }
+    return out;
 }
 
 } // namespace deps
