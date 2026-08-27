@@ -2,10 +2,10 @@
 
 A native Linux mod manager for OpenMW.
 
-## 0.6 - in development
+## 0.70 - in development
 
 Changes for the next release are collected in
-[`docs/release-notes/0.6.md`](docs/release-notes/0.6.md) as they land.
+[`docs/release-notes/0.70.md`](docs/release-notes/0.70.md) as they land.
 
 Guides: [mod conflicts and how to fix each kind](docs/conflicts.md).
 
