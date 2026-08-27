@@ -24,6 +24,8 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QProgressBar>
+#include <QSpinBox>
+#include <QCheckBox>
 #include <QPushButton>
 #include <QPainter>
 #include <QPlainTextEdit>
@@ -59,6 +61,16 @@ constexpr int RepairedRole = Qt::UserRole + 2;
 // Only ever written under a ProgrammaticEdit guard: a write to this column
 // reads as a hand edit and would detach the row from its template.
 constexpr int PendingRole  = Qt::UserRole + 3;
+// A human has read this answer and vouched for it.
+//
+// The gate on the shared per-language memory. An answer that came back from
+// the machine translator and has not been looked at belongs to this mod's own
+// progress file: put it in the memory and one bad guess about "Bandit Chief"
+// pre-fills every other mod the user ever opens.
+//
+// The item is the single source of truth. It survives paging for free -
+// nothing ever destroys a row - and there is no parallel bitset to drift.
+constexpr int ReviewedRole = Qt::UserRole + 4;
 
 // The per-row "still waiting" marker.
 //
@@ -155,6 +167,202 @@ TranslateDialog::TranslateDialog(const QString &modName,
 
     buildUi(modName);
     fillFromMemory();
+
+    // First page, and land on the first thing still wanting an answer rather
+    // than on row one - on a mod this size, row one is where you were a month
+    // ago.
+    rebuildVisible();
+    showPage(0);
+}
+
+// -- Paging ------------------------------------------------------------
+//
+// The table always holds every row; paging only hides the ones that are not
+// on offer. See the note in buildUi for why the alternative - a table that
+// holds one page - is not on the table.
+
+// Has this row been answered, and has somebody read the answer?
+//
+// "Answered" is not "has text": after a machine-translate run every row has
+// text, and a filter that only asked about text would hide the whole mod at
+// exactly the moment it is most needed. A row still needs the user until a
+// human has vouched for it.
+bool TranslateDialog::rowAnswered(int row) const
+{
+    auto *cell = m_table->item(row, ColTranslation);
+    if (!cell) return false;
+    if (cell->text().trimmed().isEmpty()) return false;
+    return cell->data(ReviewedRole).toBool();
+}
+
+void TranslateDialog::rebuildVisible()
+{
+    const bool todoOnly = m_todoOnly && m_todoOnly->isChecked();
+    m_visible.clear();
+    m_visible.reserve(m_rowSource.size());
+    for (int i = 0; i < m_rowSource.size(); ++i)
+        if (!todoOnly || !rowAnswered(i)) m_visible.append(i);
+}
+
+int TranslateDialog::pageCount() const
+{
+    if (m_visible.isEmpty()) return 1;
+    return (int(m_visible.size()) + kPageSize - 1) / kPageSize;
+}
+
+void TranslateDialog::showPage(int page)
+{
+    if (!m_table) return;
+    m_page = qBound(0, page, pageCount() - 1);
+
+    const int from = m_page * kPageSize;
+    const int to   = qMin(from + kPageSize, int(m_visible.size()));
+
+    QSet<int> onPage;
+    onPage.reserve(to - from);
+    for (int i = from; i < to; ++i) onPage.insert(m_visible[i]);
+
+    // Updates off for the sweep: setRowHidden is cheap per call, but the
+    // repaint region maths behind it is not, and this touches every row.
+    m_table->setUpdatesEnabled(false);
+    for (int r = 0; r < m_table->rowCount(); ++r)
+        m_table->setRowHidden(r, !onPage.contains(r));
+    m_table->setUpdatesEnabled(true);
+
+    // Signals blocked: setValue would call back into showPage.
+    if (m_pageSpin) {
+        const QSignalBlocker block(m_pageSpin);
+        m_pageSpin->setMaximum(pageCount());
+        m_pageSpin->setValue(m_page + 1);
+    }
+    if (m_pageOf)   m_pageOf->setText(T("translate_page_of").arg(pageCount()));
+    if (m_prevPage) m_prevPage->setEnabled(m_page > 0);
+    if (m_nextPage) m_nextPage->setEnabled(m_page < pageCount() - 1);
+
+    if (from < to) m_table->scrollToItem(m_table->item(m_visible[from], ColSource),
+                                         QAbstractItemView::PositionAtTop);
+    recountProgress();
+}
+
+int TranslateDialog::pageOfRow(int row) const
+{
+    const int at = int(m_visible.indexOf(row));
+    return at < 0 ? -1 : at / kPageSize;
+}
+
+void TranslateDialog::jumpToFirstTodo()
+{
+    // Derived, not remembered: storing "the row I was on" would be wrong the
+    // moment the mod gained a string and everything after it renumbered.
+    int target = -1;
+    for (int i = 0; i < m_rowSource.size() && target < 0; ++i)
+        if (!rowAnswered(i)) target = i;
+    if (target < 0) {
+        ui::info(this, T("translate_machine"), T("translate_all_answered"));
+        return;
+    }
+    // The row may be filtered out of the current view; the jump should still
+    // land on it, so widen first if it is not on offer.
+    if (!m_visible.contains(target)) {
+        if (m_todoOnly) { const QSignalBlocker b(m_todoOnly); m_todoOnly->setChecked(false); }
+        rebuildVisible();
+    }
+    const int page = pageOfRow(target);
+    showPage(page < 0 ? 0 : page);
+    m_table->setCurrentCell(target, ColTranslation);
+}
+
+void TranslateDialog::markPageRead()
+{
+    const int from = m_page * kPageSize;
+    const int to   = qMin(from + kPageSize, int(m_visible.size()));
+    QList<int> rows;
+    for (int i = from; i < to; ++i) {
+        const int r = m_visible[i];
+        auto *cell = m_table->item(r, ColTranslation);
+        if (cell && !cell->text().trimmed().isEmpty()
+            && !cell->data(ReviewedRole).toBool())
+            rows.append(r);
+    }
+    if (rows.isEmpty()) {
+        ui::info(this, T("translate_machine"), T("translate_mark_page_none"));
+        return;
+    }
+    if (!ui::confirm(this, T("translate_mark_page_read"),
+                     T("translate_mark_page_confirm").arg(rows.size())))
+        return;
+    for (int r : rows) setReviewed(r, true);
+    recountProgress();
+}
+
+// Marks a row as vouched for. Refuses on a blank row: "reviewed but empty"
+// would read as answered to the counter and the filter, and hide a row that
+// nobody has done anything to.
+void TranslateDialog::setReviewed(int row, bool reviewed)
+{
+    auto *cell = m_table->item(row, ColTranslation);
+    if (!cell) return;
+    if (reviewed && cell->text().trimmed().isEmpty()) return;
+    ProgrammaticEdit guard(m_expanding);
+    cell->setData(ReviewedRole, reviewed);
+}
+
+// One pass over every row. Deliberately not a pair of counters kept up to
+// date as things change: two sources of truth for "is this row done" is how a
+// counter starts lying, and twenty thousand item lookups is about a
+// millisecond.
+void TranslateDialog::recountProgress()
+{
+    if (!m_countLabel) return;
+    int done = 0, unread = 0;
+    for (int i = 0; i < m_rowSource.size(); ++i) {
+        auto *cell = m_table->item(i, ColTranslation);
+        if (!cell || cell->text().trimmed().isEmpty()) continue;
+        if (cell->data(ReviewedRole).toBool()) ++done;
+        else                                   ++unread;
+    }
+    const int total = int(m_rowSource.size());
+    m_countLabel->setText(T("translate_progress_counter")
+                              .arg(total).arg(done).arg(unread)
+                              .arg(total - done - unread));
+}
+
+void TranslateDialog::scheduleRecount()
+{
+    if (!m_recountTimer) {
+        m_recountTimer = new QTimer(this);
+        m_recountTimer->setSingleShot(true);
+        m_recountTimer->setInterval(0);
+        connect(m_recountTimer, &QTimer::timeout,
+                this, &TranslateDialog::recountProgress);
+    }
+    m_recountTimer->start();
+}
+
+// -- What the row editor walks -----------------------------------------
+//
+// Prev/Next follow the rows on OFFER, not the raw table, or Next would step
+// into a row the filter is hiding. Side-effect free so they can be tested;
+// openRowEditor itself ends in exec() and cannot be.
+
+int TranslateDialog::nextVisible(int row) const
+{
+    const int at = int(m_visible.indexOf(row));
+    if (at < 0 || at + 1 >= m_visible.size()) return -1;
+    return m_visible[at + 1];
+}
+
+int TranslateDialog::prevVisible(int row) const
+{
+    const int at = int(m_visible.indexOf(row));
+    if (at <= 0) return -1;
+    return m_visible[at - 1];
+}
+
+QPair<int, int> TranslateDialog::visiblePosition(int row) const
+{
+    const int at = int(m_visible.indexOf(row));
+    return {at < 0 ? 0 : at + 1, int(m_visible.size())};
 }
 
 void TranslateDialog::buildUi(const QString &modName)
@@ -172,6 +380,12 @@ void TranslateDialog::buildUi(const QString &modName)
     intro->setWordWrap(true);
     lay->addWidget(intro);
 
+    // Its own label: translate_intro is a four-line paragraph and reflowing it
+    // on every keystroke would make the whole dialog jump.
+    m_countLabel = new QLabel(this);
+    m_countLabel->setWordWrap(true);
+    lay->addWidget(m_countLabel);
+
     m_table = new QTableWidget(m_rowSource.size(), ColCount, this);
     m_table->setHorizontalHeaderLabels({T("translate_col_source"),
                                         T("translate_col_translation")});
@@ -179,6 +393,17 @@ void TranslateDialog::buildUi(const QString &modName)
     m_table->horizontalHeader()->setSectionResizeMode(ColTranslation, QHeaderView::Stretch);
     m_table->verticalHeader()->setVisible(false);
 
+    // Every row is built, and every row STAYS built - paging hides rows rather
+    // than rebuilding the table. Row index is the identity of a source string
+    // in a dozen places (the machine-translate queues, expandRow, setPending,
+    // onAccept's unguarded item() deref), so a table that only holds the
+    // current page would have to rewrite all of them and would hand onAccept a
+    // null pointer the first time somebody saved from page two.
+    //
+    // Updates off for the bulk build: with them on, the repaint arithmetic
+    // runs once per row, which is the difference between a blink and several
+    // seconds on a mod with twenty thousand strings.
+    m_table->setUpdatesEnabled(false);
     for (int i = 0; i < m_rowSource.size(); ++i) {
         auto *src = new QTableWidgetItem(m_rowSource[i]);
         // The source is what the plugin says; editing it here would be a lie.
@@ -186,6 +411,7 @@ void TranslateDialog::buildUi(const QString &modName)
         m_table->setItem(i, ColSource, src);
         m_table->setItem(i, ColTranslation, new QTableWidgetItem(QString()));
     }
+    m_table->setUpdatesEnabled(true);
     // Double-click is taken for the row editor, so it is off the list of
     // things that start the one-line inline editor. Typing and F2 still do,
     // which is what a short string wants.
@@ -197,6 +423,42 @@ void TranslateDialog::buildUi(const QString &modName)
             this, &TranslateDialog::onRowDoubleClicked);
     m_table->setItemDelegateForColumn(ColTranslation, new PendingDelegate(m_table));
     lay->addWidget(m_table, 1);
+
+    // Pager. A spin box as well as Prev/Next because at forty pages stepping
+    // is not navigation, and the jump button because "where was I" is the
+    // question somebody coming back after a day actually has.
+    auto *pager = new QHBoxLayout;
+    m_prevPage = new QPushButton(T("translate_page_prev"), this);
+    m_nextPage = new QPushButton(T("translate_page_next"), this);
+    m_pageSpin = new QSpinBox(this);
+    m_pageSpin->setMinimum(1);
+    m_pageOf   = new QLabel(this);
+    m_todoOnly = new QCheckBox(T("translate_filter_todo"), this);
+    m_todoOnly->setToolTip(T("translate_filter_todo_tip"));
+    auto *jumpBtn     = new QPushButton(T("translate_jump_todo"), this);
+    auto *markPageBtn = new QPushButton(T("translate_mark_page_read"), this);
+    markPageBtn->setToolTip(T("translate_mark_page_read_tip"));
+
+    pager->addWidget(m_prevPage);
+    pager->addWidget(m_pageSpin);
+    pager->addWidget(m_pageOf);
+    pager->addWidget(m_nextPage);
+    pager->addStretch(1);
+    pager->addWidget(m_todoOnly);
+    pager->addWidget(jumpBtn);
+    pager->addWidget(markPageBtn);
+    lay->addLayout(pager);
+
+    connect(m_prevPage, &QPushButton::clicked, this, [this]{ showPage(m_page - 1); });
+    connect(m_nextPage, &QPushButton::clicked, this, [this]{ showPage(m_page + 1); });
+    connect(m_pageSpin, &QSpinBox::valueChanged,
+            this, [this](int v) { if (v - 1 != m_page) showPage(v - 1); });
+    connect(m_todoOnly, &QCheckBox::toggled, this, [this]{
+        rebuildVisible();
+        showPage(0);
+    });
+    connect(jumpBtn,     &QPushButton::clicked, this, &TranslateDialog::jumpToFirstTodo);
+    connect(markPageBtn, &QPushButton::clicked, this, &TranslateDialog::markPageRead);
 
     auto *row = new QHBoxLayout;
     m_mtBtn = new QPushButton(T("translate_machine"), this);
@@ -240,6 +502,9 @@ void TranslateDialog::fillFromMemory()
         const QString known = m_memory->lookup(m_rowSource[i]);
         if (known.isEmpty()) continue;
         m_table->item(i, ColTranslation)->setText(known);
+        // Somebody typed this once already, in some other mod. It is confirmed
+        // work, not a guess, so it does not need reading again.
+        setReviewed(i, true);
         ++hits;
     }
     if (hits > 0)
@@ -833,26 +1098,44 @@ void TranslateDialog::openRowEditor(int row)
         if (!cell) return;
         const QString typed = dstBox->toPlainText();
         if (typed != cell->text()) cell->setText(typed);
+        // Reaching this means the user pressed OK, Previous or Next - not
+        // Cancel. They have read the row, which is exactly what turns this
+        // window into a review loop for a page of machine answers.
+        setReviewed(current, true);
     };
 
     auto load = [this, srcBox, dstBox, where, prev, next, &current](int r) {
         current = r;
         srcBox->setPlainText(m_table->item(r, ColSource)->text());
         dstBox->setPlainText(m_table->item(r, ColTranslation)->text());
-        where->setText(T("translate_row_of").arg(QString::number(r + 1),
-                                                 QString::number(m_table->rowCount())));
-        prev->setEnabled(r > 0);
-        next->setEnabled(r + 1 < m_table->rowCount());
+        // Counted against the rows on OFFER, not the raw table: with the
+        // filter on, "row 3 of 50" is the truth and "row 4102 of 20000" is
+        // not an answer to anything.
+        const auto at = visiblePosition(r);
+        where->setText(T("translate_row_of").arg(QString::number(at.first),
+                                                 QString::number(at.second)));
+        prev->setEnabled(prevVisible(r) >= 0);
+        next->setEnabled(nextVisible(r) >= 0);
         dstBox->setFocus();
+    };
+
+    // Walking off the end of the page follows the row rather than stopping at
+    // it: the editor is the natural way to read three hundred machine answers
+    // in a row, and having to close it every two hundred would be absurd.
+    auto go = [this, &load](int r) {
+        if (r < 0) return;
+        const int page = pageOfRow(r);
+        if (page >= 0 && page != m_page) showPage(page);
+        load(r);
     };
 
     QObject::connect(prev, &QPushButton::clicked, &dlg, [&] {
         commit();
-        if (current > 0) load(current - 1);
+        go(prevVisible(current));
     });
     QObject::connect(next, &QPushButton::clicked, &dlg, [&] {
         commit();
-        if (current + 1 < m_table->rowCount()) load(current + 1);
+        go(nextVisible(current));
     });
     QObject::connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
     QObject::connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
@@ -914,6 +1197,12 @@ void TranslateDialog::restyleLinkedRows()
 void TranslateDialog::onCellChanged(int row, int column)
 {
     if (m_expanding || column != ColTranslation) return;
+
+    // Not guarded means the user typed it. That is the whole test for "has a
+    // human read this": everything the app writes for itself goes through a
+    // ProgrammaticEdit guard and lands above this line.
+    setReviewed(row, true);
+    scheduleRecount();
 
     const int nameIdx = nameRowIndex(row);
     if (nameIdx >= 0) {

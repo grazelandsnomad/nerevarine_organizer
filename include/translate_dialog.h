@@ -23,11 +23,14 @@
 #include "translation_store.h"
 #include "translation_rules.h"
 
+class QLabel;
 class QLineEdit;
 class QNetworkAccessManager;
 class QProgressBar;
 class QTimer;
 class QPushButton;
+class QSpinBox;
+class QCheckBox;
 class QTableWidget;
 
 // One translatable string, as extracted from a plugin.
@@ -79,6 +82,28 @@ private slots:
 private:
     // Drains m_mtQueue while fewer than kMaxInFlight requests are outstanding;
     // each reply calls back in to keep the queue moving.
+    // -- Paging -------------------------------------------------------
+    //
+    // The table always holds every row; these only decide which are on offer
+    // and which of those are on screen. Row index stays the identity of a
+    // source string everywhere else in this class.
+    void rebuildVisible();          // recompute m_visible from the filter
+    void showPage(int page);        // hide everything not on `page`
+    int  pageCount() const;
+    int  pageOfRow(int row) const;  // -1 when the row is filtered out
+    bool rowAnswered(int row) const;// answered AND read
+    void jumpToFirstTodo();
+    void markPageRead();
+    void setReviewed(int row, bool reviewed);
+    void recountProgress();
+    void scheduleRecount();
+    // What the row editor's Previous/Next walk: the rows on offer, not the
+    // raw table. Side-effect free so they can be tested - openRowEditor ends
+    // in exec() and cannot be.
+    int  nextVisible(int row) const;
+    int  prevVisible(int row) const;
+    QPair<int, int> visiblePosition(int row) const;
+
     void pumpMachineTranslate();
     // Advance to pass two, or end the run.
     void advanceMachineTranslate();
@@ -118,6 +143,20 @@ private:
 
     QTableWidget *m_table   = nullptr;
     QPushButton  *m_mtBtn   = nullptr;
+    // Paging widgets and state. m_visible is the source indices currently on
+    // offer, in table order - equal to [0, rowCount) when the filter is off.
+    // It is a SNAPSHOT: rebuilt on an explicit event, never on a keystroke, or
+    // the row just answered would vanish from under the cursor mid-edit.
+    QLabel       *m_countLabel = nullptr;
+    QPushButton  *m_prevPage   = nullptr;
+    QPushButton  *m_nextPage   = nullptr;
+    QSpinBox     *m_pageSpin   = nullptr;
+    QLabel       *m_pageOf     = nullptr;
+    QCheckBox    *m_todoOnly   = nullptr;
+    QTimer       *m_recountTimer = nullptr;
+    QList<int>    m_visible;
+    int           m_page = 0;
+    static constexpr int kPageSize = 200;
     QProgressBar *m_mtBar   = nullptr;
     QNetworkAccessManager *m_net = nullptr;
     QList<int>    m_mtQueue;        // rows still waiting to be sent

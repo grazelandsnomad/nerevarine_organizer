@@ -20,6 +20,7 @@
 #include <QPushButton>
 #include <QTimer>
 #include <QProgressBar>
+#include <QCheckBox>
 #include <QStandardPaths>
 #include <QSettings>
 #include <QDateTime>
@@ -110,6 +111,26 @@ struct TranslateDialogTestHook {
     static int  cooloffLeft(TranslateDialog *d) { return d->cooloffLeftSeconds(); }
     static void refreshCooloff(TranslateDialog *d) { d->updateCooloffDisplay(); }
     static QString barFormat(TranslateDialog *d) { return d->m_mtBar->format(); }
+
+    // -- paging ------------------------------------------------------
+    static void setPage(TranslateDialog *d, int p) { d->showPage(p); }
+    static int  page(TranslateDialog *d)      { return d->m_page; }
+    static int  pageCount(TranslateDialog *d) { return d->pageCount(); }
+    static QList<int> visible(TranslateDialog *d) { return d->m_visible; }
+    static void setFilter(TranslateDialog *d, bool on)
+    {
+        d->m_todoOnly->setChecked(on);   // its own toggled() rebuilds and repages
+    }
+    static void rebuild(TranslateDialog *d)   { d->rebuildVisible(); }
+    static bool answered(TranslateDialog *d, int r) { return d->rowAnswered(r); }
+    static void review(TranslateDialog *d, int r, bool v) { d->setReviewed(r, v); }
+    static bool reviewed(TranslateDialog *d, int r)
+    { return d->m_table->item(r, 1)->data(Qt::UserRole + 4).toBool(); }
+    static int  nextVis(TranslateDialog *d, int r) { return d->nextVisible(r); }
+    static int  prevVis(TranslateDialog *d, int r) { return d->prevVisible(r); }
+    static QPair<int,int> pos(TranslateDialog *d, int r)
+    { return d->visiblePosition(r); }
+    static int  pageSize() { return TranslateDialog::kPageSize; }
     static void advance(TranslateDialog *d) { d->advanceMachineTranslate(); }
     static void finish(TranslateDialog *d)  { d->finishMachineTranslate(); }
     static bool stopped(TranslateDialog *d) { return d->m_mtStopped; }
@@ -859,6 +880,171 @@ static void testMissingProgressIsNotAnError()
     check("and it is empty", p.empty());
 }
 
+// A mod big enough to need more than one page.
+static QList<TranslatableString> manyStrings(int n)
+{
+    QList<TranslatableString> out;
+    out.reserve(n);
+    for (int i = 0; i < n; ++i) {
+        // Zero-padded so the case-insensitive sort the dialog applies keeps
+        // the order this generates them in - the tests index by row.
+        out.append({QStringLiteral("plugin.esp"),
+                    QStringLiteral("NPC_:%1:FNAM:0").arg(i),
+                    QStringLiteral("String %1").arg(i, 5, 10, QLatin1Char('0')),
+                    false});
+    }
+    return out;
+}
+
+static void testEveryRowStillExistsWhenPaged()
+{
+    std::cout << "\n[paging hides rows, it does not throw them away]\n";
+    translation_store::Memory mem;
+    const int n = TranslateDialogTestHook::pageSize() * 3;
+    auto *d = TranslateDialogTestHook::make(manyStrings(n), &mem);
+    auto *t = TranslateDialogTestHook::table(d);
+
+    TranslateDialogTestHook::setPage(d, 1);
+    // The invariant the whole design rests on. onAccept walks m_rowSource and
+    // dereferences item(i, 1) with no null check, and the machine-translate
+    // queues hold row numbers - a table holding only the current page would
+    // hand both of them a null pointer.
+    check("every row is still in the table", t->rowCount() == n,
+          QString::number(t->rowCount()));
+    check("including one on the last page", t->item(n - 1, 1) != nullptr);
+    check("and one on the first", t->item(0, 1) != nullptr);
+    check("three pages", TranslateDialogTestHook::pageCount(d) == 3,
+          QString::number(TranslateDialogTestHook::pageCount(d)));
+    delete d;
+}
+
+static void testOnlyThisPageIsOnScreen()
+{
+    std::cout << "\n[what is on screen is one page of it]\n";
+    translation_store::Memory mem;
+    const int size = TranslateDialogTestHook::pageSize();
+    auto *d = TranslateDialogTestHook::make(manyStrings(size * 2), &mem);
+    auto *t = TranslateDialogTestHook::table(d);
+
+    TranslateDialogTestHook::setPage(d, 0);
+    check("the first row of page one shows", !t->isRowHidden(0));
+    check("the last row of page one shows", !t->isRowHidden(size - 1));
+    check("page two is hidden", t->isRowHidden(size));
+
+    TranslateDialogTestHook::setPage(d, 1);
+    check("now page one is hidden", t->isRowHidden(0));
+    check("and page two shows", !t->isRowHidden(size));
+
+    TranslateDialogTestHook::setPage(d, 99);
+    check("a page past the end clamps",
+          TranslateDialogTestHook::page(d) == 1,
+          QString::number(TranslateDialogTestHook::page(d)));
+    delete d;
+}
+
+static void testAnAnswerLandsOnAnOffPageRow()
+{
+    std::cout << "\n[a two-hour run outlives the page you are looking at]\n";
+    translation_store::Memory mem;
+    const int size = TranslateDialogTestHook::pageSize();
+    auto *d = TranslateDialogTestHook::make(manyStrings(size * 2), &mem);
+    auto *t = TranslateDialogTestHook::table(d);
+
+    TranslateDialogTestHook::setPage(d, 1);          // looking at page two
+    TranslateDialogTestHook::deliver(d, 0, QStringLiteral("Cadena cero"));
+    check("the answer reached the row anyway",
+          t->item(0, 1)->text() == QStringLiteral("Cadena cero"),
+          t->item(0, 1)->text());
+    check("and the row is still off-screen", t->isRowHidden(0));
+    delete d;
+}
+
+static void testTheFilterOffersOnlyWhatStillNeedsWork()
+{
+    std::cout << "\n[show only the rows that still need me]\n";
+    translation_store::Memory mem;
+    auto *d = TranslateDialogTestHook::make(manyStrings(10), &mem);
+    auto *t = TranslateDialogTestHook::table(d);
+
+    t->item(0, 1)->setText(QStringLiteral("hecho"));   // unguarded = a hand edit
+    t->item(1, 1)->setText(QStringLiteral("hecho"));
+    TranslateDialogTestHook::setFilter(d, true);
+    check("the answered rows drop out",
+          TranslateDialogTestHook::visible(d).size() == 8,
+          QString::number(TranslateDialogTestHook::visible(d).size()));
+    check("and the ones left are the unanswered ones",
+          !TranslateDialogTestHook::visible(d).contains(0)
+              && TranslateDialogTestHook::visible(d).contains(2));
+
+    // A machine answer nobody has read still needs the user - a filter that
+    // only asked "has text" would hide the whole mod after an MT run, which
+    // is exactly when it is most wanted.
+    TranslateDialogTestHook::deliver(d, 2, QStringLiteral("adivinado"));
+    TranslateDialogTestHook::rebuild(d);
+    check("an unread machine answer still counts as needing me",
+          TranslateDialogTestHook::visible(d).contains(2));
+
+    TranslateDialogTestHook::review(d, 2, true);
+    TranslateDialogTestHook::rebuild(d);
+    check("once read, it drops out too",
+          !TranslateDialogTestHook::visible(d).contains(2));
+
+    TranslateDialogTestHook::setFilter(d, false);
+    check("turning the filter off shows everything again",
+          TranslateDialogTestHook::visible(d).size() == 10);
+    delete d;
+}
+
+static void testTheFilterDoesNotYankARowFromUnderTheCursor()
+{
+    std::cout << "\n[answering a row does not make it vanish mid-edit]\n";
+    translation_store::Memory mem;
+    auto *d = TranslateDialogTestHook::make(manyStrings(10), &mem);
+    auto *t = TranslateDialogTestHook::table(d);
+
+    TranslateDialogTestHook::setFilter(d, true);
+    const int before = int(TranslateDialogTestHook::visible(d).size());
+    t->item(3, 1)->setText(QStringLiteral("escrito"));
+    // m_visible is a snapshot on purpose. Someone will one day "fix" this to
+    // update live because a row staying put after being answered looks like a
+    // bug; it is not, and this is why.
+    check("the row is still on offer until an explicit rebuild",
+          TranslateDialogTestHook::visible(d).size() == before
+              && TranslateDialogTestHook::visible(d).contains(3));
+    check("and still on screen", !t->isRowHidden(3));
+
+    TranslateDialogTestHook::rebuild(d);
+    check("a rebuild is what drops it",
+          !TranslateDialogTestHook::visible(d).contains(3));
+    delete d;
+}
+
+static void testTheRowEditorWalksTheOfferedRows()
+{
+    std::cout << "\n[Previous and Next follow the filter, not the table]\n";
+    translation_store::Memory mem;
+    auto *d = TranslateDialogTestHook::make(manyStrings(10), &mem);
+    auto *t = TranslateDialogTestHook::table(d);
+
+    check("unfiltered, next is the next row",
+          TranslateDialogTestHook::nextVis(d, 3) == 4);
+    check("and previous the previous", TranslateDialogTestHook::prevVis(d, 3) == 2);
+    check("the first row has no previous",
+          TranslateDialogTestHook::prevVis(d, 0) == -1);
+    check("the last has no next", TranslateDialogTestHook::nextVis(d, 9) == -1);
+    check("and the caption counts the whole list",
+          TranslateDialogTestHook::pos(d, 3) == qMakePair(4, 10));
+
+    t->item(4, 1)->setText(QStringLiteral("hecho"));
+    TranslateDialogTestHook::setFilter(d, true);
+    check("Next steps over a row the filter is hiding",
+          TranslateDialogTestHook::nextVis(d, 3) == 5,
+          QString::number(TranslateDialogTestHook::nextVis(d, 3)));
+    check("and the caption counts what is on offer",
+          TranslateDialogTestHook::pos(d, 3) == qMakePair(4, 9));
+    delete d;
+}
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
@@ -887,6 +1073,12 @@ int main(int argc, char **argv)
     testProgressFileNamesCannotCollide();
     testAProgressFileReadsAsAMemory();
     testMissingProgressIsNotAnError();
+    testEveryRowStillExistsWhenPaged();
+    testOnlyThisPageIsOnScreen();
+    testAnAnswerLandsOnAnOffPageRow();
+    testTheFilterOffersOnlyWhatStillNeedsWork();
+    testTheFilterDoesNotYankARowFromUnderTheCursor();
+    testTheRowEditorWalksTheOfferedRows();
     testEditingTheNameRerendersEveryRow();
     testHandEditingARowBreaksItsLink();
     testMarkupIsLiftedOut();
