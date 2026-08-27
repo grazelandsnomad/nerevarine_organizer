@@ -523,7 +523,15 @@ void FomodWizard::buildUi()
                 QStringLiteral(" - "), QStringLiteral(" ("), QStringLiteral("_")};
             QStringList needles;
             const QString n = modName.trimmed();
-            if (n.length() < 4) return needles;
+            // 3, not 4: the scene's acronyms are the whole point of this
+            // lookup and plenty are three letters (BOS, MOP). Dropping them
+            // meant a mod installed under its acronym alone could not be
+            // found, and Pass F unticks on exactly that absence - so an
+            // option was reported as needing a mod the user already had.
+            // Every caller anchors a needle under 8 characters at the start
+            // of the name, which is what keeps a short one honest. Two is
+            // still too little to anchor usefully.
+            if (n.length() < 3) return needles;
             needles << n;
             if (n.contains(u'_')) {             // "OAAB_Data" -> "OAAB Data"
                 QString sp = n;

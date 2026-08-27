@@ -1689,6 +1689,47 @@ static void wizardui_testRequiredModTogglesTheOption()
         delete w;
     }
 
+    std::cout << "\n[a three-letter acronym is an acronym too]\n";
+    {
+        // SMIM passing proved nothing about the rule: it is four characters,
+        // and the needle builder dropped anything shorter. Three-letter names
+        // are ordinary here - BOS, MOP - and one installed under its acronym
+        // alone came back missing, so the option was unticked and labelled as
+        // needing a mod sitting right there in the modlist.
+        FomodPlugin p = wizardui_mkPlugin("Swapper Config");
+        p.description = QStringLiteral("Requires Base Object Swapper to work.");
+        FomodGroup g = wizardui_mkGroup("SelectAny", { p });
+        g.name = QStringLiteral("Swapper Config");
+        FomodStep st;
+        st.name   = QStringLiteral("Step 1 of 1");
+        st.groups = { g };
+        auto *w = FomodWizardTestHook::build({ st }, {},
+                                             {QStringLiteral("BOS")});
+        check("ticked from the three-letter acronym alone",
+              FomodWizardTestHook::btn(w, 0, 0, 0)->isChecked(),
+              FomodWizardTestHook::btn(w, 0, 0, 0)->text());
+        delete w;
+    }
+
+    std::cout << "\n[but a short needle still has to start the name]\n";
+    {
+        // The anchoring is what makes a three-letter needle safe to allow:
+        // "BOS" may open a mod name, never sit inside one.
+        FomodPlugin p = wizardui_mkPlugin("Swapper Config");
+        p.description = QStringLiteral("Requires Base Object Swapper to work.");
+        FomodGroup g = wizardui_mkGroup("SelectAny", { p });
+        g.name = QStringLiteral("Swapper Config");
+        FomodStep st;
+        st.name   = QStringLiteral("Step 1 of 1");
+        st.groups = { g };
+        auto *w = FomodWizardTestHook::build(
+            { st }, {}, {QStringLiteral("Skyrim BOS Patch Collection")});
+        check("not ticked by an acronym buried mid-name",
+              !FomodWizardTestHook::btn(w, 0, 0, 0)->isChecked(),
+              FomodWizardTestHook::btn(w, 0, 0, 0)->text());
+        delete w;
+    }
+
 
     std::cout << "\n[a FOMOD's own required entry is not a missing mod]\n";
     {
