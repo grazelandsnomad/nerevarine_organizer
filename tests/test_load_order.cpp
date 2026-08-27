@@ -20,6 +20,12 @@
 #include "pluginparser.h"
 
 #include <QCoreApplication>
+#include <QApplication>
+#include <QListWidget>
+#include <QListWidgetItem>
+
+#include "undo_stack.h"
+#include "modroles.h"
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
@@ -2570,9 +2576,151 @@ static void run_translation()
     std::cout << "\n";
 }
 
+
+// ===== undo snapshot round-trip =====
+//
+// The undo stack used to snapshot a hand-written ItemSnapshot carrying 18 of
+// ModEntry's fields. Everything it did not carry - declared dependencies, the
+// FOMOD/BAIN install choices, the Nexus id, the mod size - was silently wiped
+// by any undo, including data a save had already written to disk. It now
+// snapshots ModEntry itself.
+
+static void undo_testModFieldsSurvive()
+{
+    std::cout << "\n[undo restores every persisted field, not just 18]\n";
+    QListWidget list;
+
+    auto *mod = new QListWidgetItem(QStringLiteral("Oblivion Style Spellcasting"));
+    mod->setData(ModRole::ItemType, ItemType::Mod);
+    mod->setCheckState(Qt::Checked);
+    mod->setData(ModRole::NexusUrl,
+                 QStringLiteral("https://www.nexusmods.com/morrowind/mods/1"));
+    mod->setData(ModRole::DependsOn,
+                 QStringList{QStringLiteral("https://www.nexusmods.com/morrowind/mods/2"),
+                             QStringLiteral("https://www.nexusmods.com/morrowind/mods/3")});
+    mod->setData(ModRole::BainChoices,  QStringLiteral("00 Core;01 Patch"));
+    mod->setData(ModRole::FomodChoices, QStringLiteral("0:0:1;0:1:0"));
+    mod->setData(ModRole::NexusId,      4242);
+    mod->setData(ModRole::NexusTitle,   QStringLiteral("Quickcasting"));
+    mod->setData(ModRole::ModSize,      QVariant::fromValue<qint64>(123456789));
+    mod->setData(ModRole::VideoUrl,     QStringLiteral("https://youtu.be/x"));
+    mod->setData(ModRole::IntendedModPath, QStringLiteral("/mods/quickcast"));
+    list.addItem(mod);
+
+    UndoStack undo(&list);
+    undo.pushUndo();
+
+    // Something destructive happens: the row loses everything the old snapshot
+    // did not carry.
+    mod->setData(ModRole::DependsOn,    QStringList{});
+    mod->setData(ModRole::BainChoices,  QString());
+    mod->setData(ModRole::FomodChoices, QString());
+    mod->setData(ModRole::NexusId,      0);
+    mod->setData(ModRole::ModSize,      QVariant::fromValue<qint64>(0));
+
+    undo.performUndo();
+
+    auto *back = list.item(0);
+    check("the declared dependencies come back",
+          back->data(ModRole::DependsOn).toStringList().size() == 2,
+          back->data(ModRole::DependsOn).toStringList().join(','));
+    check("and the BAIN choices",
+          back->data(ModRole::BainChoices).toString()
+              == QStringLiteral("00 Core;01 Patch"));
+    check("and the FOMOD choices",
+          back->data(ModRole::FomodChoices).toString()
+              == QStringLiteral("0:0:1;0:1:0"));
+    check("and the Nexus id", back->data(ModRole::NexusId).toInt() == 4242);
+    check("and the Nexus title",
+          back->data(ModRole::NexusTitle).toString() == QStringLiteral("Quickcasting"));
+    check("and the mod size",
+          back->data(ModRole::ModSize).toLongLong() == 123456789);
+    check("and the video URL",
+          back->data(ModRole::VideoUrl).toString() == QStringLiteral("https://youtu.be/x"));
+    check("and the intended path",
+          back->data(ModRole::IntendedModPath).toString() == QStringLiteral("/mods/quickcast"));
+    check("the check state too", back->checkState() == Qt::Checked);
+}
+
+static void undo_testSeparatorGetsNoCheckbox()
+{
+    std::cout << "\n[a restored separator is still a separator]\n";
+    QListWidget list;
+
+    auto *sep = new QListWidgetItem(QStringLiteral("Immersion"));
+    sep->setData(ModRole::ItemType, ItemType::Separator);
+    sep->setData(ModRole::Collapsed, false);
+    sep->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled);
+    list.addItem(sep);
+
+    UndoStack undo(&list);
+    undo.pushUndo();
+    sep->setText(QStringLiteral("renamed"));
+    undo.performUndo();
+
+    auto *back = list.item(0);
+    check("the name is restored", back->text() == QStringLiteral("Immersion"));
+    // ModEntry::applyToItem writes a check state for every row it is given.
+    // Doing that to a separator makes Qt report HasCheckIndicator and paints a
+    // checkbox on the section header, so it is guarded.
+    check("no check state was written onto it",
+          !back->data(Qt::CheckStateRole).isValid(),
+          back->data(Qt::CheckStateRole).toString());
+    check("and it is not user-checkable",
+          !(back->flags() & Qt::ItemIsUserCheckable));
+    check("but still selectable and draggable",
+          (back->flags() & Qt::ItemIsSelectable)
+              && (back->flags() & Qt::ItemIsDragEnabled));
+}
+
+static void undo_testOrderAndMixedRows()
+{
+    std::cout << "\n[order and row types survive a round trip]\n";
+    QListWidget list;
+    auto *sep = new QListWidgetItem(QStringLiteral("Combat"));
+    sep->setData(ModRole::ItemType, ItemType::Separator);
+    sep->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled);
+    list.addItem(sep);
+    for (int i = 0; i < 3; ++i) {
+        auto *m = new QListWidgetItem(QStringLiteral("mod %1").arg(i));
+        m->setData(ModRole::ItemType, ItemType::Mod);
+        m->setCheckState(i == 1 ? Qt::Unchecked : Qt::Checked);
+        list.addItem(m);
+    }
+
+    UndoStack undo(&list);
+    undo.pushUndo();
+    delete list.takeItem(2);
+    undo.performUndo();
+
+    check("all four rows are back", list.count() == 4, QString::number(list.count()));
+    check("the separator is still first",
+          list.item(0)->data(ModRole::ItemType).toString() == ItemType::Separator);
+    check("order is preserved",
+          list.item(1)->text() == QStringLiteral("mod 0")
+              && list.item(2)->text() == QStringLiteral("mod 1")
+              && list.item(3)->text() == QStringLiteral("mod 2"));
+    check("and each mod's own check state",
+          list.item(1)->checkState() == Qt::Checked
+              && list.item(2)->checkState() == Qt::Unchecked
+              && list.item(3)->checkState() == Qt::Checked);
+}
+
+static void run_undo_snapshot()
+{
+    std::cout << "=== undo snapshot tests ===\n";
+    undo_testModFieldsSurvive();
+    undo_testSeparatorGetsNoCheckbox();
+    undo_testOrderAndMixedRows();
+    std::cout << "\n";
+}
+
 int main(int argc, char **argv)
 {
-    QCoreApplication app(argc, argv);
+    // The undo section drives a real QListWidget; offscreen QPA keeps it
+    // headless, the same way test_fomod runs its wizard suite.
+    qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
+    QApplication app(argc, argv);
 
     run_load_order_merge();
     run_scan_coordinator();
@@ -2585,6 +2733,7 @@ int main(int argc, char **argv)
     run_plugin_writer();
     run_tes3();
     run_translation();
+    run_undo_snapshot();
 
     std::cout << "\n" << s_passed << " passed, " << s_failed << " failed\n";
     return s_failed == 0 ? 0 : 1;

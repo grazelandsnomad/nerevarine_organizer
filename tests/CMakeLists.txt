@@ -195,7 +195,11 @@ add_executable(test_load_order
     ${CMAKE_SOURCE_DIR}/src/translation_store.cpp
     ${CMAKE_SOURCE_DIR}/src/translation_mod.cpp
     ${CMAKE_SOURCE_DIR}/src/pluginparser.cpp
+    ${CMAKE_SOURCE_DIR}/src/modentry.cpp
+    ${CMAKE_SOURCE_DIR}/src/modentry_item.cpp
+    ${CMAKE_SOURCE_DIR}/src/undo_stack.cpp
     ${CMAKE_SOURCE_DIR}/include/scan_coordinator.h
+    ${CMAKE_SOURCE_DIR}/include/undo_stack.h
 )
 set_target_properties(test_load_order PROPERTIES AUTOMOC ON)
 target_include_directories(test_load_order PRIVATE ${CMAKE_SOURCE_DIR}/include)

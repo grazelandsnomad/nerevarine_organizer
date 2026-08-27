@@ -76,7 +76,17 @@ void ModEntry::applyToItem(QListWidgetItem *item) const
 
     item->setData(ModRole::ItemType, itemType);
     item->setText(displayName);
-    item->setCheckState(checked ? Qt::Checked : Qt::Unchecked);
+    // A separator gets no check state at all. Writing one - even Unchecked -
+    // makes Qt report HasCheckIndicator for the row, and a checkbox appears on
+    // the section header. Its flags go back too: a separator is selectable and
+    // draggable but never user-checkable.
+    if (itemType == ItemType::Separator) {
+        item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable
+                       | Qt::ItemIsDragEnabled);
+    } else {
+        item->setCheckState(checked ? Qt::Checked : Qt::Unchecked);
+        item->setToolTip(modPath);
+    }
     item->setData(ModRole::BgColor, bgColor);
     item->setData(ModRole::FgColor, fgColor);
 
