@@ -6,6 +6,7 @@
 #include "plugin_strings.h"
 #include "translate_dialog.h"
 #include "translation_mod.h"
+#include "translation_progress.h"
 #include "translation_store.h"
 #include "target_language.h"
 #include "mod_package.h"
@@ -1815,13 +1816,25 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
         QStringLiteral("translation_rules_%1.txt").arg(
             language.isEmpty() ? QStringLiteral("default") : language));
 
-    TranslateDialog dlg(modName, strings, language, &memory, rulesPath, this);
+    // Half-finished work, per mod and per language, so a big mod can be done
+    // fifteen strings at a time over a month.
+    const QString progressPath = resolveUserStatePath(
+        translation_progress::fileNameFor(modName, language));
+
+    TranslateDialog dlg(modName, strings, language, &memory, rulesPath,
+                        progressPath, this);
     if (dlg.exec() != QDialog::Accepted) {
-        // Even a cancelled edit may have taught the memory nothing; only save
-        // on accept, so a cancel really is a cancel.
+        // A cancel really is a cancel: nothing typed reaches the memory.
         return;
     }
+    // A Scribe import is the user's own years of work; losing it because they
+    // saved rather than built would be silly. Both exits keep it.
     if (dlg.memoryChanged()) memory.save(memPath);
+
+    // Saved, not shipped. No mod is built, no row is added, openmw.cfg is not
+    // touched - the point of the button is that a day's work costs none of
+    // that.
+    if (dlg.outcome() == TranslateDialog::Outcome::Saved) return;
 
     const QString modsDir = m_profiles->isEmpty()
         ? QString() : m_profiles->current().modsDir;
@@ -1834,22 +1847,50 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
         return;
     }
 
-    // Insert directly BELOW the original: later wins the file conflict, which
-    // is the whole mechanism by which the translation reaches the game.
-    m_undoStack->pushUndo();
-    dropViewSortKeepingOrder();
-    auto *tr = new QListWidgetItem(built.modName);
-    tr->setData(ModRole::ItemType,      ItemType::Mod);
-    tr->setData(ModRole::ModPath,       built.modPath);
-    tr->setData(ModRole::InstallStatus, 1);
-    tr->setData(ModRole::DateAdded,     QDateTime::currentDateTime());
-    // Marks this as ours, which is what makes "package as archive" appear on
-    // it and nowhere else.
-    tr->setData(ModRole::IsGeneratedTranslation, true);
-    tr->setCheckState(Qt::Checked);
-    tr->setToolTip(built.modPath);
-    m_modList->insertItem(m_modList->row(item) + 1, tr);
-    m_modList->setCurrentItem(tr);
+    // Re-running the editor UPDATES the translation rather than adding another
+    // one. build() reuses the folder of the same name, so a second list row
+    // would be two rows pointing at one folder - and translating a big mod
+    // over a month means running this thirty times. Match on the folder
+    // first, which is the identity that matters, then on the name nameFor()
+    // would have given it.
+    const QString wanted = translation_mod::nameFor(modName, language);
+    QListWidgetItem *existing = nullptr;
+    for (int i = 0; i < m_modList->count() && !existing; ++i) {
+        auto *cand = m_modList->item(i);
+        if (cand->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (cand->data(ModRole::ModPath).toString() == built.modPath
+            || cand->text().trimmed() == wanted)
+            existing = cand;
+    }
+
+    if (existing) {
+        // Nothing structural changed, so no undo entry: undo cannot restore
+        // the plugin contents build() just rewrote, and pushing a snapshot
+        // that claims otherwise is worse than not offering one.
+        existing->setData(ModRole::ModPath,       built.modPath);
+        existing->setData(ModRole::InstallStatus, 1);
+        existing->setData(ModRole::IsGeneratedTranslation, true);
+        existing->setToolTip(built.modPath);
+        m_modList->setCurrentItem(existing);
+    } else {
+        // Insert directly BELOW the original: later wins the file conflict,
+        // which is the whole mechanism by which the translation reaches the
+        // game.
+        m_undoStack->pushUndo();
+        dropViewSortKeepingOrder();
+        auto *tr = new QListWidgetItem(built.modName);
+        tr->setData(ModRole::ItemType,      ItemType::Mod);
+        tr->setData(ModRole::ModPath,       built.modPath);
+        tr->setData(ModRole::InstallStatus, 1);
+        tr->setData(ModRole::DateAdded,     QDateTime::currentDateTime());
+        // Marks this as ours, which is what makes "package as archive" appear
+        // on it and nowhere else.
+        tr->setData(ModRole::IsGeneratedTranslation, true);
+        tr->setCheckState(Qt::Checked);
+        tr->setToolTip(built.modPath);
+        m_modList->insertItem(m_modList->row(item) + 1, tr);
+        m_modList->setCurrentItem(tr);
+    }
 
     saveModList();
     syncOpenMWConfig();

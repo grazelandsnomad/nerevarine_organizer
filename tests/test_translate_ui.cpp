@@ -131,6 +131,19 @@ struct TranslateDialogTestHook {
     static QPair<int,int> pos(TranslateDialog *d, int r)
     { return d->visiblePosition(r); }
     static int  pageSize() { return TranslateDialog::kPageSize; }
+
+    // -- saving and the memory gate ----------------------------------
+    static TranslateDialog *makeAt(const QList<TranslatableString> &strings,
+                                   translation_store::Memory *mem,
+                                   const QString &progressPath)
+    {
+        return new TranslateDialog(QStringLiteral("Project Cyrodiil"),
+                                   strings, QStringLiteral("spanish"), mem,
+                                   QString(), progressPath);
+    }
+    static bool write(TranslateDialog *d) { return d->writeProgress(); }
+    static TranslateDialog::AcceptPlan plan(TranslateDialog *d)
+    { return d->planAccept(); }
     static void advance(TranslateDialog *d) { d->advanceMachineTranslate(); }
     static void finish(TranslateDialog *d)  { d->finishMachineTranslate(); }
     static bool stopped(TranslateDialog *d) { return d->m_mtStopped; }
@@ -1045,6 +1058,133 @@ static void testTheRowEditorWalksTheOfferedRows()
     delete d;
 }
 
+static void testAMachineGuessNeverReachesTheMemory()
+{
+    std::cout << "\n[an unread guess ships, but is not remembered]\n";
+    translation_store::Memory mem;
+    auto *d = TranslateDialogTestHook::make(manyStrings(4), &mem);
+    auto *t = TranslateDialogTestHook::table(d);
+
+    TranslateDialogTestHook::deliver(d, 0, QStringLiteral("adivinado"));  // machine
+    t->item(1, 1)->setText(QStringLiteral("escrito"));                    // typed
+
+    const auto plan = TranslateDialogTestHook::plan(d);
+    check("the typed answer is remembered",
+          !mem.lookup(QStringLiteral("String 00001")).isEmpty());
+    // The whole point: one bad guess about a common string must not pre-fill
+    // every other mod the user ever opens.
+    check("the machine guess is NOT",
+          mem.lookup(QStringLiteral("String 00000")).isEmpty(),
+          mem.lookup(QStringLiteral("String 00000")));
+    // But it still goes into the mod - refusing it would hand back an empty
+    // mod to somebody who just machine-translated the lot.
+    check("both still ship into the mod", plan.byText.size() == 2,
+          QString::number(plan.byText.size()));
+    check("and the split is reported",
+          plan.remembered == 1 && plan.unreviewed == 1);
+    delete d;
+}
+
+static void testReadingAGuessLetsItIntoTheMemory()
+{
+    std::cout << "\n[once somebody has read it, it can be remembered]\n";
+    translation_store::Memory mem;
+    auto *d = TranslateDialogTestHook::make(manyStrings(2), &mem);
+
+    TranslateDialogTestHook::deliver(d, 0, QStringLiteral("adivinado"));
+    check("unread to begin with", !TranslateDialogTestHook::reviewed(d, 0));
+    TranslateDialogTestHook::review(d, 0, true);
+    TranslateDialogTestHook::plan(d);
+    check("now it is remembered",
+          !mem.lookup(QStringLiteral("String 00000")).isEmpty());
+    delete d;
+}
+
+static void testAGuardedWriteDoesNotVouchForARow()
+{
+    std::cout << "\n[the app writing is not the user reading]\n";
+    translation_store::Memory mem;
+    auto *d = TranslateDialogTestHook::make(manyStrings(3), &mem);
+    auto *t = TranslateDialogTestHook::table(d);
+
+    TranslateDialogTestHook::deliver(d, 0, QStringLiteral("del robot"));
+    check("a guarded write leaves the row unread",
+          !TranslateDialogTestHook::reviewed(d, 0));
+    t->item(1, 1)->setText(QStringLiteral("a mano"));
+    check("an unguarded one vouches for it",
+          TranslateDialogTestHook::reviewed(d, 1));
+    // A blank row can never be "read": it would count as done to the counter
+    // and drop out of the filter with nothing in it.
+    TranslateDialogTestHook::review(d, 2, true);
+    check("and a blank row refuses to be marked read",
+          !TranslateDialogTestHook::reviewed(d, 2));
+    delete d;
+}
+
+static void testProgressSurvivesClosingTheDialog()
+{
+    std::cout << "\n[fifteen today, fifteen tomorrow]\n";
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("cyrodiil.json"));
+    const auto strings = manyStrings(5);
+
+    {   // Monday.
+        translation_store::Memory mem;
+        auto *d = TranslateDialogTestHook::makeAt(strings, &mem, path);
+        auto *t = TranslateDialogTestHook::table(d);
+        t->item(0, 1)->setText(QStringLiteral("lunes"));
+        TranslateDialogTestHook::deliver(d, 1, QStringLiteral("del robot"));
+        check("it writes", TranslateDialogTestHook::write(d));
+        delete d;
+    }
+    {   // Tuesday, a fresh dialog on the same mod.
+        translation_store::Memory mem;
+        auto *d = TranslateDialogTestHook::makeAt(strings, &mem, path);
+        auto *t = TranslateDialogTestHook::table(d);
+        check("yesterday's typing is back",
+              t->item(0, 1)->text() == QStringLiteral("lunes"),
+              t->item(0, 1)->text());
+        check("and it is still vouched for",
+              TranslateDialogTestHook::reviewed(d, 0));
+        check("the machine guess is back too",
+              t->item(1, 1)->text() == QStringLiteral("del robot"));
+        // If this flipped to read across a save, a month of unread guesses
+        // would quietly join the shared memory.
+        check("and still unread",
+              !TranslateDialogTestHook::reviewed(d, 1));
+        check("the untouched rows are still blank",
+              t->item(2, 1)->text().isEmpty());
+        delete d;
+    }
+}
+
+static void testAMemoryHitDoesNotClobberRestoredWork()
+{
+    std::cout << "\n[the shared memory does not overwrite this mod's own work]\n";
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("p.json"));
+    const auto strings = manyStrings(2);
+
+    {
+        translation_store::Memory mem;
+        auto *d = TranslateDialogTestHook::makeAt(strings, &mem, path);
+        TranslateDialogTestHook::table(d)->item(0, 1)
+            ->setText(QStringLiteral("lo que escribi aqui"));
+        TranslateDialogTestHook::write(d);
+        delete d;
+    }
+    // Some other mod taught the shared memory a different answer for the same
+    // English. This mod's own saved work must win.
+    translation_store::Memory mem;
+    mem.remember(QStringLiteral("String 00000"), QStringLiteral("de otro mod"));
+    auto *d = TranslateDialogTestHook::makeAt(strings, &mem, path);
+    check("the saved answer survives the memory fill",
+          TranslateDialogTestHook::table(d)->item(0, 1)->text()
+              == QStringLiteral("lo que escribi aqui"),
+          TranslateDialogTestHook::table(d)->item(0, 1)->text());
+    delete d;
+}
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
@@ -1079,6 +1219,11 @@ int main(int argc, char **argv)
     testTheFilterOffersOnlyWhatStillNeedsWork();
     testTheFilterDoesNotYankARowFromUnderTheCursor();
     testTheRowEditorWalksTheOfferedRows();
+    testAMachineGuessNeverReachesTheMemory();
+    testReadingAGuessLetsItIntoTheMemory();
+    testAGuardedWriteDoesNotVouchForARow();
+    testProgressSurvivesClosingTheDialog();
+    testAMemoryHitDoesNotClobberRestoredWork();
     testEditingTheNameRerendersEveryRow();
     testHandEditingARowBreaksItsLink();
     testMarkupIsLiftedOut();

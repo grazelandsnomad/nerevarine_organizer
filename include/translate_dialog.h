@@ -21,6 +21,7 @@
 #include "google_translate.h"
 #include "translation_mod.h"
 #include "translation_store.h"
+#include "translation_progress.h"
 #include "translation_rules.h"
 
 class QLabel;
@@ -51,7 +52,17 @@ public:
                     const QString &language,
                     translation_store::Memory *memory,
                     const QString &rulesPath = {},
+                    // Where this mod's half-finished work lives. Empty
+                    // disables resuming, which is what a caller with nowhere
+                    // to write gets.
+                    const QString &progressPath = {},
                     QWidget *parent = nullptr);
+
+    // How the dialog was closed. Saved and Build both accept(), so the caller
+    // cannot tell them apart from exec()'s return alone - and it must, since
+    // only Build may go on to build the mod and touch the modlist.
+    enum class Outcome { Cancelled, Saved, Build };
+    Outcome outcome() const { return m_outcome; }
 
     // Valid after exec() returns Accepted. Only strings the user actually
     // filled in appear; an untouched row is left English rather than blanked.
@@ -60,6 +71,12 @@ public:
     // True when the user changed at least one entry, so the caller knows
     // whether the memory is worth saving.
     bool memoryChanged() const { return m_memoryChanged; }
+
+protected:
+    // Covers Esc, the window-manager close and the Cancel button - Qt6's
+    // QDialog::closeEvent calls reject(), so this one override catches all
+    // three.
+    void reject() override;
 
 private:
     // Test hook: tests/test_translate_ui.cpp drives the table directly. The
@@ -103,6 +120,20 @@ private:
     int  nextVisible(int row) const;
     int  prevVisible(int row) const;
     QPair<int, int> visiblePosition(int row) const;
+
+    // Half-finished work. writeProgress reports failure rather than swallowing
+    // it: this is the call standing between the user and a month of retyping.
+    void fillFromProgress();
+    bool writeProgress();
+    void onSaveProgress();
+    // What accepting would do, minus every message box - so it can be tested.
+    // onAccept itself ends in a QMessageBox and never can be.
+    struct AcceptPlan {
+        QHash<QString, QString> byText;   // every non-blank row, read or not
+        int remembered = 0;               // read rows, bound for the memory
+        int unreviewed = 0;               // shipped, but held back from it
+    };
+    AcceptPlan planAccept();
 
     void pumpMachineTranslate();
     // Advance to pass two, or end the run.
@@ -178,6 +209,12 @@ private:
     // opens so tuning the file is a save-and-reopen away.
     translation_rules::Rules m_rules;
     QString                  m_rulesPath;
+    QString                  m_progressPath;
+    translation_progress::Progress m_progress;
+    Outcome                  m_outcome = Outcome::Cancelled;
+    // Answers typed since the last write, so Cancel can ask rather than
+    // discarding a month of work without a word.
+    bool                     m_progressDirty = false;
     int           m_mtInFlight = 0;
     int           m_mtDone     = 0;
     int           m_mtTotal    = 0;

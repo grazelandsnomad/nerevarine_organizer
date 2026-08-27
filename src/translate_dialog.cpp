@@ -23,6 +23,7 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QMessageBox>
 #include <QProgressBar>
 #include <QSpinBox>
 #include <QCheckBox>
@@ -144,12 +145,14 @@ TranslateDialog::TranslateDialog(const QString &modName,
                                  const QString &language,
                                  translation_store::Memory *memory,
                                  const QString &rulesPath,
+                                 const QString &progressPath,
                                  QWidget *parent)
     : QDialog(parent)
     , m_strings(strings)
     , m_language(language)
     , m_memory(memory)
     , m_rulesPath(rulesPath)
+    , m_progressPath(progressPath)
 {
     if (!m_rulesPath.isEmpty()) m_rules = translation_rules::load(m_rulesPath);
 
@@ -166,6 +169,15 @@ TranslateDialog::TranslateDialog(const QString &modName,
     m_rowSource.sort(Qt::CaseInsensitive);
 
     buildUi(modName);
+    // Order matters. This mod's own half-finished work goes in first, and the
+    // shared memory only fills what is still blank - see the guard in
+    // fillFromMemory. The other way round, a hit from some other mod would
+    // overwrite an answer the user typed here last week.
+    if (!m_progressPath.isEmpty()) {
+        m_progress.load(m_progressPath);
+        m_progress.setMod(modName, m_language);
+        fillFromProgress();
+    }
     fillFromMemory();
 
     // First page, and land on the first thing still wanting an answer rather
@@ -489,6 +501,13 @@ void TranslateDialog::buildUi(const QString &modName)
 
     auto *box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     box->button(QDialogButtonBox::Ok)->setText(T("translate_apply"));
+    // ActionRole, not AcceptRole: an accept role would make the button box
+    // emit accepted() and run onAccept, which is the one thing saving must
+    // not do.
+    auto *saveBtn = box->addButton(T("translate_save_progress"),
+                                   QDialogButtonBox::ActionRole);
+    saveBtn->setToolTip(T("translate_save_progress_tip"));
+    connect(saveBtn, &QPushButton::clicked, this, &TranslateDialog::onSaveProgress);
     connect(box, &QDialogButtonBox::accepted, this, &TranslateDialog::onAccept);
     connect(box, &QDialogButtonBox::rejected, this, &QDialog::reject);
     lay->addWidget(box);
@@ -499,6 +518,12 @@ void TranslateDialog::fillFromMemory()
     if (!m_memory) return;
     int hits = 0;
     for (int i = 0; i < m_rowSource.size(); ++i) {
+        // Never over the top of an answer already in the row. This was safe
+        // while the table was always blank here; it is not now that this
+        // mod's own saved work is loaded first, and a memory hit from some
+        // other mod would quietly replace it.
+        if (!m_table->item(i, ColTranslation)->text().trimmed().isEmpty())
+            continue;
         const QString known = m_memory->lookup(m_rowSource[i]);
         if (known.isEmpty()) continue;
         m_table->item(i, ColTranslation)->setText(known);
@@ -1203,6 +1228,7 @@ void TranslateDialog::onCellChanged(int row, int column)
     // ProgrammaticEdit guard and lands above this line.
     setReviewed(row, true);
     scheduleRecount();
+    m_progressDirty = true;
 
     const int nameIdx = nameRowIndex(row);
     if (nameIdx >= 0) {
@@ -1283,22 +1309,148 @@ void TranslateDialog::onImportDatabase()
                  .arg(read).arg(added).arg(matched));
 }
 
-void TranslateDialog::onAccept()
+// -- Half-finished work -------------------------------------------------
+
+void TranslateDialog::fillFromProgress()
 {
-    // Source text -> what the user wants it to say. Empty rows are dropped
-    // rather than written as blanks: an untranslated string stays English.
-    QHash<QString, QString> byText;
+    int restored = 0;
+    for (int i = 0; i < m_rowSource.size(); ++i) {
+        const auto e = m_progress.lookup(m_rowSource[i]);
+        if (e.translation.isEmpty()) continue;
+        {
+            ProgrammaticEdit guard(m_expanding);
+            m_table->item(i, ColTranslation)->setText(e.translation);
+            m_table->item(i, ColTranslation)->setData(ReviewedRole, e.reviewed);
+        }
+        ++restored;
+    }
+    if (restored > 0)
+        setWindowTitle(windowTitle()
+                       + T("translate_resume_suffix")
+                             .arg(restored).arg(m_rowSource.size()));
+
+    // A mod that has been updated since the last sitting will have dropped
+    // some strings. Their answers are kept - the next update may bring them
+    // back - but say so once rather than leaving the count looking wrong.
+    const int stale = m_progress.staleAgainst(m_rowSource);
+    if (stale > 0)
+        ui::info(this, T("translate_machine"),
+                 T("translate_resume_stale").arg(stale));
+}
+
+bool TranslateDialog::writeProgress()
+{
+    if (m_progressPath.isEmpty()) return true;   // nowhere to write, not a failure
+
+    for (int i = 0; i < m_rowSource.size(); ++i) {
+        auto *cell = m_table->item(i, ColTranslation);
+        if (!cell) continue;
+        const QString t = cell->text().trimmed();
+        if (t.isEmpty()) { m_progress.forget(m_rowSource[i]); continue; }
+        m_progress.record(m_rowSource[i], t, cell->data(ReviewedRole).toBool());
+    }
+    if (!m_progress.save(m_progressPath)) return false;
+    m_progressDirty = false;
+    return true;
+}
+
+void TranslateDialog::onSaveProgress()
+{
+    if (!writeProgress()) {
+        // Stay open. Closing on a failed write is how a month disappears.
+        ui::warn(this, T("translate_machine"),
+                 T("translate_save_progress_failed").arg(m_progressPath));
+        return;
+    }
+    int done = 0;
+    for (int i = 0; i < m_rowSource.size(); ++i)
+        if (!m_table->item(i, ColTranslation)->text().trimmed().isEmpty()) ++done;
+
+    m_outcome = Outcome::Saved;
+    ui::info(this, T("translate_machine"),
+             T("translate_save_progress_done").arg(done).arg(m_rowSource.size()));
+    accept();
+}
+
+void TranslateDialog::reject()
+{
+    if (!m_progressDirty || m_progressPath.isEmpty()) {
+        m_outcome = Outcome::Cancelled;
+        QDialog::reject();
+        return;
+    }
+
+    QMessageBox box(this);
+    box.setWindowTitle(T("translate_machine"));
+    box.setIcon(QMessageBox::Warning);
+    box.setText(T("translate_close_unsaved"));
+    auto *saveBtn  = box.addButton(T("translate_save_progress"),
+                                   QMessageBox::AcceptRole);
+    auto *dropBtn  = box.addButton(T("translate_close_discard"),
+                                   QMessageBox::DestructiveRole);
+    auto *stayBtn  = box.addButton(T("translate_close_keep"),
+                                   QMessageBox::RejectRole);
+    box.setDefaultButton(saveBtn);
+    box.exec();
+
+    if (box.clickedButton() == stayBtn) return;          // not closing after all
+    if (box.clickedButton() == saveBtn) {
+        if (!writeProgress()) {
+            ui::warn(this, T("translate_machine"),
+                     T("translate_save_progress_failed").arg(m_progressPath));
+            return;                                       // still not closing
+        }
+        m_outcome = Outcome::Saved;
+        QDialog::reject();
+        return;
+    }
+    (void)dropBtn;
+    m_outcome = Outcome::Cancelled;
+    QDialog::reject();
+}
+
+TranslateDialog::AcceptPlan TranslateDialog::planAccept()
+{
+    AcceptPlan plan;
     for (int i = 0; i < m_rowSource.size(); ++i) {
         const QString t = m_table->item(i, ColTranslation)->text().trimmed();
         if (t.isEmpty()) continue;
-        if (t == m_rowSource[i]) continue;   // typed the English back; not a translation
-        byText.insert(translation_store::normalize(m_rowSource[i]), t);
+        if (t == m_rowSource[i]) continue;   // typed the English back
+        plan.byText.insert(translation_store::normalize(m_rowSource[i]), t);
 
+        // The gate. An answer nobody has read ships into the mod - that is
+        // what was asked for - but it does not join the shared memory, where
+        // one bad guess would pre-fill every other mod the user opens.
+        if (!m_table->item(i, ColTranslation)->data(ReviewedRole).toBool()) {
+            ++plan.unreviewed;
+            continue;
+        }
+        ++plan.remembered;
         if (m_memory && m_memory->lookup(m_rowSource[i]) != t) {
             m_memory->remember(m_rowSource[i], t);
             m_memoryChanged = true;
         }
     }
+    return plan;
+}
+
+void TranslateDialog::onAccept()
+{
+    // Source text -> what the user wants it to say. Empty rows are dropped
+    // rather than written as blanks: an untranslated string stays English.
+    // The gate on the shared memory lives in planAccept, which is also the
+    // half a test can reach.
+    const AcceptPlan plan = planAccept();
+    const QHash<QString, QString> &byText = plan.byText;
+
+    // Unread machine answers DO go into the mod - refusing them would hand
+    // back an empty mod to somebody who just machine-translated twenty
+    // thousand rows. They are only held back from the shared memory. Say so,
+    // once, rather than letting it be a surprise later.
+    if (plan.unreviewed > 0
+        && !ui::confirm(this, T("translate_machine"),
+                        T("translate_unreviewed_warning").arg(plan.unreviewed)))
+        return;
 
     if (byText.isEmpty()) {
         ui::info(this, T("translate_title").arg(QString()), T("translate_nothing_typed"));
@@ -1313,5 +1465,9 @@ void TranslateDialog::onAccept()
         m_result[s.pluginRel].insert(s.key, it.value());
     }
 
+    // A build is a save point too: the same answers, kept where a later
+    // sitting will find them.
+    writeProgress();
+    m_outcome = Outcome::Build;
     accept();
 }
