@@ -37,6 +37,19 @@ const QList<QStringList> &table()
         {"TR", "Tamriel Rebuilt"},
         {"OAAB", "OAAB_Data", "OAAB Data"},
         {"PT", "Project Tamriel"},
+        {"Tamriel_Data", "Tamriel Data"},
+        {"GITD", "Glow in the Dahrk"},
+        {"BCOM", "Beautiful Cities of Morrowind"},
+        {"MOP", "Morrowind Optimization Patch"},
+        {"SHOTN", "Skyrim Home of the Nords"},
+        {"SSQN", "Skyrim Style Quest Notifications"},
+        {"TOTSP", "Tomb of the Snow Prince", "Solstheim - Tomb of the Snow Prince"},
+        // One spelling, no acronym worth the risk. Here so isKnownMod() can
+        // vouch for a single-word name: a BAIN package called "98 Ashfall
+        // Compatibility" leaves "Ashfall" behind, and one word is only enough
+        // to act on when the table already knows it.
+        {"Project Atlas", "Atlas"},
+        {"Ashfall"},
         // -- Fallout / Starfield --------------------------------------
         {"F4SE", "Fallout 4 Script Extender"},
         {"NVSE", "New Vegas Script Extender"},
@@ -72,6 +85,13 @@ QStringList aliasesFor(const QString &name)
     for (const QString &n : table()[*it])
         if (n.toLower() != key) out << n;
     return out;
+}
+
+bool isKnownMod(const QString &name)
+{
+    const QString key = name.trimmed().toLower();
+    if (key.isEmpty()) return false;
+    return index().constFind(key) != index().constEnd();
 }
 
 QStringList frameworkPreference()

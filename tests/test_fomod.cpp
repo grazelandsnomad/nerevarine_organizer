@@ -8,6 +8,11 @@
 #include "fomod_scripts.h"
 #include "fomod_install.h"
 #include "bain.h"
+#include "bain_hint.h"
+#include "bainwizard.h"
+
+#include <QCheckBox>
+#include <QScrollArea>
 #include "fomodwizard.h"
 
 #include <QApplication>
@@ -838,6 +843,231 @@ static void run_bain()
     bain_testDetection();
     bain_testOrdering();
     bain_testStageMerge();
+    std::cout << "\n";
+}
+
+// ===== bain_hint: what a package name says it is for =====
+//
+// Names below are verbatim from a real mods folder. The point of this suite is
+// not that the patches are found - it is that the things which are NOT patches
+// are left alone.
+
+using BV = bain::PackageVerdict;
+
+static bain::PackageVerdict bh_judge(const QString &pkg,
+                                     const QStringList &installed,
+                                     const QString &own = {})
+{
+    return bain::judgeOne(pkg, {}, installed, {}, own);
+}
+
+static const char *bh_stateName(BV::State s)
+{
+    switch (s) {
+        case BV::State::Installed: return "Installed";
+        case BV::State::Missing:   return "Missing";
+        default:                   return "Unknown";
+    }
+}
+
+static void bh_check(const char *what, const QString &pkg,
+                     const QStringList &installed, BV::State want,
+                     const QString &own = {})
+{
+    const auto v = bh_judge(pkg, installed, own);
+    check(what, v.state == want,
+          QString("%1 -> %2 (target '%3', matched '%4')")
+              .arg(pkg, QString::fromLatin1(bh_stateName(v.state)),
+                   v.target, v.matched),
+          QString::fromLatin1(bh_stateName(want)));
+}
+
+static void bainhint_testInstalled()
+{
+    std::cout << "\n[the mod a package patches is installed]\n";
+
+    const QStringList modlist = {
+        QStringLiteral("Tamriel Rebuilt 25.08.12"),
+        QStringLiteral("Uncharted Artifacts"),
+        QStringLiteral("Project Atlas"),
+        QStringLiteral("Glow in the Dahrk"),
+        QStringLiteral("Patch for Purists"),
+    };
+
+    bh_check("a double marker still finds the mod", "02 Patch - TR Patch",
+             modlist, BV::State::Installed);
+    bh_check("and the acronym bridges to the full name",
+             "02 Patch - TR Patch", modlist, BV::State::Installed);
+    bh_check("a plainly named patch", "01 Patch - Uncharted Artifacts",
+             modlist, BV::State::Installed);
+
+    // Measured false negative: "Atlas" is one word, so it only clears the bar
+    // because the alias table vouches for it - and the alias is what reaches
+    // "Project Atlas", which does not start with "Atlas".
+    bh_check("a one-word target the table knows", "01 Atlas Patch",
+             modlist, BV::State::Installed);
+
+    // Measured false negative: the acronym found nothing on its own.
+    bh_check("an acronym target", "01 GITD Patch", modlist,
+             BV::State::Installed);
+    bh_check("an acronym behind a qualifier", "01 - Vanilla GITD Patch",
+             modlist, BV::State::Installed);
+
+    // The residue is "Purists"; only the whole name answers.
+    bh_check("a mod whose name contains the marker",
+             "01 - Patch for Purists", modlist, BV::State::Installed);
+
+    const auto v = bh_judge("02 Patch - TR Patch", modlist);
+    check("and it reports which mod answered",
+          v.matched == QStringLiteral("Tamriel Rebuilt 25.08.12"), v.matched);
+}
+
+static void bainhint_testMissing()
+{
+    std::cout << "\n[the mod a package patches is not installed]\n";
+
+    // Ground truth from the archive that prompted this: OAAB Shipwrecks.
+    const QStringList modlist = {
+        QStringLiteral("Tamriel Rebuilt 25.08.12"),
+        QStringLiteral("Uncharted Artifacts"),
+        QStringLiteral("OAAB_Data"),
+    };
+
+    bh_check("four title-cased words read as a name",
+             "03 Patch - Of Pillows and Peril", modlist, BV::State::Missing);
+    // The case a master check gets wrong: that patch's plugin declares only
+    // base game, Tamriel_Data and OAAB_Data, all of them present.
+    bh_check("two title-cased words are enough",
+             "04 Patch - Lush Synthesis", modlist, BV::State::Missing);
+    bh_check("a known one-word target that is absent", "01 Atlas Patch",
+             modlist, BV::State::Missing);
+
+    const auto v = bh_judge("04 Patch - Lush Synthesis", modlist);
+    check("and names the mod it wanted",
+          v.target == QStringLiteral("Lush Synthesis"), v.target);
+    check("from the name, not a master",
+          v.source == BV::Source::Name);
+}
+
+static void bainhint_testSilence()
+{
+    std::cout << "\n[everything that is not a patch is left alone]\n";
+
+    // The false positive: "OpenMW" is the engine. It lives in the game folder,
+    // not the modlist, so the modlist cannot answer for it either way - and
+    // without the stop-list it matches the first mod whose name starts OpenMW.
+    bh_check("an engine name is not a mod", "03 OpenMW Patch",
+             {QStringLiteral("OpenMW Skyrim Style Quest Notifications")},
+             BV::State::Unknown);
+    bh_check("nor is a script extender", "02 MWSE Patch",
+             {QStringLiteral("MWSE")}, BV::State::Unknown);
+
+    const QStringList some = {QStringLiteral("Tamriel Rebuilt")};
+    bh_check("'Fix' is not a marker", "03 Chuzei Fix", some, BV::State::Unknown);
+    bh_check("a lower-case residue is not a name",
+             "05 - Patch for water removal", some, BV::State::Unknown);
+    bh_check("one Title word the table cannot vouch for",
+             "01 White suran patch", some, BV::State::Unknown);
+    bh_check("an acronym nobody can vouch for", "03 TPOTAI patch", some,
+             BV::State::Unknown);
+    bh_check("no marker at all", "00 Core", some, BV::State::Unknown);
+    bh_check("nor here", "01 Stratified Rocks", some, BV::State::Unknown);
+    bh_check("nor a bare mod name", "02 - Atlas", some, BV::State::Unknown);
+
+    // Confident enough to find, not confident enough to miss.
+    bh_check("a one-word target stays silent when absent",
+             "01 - Patch for Purists", some, BV::State::Unknown);
+
+    std::cout << "\n[a package naming its own mod is not naming another]\n";
+    bh_check("self-reference", "01 OAAB Patch", {QStringLiteral("Tamriel Rebuilt")},
+             BV::State::Unknown, QStringLiteral("OAAB Grazelands"));
+
+    std::cout << "\n[an empty modlist is evidence of nothing]\n";
+    bh_check("nothing to ask", "04 Patch - Lush Synthesis", {},
+             BV::State::Unknown);
+}
+
+static void bainhint_testAnchoring()
+{
+    std::cout << "\n[a short needle has to start the mod name]\n";
+    // "OAABandoned Shack" is a real folder in the mods directory this was
+    // measured against. Loosening the start-anchor to a bare word boundary
+    // would report OAAB_Data as installed on the strength of it.
+    bh_check("OAAB does not fire inside OAABandoned", "01 OAAB Patch",
+             {QStringLiteral("OAABandoned Shack 1.1")}, BV::State::Missing);
+    bh_check("and does fire when it opens the name", "01 OAAB Patch",
+             {QStringLiteral("OAAB_Data")}, BV::State::Installed);
+}
+
+static void bainhint_testMasters()
+{
+    std::cout << "\n[a master the modlist cannot supply outranks the name]\n";
+
+    const QSet<QString> have = {QStringLiteral("oaab_data.esm")};
+
+    {   // Name says nothing; the plugin says everything.
+        const auto v = bain::judgeOne("01 Optional Extras",
+                                      {QStringLiteral("TR_Mainland.esm")},
+                                      {QStringLiteral("Tamriel Rebuilt")},
+                                      have);
+        check("an unsatisfiable master is a miss on its own",
+              v.state == BV::State::Missing);
+        check("and the reason is the file, not a guess",
+              v.master == QStringLiteral("TR_Mainland.esm"), v.master);
+        check("reported as master evidence", v.source == BV::Source::Master);
+    }
+    {   // Satisfied masters must not vouch for anything - the lush3 shape.
+        const auto v = bain::judgeOne("04 Patch - Lush Synthesis",
+                                      {QStringLiteral("OAAB_Data.esm")},
+                                      {QStringLiteral("OAAB_Data")}, have);
+        check("satisfied masters do not veto the name verdict",
+              v.state == BV::State::Missing && v.source == BV::Source::Name,
+              QString::fromLatin1(bh_stateName(v.state)));
+    }
+    {   // Empty inventory = the pass is off, not "everything is missing".
+        const auto v = bain::judgeOne("01 Optional Extras",
+                                      {QStringLiteral("TR_Mainland.esm")},
+                                      {QStringLiteral("Tamriel Rebuilt")}, {});
+        check("an empty plugin inventory turns the master pass off",
+              v.state == BV::State::Unknown);
+    }
+    {   // Hard evidence beats a name that says the mod is there.
+        const auto v = bain::judgeOne("01 Patch - Uncharted Artifacts",
+                                      {QStringLiteral("Nowhere.esm")},
+                                      {QStringLiteral("Uncharted Artifacts")},
+                                      have);
+        check("a missing master outranks an installed-looking name",
+              v.state == BV::State::Missing && v.source == BV::Source::Master);
+    }
+}
+
+static void bainhint_testArchiveGuard()
+{
+    std::cout << "\n[the pass never leaves the archive with nothing ticked]\n";
+    // stage() returns "" for an empty selection and the caller reads "" as a
+    // cancel, so a pass confident about every package would abort the install.
+    QTemporaryDir d;
+    bain_touch(d.filePath("mod/01 Patch - Of Pillows and Peril/x.esp"));
+    bain_touch(d.filePath("mod/02 Patch - Lush Synthesis/y.esp"));
+    const auto pkgs = bain::packages(d.filePath("mod"));
+    check("two packages found", pkgs.size() == 2);
+
+    const auto v = bain::judgePackages(pkgs, {QStringLiteral("Tamriel Rebuilt")},
+                                       {}, {});
+    const bool allQuiet = std::all_of(v.cbegin(), v.cend(),
+        [](const BV &x) { return x.state == BV::State::Unknown; });
+    check("all-missing is downgraded to silence", allQuiet);
+}
+
+static void run_bain_hint()
+{
+    std::cout << "=== bain_hint tests ===\n";
+    bainhint_testInstalled();
+    bainhint_testMissing();
+    bainhint_testSilence();
+    bainhint_testAnchoring();
+    bainhint_testMasters();
+    bainhint_testArchiveGuard();
     std::cout << "\n";
 }
 
@@ -1976,6 +2206,216 @@ static void run_fomod_wizard_ui()
     std::cout << "\n";
 }
 
+
+// ===== BainWizard: the picker applies the verdicts =====
+//
+// Fills the friend seam declared in bainwizard.h. Packages are stuffed in
+// directly, so none of this touches a filesystem; master evidence is covered
+// against real TES3 headers in the bain_hint suite above.
+struct BainWizardTestHook {
+    static BainWizard *build(const QList<bain::Package> &pkgs,
+                             const QString &prior = {},
+                             const QStringList &installed = {},
+                             const QString &ownModName = {},
+                             const QSet<QString> &availablePlugins = {})
+    {
+        auto *w = new BainWizard(QStringLiteral("/tmp/nrv_bain_ui_test"), prior);
+        w->m_packages              = pkgs;
+        w->m_installedModNames     = installed;
+        w->m_ownModName            = ownModName;
+        w->m_availablePluginsLower = availablePlugins;
+        w->buildUi();
+        return w;
+    }
+    static QCheckBox  *box(BainWizard *w, int i) { return w->m_boxes.value(i); }
+    static int         boxCount(BainWizard *w)   { return w->m_boxes.size(); }
+    static QStringList chosen(BainWizard *w)     { return w->chosenNames(); }
+    // isHidden(), not isVisible(): the dialog is never show()n here, so every
+    // child is invisible regardless and isVisible() would pass vacuously.
+    static bool        pickerRevealed(BainWizard *w)
+                          { return w->m_scroll && !w->m_scroll->isHidden(); }
+    static QWidget    *chooser(BainWizard *w)    { return w->m_chooser; }
+};
+
+static QList<bain::Package> bw_pkgs(const QStringList &names)
+{
+    QList<bain::Package> out;
+    for (const QString &n : names) out.append({n, QString()});
+    return out;
+}
+
+// The archive that prompted all this.
+static const QStringList kShipwrecks = {
+    QStringLiteral("00 Core"),
+    QStringLiteral("01 Patch - Uncharted Artifacts"),
+    QStringLiteral("02 Patch - TR Patch"),
+    QStringLiteral("03 Patch - Of Pillows and Peril"),
+    QStringLiteral("04 Patch - Lush Synthesis"),
+};
+static const QStringList kShipwrecksModlist = {
+    QStringLiteral("Uncharted Artifacts"),
+    QStringLiteral("Tamriel Rebuilt 25.08.12"),
+};
+
+static void bainui_testOaabShipwrecks()
+{
+    std::cout << "\n[OAAB Shipwrecks, judged against the real modlist]\n";
+    auto *w = BainWizardTestHook::build(bw_pkgs(kShipwrecks), {},
+                                        kShipwrecksModlist);
+    check("five packages", BainWizardTestHook::boxCount(w) == 5);
+
+    check("Core is left alone",
+          BainWizardTestHook::box(w, 0)->isChecked());
+    check("and keeps its name unchanged",
+          BainWizardTestHook::box(w, 0)->text() == kShipwrecks[0],
+          BainWizardTestHook::box(w, 0)->text());
+
+    check("the Uncharted Artifacts patch stays ticked",
+          BainWizardTestHook::box(w, 1)->isChecked());
+    check("and says which mod it found",
+          BainWizardTestHook::box(w, 1)->text().contains(
+              QStringLiteral("Uncharted Artifacts ✓")),
+          BainWizardTestHook::box(w, 1)->text());
+
+    check("the TR patch stays ticked",
+          BainWizardTestHook::box(w, 2)->isChecked(),
+          BainWizardTestHook::box(w, 2)->text());
+
+    check("Of Pillows and Peril is unticked",
+          !BainWizardTestHook::box(w, 3)->isChecked());
+    check("and says why",
+          BainWizardTestHook::box(w, 3)->text().contains(
+              QStringLiteral("Of Pillows and Peril is not installed")),
+          BainWizardTestHook::box(w, 3)->text());
+    check("Lush Synthesis is unticked",
+          !BainWizardTestHook::box(w, 4)->isChecked());
+
+    // Unticked, never disabled: a mod kept outside the manager is absent from
+    // the modlist and only the user knows that.
+    check("an unticked package is still settable",
+          BainWizardTestHook::box(w, 3)->isEnabled());
+    check("with a tooltip saying how to put it back",
+          BainWizardTestHook::box(w, 3)->toolTip().contains(
+              QStringLiteral("Tick it back")),
+          BainWizardTestHook::box(w, 3)->toolTip());
+
+    const QStringList chosen = BainWizardTestHook::chosen(w);
+    check("only the three wanted packages are staged",
+          chosen.size() == 3 && !chosen.contains(kShipwrecks[3])
+                             && !chosen.contains(kShipwrecks[4]),
+          chosen.join(QStringLiteral(", ")));
+    delete w;
+}
+
+static void bainui_testBadgeNamesTheTarget()
+{
+    std::cout << "\n[the badge names the mod the package is for]\n";
+    // Found in the real corpus: "02 OAAB Shipwrecks Patch" is answered through
+    // the OAAB alias by whichever OAAB mod the modlist happens to list first.
+    // The tick is right; naming that row on the label is not.
+    auto *w = BainWizardTestHook::build(
+        bw_pkgs({QStringLiteral("02 OAAB Shipwrecks Patch")}), {},
+        {QStringLiteral("OAAB Juniper's Twin Lamps (quests)")});
+    const QString label = BainWizardTestHook::box(w, 0)->text();
+    check("the label names the package's own target",
+          label.contains(QStringLiteral("OAAB Shipwrecks ✓")), label);
+    check("and not the row that happened to answer",
+          !label.contains(QStringLiteral("Juniper")), label);
+    check("which is explained in the tooltip instead",
+          BainWizardTestHook::box(w, 0)->toolTip().contains(
+              QStringLiteral("Juniper")),
+          BainWizardTestHook::box(w, 0)->toolTip());
+    delete w;
+}
+
+static void bainui_testChooser()
+{
+    std::cout << "\n[the one-click chooser gives way to a recommendation]\n";
+    {
+        // A recommendation you cannot see is not one, and "Install everything"
+        // force-ticks every box - so the list has to be on screen.
+        auto *w = BainWizardTestHook::build(bw_pkgs(kShipwrecks), {},
+                                            kShipwrecksModlist);
+        check("the picker is open", BainWizardTestHook::pickerRevealed(w));
+        check("and the compact chooser was never built",
+              BainWizardTestHook::chooser(w) == nullptr);
+        delete w;
+    }
+    {
+        // Nothing to say: the one-click path is exactly as it was.
+        auto *w = BainWizardTestHook::build(
+            bw_pkgs({QStringLiteral("00 Core"),
+                     QStringLiteral("01 Stratified Rocks")}), {},
+            kShipwrecksModlist);
+        check("no recommendation leaves the chooser in place",
+              BainWizardTestHook::chooser(w) != nullptr);
+        check("with the list still hidden",
+              !BainWizardTestHook::pickerRevealed(w));
+        check("and every package ticked",
+              BainWizardTestHook::chosen(w).size() == 2);
+        delete w;
+    }
+}
+
+static void bainui_testPriorChoices()
+{
+    std::cout << "\n[a remembered selection versus what the modlist says]\n";
+    {
+        // The stored tick was made against a modlist that had the mod. That
+        // modlist is gone, and the label beside it now says so.
+        auto *w = BainWizardTestHook::build(
+            bw_pkgs(kShipwrecks),
+            QStringLiteral("00 Core;03 Patch - Of Pillows and Peril"),
+            kShipwrecksModlist);
+        check("a prior tick loses to the modlist",
+              !BainWizardTestHook::box(w, 3)->isChecked(),
+              BainWizardTestHook::box(w, 3)->text());
+        delete w;
+    }
+    {
+        // The reverse is NOT forced. This verdict is an inference off a folder
+        // name, and a prior untick is a deliberate prune by the user.
+        auto *w = BainWizardTestHook::build(
+            bw_pkgs(kShipwrecks), QStringLiteral("00 Core"),
+            kShipwrecksModlist);
+        check("a prior untick survives an Installed verdict",
+              !BainWizardTestHook::box(w, 1)->isChecked(),
+              BainWizardTestHook::box(w, 1)->text());
+        check("though the label still says the mod is there",
+              BainWizardTestHook::box(w, 1)->text().contains(
+                  QStringLiteral("Uncharted Artifacts ✓")));
+        delete w;
+    }
+}
+
+static void bainui_testSilenceLeavesUiAlone()
+{
+    std::cout << "\n[a package with no verdict is not touched at all]\n";
+    const QStringList names = {QStringLiteral("00 Core"),
+                               QStringLiteral("01 Stratified Rocks"),
+                               QStringLiteral("02 - Atlas")};
+    auto *w = BainWizardTestHook::build(bw_pkgs(names), {},
+                                        kShipwrecksModlist);
+    for (int i = 0; i < names.size(); ++i) {
+        check("label is byte-identical to the folder name",
+              BainWizardTestHook::box(w, i)->text() == names[i],
+              BainWizardTestHook::box(w, i)->text());
+        check("and it is ticked", BainWizardTestHook::box(w, i)->isChecked());
+    }
+    delete w;
+}
+
+static void run_bain_wizard_ui()
+{
+    std::cout << "=== bain wizard UI tests ===\n";
+    bainui_testOaabShipwrecks();
+    bainui_testBadgeNamesTheTarget();
+    bainui_testChooser();
+    bainui_testPriorChoices();
+    bainui_testSilenceLeavesUiAlone();
+    std::cout << "\n";
+}
+
 int main(int argc, char **argv)
 {
     // Wizard section needs Widgets; run headless via offscreen QPA.
@@ -1987,8 +2427,10 @@ int main(int argc, char **argv)
     run_fomod_scripts();
     run_fomod_install();
     run_bain();
+    run_bain_hint();
     run_fomod_hint();
     run_fomod_wizard_ui();
+    run_bain_wizard_ui();
 
     std::cout << s_passed << " passed, " << s_failed << " failed\n";
     return s_failed == 0 ? 0 : 1;

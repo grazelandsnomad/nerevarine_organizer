@@ -29,13 +29,18 @@ add_executable(test_fomod
     ${CMAKE_SOURCE_DIR}/src/fomod_copy.cpp
     ${CMAKE_SOURCE_DIR}/src/fomod_hint.cpp
     ${CMAKE_SOURCE_DIR}/src/mod_aliases.cpp
+    ${CMAKE_SOURCE_DIR}/src/mod_match.cpp
+    ${CMAKE_SOURCE_DIR}/src/bain_hint.cpp
+    ${CMAKE_SOURCE_DIR}/src/pluginparser.cpp
     ${CMAKE_SOURCE_DIR}/src/nxmurl.cpp
     ${CMAKE_SOURCE_DIR}/src/fomod_scripts.cpp
     ${CMAKE_SOURCE_DIR}/src/fomod_install.cpp
     ${CMAKE_SOURCE_DIR}/src/bain.cpp
+    ${CMAKE_SOURCE_DIR}/src/bainwizard.cpp
     ${CMAKE_SOURCE_DIR}/src/fomodwizard.cpp
     ${CMAKE_SOURCE_DIR}/src/translator.cpp
     ${CMAKE_SOURCE_DIR}/include/fomodwizard.h
+    ${CMAKE_SOURCE_DIR}/include/bainwizard.h
 )
 set_target_properties(test_fomod PROPERTIES AUTOMOC ON)
 target_include_directories(test_fomod PRIVATE

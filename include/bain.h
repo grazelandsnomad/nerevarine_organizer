@@ -47,6 +47,20 @@ bool looksLikeBain(const QString &modPath);
 // during the merge (last-writer-wins).
 QList<Package> packages(const QString &modPath);
 
+// Masters that the plugins in `packages[index]` declare but that neither the
+// base game nor any OTHER package in the same archive supplies. Empty for a
+// package with no plugins, no TES3 plugins, or only self-contained masters.
+//
+// This is the one hard signal a BAIN package carries about what it is FOR: a
+// patch declaring TR_Mainland.esm names Tamriel Rebuilt by file, not by guess,
+// and OpenMW will refuse to load it if that file is absent. Sibling packages
+// count as suppliers because "00 Core"'s .esm is exactly what "03 Patch"
+// expects to load after.
+//
+// Filesystem, unlike the judgement in bain_hint.h, which takes the result of
+// this as an argument so it can stay pure.
+QStringList foreignMasters(const QList<Package> &packages, int index);
+
 // Merge the chosen packages (by folder name) into a fresh staging dir
 // `<modPath>/../bain_install` and return its path. Packages are applied in the
 // order packages() reports (numeric), so a higher-numbered choice overwrites a

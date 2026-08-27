@@ -364,7 +364,48 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
         const QString sanitizedTitle = sanitizeFolderName(title);
         const QString priorChoices = placeholder->data(ModRole::BainChoices).toString();
 
-        BainWizard::showAsync(modPath, priorChoices, this,
+        // What the user currently HAS, so a package patching a mod that is not
+        // there can start unticked and say so.
+        const QStringList installedModNames =
+            m_model ? m_model->installedModDisplayNames() : QStringList();
+
+        // Every plugin filename the modlist provides, so a package whose plugin
+        // demands a parent file nothing supplies is caught by the file rather
+        // than by its folder name.
+        //
+        // Gated on at least one package actually declaring a foreign master:
+        // that check is a handful of small header reads inside the archive we
+        // just extracted, and most archives have none - whereas this walk can
+        // hit the mods drive once per installed mod on a cold cache.
+        //
+        // EMPTY or COMPLETE, never partial. A half-filled set makes a satisfied
+        // master look unsatisfiable, and that is the one direction that unticks
+        // something the user needs. So nothing here may skip a row.
+        QSet<QString> availablePlugins;
+        {
+            const QList<bain::Package> pkgs = bain::packages(modPath);
+            bool anyForeign = false;
+            for (int i = 0; i < pkgs.size() && !anyForeign; ++i)
+                anyForeign = !bain::foreignMasters(pkgs, i).isEmpty();
+
+            if (anyForeign && m_scans) {
+                const QStringList exts = plugins::contentExtensions();
+                for (int i = 0; i < m_modList->count(); ++i) {
+                    auto *row = m_modList->item(i);
+                    if (!row) continue;
+                    if (row->data(ModRole::ItemType).toString() != ItemType::Mod)
+                        continue;
+                    if (row->data(ModRole::InstallStatus).toInt() != 1) continue;
+                    const QString rowPath = row->data(ModRole::ModPath).toString();
+                    if (rowPath.isEmpty()) continue;
+                    for (const auto &dir : m_scans->cachedDataFolders(rowPath, exts))
+                        for (const QString &f : dir.second)
+                            availablePlugins.insert(f.toLower());
+                }
+            }
+        }
+
+        BainWizard::showAsync(modPath, priorChoices, this, installedModNames,
             [this, archivePath, extractDir, modPath,
              installToken, archiveFileName, sanitizedTitle]
             (const QString &stagedPath, const QString &bainChoices) {
@@ -417,7 +458,7 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
                 }
             }
             QFile::remove(archivePath);
-        });
+        }, title, availablePlugins);
         return; // picker shown; callback drives the rest
     }
 

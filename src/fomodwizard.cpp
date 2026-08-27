@@ -2,6 +2,7 @@
 #include "fomod_copy.h"
 #include "fomod_hint.h"
 #include "mod_aliases.h"
+#include "mod_match.h"
 #include "fomod_path.h"
 #include "fomod_scripts.h"
 #include "translator.h"
@@ -515,40 +516,10 @@ void FomodWizard::buildUi()
             }
         }
 
-        // Expand a mod display name into search needles for naming variants:
-        //   "OAAB_Data"              -> ["OAAB_Data", "OAAB Data", "OAAB"]
-        //   "Ashfall - Survival Sim" -> ["Ashfall - Survival Sim", "Ashfall"]
-        auto needlesFor = [](const QString &modName) -> QStringList {
-            static const QStringList kSeps{
-                QStringLiteral(" - "), QStringLiteral(" ("), QStringLiteral("_")};
-            QStringList needles;
-            const QString n = modName.trimmed();
-            // 3, not 4: the scene's acronyms are the whole point of this
-            // lookup and plenty are three letters (BOS, MOP). Dropping them
-            // meant a mod installed under its acronym alone could not be
-            // found, and Pass F unticks on exactly that absence - so an
-            // option was reported as needing a mod the user already had.
-            // Every caller anchors a needle under 8 characters at the start
-            // of the name, which is what keeps a short one honest. Two is
-            // still too little to anchor usefully.
-            if (n.length() < 3) return needles;
-            needles << n;
-            if (n.contains(u'_')) {             // "OAAB_Data" -> "OAAB Data"
-                QString sp = n;
-                sp.replace(u'_', u' ');
-                needles << sp;
-            }
-            int firstSep = -1;                  // earliest separator position
-            for (const QString &sep : kSeps) {
-                const int idx = n.indexOf(sep);
-                if (idx >= 4 && (firstSep < 0 || idx < firstSep)) firstSep = idx;
-            }
-            if (firstSep >= 4) {
-                const QString prefix = n.left(firstSep).trimmed();
-                if (prefix.length() >= 4) needles << prefix;
-            }
-            return needles;
-        };
+        // Search needles for the spellings a modlist actually uses. Shared
+        // with the BAIN picker, which asks the same question of a folder
+        // name - see mod_match.h.
+        const auto needlesFor = &mod_match::needlesFor;
 
         for (int si = 0; si < m_steps.size(); ++si) {
             const FomodStep &step = m_steps[si];

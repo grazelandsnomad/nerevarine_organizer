@@ -97,6 +97,8 @@ set(SOURCES
     src/pe_info.cpp
     src/skse_check.cpp
     src/mod_aliases.cpp
+    src/mod_match.cpp
+    src/bain_hint.cpp
     src/fomod_install.cpp
     src/fomod_path.cpp
     src/fomod_scripts.cpp

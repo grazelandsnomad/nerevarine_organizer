@@ -1,5 +1,6 @@
 #include "bain.h"
 #include "fomod_copy.h"
+#include "pluginparser.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -108,6 +109,40 @@ QString stage(const QString &modPath, const QStringList &chosenNames)
         return {};
     }
     return stageDir;
+}
+
+
+QStringList foreignMasters(const QList<Package> &packages, int index)
+{
+    if (index < 0 || index >= packages.size()) return {};
+
+    // Every plugin filename this archive supplies, from ANY package: "00
+    // Core"'s .esm is what "03 Patch" is meant to load after, and a plugin is
+    // never a master of itself. Counting only the chosen packages would make a
+    // patch look foreign to the core it ships beside.
+    QSet<QString> own;
+    for (const Package &p : packages)
+        for (const auto &dir : plugins::collectDataFolders(
+                 p.path, plugins::contentExtensions()))
+            for (const QString &f : dir.second) own.insert(f.toLower());
+
+    static const QSet<QString> kBaseGame = {
+        QStringLiteral("morrowind.esm"), QStringLiteral("tribunal.esm"),
+        QStringLiteral("bloodmoon.esm")};
+
+    QStringList out;
+    for (const auto &dir : plugins::collectDataFolders(
+             packages[index].path, plugins::contentExtensions())) {
+        for (const QString &f : dir.second) {
+            const QString full = dir.first + QLatin1Char('/') + f;
+            for (const QString &m : plugins::readTes3Masters(full)) {
+                const QString low = m.toLower();
+                if (kBaseGame.contains(low) || own.contains(low)) continue;
+                if (!out.contains(m, Qt::CaseInsensitive)) out << m;
+            }
+        }
+    }
+    return out;
 }
 
 } // namespace bain

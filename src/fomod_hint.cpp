@@ -1,6 +1,7 @@
 #include "fomod_hint.h"
 
 #include "mod_aliases.h"
+#include "mod_match.h"
 
 #include <QRegularExpression>
 #include <QSet>
@@ -133,14 +134,8 @@ namespace {
 // A run of consecutive Title-Case words, e.g. "Static Mesh Improvement Mod".
 // Stops at the first lower-case word, which is what makes "Required for the
 // mod to function" yield nothing at all.
-// Lower-case words that sit INSIDE a mod name rather than ending it:
-// "Complete Alchemy and Cooking Overhaul", "Patch for Purists", "Legacy of
-// the Dragonborn". Anything else in lower case ends the name.
-bool isConnector(const QString &w)
-{
-    static const QSet<QString> kJoin = {"and", "of", "the", "for", "a", "an", "in"};
-    return kJoin.contains(w.toLower());
-}
+// Connector words come from mod_match, so both readers agree on them.
+using mod_match::isConnector;
 
 // A run of Title-Case words, allowing the connectors above between them.
 // `stopAtConnector` returns only the part before the first connector.
@@ -183,16 +178,7 @@ QString titleRun(const QList<Word> &words, int from, bool stopAtConnector)
     return run.join(QLatin1Char(' '));
 }
 
-// Does this read as a mod name rather than a sentence fragment? Either several
-// title-cased words, or an acronym - "Materials" on its own does not qualify,
-// which is what keeps "requires Materials set for OpenMW" quiet.
-bool looksLikeModName(const QString &phrase)
-{
-    const QStringList words = phrase.split(QLatin1Char(' '), Qt::SkipEmptyParts);
-    if (words.size() >= 2) return true;
-    return words.size() == 1 && words[0].size() >= 3
-        && words[0] == words[0].toUpper();
-}
+using mod_match::looksLikeModName;
 
 } // namespace
 
@@ -346,23 +332,6 @@ SkyrimRuntime classifyRuntimeVariant(const QString &optionName)
 
 namespace {
 
-// Word-boundary match of any alias of `name` against any installed mod name.
-// Short needles must match at the start so "CDF" cannot fire inside an
-// unrelated word.
-bool installedUnderAnyName(const QString &name, const QStringList &installed)
-{
-    for (const QString &cand : mod_aliases::expand({name})) {
-        const bool shortNeedle = cand.length() < 8;
-        const QString pat = shortNeedle
-            ? (QLatin1String("^") + QRegularExpression::escape(cand) + QLatin1String("\\b"))
-            : (QLatin1String("\\b") + QRegularExpression::escape(cand) + QLatin1String("\\b"));
-        const QRegularExpression re(pat, QRegularExpression::CaseInsensitiveOption);
-        for (const QString &mod : installed)
-            if (re.match(mod).hasMatch()) return true;
-    }
-    return false;
-}
-
 // "Don't Install", "None", "Skip" - the escape hatch a framework group offers.
 bool isOptOut(const QString &name)
 {
@@ -399,7 +368,8 @@ FrameworkChoice chooseFrameworkOption(const QStringList &optionNames,
             continue;
         }
         named << i;
-        const bool have = installedUnderAnyName(n, installedModNames);
+        const bool have =
+            !mod_match::installedUnderAnyName(n, installedModNames).isEmpty();
         if (have) out.anyInstalled = true;
         out.states << (have ? FrameworkChoice::State::Installed
                             : FrameworkChoice::State::Missing);

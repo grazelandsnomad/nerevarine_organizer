@@ -37,6 +37,14 @@ QStringList aliasesFor(const QString &name);
 // The shape a caller matching against a modlist wants.
 QStringList expand(const QStringList &names);
 
+// Does the table hold this spelling at all?
+//
+// Not the same question as aliasesFor() coming back empty: that happens both
+// for a name the table has never heard of and for a one-row entry that simply
+// has no second spelling ("SkyUI", "Ashfall"). A caller deciding whether a
+// bare word is confident enough to act on needs to tell those apart.
+bool isKnownMod(const QString &name);
+
 // Distribution frameworks a FOMOD may offer as alternatives for the same
 // content, most preferred first.
 //
