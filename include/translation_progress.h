@@ -102,7 +102,16 @@ private:
 // looking at the directory can tell which file is which, and the hash is
 // because folding punctuation away would otherwise let "Mod: A" and "Mod  A"
 // collide and silently share one file.
-QString fileNameFor(const QString &modName, const QString &language);
+// `stableId` is an identity for the mod PAGE that survives things the display
+// name does not: a rename, and a reinstall (which lands in a new
+// timestamped folder, so a path would not survive it either). "morrowind-59192"
+// from the Nexus URL. Empty falls back to the name, which is all a
+// hand-added mod has.
+//
+// Built by the caller rather than parsed here, so this stays free of the URL
+// parser and its test target stays small.
+QString fileNameFor(const QString &modName, const QString &language,
+                    const QString &stableId = {});
 
 } // namespace translation_progress
 

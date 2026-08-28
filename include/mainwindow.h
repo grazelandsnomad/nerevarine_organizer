@@ -488,6 +488,18 @@ private:
     // has never been asked - callers must not read that as English, which is
     // the bug this replaced (see target_language.h).
     QString translationLanguage() const;
+    // Where this mod's half-finished translation lives, and whether any of it
+    // exists yet.
+    //
+    // One helper because THREE places need the same answer - the context menu,
+    // the Edit Mod button and the untranslated scan - and if they ever disagree
+    // the marker says there is no work while the editor happily resumes it,
+    // which is the hardest kind of wrong to notice.
+    //
+    // Keyed on the Nexus mod page, so a rename or a reinstall does not orphan
+    // the file. A name-keyed file from before that change is still found.
+    QString translationProgressPathFor(const QListWidgetItem *item) const;
+    int     translationProgressCount(const QListWidgetItem *item) const;
     // Same, but asks once and stores the answer as the shared default, so no
     // other game or profile is ever asked again. Empty return means the user
     // cancelled and the caller must abort.

@@ -3451,7 +3451,6 @@ void MainWindow::onTranslationsScanned(
     int modsWithoutPlugins)
 {
     int flagged = 0, noTranslation = 0, inProgress = 0;
-    const QString lang = translationLanguage();
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *it = m_modList->item(i);
         if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
@@ -3461,15 +3460,7 @@ void MainWindow::onTranslationsScanned(
         // and it is what turns "nobody has translated this" into "you are
         // partway through translating it", which are different things to be
         // told and used to look identical.
-        int started = 0;
-        {
-            const QString ppath = resolveUserStatePath(
-                translation_progress::fileNameFor(it->text().trimmed(), lang));
-            if (QFileInfo::exists(ppath)) {
-                translation_progress::Progress p;
-                if (p.load(ppath)) started = p.size();
-            }
-        }
+        const int started = translationProgressCount(it);
         it->setData(ModRole::TranslationInProgress, started);
         if (started > 0) ++inProgress;
 

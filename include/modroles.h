@@ -112,11 +112,6 @@ namespace ModRole {
     //   1 = carries player-visible text and nothing in the list translates it
     //   2 = a translation exists but leaves a lot of the text unchanged
     constexpr int TranslationState      = Qt::UserRole + 47; // int
-    // How many strings of this mod already have an answer saved in its
-    // translation-progress file, 0 for none. Orthogonal to TranslationState:
-    // a mod can be untranslated AND half-done, and that is the whole point -
-    // "nobody has translated this" and "I am partway through translating it"
-    // are different things to be told.
     // Tab-packed detail for the tooltip, same convention as the conflict
     // lists: "partnerName\t<translatable>\t<identical>\t<common>", then the
     // plugin names, then a blank field, then sample untranslated strings.

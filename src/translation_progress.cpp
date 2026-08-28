@@ -124,10 +124,22 @@ int Progress::staleAgainst(const QStringList &sources) const
     return stale;
 }
 
-QString fileNameFor(const QString &modName, const QString &language)
+QString fileNameFor(const QString &modName, const QString &language,
+                    const QString &stableId)
 {
     const QString lang = language.isEmpty() ? QStringLiteral("default")
                                             : language.toLower();
+
+    // A mod page's own id, when there is one. Rename the mod, reinstall it
+    // into a new folder - the file is still found, which is the difference
+    // between resuming a month of work and starting it again.
+    if (!stableId.isEmpty()) {
+        QString id;
+        id.reserve(stableId.size());
+        for (const QChar &c : stableId)
+            id.append(c.isLetterOrNumber() ? c.toLower() : QLatin1Char('-'));
+        return QStringLiteral("translation_progress_%1_%2.json").arg(lang, id);
+    }
 
     // A slug so the directory is legible, capped so a very long mod name
     // cannot push the path past what a filesystem will take.

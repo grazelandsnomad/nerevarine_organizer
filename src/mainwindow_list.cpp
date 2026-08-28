@@ -7,6 +7,7 @@
 #include "translate_dialog.h"
 #include "translation_mod.h"
 #include "translation_progress.h"
+#include "nxmurl.h"
 #include "translation_store.h"
 #include "target_language.h"
 #include "mod_package.h"
@@ -986,7 +987,24 @@ void MainWindow::onContextMenu(const QPoint &pos)
                 // would fix it in, bold so it reads as the answer to the red
                 // caption directly above the cursor. The generic entry stays
                 // for every other installed mod (state 1 = no translation).
-                if (item->data(ModRole::TranslationState).toInt() == 1) {
+                // Work already started outranks the scan's verdict: "create"
+                // reads as "make a second one" to somebody four hundred strings
+                // in, and what they came for is the way back to it.
+                //
+                // Asked of the FILE, not ModRole::TranslationInProgress. That
+                // role is cleared whenever the untranslated-notices toggle goes
+                // off, and a menu entry disappearing because of a display
+                // setting - while the work and the editor are both fine - is a
+                // different bargain from a row losing its tint.
+                const int started = translationProgressCount(item);
+                if (started > 0) {
+                    QAction *act = menu.addAction(
+                        T("translate_continue").arg(started),
+                        this, [this, item]{ onTranslateMod(item); });
+                    QFont f = act->font();
+                    f.setBold(true);
+                    act->setFont(f);
+                } else if (item->data(ModRole::TranslationState).toInt() == 1) {
                     // No language in the label. Naming one here meant naming
                     // the app's UI language, which is the language the mod is
                     // already in; the editor names the real target instead.
@@ -1390,13 +1408,38 @@ void MainWindow::onItemDoubleClicked(QListWidgetItem *item)
         layout->addLayout(form);
 
         QString nexusUrl = item->data(ModRole::NexusUrl).toString();
-        if (!nexusUrl.isEmpty()) {
+        const int startedHere =
+            (item->data(ModRole::InstallStatus).toInt() == 1)
+                ? translationProgressCount(item) : 0;
+        // Set by the continue button; acted on after the dialog's own accept
+        // path has run - see below.
+        bool continueTranslation = false;
+
+        if (!nexusUrl.isEmpty() || startedHere > 0) {
             auto *extraRow = new QHBoxLayout;
-            auto *visitBtn = new QPushButton(T("mod_edit_visit_page"));
-            connect(visitBtn, &QPushButton::clicked, &dlg, [nexusUrl]{
-                QDesktopServices::openUrl(QUrl(nexusUrl));
-            });
-            extraRow->addWidget(visitBtn);
+            if (!nexusUrl.isEmpty()) {
+                auto *visitBtn = new QPushButton(T("mod_edit_visit_page"));
+                connect(visitBtn, &QPushButton::clicked, &dlg, [nexusUrl]{
+                    QDesktopServices::openUrl(QUrl(nexusUrl));
+                });
+                extraRow->addWidget(visitBtn);
+            }
+            if (startedHere > 0) {
+                auto *contBtn = new QPushButton(
+                    T("mod_edit_continue_translation").arg(startedHere));
+                contBtn->setToolTip(T("mod_edit_continue_translation_tip"));
+                // Closes this dialog rather than opening the editor on top of
+                // it. Two reasons: the editor is a large modal of its own, and
+                // a rename typed above is only written when this one is
+                // accepted - firing from inside would open the editor against
+                // the name the user just changed.
+                connect(contBtn, &QPushButton::clicked, &dlg,
+                        [&dlg, &continueTranslation]{
+                    continueTranslation = true;
+                    dlg.accept();
+                });
+                extraRow->addWidget(contBtn);
+            }
             extraRow->addStretch();
             layout->addLayout(extraRow);
         }
@@ -1556,6 +1599,11 @@ void MainWindow::onItemDoubleClicked(QListWidgetItem *item)
         item->setToolTip(annot.isEmpty() ? modPath : modPath + "\n\n" + annot);
         m_modList->update(m_modList->indexFromItem(item));
         saveModList();
+
+        // Last, so the rename above is already written: the editor opens on
+        // the mod as it now is, and its progress file is found under the mod
+        // page rather than under a name that just changed.
+        if (continueTranslation) onTranslateMod(item);
     }
 }
 
@@ -1817,9 +1865,9 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
             language.isEmpty() ? QStringLiteral("default") : language));
 
     // Half-finished work, per mod and per language, so a big mod can be done
-    // fifteen strings at a time over a month.
-    const QString progressPath = resolveUserStatePath(
-        translation_progress::fileNameFor(modName, language));
+    // fifteen strings at a time over a month. Shared helper: the context menu
+    // and the untranslated scan must resolve the very same file.
+    const QString progressPath = translationProgressPathFor(item);
 
     TranslateDialog dlg(modName, strings, language, &memory, rulesPath,
                         progressPath, this);
@@ -1903,6 +1951,39 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
     if (!built.warnings.isEmpty())
         body += QLatin1String("\n\n") + built.warnings.join(QLatin1Char('\n'));
     ui::info(this, T("translate_title").arg(modName), body);
+}
+
+QString MainWindow::translationProgressPathFor(const QListWidgetItem *item) const
+{
+    if (!item) return {};
+    const QString name = item->text().trimmed();
+    const QString lang = translationLanguage();
+
+    // The mod page, when the row came from one. Survives a rename and a
+    // reinstall; the display name survives neither.
+    QString stableId;
+    const auto ref = parseNexusModUrl(item->data(ModRole::NexusUrl).toString());
+    if (ref) stableId = ref->game + QLatin1Char('-') + QString::number(ref->modId);
+
+    const QString stable = resolveUserStatePath(
+        translation_progress::fileNameFor(name, lang, stableId));
+    if (stableId.isEmpty() || QFileInfo::exists(stable)) return stable;
+
+    // Written before the key moved to the mod page. Read it where it is; the
+    // next save writes the stable name and this one goes quiet on its own.
+    const QString legacy = resolveUserStatePath(
+        translation_progress::fileNameFor(name, lang));
+    if (QFileInfo::exists(legacy)) return legacy;
+    return stable;
+}
+
+int MainWindow::translationProgressCount(const QListWidgetItem *item) const
+{
+    const QString path = translationProgressPathFor(item);
+    if (path.isEmpty() || !QFileInfo::exists(path)) return 0;
+    translation_progress::Progress p;
+    if (!p.load(path)) return 0;
+    return p.size();
 }
 
 QString MainWindow::translationLanguage() const

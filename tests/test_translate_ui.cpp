@@ -1185,6 +1185,57 @@ static void testAMemoryHitDoesNotClobberRestoredWork()
     delete d;
 }
 
+static void testAStableKeySurvivesARename()
+{
+    std::cout << "\n[renaming a mod does not lose a month of work]\n";
+    const QString id   = QStringLiteral("morrowind-59192");
+    const QString lang = QStringLiteral("spanish");
+
+    // The bug this fixes: the file was named after the display name, so
+    // renaming the mod orphaned it - the editor reopened blank and the row
+    // stopped saying anything.
+    const QString before = translation_progress::fileNameFor(
+        QStringLiteral("Kawaiijiit - A Khajiit Encutification Mod"), lang, id);
+    const QString after  = translation_progress::fileNameFor(
+        QStringLiteral("Kawaiijiit (HD) - renamed by me"), lang, id);
+    check("the same mod page gives the same file whatever it is called",
+          before == after, before + " vs " + after);
+    // A reinstall lands in a new timestamped folder, so a path-based key would
+    // have missed this case too; the mod page is what survives both.
+    check("and it carries the page id, not the name",
+          before.contains(QStringLiteral("morrowind-59192")), before);
+
+    check("a different mod page gets a different file",
+          before != translation_progress::fileNameFor(
+              QStringLiteral("Kawaiijiit"), lang,
+              QStringLiteral("morrowind-12345")));
+    check("and so does a different language",
+          before != translation_progress::fileNameFor(
+              QStringLiteral("Kawaiijiit"), QStringLiteral("french"), id));
+    check("the name is filesystem-safe",
+          !before.contains(QLatin1Char('/')) && !before.contains(QLatin1Char(':')),
+          before);
+}
+
+static void testNoModPageFallsBackToTheName()
+{
+    std::cout << "\n[a hand-added mod has only its name]\n";
+    const QString lang = QStringLiteral("spanish");
+    // Unchanged from before the key moved, so a file written under the old
+    // scheme is still the file this asks for.
+    check("an empty id gives exactly the name-keyed shape",
+          translation_progress::fileNameFor(QStringLiteral("Some Mod"), lang, {})
+              == translation_progress::fileNameFor(QStringLiteral("Some Mod"), lang),
+          translation_progress::fileNameFor(QStringLiteral("Some Mod"), lang, {}));
+    check("and two such mods still cannot collide",
+          translation_progress::fileNameFor(QStringLiteral("Mod: A"), lang, {})
+              != translation_progress::fileNameFor(QStringLiteral("Mod  A"), lang, {}));
+    // Without this a renamed hand-added mod would be found by neither key.
+    check("renaming one DOES move its file, which is why the fallback is a fallback",
+          translation_progress::fileNameFor(QStringLiteral("Old Name"), lang, {})
+              != translation_progress::fileNameFor(QStringLiteral("New Name"), lang, {}));
+}
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
@@ -1211,6 +1262,8 @@ int main(int argc, char **argv)
     testAnAnswerForAVanishedStringIsKept();
     testProgressNormalisesLikeTheMemory();
     testProgressFileNamesCannotCollide();
+    testAStableKeySurvivesARename();
+    testNoModPageFallsBackToTheName();
     testAProgressFileReadsAsAMemory();
     testMissingProgressIsNotAnError();
     testEveryRowStillExistsWhenPaged();
