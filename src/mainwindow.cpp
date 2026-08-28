@@ -4,6 +4,7 @@
 #include "separatordialog.h"
 #include "modlistdelegate.h"
 #include "modroles.h"
+#include "translation_progress.h"
 #include "translator.h"
 #include "post_install.h"
 #include "placeholder_state.h"
@@ -3449,10 +3450,29 @@ void MainWindow::onTranslationsScanned(
     const QHash<QString, TranslationCoverage> &byModPath,
     int modsWithoutPlugins)
 {
-    int flagged = 0, noTranslation = 0;
+    int flagged = 0, noTranslation = 0, inProgress = 0;
+    const QString lang = translationLanguage();
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *it = m_modList->item(i);
         if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+
+        // Work the user has already started on this mod, from its own progress
+        // file. A stat per row and a read only for the handful that have one -
+        // and it is what turns "nobody has translated this" into "you are
+        // partway through translating it", which are different things to be
+        // told and used to look identical.
+        int started = 0;
+        {
+            const QString ppath = resolveUserStatePath(
+                translation_progress::fileNameFor(it->text().trimmed(), lang));
+            if (QFileInfo::exists(ppath)) {
+                translation_progress::Progress p;
+                if (p.load(ppath)) started = p.size();
+            }
+        }
+        it->setData(ModRole::TranslationInProgress, started);
+        if (started > 0) ++inProgress;
+
         const auto found = byModPath.constFind(it->data(ModRole::ModPath).toString());
         if (found == byModPath.constEnd()) {
             it->setData(ModRole::TranslationState,  0);
@@ -3504,6 +3524,11 @@ void MainWindow::onTranslationsScanned(
     // plugin, read as cleared when it had simply never been examined.
     if (modsWithoutPlugins > 0)
         msg += T("untranslated_result_unchecked").arg(modsWithoutPlugins);
+    // Said after the counts, because it changes what the colours mean: an
+    // orange row is one the user is already partway through, not one the scan
+    // is complaining about.
+    if (inProgress > 0)
+        msg += T("untranslated_result_in_progress").arg(inProgress);
     m_translationOverlay->showResult(msg);
 }
 
@@ -3512,6 +3537,7 @@ void MainWindow::clearTranslationMarks()
     for (int i = 0; i < m_modList->count(); ++i) {
         m_modList->item(i)->setData(ModRole::TranslationState,  0);
         m_modList->item(i)->setData(ModRole::TranslationDetail, QStringList());
+        m_modList->item(i)->setData(ModRole::TranslationInProgress, 0);
     }
     m_modList->viewport()->update();
 }

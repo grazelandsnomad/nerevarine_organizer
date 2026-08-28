@@ -112,6 +112,11 @@ namespace ModRole {
     //   1 = carries player-visible text and nothing in the list translates it
     //   2 = a translation exists but leaves a lot of the text unchanged
     constexpr int TranslationState      = Qt::UserRole + 47; // int
+    // How many strings of this mod already have an answer saved in its
+    // translation-progress file, 0 for none. Orthogonal to TranslationState:
+    // a mod can be untranslated AND half-done, and that is the whole point -
+    // "nobody has translated this" and "I am partway through translating it"
+    // are different things to be told.
     // Tab-packed detail for the tooltip, same convention as the conflict
     // lists: "partnerName\t<translatable>\t<identical>\t<common>", then the
     // plugin names, then a blank field, then sample untranslated strings.
@@ -134,6 +139,13 @@ namespace ModRole {
     // The tooltip line behind that flag: which DLL, when it was built, and
     // the runtime it declares.
     constexpr int ScriptExtenderDetail  = Qt::UserRole + 52; // QString
+
+    // How many strings of this mod already have an answer saved in its
+    // translation-progress file, 0 for none. Orthogonal to TranslationState:
+    // a mod can be untranslated AND half-done, and those are different things
+    // to be told - "nobody has translated this" versus "I am partway through
+    // translating it myself".
+    constexpr int TranslationInProgress = Qt::UserRole + 53; // int: answers saved
 }
 
 namespace ItemType {

@@ -239,7 +239,16 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
     // thing twice in less space - and "no translation" is the actionable half.
     const int translationState = m_untranslatedNotices
         ? index.data(ModRole::TranslationState).toInt() : 0;
-    if (translationState != 0) {
+    // Work the user has already started outranks either verdict. "No
+    // translation" is true and unhelpful once they are four hundred strings
+    // into translating it themselves; what they want to be told is where they
+    // got to.
+    const int translationStarted = m_untranslatedNotices
+        ? index.data(ModRole::TranslationInProgress).toInt() : 0;
+    if (translationStarted > 0) {
+        capLose = tr("Translation in progress…");
+        capLoseIsRecords = false;
+    } else if (translationState != 0) {
         const QStringList d = index.data(ModRole::TranslationDetail).toStringList();
         const QStringList head = d.value(0).split('\t');
         if (translationState == 1) {
@@ -271,8 +280,11 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
     // Red for a mod with no translation at all, and the same orange as
     // "overwritten by" for a partial one - it is the same shape of problem,
     // something is there but not doing its whole job.
+    // Dark orange for work in progress - deliberately not the red of "nobody
+    // has translated this", because the answer to that one is now "you are".
     const QColor capLoseColor =
-          translationState == 1 ? (darkRow ? QColor(255, 190, 190) : QColor(140, 12, 12))
+          translationStarted > 0  ? (darkRow ? QColor(255, 178,  92) : QColor(204, 102, 0))
+        : translationState == 1 ? (darkRow ? QColor(255, 190, 190) : QColor(140, 12, 12))
         : capLoseIsRecords      ? (darkRow ? QColor(190, 155, 250) : QColor(110, 70, 185))
         :                         (darkRow ? QColor(250, 175,  90) : QColor(185, 88,   0));
 
@@ -432,11 +444,19 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
     // the standing colour is in the way.
     const int translationHl = m_untranslatedNotices
         ? index.data(ModRole::TranslationState).toInt() : 0;
-    if (hlRole == 0 && conflictHl == 0 && translationHl > 0) {
+    // A mod being worked on washes orange even when the scan has nothing to
+    // say about it - the row is worth finding again tomorrow either way.
+    const int startedHl = m_untranslatedNotices
+        ? index.data(ModRole::TranslationInProgress).toInt() : 0;
+    if (hlRole == 0 && conflictHl == 0 && (translationHl > 0 || startedHl > 0)) {
         painter->save();
         const bool none = (translationHl == 1);
-        const QColor tint   = none ? QColor(200,  50,  50, 105) : QColor(210, 150, 20, 95);
-        const QColor stripe = none ? QColor(200,  40,  40)      : QColor(210, 140,  0);
+        QColor tint   = none ? QColor(200,  50,  50, 105) : QColor(210, 150, 20, 95);
+        QColor stripe = none ? QColor(200,  40,  40)      : QColor(210, 140,  0);
+        if (startedHl > 0) {
+            tint   = QColor(245, 124,   0, 100);
+            stripe = QColor(240, 120,   0);
+        }
         painter->fillRect(option.rect, tint);
         const int stripeW = 6;
         painter->fillRect(QRect(option.rect.left(),                option.rect.top(),
@@ -1026,7 +1046,23 @@ bool ModListDelegate::helpEvent(QHelpEvent *event, QAbstractItemView *view,
         // where the caption the user is asking about actually is. Last, so
         // every icon above keeps its own tooltip.
         if (m_untranslatedNotices && event->pos().x() < statusX) {
-            const int state = index.data(ModRole::TranslationState).toInt();
+            const int state   = index.data(ModRole::TranslationState).toInt();
+            const int started = index.data(ModRole::TranslationInProgress).toInt();
+            // Where they got to comes first: it is the reason the row is
+            // orange, and it is the only line here they can act on today.
+            if (started > 0) {
+                QString tip = tr("You have answered %1 string(s) of this mod "
+                                 "so far.\n\nRight-click and translate it to "
+                                 "carry on - it opens on the first string "
+                                 "still waiting.").arg(started);
+                if (state == 1)
+                    tip += "\n\n" + tr("Nothing in this list translates it yet.");
+                else if (state == 2)
+                    tip += "\n\n" + tr("A translation exists but leaves part "
+                                        "of the text unchanged.");
+                QToolTip::showText(event->globalPos(), tip, view);
+                return true;
+            }
             if (state != 0) {
                 // "partner\ttranslatable\tidentical\tcommon", plugins, blank,
                 // then samples - packed by MainWindow::onTranslationsScanned.
