@@ -20,7 +20,8 @@ const QSet<QString> &ordinaryWords()
         "the","of","and","a","an","in","for","with","to","from","on","at",
         // containers and gear
         "key","chest","door","gate","sword","greatsword","dagger","axe","mace",
-        "bow","shield","helmet","helm","armor","armour","boots","gauntlets",
+        "bow","quiver","shield","helmet","helm","armor","armour","boots",
+        "gauntlets",
         "ring","amulet","potion","book","note","journal","scroll","robe",
         "wardrobe","barrel","sack","urn","strongbox","satchel","pouch","cupboard",
         // places
@@ -30,6 +31,9 @@ const QSet<QString> &ordinaryWords()
         // adjectives and materials
         "ancient","old","new","great","greater","lesser","small","large",
         "iron","steel","gold","golden","silver","glass","ebony","leather",
+        // Morrowind's own materials, which recur across every armour and
+        // weapon name in these mods: "Chitin Quiver" is a thing, not a person.
+        "chitin","bonemold","netch",
         "north","south","east","west","upper","lower","inner","outer",
         // Creatures, ranks and materials that recur across the Morrowind
         // mods here. They earn their place through looksLikeName(): without
@@ -41,6 +45,19 @@ const QSet<QString> &ordinaryWords()
         "banner","staff","spear","arrow","cloak","hood","hooded",
         "common","fine","expensive","extravagant","exquisite","raw","short",
         "long","wooden","twin","clan","blood","bone","skull",
+        // Item and creature vocabulary from the Morrowind mods here. Without
+        // these, "Boiling Pot", "Ashlander Tent" and "Domesticated Guar" all
+        // read as somebody's name and are never translated at all.
+        "pot","tent","pipe","whip","herder","herders","shortsword","longsword",
+        "damaged","domesticated","tame","wild","bowl","cup","plate","basket",
+        "lantern","torch","rug","mat","pillow","blanket","hide","pelt",
+        "board","boat","set","sets","orders","order","work","cutting","masked",
+        "broadsword","halberd","ringmail","mail","chainmail","cuirass",
+        "greaves","pauldron","pauldrons","bracer","bracers","sleeve","sleeves",
+        "glove","gloves","cap","caps","skirt","shirt","pants","belt","mask",
+        "flower","flowers","leaf","leaves","root","roots","seed","seeds",
+        "paste","powder","bread","meat","stew","soup","fried","boiled","dried",
+        "skeleton","skull","corpse","remains","tail","claw","scale","scales",
     };
     return kWords;
 }
@@ -49,6 +66,77 @@ bool isOrdinary(const QString &word, const QSet<QString> &extra)
 {
     const QString w = word.toLower();
     return ordinaryWords().contains(w) || extra.contains(w);
+}
+
+} // namespace
+
+QStringList knownNames()
+{
+    // Ashlander given names. Every one of these is a person in Morrowind or in
+    // a mod built on it, none is a word in English, and each appears once in
+    // the string list it comes from - which is exactly the case repetition
+    // cannot catch. Verified against The Ashlanders' own plugin, where the
+    // camp cells name them: "Urshilaku Camp, Shalapli's Yurt", "Zainab Camp,
+    // Kuda's Yurt", "Erabenimsun Camp, Addut-Lamanu's Yurt".
+    //
+    // The two-part forms come first only for readability; findNames sorts by
+    // length, so "Addut-Lamanu" is masked before the bare "Lamanu" either way.
+    static const QStringList kNames = {
+        QStringLiteral("Sinnammu Mirpal"),
+        QStringLiteral("Addut-Lamanu"),
+        QStringLiteral("Ashu-Ahhe"),
+        QStringLiteral("Kausamsi"),
+        QStringLiteral("Massanud"),
+        QStringLiteral("Ninibaal"),
+        QStringLiteral("Shanbaal"),
+        QStringLiteral("Shalapli"),
+        QStringLiteral("Ilasour"),
+        QStringLiteral("Shalibi"),
+        QStringLiteral("Shulhaz"),
+        QStringLiteral("Hanlay"),
+        QStringLiteral("Kumlay"),
+        QStringLiteral("Lamanu"),
+        QStringLiteral("Mashah"),
+        QStringLiteral("Miishi"),
+        QStringLiteral("Shinat"),
+        QStringLiteral("Ashlander"),
+        QStringLiteral("Ahan"),
+        QStringLiteral("Ahhe"),
+        QStringLiteral("Idan"),
+        QStringLiteral("Kuda"),
+        QStringLiteral("Yalit"),
+        // Creatures, not descriptions: "Domesticated Guar" has to come back
+        // as a domesticated GUAR, and a translator asked cold invents a
+        // different animal every time.
+        QStringLiteral("Shalk"),
+        QStringLiteral("Guar"),
+    };
+    return kNames;
+}
+
+namespace {
+
+// `name` as a WHOLE word. A term is a word, and matching it as a bare
+// substring is how "Boar" gets pulled out of the middle of "Cupboard".
+QRegularExpression wordRe(const QString &name, bool caseSensitive)
+{
+    QRegularExpression::PatternOptions opts =
+        QRegularExpression::UseUnicodePropertiesOption;
+    if (!caseSensitive) opts |= QRegularExpression::CaseInsensitiveOption;
+    return QRegularExpression(
+        QStringLiteral("(?<![\\p{L}\\p{N}])") + QRegularExpression::escape(name)
+            + QStringLiteral("(?![\\p{L}\\p{N}])"),
+        opts);
+}
+
+// Case-sensitive on purpose: these are proper nouns and mask() matches them
+// the same way, so a lowercase "guar" in prose is left as prose.
+bool mentionedIn(const QString &name, const QStringList &sources)
+{
+    const QRegularExpression re = wordRe(name, true);
+    for (const QString &src : sources)
+        if (re.match(src).hasMatch()) return true;
+    return false;
 }
 
 // Capitalised runs of a string: "Forfeoranna Heim Catacombs" is one run,
@@ -130,6 +218,20 @@ QStringList findNames(const QStringList &sources,
     for (const QString &p : alwaysProtect)
         if (!p.trimmed().isEmpty() && !kept.contains(p.trimmed()))
             kept << p.trimmed();
+
+    // Then the built-in names - but only the ones this mod actually says.
+    // Carrying all of them would mask nothing extra and cost a pass over every
+    // row for each unused name, on mods that can run to thousands of rows.
+    //
+    // extraOrdinary still wins: [ordinary] is documented as the escape hatch
+    // when protection is too eager, and a built-in the user has declared a
+    // word must obey that like any other.
+    for (const QString &n : knownNames()) {
+        if (extraOrdinary.contains(n.toLower())) continue;
+        if (kept.contains(n)) continue;
+        if (mentionedIn(n, sources)) kept << n;
+    }
+
     std::sort(kept.begin(), kept.end(),
               [](const QString &a, const QString &b) { return a.size() > b.size(); });
 
@@ -232,10 +334,14 @@ bool looksLikeName(const QString &text, const QStringList &terms,
 
     // Words already covered by a found term are names by definition; the
     // question is only about what is left over.
+    // Whole words only. A bare substring removal lets a short name eat the
+    // middle of an unrelated word - "Boar" turns "Cupboard" into "Cupd",
+    // which then reads as a name because "Cupd" is in no dictionary.
     QString rest = subject;
     for (const QString &t : terms) {
-        if (t.trimmed().isEmpty()) continue;
-        rest.remove(t, Qt::CaseInsensitive);
+        const QString term = t.trimmed();
+        if (term.isEmpty()) continue;
+        rest.remove(wordRe(term, false));
     }
 
     static const QRegularExpression kSplit(QStringLiteral("[^\\p{L}\\p{N}']+"),

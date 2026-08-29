@@ -58,6 +58,27 @@ QStringList findNames(const QStringList &sources,
                       const QStringList &alwaysProtect,
                       const QSet<QString> &extraOrdinary);
 
+// Proper nouns the setting already knows, protected wherever a mod uses them.
+//
+// Repetition is the only evidence this module has, and it cannot see a name a
+// mod mentions ONCE. The Ashlanders lists forty strings, nineteen of which are
+// an Ashlander's given name appearing exactly once each - "Shalapli",
+// "Shulhaz", "Yalit" - so every one of them was sent to the translator, which
+// is both nonsense to ask and enough requests in a row to earn a rate-limit
+// block before the real strings were reached.
+//
+// -- What belongs here -------------------------------------------------
+//
+// Only a name that is not also an ordinary word in any language a mod is
+// likely to be written in. "Quiver" is NOT here: it arrives as "Chitin
+// Quiver", and a quiver is a thing, not a person. When in doubt leave it out -
+// a missing entry costs one wasted request, a wrong one silently freezes a
+// word that should have been translated.
+//
+// This is the built-in floor. `[protect]` in the user's rules file adds to it
+// per language, and `[ordinary]` overrides it, so nothing here is final.
+QStringList knownNames();
+
 // The token standing in for terms[i]. Word-shaped on purpose - see above.
 QString tokenFor(int index);
 

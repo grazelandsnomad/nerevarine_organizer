@@ -598,6 +598,92 @@ static void testWhatReadsAsAName()
           !term_protect::looksLikeName(QStringLiteral("Dagoth Andas"), names, ordinary));
 }
 
+// The Ashlanders: forty strings, nineteen of them one Ashlander's name each,
+// every one appearing exactly ONCE - which repetition cannot see. All nineteen
+// went to the translator and earned a rate-limit block before the rows with
+// real sentences in them were ever reached.
+static void testAKnownNameNeedsNoRepetition()
+{
+    std::cout << "\n[term_protect: the built-in names]\n";
+
+    // Verbatim from the mod's own string list.
+    const QStringList sources = {
+        QStringLiteral("Shalapli"),
+        QStringLiteral("Shalibi"),
+        QStringLiteral("Shanbaal"),
+        QStringLiteral("Shinat"),
+        QStringLiteral("Shulhaz"),
+        QStringLiteral("Yalit"),
+        QStringLiteral("Chitin Quiver"),
+        QStringLiteral("Boiling Pot"),
+        QStringLiteral("Ashlander Tent"),
+        QStringLiteral("Domesticated Guar"),
+        QStringLiteral("Herder's Whip"),
+        QStringLiteral("Sinnammu Mirpal says I can mix marshmerrow and "
+                       "wickwheat to make a poultice."),
+    };
+    const QStringList names = term_protect::findNames(sources);
+
+    for (const char *n : {"Shalapli", "Shalibi", "Shanbaal",
+                          "Shinat", "Shulhaz", "Yalit"}) {
+        const QString name = QString::fromLatin1(n);
+        check("a name appearing once is protected anyway",
+              names.contains(name), name);
+        // The whole point: nothing in this row to translate, so it is never
+        // sent. This is the request that was being spent on a proper noun.
+        check("and a row that is only that name is held back",
+              term_protect::looksLikeName(name, names), name);
+    }
+
+    check("a name inside a sentence is protected too",
+          names.contains(QStringLiteral("Sinnammu Mirpal")),
+          names.join(QStringLiteral(", ")));
+    check("but the sentence around it still goes to the translator",
+          !term_protect::looksLikeName(sources.last(), names));
+
+    // The line the list must not cross. A quiver is a thing, not a person.
+    check("an ordinary noun is not treated as a name",
+          !names.contains(QStringLiteral("Quiver")),
+          names.join(QStringLiteral(", ")));
+    check("so it is still translated",
+          !term_protect::looksLikeName(QStringLiteral("Chitin Quiver"), names));
+
+    // The other half, and it was already broken before the names went in:
+    // every one of these was read as somebody's name and never translated at
+    // all, because "pot", "tent" and "domesticated" were not known to be
+    // ordinary words.
+    for (const char *thing : {"Boiling Pot", "Ashlander Tent",
+                              "Domesticated Guar", "Herder's Whip"}) {
+        const QString t = QString::fromLatin1(thing);
+        check("a thing is not a person", !term_protect::looksLikeName(t, names), t);
+    }
+    // ...but the proper nouns inside them still are, so the translator sees a
+    // token where the creature is and cannot invent a different animal.
+    check("the people are still protected",
+          names.contains(QStringLiteral("Ashlander")),
+          names.join(QStringLiteral(", ")));
+    check("and so are the creatures",
+          names.contains(QStringLiteral("Guar")),
+          names.join(QStringLiteral(", ")));
+
+    // Only what the mod actually says: a term list carrying every known name
+    // would cost a pass over every row for each one it never uses.
+    const QStringList unrelated =
+        term_protect::findNames({QStringLiteral("Iron Key"),
+                                 QStringLiteral("Ancient Chest")});
+    check("a mod that names nobody carries no names",
+          unrelated.isEmpty(), unrelated.join(QStringLiteral(", ")));
+
+    // [ordinary] is documented as the escape hatch when protection is too
+    // eager, and a built-in has to obey it like anything else.
+    QSet<QString> ordinary;
+    ordinary.insert(QStringLiteral("shinat"));
+    const QStringList relaxed = term_protect::findNames(sources, {}, ordinary);
+    check("[ordinary] can release a built-in name",
+          !relaxed.contains(QStringLiteral("Shinat")),
+          relaxed.join(QStringLiteral(", ")));
+}
+
 static void testTheMorrowindNamingFamilies()
 {
     std::cout << "\n[lore_overrides: naming families]\n";
@@ -1267,6 +1353,7 @@ int main(int argc, char **argv)
     testAProgressFileReadsAsAMemory();
     testMissingProgressIsNotAnError();
     testEveryRowStillExistsWhenPaged();
+    testAKnownNameNeedsNoRepetition();
     testOnlyThisPageIsOnScreen();
     testAnAnswerLandsOnAnOffPageRow();
     testTheFilterOffersOnlyWhatStillNeedsWork();
