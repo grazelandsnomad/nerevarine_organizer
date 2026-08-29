@@ -1059,6 +1059,84 @@ static void bainhint_testArchiveGuard()
     check("all-missing is downgraded to silence", allQuiet);
 }
 
+// A package name with no marker, but a bare "for"/"with" pointing at a mod.
+//
+// Every name here is verbatim from the real mods folder. The archive that
+// prompted it is Death and Taxes, whose "01 Icons for OpenMW SSQN" carried no
+// badge at all - neither "you have that" nor "you do not" - because the parser
+// needed a "Patch"/"Addon" word before it would look.
+//
+// The gate being tested is the alias table. It is the only evidence a folder
+// name offers, so a tail it cannot vouch for stays silent however name-shaped
+// it looks; and a tail it CAN vouch for still loses when the vouching word is
+// an engine, which lives in the game folder and can never be in a modlist.
+static void bainhint_testBareJoin()
+{
+    std::cout << "\n[a bare \"for\" naming a mod the table knows]\n";
+
+    const QStringList withSsqn = {
+        QStringLiteral("OpenMW Skyrim Style Quest Notifications (SSQN)"),
+        QStringLiteral("OAAB_Data-49042-2-6-2-1780155954"),
+    };
+    const QStringList withoutSsqn = {
+        QStringLiteral("Tamriel Rebuilt 25.08.12"),
+        QStringLiteral("Uncharted Artifacts"),
+    };
+
+    bh_check("the icons package finds the mod it is for",
+             "01 Icons for OpenMW SSQN", withSsqn, BV::State::Installed);
+    bh_check("and says so when the mod is not there",
+             "01 Icons for OpenMW SSQN", withoutSsqn, BV::State::Missing);
+
+    // The badge has to name the package's own target rather than the row that
+    // answered, which here reached it through the SSQN alias.
+    const auto v = bh_judge("01 Icons for OpenMW SSQN", withSsqn);
+    check("the badge names the target",
+          v.target == QStringLiteral("OpenMW SSQN"), v.target);
+    check("and the tooltip can name the row that answered",
+          v.matched == withSsqn[0], v.matched);
+
+    bh_check("a join anywhere in the name is enough",
+             "04 Riders - to use with OAAB Grazelands", withSsqn,
+             BV::State::Installed);
+
+    // -- and the silences, which are the point of the gate ---------------
+
+    // The case the old comment named as the reason not to split at all. It
+    // still says nothing, because "OpenMW" is a stop-word and the table does
+    // not know it - a different mechanism, same answer.
+    bh_check("an engine after the join is not a mod", "01 Icons for OpenMW",
+             withSsqn, BV::State::Unknown);
+
+    // The one false untick this gate prevents: MGE XE is in the alias table
+    // AND in the stop-word list, so it cannot vouch. Without that, this grass
+    // would start unticked against a tool no modlist can contain.
+    bh_check("an engine cannot vouch for the tail either",
+             "01 Grass for MGEXE and OpenMW", withoutSsqn, BV::State::Unknown);
+
+    bh_check("a tail the table does not know stays silent",
+             "01 Grass for Remiros' Groundcover", withoutSsqn,
+             BV::State::Unknown);
+    bh_check("however name-shaped it is",
+             "01 GITD Telvanni Dormers Patch - for users of Sadrith Mora - SOP",
+             withoutSsqn, BV::State::Unknown);
+
+    // Whitespace is required on both sides of the join, so a name that merely
+    // opens with "For" is not making a claim about a mod.
+    bh_check("a leading For is not a join",
+             "02 For WIP Detailed Correct UV Rocks", withoutSsqn,
+             BV::State::Unknown);
+    bh_check("nor is it when the rest looks like a name",
+             "01 For Vanilla Rocks", withoutSsqn, BV::State::Unknown);
+
+    // The marker path is untouched: these two answered before this change and
+    // must answer identically now.
+    bh_check("a marker still wins on its own", "01 SSQN Addon", withSsqn,
+             BV::State::Installed);
+    bh_check("and a stop-word target is still silent", "03 OpenMW Patch",
+             withSsqn, BV::State::Unknown);
+}
+
 static void run_bain_hint()
 {
     std::cout << "=== bain_hint tests ===\n";
@@ -1068,6 +1146,7 @@ static void run_bain_hint()
     bainhint_testAnchoring();
     bainhint_testMasters();
     bainhint_testArchiveGuard();
+    bainhint_testBareJoin();
     std::cout << "\n";
 }
 
@@ -2339,6 +2418,27 @@ static void bainui_testChooser()
         check("the picker is open", BainWizardTestHook::pickerRevealed(w));
         check("and the compact chooser was never built",
               BainWizardTestHook::chooser(w) == nullptr);
+        delete w;
+    }
+    {
+        // A tick is a recommendation too. "This is for a mod you have" is the
+        // answer to the question the picker exists to ask, and behind "Choose
+        // packages..." the one archive you wondered about is the one that
+        // stays silent.
+        auto *w = BainWizardTestHook::build(
+            bw_pkgs({QStringLiteral("00 Core"),
+                     QStringLiteral("01 Icons for OpenMW SSQN")}), {},
+            {QStringLiteral("OpenMW Skyrim Style Quest Notifications (SSQN)")});
+        check("a positive verdict opens the list too",
+              BainWizardTestHook::pickerRevealed(w));
+        check("with no compact chooser in the way",
+              BainWizardTestHook::chooser(w) == nullptr);
+        check("and it says which mod it found",
+              BainWizardTestHook::box(w, 1)->text().contains(
+                  QStringLiteral("OpenMW SSQN ✓")),
+              BainWizardTestHook::box(w, 1)->text());
+        check("nothing is unticked by a positive",
+              BainWizardTestHook::chosen(w).size() == 2);
         delete w;
     }
     {

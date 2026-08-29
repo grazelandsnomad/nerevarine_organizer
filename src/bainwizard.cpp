@@ -93,6 +93,10 @@ void BainWizard::buildUi()
     const int recommendedOff = int(std::count_if(
         m_verdicts.cbegin(), m_verdicts.cend(),
         [](const bain::PackageVerdict &v) { return v.state == State::Missing; }));
+    // Anything the modlist had an opinion about, a tick as much as an untick.
+    const int judged = int(std::count_if(
+        m_verdicts.cbegin(), m_verdicts.cend(),
+        [](const bain::PackageVerdict &v) { return v.state != State::Unknown; }));
 
     if (recommendedOff > 0) {
         auto *summary = new QLabel(
@@ -179,16 +183,18 @@ void BainWizard::buildUi()
     m_btns = new QDialogButtonBox(QDialogButtonBox::Cancel, this);
     connect(m_btns, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
-    // Re-install, or a first install with something to recommend: skip the
-    // chooser and show the pre-ticked list.
+    // Re-install, or a first install where the modlist had anything to say:
+    // skip the chooser and show the pre-ticked list.
     //
-    // A recommendation you cannot see is not one. "Install everything" force-
-    // ticks every box, so leaving the compact chooser up would erase the
-    // unticks under badges nobody had a chance to read - and the count alone
-    // does not say which packages were dropped. It costs one extra click on
-    // exactly the archives where one click was the wrong answer; archives with
-    // nothing to flag are untouched.
-    if (havePrior || recommendedOff > 0) {
+    // A recommendation you cannot see is not one. That is plainest for an
+    // untick - "Install everything" force-ticks every box, so the compact
+    // chooser would erase unticks under badges nobody had a chance to read -
+    // but it holds for a tick too: "this package is for a mod you have" is the
+    // answer to the question the picker exists to ask, and hiding it behind
+    // "Choose packages..." means the one archive you wondered about is the one
+    // that stays silent. It costs a click on the archives the manager
+    // recognises; archives it can say nothing about keep the one-click path.
+    if (havePrior || judged > 0) {
         addInstallButton();
         main->addWidget(m_btns);
         return;

@@ -390,6 +390,7 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
 
             if (anyForeign && m_scans) {
                 const QStringList exts = plugins::contentExtensions();
+                bool complete = true;
                 for (int i = 0; i < m_modList->count(); ++i) {
                     auto *row = m_modList->item(i);
                     if (!row) continue;
@@ -397,11 +398,26 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
                         continue;
                     if (row->data(ModRole::InstallStatus).toInt() != 1) continue;
                     const QString rowPath = row->data(ModRole::ModPath).toString();
-                    if (rowPath.isEmpty()) continue;
+                    // A row that calls itself installed but has no readable
+                    // folder is a HOLE in the evidence, not an absence of
+                    // plugins - and reading on would let a master this row
+                    // actually supplies look unsatisfiable. Skipping it is
+                    // exactly the "partial" the comment above forbids.
+                    //
+                    // A folder that exists and simply ships no plugins (a
+                    // texture replacer) is not a hole, which is why the test
+                    // is existence and not emptiness.
+                    if (rowPath.isEmpty() || !QFileInfo::exists(rowPath)) {
+                        complete = false;
+                        break;
+                    }
                     for (const auto &dir : m_scans->cachedDataFolders(rowPath, exts))
                         for (const QString &f : dir.second)
                             availablePlugins.insert(f.toLower());
                 }
+                // Empty turns the master pass off entirely, which is the safe
+                // reading of "we could not see the whole modlist".
+                if (!complete) availablePlugins.clear();
             }
         }
 

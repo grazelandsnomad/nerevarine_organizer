@@ -34,8 +34,12 @@ const QRegularExpression &trailingMarkerRe()
 }
 
 // The same markers at the front, joined to the target by "for", "with" or a
-// dash. Bare "for"/"with" is NOT a marker on its own: "01 Icons for OpenMW"
-// would parse, and so would a whole class of ordinary option names.
+// dash.
+//
+// A bare "for"/"with" is handled separately, by bareJoinRe below - it is not
+// a marker, because a marker is itself evidence that what follows names a
+// mod and "for" is not. What holds "01 Icons for OpenMW" back there is the
+// alias table, not a refusal to split; do not "simplify" that gate away.
 const QRegularExpression &leadingMarkerRe()
 {
     static const QRegularExpression re(
@@ -43,6 +47,21 @@ const QRegularExpression &leadingMarkerRe()
                        "\\s*(?:for|with|[-\u2013\u2014])|"
                        "(?:to|for)\\s+use\\s+with|compatible\\s+with)\\s*"),
         QRegularExpression::CaseInsensitiveOption);
+    return re;
+}
+
+// A bare "for"/"with" joining two things: "Icons for OpenMW SSQN", "Riders -
+// to use with OAAB Grazelands". Whitespace is required on BOTH sides, so a
+// name that merely opens with "For" - "02 For WIP Detailed Correct UV Rocks" -
+// is not a claim about a mod.
+//
+// This is the loosest reading in the file, and it is only allowed to say
+// anything because targetOfPackageName makes the alias table vouch for the
+// tail before acting on it.
+const QRegularExpression &bareJoinRe()
+{
+    static const QRegularExpression re(QStringLiteral("\\s(?:for|with)\\s"),
+                                       QRegularExpression::CaseInsensitiveOption);
     return re;
 }
 
@@ -94,10 +113,41 @@ PackageTarget targetOfPackageName(const QString &packageName,
         if (residue == before) break;
         sawMarker = true;
     }
-    if (!sawMarker || residue.isEmpty()) return out;   // no marker, no verdict
+    // No marker. A bare "for"/"with" still points at something - take the tail
+    // and let the alias gate below decide whether it is a mod.
+    bool viaBareJoin = false;
+    if (!sawMarker) {
+        const QRegularExpressionMatch m = bareJoinRe().match(cleaned);
+        if (!m.hasMatch()) return out;                 // no marker, no join
+        residue     = cleaned.mid(m.capturedEnd()).trimmed();
+        viaBareJoin = true;
+    }
+    if (residue.isEmpty()) return out;
 
     // A stop-word target is silence, not a verdict either way.
     if (isStopWord(residue)) return out;
+
+    // The alias table is the WHOLE licence for the bare-join path. A marker
+    // ("Patch for X") is itself evidence that X names a mod; "for" alone is
+    // not, so the table is the only evidence there is - which is exactly what
+    // the header says about folder names carrying no requirement sentence.
+    //
+    // A stop-word cannot vouch even when the table knows it: "01 Grass for
+    // MGEXE and OpenMW" would otherwise be judged against a tool that lives in
+    // the game folder and can never appear in a modlist, and unticking it
+    // takes the user's grass with it. Measured on a real corpus, that is the
+    // one false untick this gate prevents.
+    if (viaBareJoin) {
+        bool vouched = false;
+        for (const QString &tok :
+             residue.split(QLatin1Char(' '), Qt::SkipEmptyParts)) {
+            if (mod_aliases::isKnownMod(tok) && !isStopWord(tok)) {
+                vouched = true;
+                break;
+            }
+        }
+        if (!vouched) return out;
+    }
 
     const QString phrase = mod_match::titleRun(residue);
     if (isStopWord(phrase)) return out;
@@ -127,9 +177,13 @@ PackageTarget targetOfPackageName(const QString &packageName,
     // token: there the acronym came out of a stated requirement sentence,
     // which is itself evidence that it names a mod. A folder name carries no
     // such sentence, so the table is the only evidence there is.
-    out.confident = !phrase.isEmpty()
-        && (phrase.split(QLatin1Char(' '), Qt::SkipEmptyParts).size() >= 2
-            || mod_aliases::isKnownMod(phrase));
+    //
+    // The bare-join path is already past that bar: the table vouched for the
+    // tail above, which is a stronger statement than "two title-cased words".
+    out.confident = viaBareJoin
+        || (!phrase.isEmpty()
+            && (phrase.split(QLatin1Char(' '), Qt::SkipEmptyParts).size() >= 2
+                || mod_aliases::isKnownMod(phrase)));
     return out;
 }
 
