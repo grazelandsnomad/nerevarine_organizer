@@ -43,14 +43,19 @@ QUrl requestUrl(const QStringList &texts, const QString &targetIso)
     return url;
 }
 
+bool fitsInOneRequest(const QStringList &texts, const QString &targetIso)
+{
+    if (texts.size() > kMaxBatch) return false;
+    return requestUrl(texts, targetIso).toEncoded().size() <= kMaxUrlBytes;
+}
+
 int fitBatch(const QStringList &texts, int from, const QString &targetIso)
 {
     if (from < 0 || from >= texts.size()) return 0;
 
     int n = 0;
     for (; n < kMaxBatch && from + n < texts.size(); ++n) {
-        const QStringList slice = texts.mid(from, n + 1);
-        if (requestUrl(slice, targetIso).toEncoded().size() > kMaxUrlBytes) break;
+        if (!fitsInOneRequest(texts.mid(from, n + 1), targetIso)) break;
     }
     // One string that is too long on its own still goes, alone. Returning 0
     // would leave the pump with nothing to send and nothing to drain.

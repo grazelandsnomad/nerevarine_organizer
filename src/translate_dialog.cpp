@@ -788,7 +788,29 @@ void TranslateDialog::pumpMachineTranslate()
     // rows are still there to resume from.
     if (m_mtProbe && m_mtInFlight >= 1) return;
 
-    while (!m_mtQueue.isEmpty()) {
+    // Gather a batch. Each row still gets its own masking and markup pass -
+    // that is per-row work and cannot be shared - but they travel together.
+    //
+    // One row used to be one HTTP GET, which for a mod the size of Project
+    // Cyrodiil is 8435 of them, and a burst of requests is what earns the 429
+    // in the first place.
+    struct Send {
+        int         item;
+        int         nameIdx;
+        bool        isName;
+        QString     named;
+        QStringList spans;
+        QString     sent;
+    };
+    QList<Send> batch;
+    QStringList payload;
+
+    // One at a time while probing (the point is to spend a single request
+    // finding out whether the block has lifted), and one at a time once a
+    // batch has come back unreadable.
+    const int cap = (m_mtProbe || m_mtNoBatch) ? 1 : google_translate::kMaxBatch;
+
+    while (!m_mtQueue.isEmpty() && batch.size() < cap) {
         const int item = m_mtQueue.takeFirst();
 
         // Negative encodes "this is a bare name with no row of its own".
@@ -822,38 +844,93 @@ void TranslateDialog::pumpMachineTranslate()
             continue;
         }
 
-        ++m_mtInFlight;                 // below the free skip, which sends nothing
-        if (item >= 0) {
-            ProgrammaticEdit guard(m_expanding);
-            setPending(item, 2);        // on the wire now, not merely queued
+        // Would this one overflow the request? Put it back and send what we
+        // have. Asked of google_translate rather than measured here, so the
+        // pump and fitBatch cannot drift apart about what fits.
+        if (!payload.isEmpty()
+            && !google_translate::fitsInOneRequest(payload + QStringList{sent},
+                                                   isoFor(m_language))) {
+            m_mtQueue.prepend(item);
+            break;
         }
 
-        QNetworkRequest req(google_translate::requestUrl(sent, isoFor(m_language)));
+        batch.append({item, nameIdx, isName, named, spans, sent});
+        payload << sent;
+    }
+
+    if (!batch.isEmpty()) {
+        ++m_mtInFlight;                 // one request, however many rows
+        for (const Send &b : batch) {
+            if (b.item < 0) continue;
+            ProgrammaticEdit guard(m_expanding);
+            setPending(b.item, 2);      // on the wire now, not merely queued
+        }
+
+        // A single row keeps the exact request and parser it has always had.
+        // Only a real batch takes the new path, so the one-string case cannot
+        // regress on a shape nobody has been able to confirm yet.
+        const bool batched = payload.size() > 1;
+        QNetworkRequest req(batched
+            ? google_translate::requestUrl(payload, isoFor(m_language))
+            : google_translate::requestUrl(payload.first(), isoFor(m_language)));
         req.setRawHeader("Accept", "application/json");
         req.setRawHeader("User-Agent", google_translate::userAgent());
 
         QNetworkReply *reply = m_net->get(req);
         connect(reply, &QNetworkReply::finished, this,
-                [this, reply, item, nameIdx, isName, named, spans]() {
+                [this, reply, batch, payload, batched]() {
             reply->deleteLater();
 
             const int http = reply->attribute(
                 QNetworkRequest::HttpStatusCodeAttribute).toInt();
 
-            QString text;
-            bool    repaired = false;
+            QStringList answers;
             // Left guarded: on a 429 the body is an HTML "Sorry..." page, and
             // there is nothing to gain from putting that through a JSON parser.
-            if (reply->error() == QNetworkReply::NoError)
-                text = google_translate::parseResponse(reply->readAll());
+            if (reply->error() == QNetworkReply::NoError) {
+                const QByteArray body = reply->readAll();
+                if (batched) {
+                    // Checked against the sources Google echoes back, so a
+                    // shape this does not read comes out EMPTY rather than
+                    // plausible. Mapping answers onto the wrong rows is the
+                    // one failure here nobody would ever catch.
+                    answers = google_translate::parseResponses(body, payload);
+                } else {
+                    answers = QStringList{google_translate::parseResponse(body)};
+                }
+            }
+
+            const bool gotAll = answers.size() == batch.size();
+
+            // The batch came back readable HTTP but unreadable to us. That is
+            // not the endpoint failing, so nothing is counted and no row is
+            // spent: drop to single requests and put the rows back.
+            if (batched && http >= 200 && http < 300 && !gotAll) {
+                m_mtNoBatch = true;
+                for (int i = int(batch.size()) - 1; i >= 0; --i) {
+                    if (batch[i].item >= 0) {
+                        ProgrammaticEdit guard(m_expanding);
+                        setPending(batch[i].item, 1);
+                    }
+                    m_mtQueue.prepend(batch[i].item);
+                }
+                --m_mtInFlight;
+                if (m_mtPace && !m_mtPace->isActive()) m_mtPace->start();
+                advanceMachineTranslate();
+                return;
+            }
 
             // Classified on the RAW answer, before restore() and the user's
             // after-rules touch it: this is a statement about the endpoint, and
             // a rule of the user's own that blanks a row must not read as
             // Google having failed.
             const auto outcome = google_translate::classify(
-                int(reply->error()), http, !text.isEmpty());
-            m_mtTally.count(outcome);
+                int(reply->error()), http, gotAll && !answers.isEmpty()
+                                           && !answers.first().isEmpty());
+            // Counted once per ROW, not once per request: every message that
+            // quotes these numbers says "lines", and a batch of twenty-five
+            // that failed did not cost the user one line.
+            for (int i = 0; i < batch.size(); ++i) m_mtTally.count(outcome);
             // An answer means the block has lifted: stop probing and let the
             // pace timer run the rest of the queue at full speed.
             if (outcome == google_translate::Failure::Ok) m_mtProbe = false;
@@ -864,9 +941,9 @@ void TranslateDialog::pumpMachineTranslate()
             }
 
             // A 429 means the endpoint has stopped answering this client, so
-            // the other 163 requests will 429 too - and sending them is what
-            // makes the block last longer. Only a 429: a 403 is a refusal, not
-            // a rate limit, and the run is allowed to finish and report it.
+            // the other requests will 429 too - and sending them is what makes
+            // the block last longer. Only a 429: a 403 is a refusal, not a
+            // rate limit, and the run is allowed to finish and report it.
             //
             // Requests already in flight are left alone. They are paid for and
             // may still answer, and cancelling would manufacture status-0
@@ -893,54 +970,20 @@ void TranslateDialog::pumpMachineTranslate()
                         Settings::translateBlockStrikes() + 1);
                 }
             }
-            if (!text.isEmpty() && !spans.isEmpty()) {
-                // Before the user's own after-rules, so those see the real
-                // markup rather than a row of tokens.
-                const auto restored = markup_protect::restore(named, text, spans);
-                text     = restored.text;
-                repaired = restored.repaired;
-            }
-            if (!text.isEmpty())
-                text = translation_rules::applyAfter(text, m_rules);
 
-            if (text.isEmpty()) {
-                // Counted by the tally above; nothing to write.
-            } else if (isName) {
-                // The answer for this name, reused everywhere from here on.
-                if (nameIdx >= 0 && nameIdx < m_nameRendering.size())
-                    m_nameRendering[nameIdx] = text;
-                if (item >= 0 && item < m_table->rowCount()) {
-                    ProgrammaticEdit guard(m_expanding);
-                    m_table->item(item, ColTranslation)->setText(text);
-                }
-            } else if (item >= 0 && item < m_table->rowCount()
-                       && m_table->item(item, ColTranslation)
-                              ->text().trimmed().isEmpty()) {
-                // Keep the masked form: it is what lets this row follow the
-                // name if the user changes their mind about it. Guarded, or
-                // storing it reads as a hand edit and blanks the row.
-                {
-                    ProgrammaticEdit guard(m_expanding);
-                    auto *cell = m_table->item(item, ColTranslation);
-                    cell->setData(TemplateRole, text);
-                    cell->setData(RepairedRole, repaired);
-                }
-                expandRow(item);
-            }
-
-            if (item >= 0) {
-                ProgrammaticEdit guard(m_expanding);
-                setPending(item, 0);    // answered, whatever the answer was
+            for (int i = 0; i < batch.size(); ++i) {
+                const Send &b = batch[i];
+                applyMachineAnswer(b.item, b.nameIdx, b.isName, b.named,
+                                   b.spans, gotAll ? answers[i] : QString());
+                m_mtBar->setValue(++m_mtDone);
             }
 
             --m_mtInFlight;
-            m_mtBar->setValue(++m_mtDone);
 
             // Dispatch belongs to the pace timer now. A reply firing the next
             // request itself is exactly what made this a burst.
             advanceMachineTranslate();
         });
-        break;                          // one request per tick
     }
 
     // Whatever is left goes at the spacing, not as fast as replies land.
@@ -949,6 +992,62 @@ void TranslateDialog::pumpMachineTranslate()
     // A tick that dispatched nothing - every remaining row was markup-only -
     // still has to be able to end the run.
     advanceMachineTranslate();
+}
+
+// One machine answer, written where it belongs.
+//
+// Lifted out of the reply handler when requests started carrying a batch: the
+// markup restore, the after-rules and the name bookkeeping are per ROW, and a
+// reply now has several. `raw` empty means no answer came back for this row -
+// the tally has already counted why - and the row is simply left blank, which
+// leaves the original string in place.
+void TranslateDialog::applyMachineAnswer(int item, int nameIdx, bool isName,
+                                         const QString &named,
+                                         const QStringList &spans,
+                                         const QString &raw)
+{
+    QString text     = raw;
+    bool    repaired = false;
+
+    if (!text.isEmpty() && !spans.isEmpty()) {
+        // Before the user's own after-rules, so those see the real markup
+        // rather than a row of tokens.
+        const auto restored = markup_protect::restore(named, text, spans);
+        text     = restored.text;
+        repaired = restored.repaired;
+    }
+    if (!text.isEmpty())
+        text = translation_rules::applyAfter(text, m_rules);
+
+    if (text.isEmpty()) {
+        // Counted by the tally already; nothing to write.
+    } else if (isName) {
+        // The answer for this name, reused everywhere from here on.
+        if (nameIdx >= 0 && nameIdx < m_nameRendering.size())
+            m_nameRendering[nameIdx] = text;
+        if (item >= 0 && item < m_table->rowCount()) {
+            ProgrammaticEdit guard(m_expanding);
+            m_table->item(item, ColTranslation)->setText(text);
+        }
+    } else if (item >= 0 && item < m_table->rowCount()
+               && m_table->item(item, ColTranslation)
+                      ->text().trimmed().isEmpty()) {
+        // Keep the masked form: it is what lets this row follow the name if
+        // the user changes their mind about it. Guarded, or storing it reads
+        // as a hand edit and blanks the row.
+        {
+            ProgrammaticEdit guard(m_expanding);
+            auto *cell = m_table->item(item, ColTranslation);
+            cell->setData(TemplateRole, text);
+            cell->setData(RepairedRole, repaired);
+        }
+        expandRow(item);
+    }
+
+    if (item >= 0) {
+        ProgrammaticEdit guard(m_expanding);
+        setPending(item, 0);            // answered, whatever the answer was
+    }
 }
 
 // Called whenever the run might be over: after a reply lands, and after a tick

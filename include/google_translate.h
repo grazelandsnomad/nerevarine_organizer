@@ -47,6 +47,10 @@ QUrl requestUrl(const QString &text, const QString &targetIso);
 // them. The endpoint accepts repeated q=; nothing here could emit it.
 QUrl requestUrl(const QStringList &texts, const QString &targetIso);
 
+// Whether these strings all fit in one request. The one place the size rule
+// lives, so fitBatch and the pump cannot come to disagree about it.
+bool fitsInOneRequest(const QStringList &texts, const QString &targetIso);
+
 // How many of `texts`, starting at `from`, fit in one request. Always at least
 // 1 even when that one string is over the limit on its own, or a run would
 // stall forever on a long row.

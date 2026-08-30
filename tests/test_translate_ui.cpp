@@ -76,6 +76,15 @@ struct TranslateDialogTestHook {
         }
         d->expandRow(row);
     }
+    // The REAL write path a reply takes, now that a reply carries a batch.
+    // deliver() above mirrors it; this one is the code that actually ships.
+    static void apply(TranslateDialog *d, int item, int nameIdx, bool isName,
+                      const QString &named, const QString &raw)
+    {
+        d->applyMachineAnswer(item, nameIdx, isName, named,
+                              markup_protect::findSpans(named), raw);
+    }
+
     // The same delivery WITHOUT the guard - the shape of the original bug.
     static void deliverUnguarded(TranslateDialog *d, int row, const QString &masked)
     {
@@ -695,6 +704,51 @@ static void testAKnownNameNeedsNoRepetition()
 // without meaning to. It offered 27 rows and earned a rate-limit block reaching
 // for them - and a translated GMST does not stay in the mod, it replaces that
 // setting for the whole game.
+// A request used to carry one row, so a reply could not land on the wrong one.
+// Now it carries up to twenty-five, and putting the right Spanish in the wrong
+// row is the one failure here a user would never catch.
+static void testABatchLandsOnTheRightRows()
+{
+    std::cout << "\n[a batched reply is written row by row]\n";
+    translation_store::Memory mem;
+    auto *d = TranslateDialogTestHook::make(dungeonStrings(), &mem);
+    auto *t = TranslateDialogTestHook::table(d);
+
+    TranslateDialogTestHook::names(d)      = {QStringLiteral("Forfeoranna Heim")};
+    TranslateDialogTestHook::renderings(d) = {QString::fromUtf8("Hogar de los precursores")};
+
+    const int a = rowOf(t, QStringLiteral("Forfeoranna Heim Catacombs"));
+    const int b = rowOf(t, QStringLiteral("Forfeoranna Heim Depths"));
+    check("two distinct rows to answer", a >= 0 && b >= 0 && a != b);
+
+    // Answered together, in the order the batch was built - which is the order
+    // parseResponses returns and the order the pump indexes.
+    TranslateDialogTestHook::apply(d, a, 0, false,
+        QStringLiteral("Nrvaa Catacombs"), QStringLiteral("Catacumbas de Nrvaa"));
+    TranslateDialogTestHook::apply(d, b, 0, false,
+        QStringLiteral("Nrvaa Depths"), QStringLiteral("Profundidades de Nrvaa"));
+
+    check("the first row got its own answer",
+          t->item(a, 1)->text()
+              == QString::fromUtf8("Catacumbas de Hogar de los precursores"),
+          t->item(a, 1)->text());
+    check("and the second got its own, not the first's",
+          t->item(b, 1)->text()
+              == QString::fromUtf8("Profundidades de Hogar de los precursores"),
+          t->item(b, 1)->text());
+
+    // A row nothing came back for is left blank on purpose: blank keeps the
+    // original string in the plugin, and the tally has already said why. This
+    // is the path a batch takes when parseResponses refuses to verify it.
+    const int c = rowOf(t, QStringLiteral("Forfeoranna Heim"));
+    check("a third row to leave unanswered", c >= 0 && c != a && c != b);
+    TranslateDialogTestHook::apply(d, c, 0, false,
+        QStringLiteral("Nrvaa"), QString());
+    check("an unanswered row stays blank rather than guessing",
+          t->item(c, 1)->text().isEmpty(), t->item(c, 1)->text());
+    delete d;
+}
+
 static void testVanillaGameSettingsAreNotTheMods()
 {
     std::cout << "\n[vanilla_gmst: what the mod actually changed]\n";
@@ -1532,6 +1586,7 @@ int main(int argc, char **argv)
     testMissingProgressIsNotAnError();
     testEveryRowStillExistsWhenPaged();
     testAKnownNameNeedsNoRepetition();
+    testABatchLandsOnTheRightRows();
     testVanillaGameSettingsAreNotTheMods();
     testABlockThatOutlivesTheGuess();
     testSeveralStringsInOneRequest();

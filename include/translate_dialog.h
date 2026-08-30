@@ -245,6 +245,18 @@ private:
     // Google's and it does not tell us - so the cheapest way to ask is to ask
     // once. Cleared by the first answer that comes back.
     bool          m_mtProbe = false;
+    // A batch came back in a shape parseResponses could not verify, so the
+    // rest of this run asks one string at a time. Sticky for the run rather
+    // than retried: if the endpoint does not answer batches the way this reads
+    // them, it will not start doing so halfway through.
+    bool          m_mtNoBatch = false;
+
+    // Write one machine answer into the table. Split out of the reply handler
+    // because a reply now carries a whole batch, and every row in it needs the
+    // same markup restore, after-rules and name bookkeeping.
+    void applyMachineAnswer(int item, int nameIdx, bool isName,
+                            const QString &named, const QStringList &spans,
+                            const QString &raw);
     int           m_mtFrame = 0;
 };
 
