@@ -112,6 +112,14 @@ struct Settings {
     // google_translate::cooloffSecondsLeft for what is done with it.
     static QDateTime translateBlockedAt();
     static void      setTranslateBlockedAt(const QDateTime &whenUtc);
+
+    // How many times in a row Google has refused. Google's block outlives a
+    // fifteen-minute guess by a wide margin - one was measured still in force
+    // more than twelve hours later - so each repeat lengthens the wait. Reset
+    // to zero by a run that gets an answer; see
+    // google_translate::cooloffMinutesFor.
+    static int  translateBlockStrikes();
+    static void setTranslateBlockStrikes(int strikes);
     static bool    utilityExplainerSeen();
     static void    setUtilityExplainerSeen(bool seen);
     static bool    uiDarkMode();                 // default false (light)

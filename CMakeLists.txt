@@ -120,6 +120,7 @@ set(SOURCES
     src/pluginparser.cpp
     src/plugin_records.cpp
     src/plugin_strings.cpp
+    src/vanilla_gmst.cpp
     src/scan_overlay.cpp
     src/variant_picker.cpp
     src/firstrunwizard.cpp

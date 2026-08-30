@@ -30,6 +30,7 @@ constexpr auto kTranslationLanguage   = "ui/translation_language";
 // mod and the app - closing the window and reopening it is the first thing
 // anybody tries.
 constexpr auto kTranslateBlockedAt    = "translate/blocked_at";
+constexpr auto kTranslateBlockStrikes = "translate/block_strikes";
 constexpr auto kUiUtilityExplainer    = "ui/utility_explainer_seen";
 constexpr auto kUiDarkMode            = "ui/dark_mode";
 constexpr auto kUiConflictNotices     = "ui/conflict_notices";
@@ -373,6 +374,19 @@ void Settings::setTranslateBlockedAt(const QDateTime &whenUtc)
     // own way; storing local time would let a DST shift move the deadline.
     QSettings().setValue(kTranslateBlockedAt,
                          whenUtc.toUTC().toString(Qt::ISODate));
+}
+
+int Settings::translateBlockStrikes()
+{
+    // Clamped on the way out as well as in: a hand-edited config should not be
+    // able to put the user in a wait no code path can end.
+    const int n = QSettings().value(kTranslateBlockStrikes, 0).toInt();
+    return qBound(0, n, 16);
+}
+
+void Settings::setTranslateBlockStrikes(int strikes)
+{
+    QSettings().setValue(kTranslateBlockStrikes, qBound(0, strikes, 16));
 }
 
 QString Settings::uiLanguage()

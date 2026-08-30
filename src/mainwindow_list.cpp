@@ -4,6 +4,8 @@
 #include "mainwindow.h"
 #include "variant_picker.h"
 #include "plugin_strings.h"
+#include "vanilla_gmst.h"
+#include "openmwconfigwriter.h"
 #include "translate_dialog.h"
 #include "translation_mod.h"
 #include "translation_progress.h"
@@ -1790,6 +1792,49 @@ void MainWindow::onSortByDate()
         m_dateSortAsc ? T("status_sorted_asc") : T("status_sorted_desc"), 3000);
 }
 
+namespace {
+
+// The base game's own game settings, so a mod's re-saved copy of one can be
+// told from a setting it meant to change.
+//
+// Built once and kept: it is a walk of Morrowind.esm and its expansions (about
+// 94 MB), which is cheap enough to do but not per mod. Rebuilding it costs
+// nothing in correctness - the answer only changes when the user reinstalls
+// the game - so there is no invalidation here beyond the process lifetime.
+//
+// An empty table is a legitimate outcome: a Bethesda-engine profile has no
+// openmw.cfg, and vanilla_gmst::isDirty still answers from the value alone.
+const vanilla_gmst::Table &vanillaGmsts()
+{
+    static bool                 loaded = false;
+    static vanilla_gmst::Table  table;
+    if (loaded) return table;
+    loaded = true;
+
+#ifdef Q_OS_WIN
+    const QString cfgPath = QDir::homePath()
+        + QStringLiteral("/Documents/My Games/OpenMW/openmw.cfg");
+#else
+    const QString cfgPath = QDir::homePath()
+        + QStringLiteral("/.config/openmw/openmw.cfg");
+#endif
+    QFile cfg(cfgPath);
+    if (!cfg.open(QIODevice::ReadOnly | QIODevice::Text)) return table;
+
+    const openmw::ImportEntries entries =
+        openmw::parseConfigEntries(QString::fromUtf8(cfg.readAll()));
+    cfg.close();
+
+    for (const QString &p : entries.dataPaths) {
+        if (!openmw::looksLikeVanillaDataFolder(p)) continue;
+        table.load(p);
+        break;
+    }
+    return table;
+}
+
+} // namespace
+
 void MainWindow::onTranslateMod(QListWidgetItem *item)
 {
     if (!item) return;
@@ -1813,6 +1858,7 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
     translation_mod::EncodingByPlugin encodings;
     bool sawPlugin = false;
     bool sawLocalized = false;
+    int  skippedVanilla = 0;
     QDirIterator dit(modPath, QDir::Files | QDir::NoDotAndDotDot,
                      QDirIterator::Subdirectories);
     while (dit.hasNext()) {
@@ -1832,8 +1878,21 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
         if (set.localized) { sawLocalized = true; continue; }
         const QString rel = QDir(modPath).relativeFilePath(dit.filePath());
         encodings.insert(rel, set.encoding);
-        for (auto it = set.byKey.cbegin(); it != set.byKey.cend(); ++it)
+        for (auto it = set.byKey.cbegin(); it != set.byKey.cend(); ++it) {
+            // A GMST the mod did not actually change is the base game
+            // talking, and a translation mod loads AFTER the mod - so
+            // translating one replaces that setting for the whole game.
+            // Daedric Maul is one weapon and 72 re-saved settings; it
+            // offered 27 rows and earned a rate-limit block reaching for
+            // them. See vanilla_gmst.h.
+            const QString setting = vanilla_gmst::settingOfKey(it.key());
+            if (!setting.isEmpty()
+                && vanilla_gmst::isDirty(setting, it.value(), vanillaGmsts())) {
+                ++skippedVanilla;
+                continue;
+            }
             strings.append({rel, it.key(), it.value(), false});
+        }
         for (auto it = set.auxByKey.cbegin(); it != set.auxByKey.cend(); ++it)
             strings.append({rel, it.key(), it.value(), true});
     }

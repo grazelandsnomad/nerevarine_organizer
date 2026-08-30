@@ -2606,7 +2606,11 @@ static void testTheRunSaysOneThing()
 static void testTheCooloffArithmetic()
 {
     std::cout << "\n[how long is left of a fifteen-minute block]\n";
-    const auto left = google_translate::cooloffSecondsLeft;
+    // A lambda, not a function pointer: taking the address would drop the
+    // strikes default and these cases are all about the first block.
+    const auto left = [](qint64 blockedAt, qint64 now) {
+        return google_translate::cooloffSecondsLeft(blockedAt, now);
+    };
     constexpr qint64 t = 1'700'000'000;
     const int total = google_translate::kBlockCooloffMinutes * 60;
 

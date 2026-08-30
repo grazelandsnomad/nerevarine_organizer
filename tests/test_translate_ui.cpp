@@ -13,6 +13,8 @@
 
 #include "lore_overrides.h"
 #include "term_protect.h"
+#include "vanilla_gmst.h"
+#include "google_translate.h"
 #include "markup_protect.h"
 #include "translation_progress.h"
 #include "translate_dialog.h"
@@ -689,6 +691,177 @@ static void testAKnownNameNeedsNoRepetition()
           relaxed.join(QStringLiteral(", ")));
 }
 
+// Daedric Maul is one weapon and 72 game settings its author's editor re-saved
+// without meaning to. It offered 27 rows and earned a rate-limit block reaching
+// for them - and a translated GMST does not stay in the mod, it replaces that
+// setting for the whole game.
+static void testVanillaGameSettingsAreNotTheMods()
+{
+    std::cout << "\n[vanilla_gmst: what the mod actually changed]\n";
+
+    vanilla_gmst::Table v;
+    v.insert(QStringLiteral("sTeleportDisabled"),
+             QStringLiteral("Teleportation magic does not work here."));
+    v.insert(QStringLiteral("sEffectSummonCreature01"), QStringLiteral("Call Wolf"));
+    v.insert(QStringLiteral("sEffectSummonCreature04"), QStringLiteral("Summon Winged Twilight"));
+    v.insert(QStringLiteral("sTrapImpossible"),
+             QStringLiteral("Trap too complex; your chance to disarm it is zero."));
+
+    // 1. Re-saved untouched. Verbatim from Daedric_Maul.ESP.
+    check("a setting re-saved unchanged is the game talking",
+          vanilla_gmst::isDirty(QStringLiteral("sTeleportDisabled"),
+                                QStringLiteral("Teleportation magic does not work here."), v));
+
+    // 2. The setting's own name as its value - an editor opened without the
+    // expansion that defines it. Bloodmoon says "Call Wolf".
+    check("a setting named after itself is not prose",
+          vanilla_gmst::isDirty(QStringLiteral("sEffectSummonCreature01"),
+                                QStringLiteral("sEffectSummonCreature01"), v));
+
+    // 3. Nothing to translate.
+    check("a blank value is not translatable",
+          vanilla_gmst::isDirty(QStringLiteral("sNotifyMessage60"), QString(), v));
+    check("nor is one that is only spaces",
+          vanilla_gmst::isDirty(QStringLiteral("sNotifyMessage61"), QStringLiteral("   "), v));
+
+    // The other half, and the half that decides whether this is safe to ship:
+    // mods that edit game settings ON PURPOSE must keep every one of them.
+    check("MultiMark keeps the spell it repurposed",
+          !vanilla_gmst::isDirty(QStringLiteral("sEffectSummonCreature04"),
+                                 QStringLiteral("Greater Mark"), v));
+    check("Patch for Purists keeps its correction",
+          !vanilla_gmst::isDirty(QStringLiteral("sTrapImpossible"),
+                                 QStringLiteral("Trap too complex; your chance to disarm it is nil."), v));
+    check("a setting the game does not define at all is the mod's",
+          !vanilla_gmst::isDirty(QStringLiteral("sSomeModAddedThis"),
+                                 QStringLiteral("A brand new message"), v));
+
+    // No game files - a Bethesda-engine profile, or openmw.cfg missing. Rules
+    // 2 and 3 still answer, which is what keeps that a degraded answer rather
+    // than no answer at all.
+    const vanilla_gmst::Table none;
+    check("without the base game, a self-named setting is still caught",
+          vanilla_gmst::isDirty(QStringLiteral("sMagicCreature01ID"),
+                                QStringLiteral("sMagicCreature01ID"), none));
+    check("and a blank one is still caught",
+          vanilla_gmst::isDirty(QStringLiteral("sAnything"), QString(), none));
+    check("but real text is left alone, because nothing can vouch against it",
+          !vanilla_gmst::isDirty(QStringLiteral("sTeleportDisabled"),
+                                 QStringLiteral("Teleportation magic does not work here."), none));
+
+    // The key format, kept in one place so the call site cannot spell it wrong.
+    check("the setting is read out of a plugin_strings key",
+          vanilla_gmst::settingOfKey(QStringLiteral("GMST:sWerewolfPopup:STRV:0"))
+              == QStringLiteral("sWerewolfPopup"));
+    check("and another record type is not a GMST",
+          vanilla_gmst::settingOfKey(QStringLiteral("WEAP:DV_daedric_maul:FNAM:0")).isEmpty());
+    check("nor is a GMST subrecord that is not its text",
+          vanilla_gmst::settingOfKey(QStringLiteral("GMST:sFoo:INTV:0")).isEmpty());
+}
+
+// Fifteen minutes was a guess. A block was measured still refusing the very
+// first request of a fresh run more than twelve hours later, so a repeat has to
+// buy a longer wait than the last one.
+static void testABlockThatOutlivesTheGuess()
+{
+    std::cout << "\n[google_translate: the cooloff ladder]\n";
+    using namespace google_translate;
+
+    check("the first block is the old fifteen minutes",
+          cooloffMinutesFor(1) == kBlockCooloffMinutes,
+          QString::number(cooloffMinutesFor(1)));
+    check("an unblocked user is treated as the first too",
+          cooloffMinutesFor(0) == 15);
+    check("the second is an hour",  cooloffMinutesFor(2) == 60);
+    check("the third is six hours", cooloffMinutesFor(3) == 360);
+    check("the fourth is a day",    cooloffMinutesFor(4) == 1440);
+    check("and it stops there rather than growing without end",
+          cooloffMinutesFor(99) == 1440);
+    check("a nonsense count cannot shorten it either",
+          cooloffMinutesFor(-5) == 15);
+
+    constexpr qint64 t = 1'700'000'000;
+    check("a second block waits the full hour",
+          cooloffSecondsLeft(t, t, 2) == 60 * 60);
+    check("and is over when the hour is up",
+          cooloffSecondsLeft(t, t + 3600, 2) == 0);
+    check("while the first was already over by then",
+          cooloffSecondsLeft(t, t + 3600, 1) == 0);
+    check("a clock that jumped forward still fails open",
+          cooloffSecondsLeft(t + 500, t, 4) == 0);
+}
+
+// One row was one HTTP GET. Project Cyrodiil is 8435 rows.
+static void testSeveralStringsInOneRequest()
+{
+    std::cout << "\n[google_translate: batching]\n";
+    using namespace google_translate;
+
+    const QStringList three = { QStringLiteral("Werewolf"),
+                                QStringLiteral("Ash Slave"),
+                                QStringLiteral("Bonemold Set") };
+    const QString url = QString::fromUtf8(
+        requestUrl(three, QStringLiteral("es")).toEncoded());
+    check("every string gets its own q=", url.count(QStringLiteral("&q=")) == 3, url);
+    check("in the order they were asked",
+          url.indexOf(QStringLiteral("Werewolf")) < url.indexOf(QStringLiteral("Ash"))
+       && url.indexOf(QStringLiteral("Ash")) < url.indexOf(QStringLiteral("Bonemold")), url);
+
+    check("a small batch fits whole",
+          fitBatch(three, 0, QStringLiteral("es")) == 3);
+    check("and the tail of it does too",
+          fitBatch(three, 2, QStringLiteral("es")) == 1);
+    check("past the end asks for nothing",
+          fitBatch(three, 3, QStringLiteral("es")) == 0);
+
+    QStringList many;
+    for (int i = 0; i < 200; ++i) many << QStringLiteral("A reasonably long line of dialogue %1").arg(i);
+    const int fit = fitBatch(many, 0, QStringLiteral("es"));
+    check("a long list is capped", fit > 0 && fit <= kMaxBatch, QString::number(fit));
+
+    // A single string over the limit still goes, alone. Returning 0 would
+    // leave the pump with nothing to send and a queue it can never drain.
+    const QStringList huge = { QString(4000, QLatin1Char('x')) };
+    check("one oversized string does not stall the run",
+          fitBatch(huge, 0, QStringLiteral("es")) == 1);
+
+    // -- and the part that makes batching safe to ship unverified ---------
+    //
+    // Google echoes each source back beside its translation, so the mapping is
+    // CHECKED rather than trusted. Guessing here would write the wrong Spanish
+    // into the wrong row, which no user would ever catch.
+    const QByteArray good =
+        "[[[\"Hombre lobo\",\"Werewolf\",null,null,1],"
+          "[\"Esclavo de ceniza\",\"Ash Slave\",null,null,1]],null,\"en\"]";
+    const QStringList two = { QStringLiteral("Werewolf"), QStringLiteral("Ash Slave") };
+    const QStringList got = parseResponses(good, two);
+    check("a verified batch comes back in order",
+          got.size() == 2 && got[0] == QString::fromUtf8("Hombre lobo")
+                          && got[1] == QString::fromUtf8("Esclavo de ceniza"),
+          got.join(QStringLiteral(" | ")));
+
+    // A long row arrives split across segments; the boundary is the echoed
+    // source, not the segment count.
+    const QByteArray split =
+        "[[[\"Hombre \",\"Were\",null,null,1],"
+          "[\"lobo\",\"wolf\",null,null,1]],null,\"en\"]";
+    const QStringList one = { QStringLiteral("Werewolf") };
+    check("segments are rejoined by what they answer",
+          parseResponses(split, one) == QStringList{QString::fromUtf8("Hombre lobo")},
+          parseResponses(split, one).join(QStringLiteral("|")));
+
+    check("an answer to something else is refused outright",
+          parseResponses(good, {QStringLiteral("Werewolf"),
+                                QStringLiteral("Something we never sent")}).isEmpty());
+    check("so is a short answer",
+          parseResponses(good, {QStringLiteral("Werewolf"), QStringLiteral("Ash Slave"),
+                                QStringLiteral("Bonemold Set")}).isEmpty());
+    check("and a body of an unexpected shape",
+          parseResponses(QByteArray("{\"error\":429}"), two).isEmpty());
+    check("and the HTML block page",
+          parseResponses(QByteArray("<html><title>Sorry...</title></html>"), two).isEmpty());
+}
+
 static void testTheMorrowindNamingFamilies()
 {
     std::cout << "\n[lore_overrides: naming families]\n";
@@ -1359,6 +1532,9 @@ int main(int argc, char **argv)
     testMissingProgressIsNotAnError();
     testEveryRowStillExistsWhenPaged();
     testAKnownNameNeedsNoRepetition();
+    testVanillaGameSettingsAreNotTheMods();
+    testABlockThatOutlivesTheGuess();
+    testSeveralStringsInOneRequest();
     testOnlyThisPageIsOnScreen();
     testAnAnswerLandsOnAnOffPageRow();
     testTheFilterOffersOnlyWhatStillNeedsWork();

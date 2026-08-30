@@ -552,7 +552,8 @@ int TranslateDialog::cooloffLeftSeconds() const
     const QDateTime blocked = Settings::translateBlockedAt();
     if (!blocked.isValid()) return 0;
     return google_translate::cooloffSecondsLeft(
-        blocked.toSecsSinceEpoch(), QDateTime::currentSecsSinceEpoch());
+        blocked.toSecsSinceEpoch(), QDateTime::currentSecsSinceEpoch(),
+        Settings::translateBlockStrikes());
 }
 
 // The bar is either a run's progress or a cooloff countdown, never both - a run
@@ -580,7 +581,8 @@ void TranslateDialog::updateCooloffDisplay()
         connect(m_mtCooloffTick, &QTimer::timeout,
                 this, &TranslateDialog::updateCooloffDisplay);
     }
-    const int total = google_translate::kBlockCooloffMinutes * 60;
+    const int total = google_translate::cooloffMinutesFor(
+                          Settings::translateBlockStrikes()) * 60;
     m_mtBar->setRange(0, total);
     m_mtBar->setValue(total - left);     // fills as the wait drains
     // No literal '%' in the format: QProgressBar reads %p, %v and %m out of it,
@@ -750,6 +752,9 @@ void TranslateDialog::onMachineTranslate()
                 this, &TranslateDialog::pumpMachineTranslate);
     }
     m_mtStopped = false;
+    // Coming back after a block: open with one request and wait for it. The
+    // wait expiring only says our timer ran out, not that Google's did.
+    m_mtProbe   = Settings::translateBlockStrikes() > 0;
     m_mtBtn->setEnabled(false);
     if (m_mtCooloffTick) m_mtCooloffTick->stop();
     m_mtBar->resetFormat();          // no stale "Blocked - 0:00" into a run
@@ -778,6 +783,10 @@ void TranslateDialog::pumpMachineTranslate()
     // piling up when the endpoint is slow. The timer keeps ticking and the next
     // tick tries again.
     if (m_mtInFlight >= google_translate::kMaxInFlight) return;
+    // Probing: one request, and nothing else until it answers. A stale block
+    // then costs a single refusal instead of a handful, and the queue and the
+    // rows are still there to resume from.
+    if (m_mtProbe && m_mtInFlight >= 1) return;
 
     while (!m_mtQueue.isEmpty()) {
         const int item = m_mtQueue.takeFirst();
@@ -845,6 +854,9 @@ void TranslateDialog::pumpMachineTranslate()
             const auto outcome = google_translate::classify(
                 int(reply->error()), http, !text.isEmpty());
             m_mtTally.count(outcome);
+            // An answer means the block has lifted: stop probing and let the
+            // pace timer run the rest of the queue at full speed.
+            if (outcome == google_translate::Failure::Ok) m_mtProbe = false;
             if (outcome != google_translate::Failure::Ok
                 && m_mtFirstError.isEmpty()) {
                 m_mtFirstError      = reply->errorString();
@@ -869,6 +881,17 @@ void TranslateDialog::pumpMachineTranslate()
                 // Stamped here, not at teardown: closing the dialog between
                 // the block and the last reply must not lose it.
                 Settings::setTranslateBlockedAt(QDateTime::currentDateTimeUtc());
+                // And each refusal in a row buys a longer wait. Fifteen
+                // minutes was a guess that a twelve-hour block made a liar of,
+                // and returning at full cadence is what renews it.
+                //
+                // Except when this was the probe: finding the same block still
+                // in force is not a new offence, and counting it would let one
+                // bad night ratchet the wait to a day all by itself.
+                if (!(m_mtProbe && m_mtTally.ok == 0)) {
+                    Settings::setTranslateBlockStrikes(
+                        Settings::translateBlockStrikes() + 1);
+                }
             }
             if (!text.isEmpty() && !spans.isEmpty()) {
                 // Before the user's own after-rules, so those see the real
@@ -973,8 +996,17 @@ void TranslateDialog::finishMachineTranslate()
     restyleLinkedRows();
     // Forget this and pumpMachineTranslate returns immediately for the rest of
     // the dialog's life, with nothing on screen to say why.
+    m_mtProbe   = false;
     m_mtStopped = false;
     m_mtBar->setVisible(false);
+    // A run that got answers and was not turned away means the block has
+    // genuinely lapsed, so the ladder starts over. Without this the wait would
+    // only ever grow, and one bad night would cost a day.
+    if (m_mtTally.ok > 0 && m_mtTally.blocked == 0
+        && Settings::translateBlockStrikes() != 0) {
+        Settings::setTranslateBlockStrikes(0);
+    }
+
     updateCooloffDisplay();
 
     // One message, naming what actually happened. This used to be a
@@ -988,7 +1020,8 @@ void TranslateDialog::finishMachineTranslate()
             case google_translate::Failure::Blocked:
                 body = T("translate_mt_blocked")
                            .arg(done)
-                           .arg(google_translate::kBlockCooloffMinutes);
+                           .arg(google_translate::cooloffMinutesFor(
+                                    Settings::translateBlockStrikes()));
                 break;
             case google_translate::Failure::Refused:
                 body = T("translate_mt_refused").arg(done);

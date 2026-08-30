@@ -239,6 +239,12 @@ private:
     // A block cleared the queues. Nothing restarts them until the run is torn
     // down, and finishMachineTranslate is what puts this back to false.
     bool          m_mtStopped = false;
+    // This run follows a block, so it opens with ONE request and waits to see
+    // whether Google has let go before committing the rest of the queue. A
+    // wait that expires is only a guess that the block lapsed - the block is
+    // Google's and it does not tell us - so the cheapest way to ask is to ask
+    // once. Cleared by the first answer that comes back.
+    bool          m_mtProbe = false;
     int           m_mtFrame = 0;
 };
 

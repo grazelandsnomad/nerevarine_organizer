@@ -41,6 +41,25 @@ namespace google_translate {
 // mods are not reliably in the language you assume, and "auto" costs nothing.
 QUrl requestUrl(const QString &text, const QString &targetIso);
 
+// The same request carrying SEVERAL strings, as repeated q= parameters.
+//
+// One row was one HTTP GET, which for a mod like Project Cyrodiil is 8435 of
+// them. The endpoint accepts repeated q=; nothing here could emit it.
+QUrl requestUrl(const QStringList &texts, const QString &targetIso);
+
+// How many of `texts`, starting at `from`, fit in one request. Always at least
+// 1 even when that one string is over the limit on its own, or a run would
+// stall forever on a long row.
+int fitBatch(const QStringList &texts, int from, const QString &targetIso);
+
+// A cap on top of the URL length, because a request that fails takes the whole
+// batch with it and a hundred rows is too much to lose to one hiccup.
+constexpr int kMaxBatch = 25;
+
+// Conservative: the endpoint tolerates more, but a middlebox on the user's
+// network may not, and the failure would look like Google's.
+constexpr int kMaxUrlBytes = 1800;
+
 // The user agent the free endpoint requires - see note 1 above.
 QByteArray userAgent();
 
@@ -48,6 +67,21 @@ QByteArray userAgent();
 // payload is not the shape this endpoint returns, which the caller must treat
 // as "no answer", never as "translates to nothing".
 QString parseResponse(const QByteArray &json);
+
+// The answers to a batched request, in the order `sent` was asked.
+//
+// VERIFIED, not trusted. Google echoes each source string back beside its
+// translation, so this reassembles the segments and checks that what came back
+// was an answer to what went out. Any mismatch, any shortfall, and it returns
+// an EMPTY list rather than a plausible one - because the failure mode of
+// guessing here is writing the wrong Spanish into the wrong row of somebody's
+// mod, which no user would ever catch.
+//
+// That check is also what makes batching safe to ship without having seen the
+// multi-q response shape from the live endpoint: an unexpected shape does not
+// parse into a confident wrong answer, it parses into nothing and the caller
+// falls back to one string per request.
+QStringList parseResponses(const QByteArray &json, const QStringList &sent);
 
 // How many replies may be outstanding at once.
 //
@@ -130,13 +164,25 @@ Failure worstOf(const FailureTally &tally);
 // still on the table.
 constexpr int kBlockCooloffMinutes = 15;
 
+// ...and how long after the SECOND, third, fourth. Fifteen minutes was a
+// guess, and the guess was wrong: a block was measured still in force more
+// than twelve hours later, refusing the very first request of a fresh run with
+// both this client's request shape and a browser's. Walking back in at full
+// cadence the moment a short timer expires is how a block gets renewed.
+//
+// So a repeat lengthens the wait - 15 min, 1 h, 6 h, then a day - and a run
+// that actually gets an answer resets it. `strikes` is how many refusals in a
+// row have happened; 0 and 1 both mean the first.
+int cooloffMinutesFor(int strikes);
+
 // Seconds still to wait. Epoch seconds rather than QDateTime so a test can
 // drive "now" instead of sleeping a quarter of an hour.
 //
 // A stamp from the FUTURE returns 0, not the full wait: a clock that jumps
 // forward and is then corrected would otherwise lock machine translation out
 // permanently, with no UI anywhere to clear it. This fails open on purpose.
-int cooloffSecondsLeft(qint64 blockedAtEpochSec, qint64 nowEpochSec);
+int cooloffSecondsLeft(qint64 blockedAtEpochSec, qint64 nowEpochSec,
+                       int strikes = 1);
 
 } // namespace google_translate
 
