@@ -503,7 +503,11 @@ static void testUserPatternsFromTheRulesFile()
 
     {
         QFile f(path);
-        f.open(QIODevice::WriteOnly | QIODevice::Text);
+        // Asserted rather than ignored: a rules file that never opened parses
+        // as an empty rule set, which would fail the checks below for a
+        // reason that has nothing to do with what they are testing.
+        check("the rules file opens for writing",
+              f.open(QIODevice::WriteOnly | QIODevice::Text), path);
         f.write("[patterns]\n"
                 "%1 Devotee = Fiel de %1\n"
                 "Altar of %1=Altar de %1\n"
@@ -538,7 +542,8 @@ static void testUserPatternsFromTheRulesFile()
     check("the written template mentions the section",
           translation_rules::ensureTemplate(tpl, QStringLiteral("spanish")));
     QFile tf(tpl);
-    tf.open(QIODevice::ReadOnly | QIODevice::Text);
+    check("the written template opens for reading",
+          tf.open(QIODevice::ReadOnly | QIODevice::Text), tpl);
     check("and it is spelled the way load() looks for it",
           QString::fromUtf8(tf.readAll()).contains(QLatin1String("[patterns]")));
 }
