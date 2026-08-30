@@ -64,6 +64,17 @@ struct TranslateDialogTestHook {
     static void pendingUnguarded(TranslateDialog *d, int row, int state)
     { d->setPending(row, state); }
 
+    // The vouch click, exactly as the cellClicked lambda runs it.
+    static void vouch(TranslateDialog *d, int row)
+    {
+        auto *cell = d->m_table->item(row, 1);
+        if (!cell || cell->text().trimmed().isEmpty()) return;
+        d->setReviewed(row, !cell->data(Qt::UserRole + 4).toBool());
+        d->m_progressDirty = true;
+    }
+    static bool dirty(TranslateDialog *d) { return d->m_progressDirty; }
+    static void setDirty(TranslateDialog *d, bool v) { d->m_progressDirty = v; }
+
     // Exactly what the network reply does when a row comes back.
     static void deliver(TranslateDialog *d, int row, const QString &masked)
     {
@@ -707,6 +718,112 @@ static void testAKnownNameNeedsNoRepetition()
 // A request used to carry one row, so a reply could not land on the wrong one.
 // Now it carries up to twenty-five, and putting the right Spanish in the wrong
 // row is the one failure here a user would never catch.
+// The editor already knew which rows a human had stood behind - ReviewedRole
+// gates the shared translation memory - but nothing on screen said so, and the
+// only way to vouch without typing was "Mark this page read", all two hundred
+// of them at once.
+static void testVouchingForALineWithoutEditingIt()
+{
+    std::cout << "\n[a line you have read, and the tick that says so]\n";
+    translation_store::Memory mem;
+    auto *d = TranslateDialogTestHook::make(dungeonStrings(), &mem);
+    auto *t = TranslateDialogTestHook::table(d);
+    const int row = rowOf(t, QStringLiteral("Forfeoranna Heim Catacombs"));
+    check("a row to work with", row >= 0);
+
+    // A machine answer: written under the guard, so nobody has read it.
+    TranslateDialogTestHook::apply(d, row, 0, false,
+        QStringLiteral("Nrvaa Catacombs"), QStringLiteral("Catacumbas de Nrvaa"));
+    check("a machine answer starts unvouched",
+          !TranslateDialogTestHook::reviewed(d, row));
+
+    TranslateDialogTestHook::vouch(d, row);
+    check("clicking the tick vouches for it",
+          TranslateDialogTestHook::reviewed(d, row));
+
+    // A mis-click on a page of two hundred must not be a one-way door.
+    TranslateDialogTestHook::vouch(d, row);
+    check("and clicking again takes it back",
+          !TranslateDialogTestHook::reviewed(d, row));
+
+    // "Reviewed but empty" would read as answered to the counter and the
+    // filter, hiding a row nobody has touched.
+    const int blank = rowOf(t, QStringLiteral("Forfeoranna Heim Depths"));
+    check("a blank row to try it on", blank >= 0);
+    TranslateDialogTestHook::vouch(d, blank);
+    check("a blank row cannot be vouched for",
+          !TranslateDialogTestHook::reviewed(d, blank));
+
+    // Paging only hides rows, so the flag has nothing to survive - but that is
+    // the property the green depends on, so it is worth saying out loud.
+    TranslateDialogTestHook::vouch(d, row);
+    TranslateDialogTestHook::setPage(d, 0);
+    check("a vouch survives a page change",
+          TranslateDialogTestHook::reviewed(d, row));
+    delete d;
+}
+
+// The other half of the same idea: a line the USER typed is vouched for by the
+// act of typing it. That has always been true in the data - the green is what
+// finally says so - and it rests entirely on the guard, so both directions are
+// worth pinning down.
+static void testTypingInARowVouchesForIt()
+{
+    std::cout << "\n[a line you typed is a line you have read]\n";
+    translation_store::Memory mem;
+    auto *d = TranslateDialogTestHook::make(dungeonStrings(), &mem);
+    auto *t = TranslateDialogTestHook::table(d);
+    const int row = rowOf(t, QStringLiteral("Forfeoranna Heim Catacombs"));
+
+    // Unguarded is exactly what the inline editor does when it commits.
+    t->item(row, 1)->setText(QString::fromUtf8("Catacumbas de Forfeoranna Heim"));
+    check("typing an answer vouches for it",
+          TranslateDialogTestHook::reviewed(d, row));
+    check("and it is unsaved work", TranslateDialogTestHook::dirty(d));
+
+    // The app's own writes go through ProgrammaticEdit and must NOT count as
+    // somebody having read the row - that guard is the whole discriminator.
+    const int other = rowOf(t, QStringLiteral("Forfeoranna Heim Depths"));
+    {
+        bool &g = TranslateDialogTestHook::expanding(d);
+        const bool prev = g;
+        g = true;
+        t->item(other, 1)->setText(QStringLiteral("Profundidades"));
+        g = prev;
+    }
+    check("but a write the app made does not",
+          !TranslateDialogTestHook::reviewed(d, other));
+    delete d;
+}
+
+// Vouching is unsaved work. Only a keystroke used to say so, so vouching and
+// then closing threw the lot away in silence - reject() decides whether to
+// offer a save from that one flag.
+//
+// markPageRead itself cannot be driven from here: it ends in a blocking
+// ui::confirm, which headless would simply hang. The same fix is applied
+// there, and this covers the flag it turns on.
+static void testVouchingCountsAsUnsavedWork()
+{
+    std::cout << "\n[vouching is something to save]\n";
+    translation_store::Memory mem;
+    auto *d = TranslateDialogTestHook::make(dungeonStrings(), &mem);
+    auto *t = TranslateDialogTestHook::table(d);
+    const int row = rowOf(t, QStringLiteral("Forfeoranna Heim Catacombs"));
+
+    TranslateDialogTestHook::apply(d, row, 0, false,
+        QStringLiteral("Nrvaa Catacombs"), QStringLiteral("Catacumbas de Nrvaa"));
+    check("a machine answer alone is not unsaved work of the user's",
+          !TranslateDialogTestHook::reviewed(d, row));
+    TranslateDialogTestHook::setDirty(d, false);
+
+    TranslateDialogTestHook::vouch(d, row);
+    check("vouching leaves work to save", TranslateDialogTestHook::dirty(d));
+    check("and it really did vouch",
+          TranslateDialogTestHook::reviewed(d, row));
+    delete d;
+}
+
 static void testABatchLandsOnTheRightRows()
 {
     std::cout << "\n[a batched reply is written row by row]\n";
@@ -1586,6 +1703,9 @@ int main(int argc, char **argv)
     testMissingProgressIsNotAnError();
     testEveryRowStillExistsWhenPaged();
     testAKnownNameNeedsNoRepetition();
+    testTypingInARowVouchesForIt();
+    testVouchingForALineWithoutEditingIt();
+    testVouchingCountsAsUnsavedWork();
     testABatchLandsOnTheRightRows();
     testVanillaGameSettingsAreNotTheMods();
     testABlockThatOutlivesTheGuess();

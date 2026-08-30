@@ -48,7 +48,9 @@ QString isoFor(const QString &language)
     return target_language::isoCode(language);
 }
 
-enum Col { ColSource = 0, ColTranslation = 1, ColCount = 2 };
+// ColVouch is appended, never inserted: ColTranslation stays 1, which a great
+// many places - including every test - address by number.
+enum Col { ColSource = 0, ColTranslation = 1, ColVouch = 2, ColCount = 3 };
 
 // The masked translation a row came back with ("Catacumbas de Nrvaa"), kept so
 // the row can be re-rendered when the name's translation changes. Cleared when
@@ -81,7 +83,7 @@ constexpr int ReviewedRole = Qt::UserRole + 4;
 // finished blank. Five requests are outstanding at a time, so five rows spin
 // and the rest say they are waiting - and that is the truth of it rather than
 // 480 spinners implying 480 requests.
-class PendingDelegate : public QStyledItemDelegate {
+class RowDelegate : public QStyledItemDelegate {
 public:
     using QStyledItemDelegate::QStyledItemDelegate;
     void setFrame(int f) { m_frame = f; }
@@ -90,6 +92,44 @@ public:
                const QModelIndex &index) const override
     {
         QStyledItemDelegate::paint(painter, opt, index);
+
+        // The flag lives on the answer, whatever column is being painted, so
+        // the wash covers the whole row.
+        //
+        // Painted rather than set as a background: restyleLinkedRows clears
+        // every non-linked row's background to NoBrush, so a setBackground
+        // green would work until the next machine-translate run finished and
+        // then quietly vanish. Reading the role here also means there is one
+        // source of truth and nothing to re-apply at the six places the flag
+        // changes.
+        const QModelIndex answer = index.sibling(index.row(), ColTranslation);
+        const bool reviewed = answer.data(ReviewedRole).toBool()
+                           && !answer.data(Qt::DisplayRole).toString().trimmed().isEmpty();
+        if (reviewed && !(opt.state & QStyle::State_Selected)) {
+            // The green the mod list uses for "this one wins", at an alpha the
+            // text still reads through.
+            const bool dark = opt.palette.color(QPalette::Base).lightness() < 128;
+            painter->fillRect(opt.rect, dark ? QColor(120, 225, 145, 55)
+                                             : QColor( 46, 160,  67, 60));
+        }
+
+        if (index.column() == ColVouch) {
+            // Nothing to vouch for on a blank row, and setReviewed refuses it
+            // anyway - so no box is offered rather than one that does nothing.
+            if (answer.data(Qt::DisplayRole).toString().trimmed().isEmpty()) return;
+            painter->save();
+            QColor fg = reviewed
+                ? opt.palette.color(QPalette::Text)
+                : opt.palette.color(QPalette::Disabled, QPalette::Text);
+            painter->setPen(fg);
+            painter->drawText(opt.rect, Qt::AlignCenter,
+                              reviewed ? QStringLiteral("✓") : QStringLiteral("☐"));
+            painter->restore();
+            return;
+        }
+        // Everything below is the pending spinner, which belongs to the answer
+        // column alone - drawn in all three it would be three spinners.
+        if (index.column() != ColTranslation) return;
 
         const int state = index.data(PendingRole).toInt();
         if (state <= 0) return;
@@ -304,6 +344,10 @@ void TranslateDialog::markPageRead()
                      T("translate_mark_page_confirm").arg(rows.size())))
         return;
     for (int r : rows) setReviewed(r, true);
+    // Vouching IS unsaved work. Only onCellChanged used to set this, so
+    // marking a page read and then closing threw every vouch away without
+    // offering to save - and nothing on screen said so.
+    m_progressDirty = true;
     recountProgress();
 }
 
@@ -400,9 +444,13 @@ void TranslateDialog::buildUi(const QString &modName)
 
     m_table = new QTableWidget(m_rowSource.size(), ColCount, this);
     m_table->setHorizontalHeaderLabels({T("translate_col_source"),
-                                        T("translate_col_translation")});
+                                        T("translate_col_translation"),
+                                        T("translate_col_vouch")});
     m_table->horizontalHeader()->setSectionResizeMode(ColSource, QHeaderView::Stretch);
     m_table->horizontalHeader()->setSectionResizeMode(ColTranslation, QHeaderView::Stretch);
+    // One glyph wide, so the two text columns keep the room.
+    m_table->horizontalHeader()->setSectionResizeMode(ColVouch,
+                                                      QHeaderView::ResizeToContents);
     m_table->verticalHeader()->setVisible(false);
 
     // Every row is built, and every row STAYS built - paging hides rows rather
@@ -422,6 +470,13 @@ void TranslateDialog::buildUi(const QString &modName)
         src->setFlags(src->flags() & ~Qt::ItemIsEditable);
         m_table->setItem(i, ColSource, src);
         m_table->setItem(i, ColTranslation, new QTableWidgetItem(QString()));
+
+        // Enabled, but neither editable nor selectable: it is a button, and a
+        // drag across the table must not sweep it into a selection.
+        auto *vouch = new QTableWidgetItem(QString());
+        vouch->setFlags(Qt::ItemIsEnabled);
+        vouch->setToolTip(T("translate_vouch_tip"));
+        m_table->setItem(i, ColVouch, vouch);
     }
     m_table->setUpdatesEnabled(true);
     // Double-click is taken for the row editor, so it is off the list of
@@ -433,7 +488,26 @@ void TranslateDialog::buildUi(const QString &modName)
             this, &TranslateDialog::onCellChanged);
     connect(m_table, &QTableWidget::cellDoubleClicked,
             this, &TranslateDialog::onRowDoubleClicked);
-    m_table->setItemDelegateForColumn(ColTranslation, new PendingDelegate(m_table));
+    // On the whole table, not one column: the green wash covers the row.
+    m_rowDelegate = new RowDelegate(m_table);
+    m_table->setItemDelegate(m_rowDelegate);
+
+    // A click in the vouch column says "I have read this one". The mod list
+    // does its ▶ through the delegate's editorEvent and a signal, but that
+    // needs Q_OBJECT on a class that has none and lives in this .cpp -
+    // cellClicked already carries the row and the column.
+    connect(m_table, &QTableWidget::cellClicked, this,
+            [this](int row, int col) {
+        if (col != ColVouch) return;
+        auto *cell = m_table->item(row, ColTranslation);
+        if (!cell || cell->text().trimmed().isEmpty()) return;
+        // Clicking again takes it back: a mis-click on a page of two hundred
+        // rows should not be a one-way door.
+        setReviewed(row, !cell->data(ReviewedRole).toBool());
+        m_progressDirty = true;
+        scheduleRecount();
+        m_table->viewport()->update();
+    });
     lay->addWidget(m_table, 1);
 
     // Pager. A spin box as well as Prev/Next because at forty pages stepping
@@ -730,12 +804,11 @@ void TranslateDialog::onMachineTranslate()
         m_mtAnim->setInterval(120);   // the mod list's spinner rate
         connect(m_mtAnim, &QTimer::timeout, this, [this] {
             m_mtFrame = (m_mtFrame + 1) % 10;
-            // static_cast, not qobject_cast: this delegate has no Q_OBJECT
-            // (it has no signals or slots), and it is the one buildUi set on
-            // that column and the only thing that ever sets it.
-            if (auto *d = static_cast<PendingDelegate *>(
-                    m_table->itemDelegateForColumn(ColTranslation)))
-                d->setFrame(m_mtFrame);
+            // static_cast, not qobject_cast: RowDelegate has no Q_OBJECT (it
+            // has no signals or slots), and it is the one buildUi set on this
+            // table and the only thing that ever sets it.
+            if (m_rowDelegate)
+                static_cast<RowDelegate *>(m_rowDelegate)->setFrame(m_mtFrame);
             m_table->viewport()->update();
         });
     }

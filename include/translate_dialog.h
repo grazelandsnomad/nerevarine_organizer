@@ -33,6 +33,7 @@ class QPushButton;
 class QSpinBox;
 class QCheckBox;
 class QTableWidget;
+class QStyledItemDelegate;
 
 // One translatable string, as extracted from a plugin.
 struct TranslatableString {
@@ -205,6 +206,16 @@ private:
     // Guards the programmatic writes that re-expand linked rows, so they do
     // not read as user edits and detach the row they just updated.
     bool          m_expanding = false;
+
+    // The table's own delegate: paints the green wash for a row somebody has
+    // vouched for, the vouch glyph, and the machine-translate spinner. Held
+    // rather than fetched back off the view every animation frame.
+    //
+    // Typed as the base class on purpose: the real one is file-local to
+    // translate_dialog.cpp, which is where it belongs, and naming it here
+    // would mean either moving it out or forward-declaring a type that does
+    // not exist at this scope.
+    QStyledItemDelegate *m_rowDelegate = nullptr;
     // The user's own English->target rules, reloaded every time the editor
     // opens so tuning the file is a save-and-reopen away.
     translation_rules::Rules m_rules;
