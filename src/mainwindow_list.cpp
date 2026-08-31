@@ -1886,8 +1886,14 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
             // offered 27 rows and earned a rate-limit block reaching for
             // them. See vanilla_gmst.h.
             const QString setting = vanilla_gmst::settingOfKey(it.key());
+            // Two different refusals. isDirty is "this is the base game
+            // talking"; holdsObjectId is "this is not text at all" - a setting
+            // whose value names a creature or a bound item, which a mod may
+            // well have changed on purpose and which still must never be
+            // translated, or the spell it drives quietly stops working.
             if (!setting.isEmpty()
-                && vanilla_gmst::isDirty(setting, it.value(), vanillaGmsts())) {
+                && (vanilla_gmst::isDirty(setting, it.value(), vanillaGmsts())
+                    || vanilla_gmst::holdsObjectId(setting))) {
                 ++skippedVanilla;
                 continue;
             }

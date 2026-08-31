@@ -930,6 +930,55 @@ static void testVanillaGameSettingsAreNotTheMods()
           vanilla_gmst::settingOfKey(QStringLiteral("GMST:sFoo:INTV:0")).isEmpty());
 }
 
+// Some game settings do not hold text at all - their value is an object id the
+// engine looks up. Translating one means it looks for a creature that is not
+// there, and the spell then does nothing: no error, no crash, just silence.
+static void testASettingThatHoldsAnObjectIdIsNotText()
+{
+    std::cout << "\n[vanilla_gmst: settings whose value is an id]\n";
+
+    check("a summon's creature id is not text",
+          vanilla_gmst::holdsObjectId(QStringLiteral("sMagicCreature01ID")));
+    check("nor is a bound item's",
+          vanilla_gmst::holdsObjectId(QStringLiteral("sMagicBoundBattleAxeID")));
+
+    // The one a value-shape rule would miss: it has a space in it and is still
+    // an id, which is why this is keyed on the setting name.
+    check("even when the id contains a space",
+          vanilla_gmst::holdsObjectId(QStringLiteral("sMagicWingedTwilightID")));
+
+    // The adjacent setting in the very same feature IS the effect's display
+    // name, and translating that one is right. One character apart, opposite
+    // answers - which is the whole reason this is a rule about names.
+    check("but the effect's own name is text",
+          !vanilla_gmst::holdsObjectId(QStringLiteral("sEffectSummonCreature04")));
+    check("and so is ordinary prose",
+          !vanilla_gmst::holdsObjectId(QStringLiteral("sTeleportDisabled")));
+    // Bethesda's convention is capital ID; a word merely ending in those
+    // letters is not one of them.
+    check("a lowercase ending is not the convention",
+          !vanilla_gmst::holdsObjectId(QStringLiteral("sSomethingid")));
+
+    // The live case this was found through. MultiMark repoints two of these at
+    // its own summons, so isDirty - which asks "did the mod change it" -
+    // answers KEEP, and only the id rule refuses.
+    vanilla_gmst::Table v;
+    v.insert(QStringLiteral("sMagicCreature04ID"),
+             QStringLiteral("BM_bear_black_summon"));
+    v.insert(QStringLiteral("sEffectSummonCreature04"),
+             QStringLiteral("Summon Winged Twilight"));
+
+    check("a repointed id does not read as the game talking",
+          !vanilla_gmst::isDirty(QStringLiteral("sMagicCreature04ID"),
+                                 QStringLiteral("Teleport_summonMark"), v));
+    check("so the id rule is the only thing that catches it",
+          vanilla_gmst::holdsObjectId(QStringLiteral("sMagicCreature04ID")));
+    check("while the effect name beside it stays offered",
+          !vanilla_gmst::isDirty(QStringLiteral("sEffectSummonCreature04"),
+                                 QStringLiteral("Greater Mark"), v)
+       && !vanilla_gmst::holdsObjectId(QStringLiteral("sEffectSummonCreature04")));
+}
+
 // Fifteen minutes was a guess. A block was measured still refusing the very
 // first request of a fresh run more than twelve hours later, so a repeat has to
 // buy a longer wait than the last one.
@@ -1708,6 +1757,7 @@ int main(int argc, char **argv)
     testVouchingCountsAsUnsavedWork();
     testABatchLandsOnTheRightRows();
     testVanillaGameSettingsAreNotTheMods();
+    testASettingThatHoldsAnObjectIdIsNotText();
     testABlockThatOutlivesTheGuess();
     testSeveralStringsInOneRequest();
     testOnlyThisPageIsOnScreen();

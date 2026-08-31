@@ -85,6 +85,26 @@ private:
 // the game defines, and both mean it.
 bool isDirty(const QString &setting, const QString &value, const Table &vanilla);
 
+// True when this setting's VALUE is an object id the engine looks up, rather
+// than text anybody reads. Morrowind names them all "...ID":
+//
+//     sMagicBoundBattleAxeID = "Bound_Battle_Axe"
+//     sMagicCreature01ID     = "BM_wolf_grey_summon"
+//
+// Thirty-four of them in the base game. Translating one means the engine looks
+// for a creature that does not exist, and the spell then does nothing at all -
+// no error, no crash, just silence.
+//
+// Keyed on the setting NAME, not on the shape of the value. A value-shape guess
+// gets it wrong in both directions: it would flag "Abilities:" and
+// "Cost/Chance", and it would MISS "Winged Twilight_summon" and "Golden
+// Saint_summon", which have spaces in them and are still ids.
+//
+// Deliberately independent of isDirty. A mod that repoints one of these means
+// it - MultiMark aims two at its own Mark and Recall summons - so "did the mod
+// change it" answers KEEP, which is exactly the case that breaks.
+bool holdsObjectId(const QString &setting);
+
 // Deliberately no "find the vanilla folder" helper here. That needs
 // openmw::looksLikeVanillaDataFolder, and dragging openmwconfigwriter into
 // this module would drag it into every test target that links it - for a

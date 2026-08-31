@@ -65,6 +65,13 @@ bool isDirty(const QString &setting, const QString &value, const Table &vanilla)
     return false;
 }
 
+bool holdsObjectId(const QString &setting)
+{
+    // Case-sensitive: the suffix is Bethesda's own convention, and a setting
+    // ending in a lowercase "id" is not part of it.
+    return setting.endsWith(QLatin1String("ID"), Qt::CaseSensitive);
+}
+
 QString settingOfKey(const QString &key)
 {
     // "GMST:<setting>:STRV:<index>". Split rather than sliced so a setting
