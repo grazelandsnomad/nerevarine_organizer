@@ -125,7 +125,15 @@ private:
     // Half-finished work. writeProgress reports failure rather than swallowing
     // it: this is the call standing between the user and a month of retyping.
     void fillFromProgress();
-    bool writeProgress();
+    // Writes the answers to the progress file. `built` records whether they
+    // have just been turned into a translation mod: a build is a save point
+    // too, but finished work and half-done work must not look the same on
+    // disk, or the row goes on calling a shipped translation unfinished.
+    //
+    // An argument rather than a separate setter, because EVERY write has to
+    // answer the question - "saved, not shipped" is exactly as much a fact as
+    // a build is, and a caller that forgot would leave a stale flag behind.
+    bool writeProgress(bool built = false);
     void onSaveProgress();
     // What accepting would do, minus every message box - so it can be tested.
     // onAccept itself ends in a QMessageBox and never can be.

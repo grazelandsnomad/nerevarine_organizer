@@ -38,6 +38,7 @@
 // and testable - the same rule translation_store.h follows and for the same
 // reason.
 
+#include <QDateTime>
 #include <QHash>
 #include <QString>
 #include <QStringList>
@@ -75,6 +76,22 @@ public:
     void record(const QString &source, const QString &translation, bool reviewed);
     void forget(const QString &source);
 
+    // When this work was last built into a translation mod, invalid if never.
+    //
+    // A build is still a save point - the answers stay exactly where a later
+    // sitting will find them, which is what makes re-reviewing a finished
+    // translation possible at all. But finished work is not work in progress,
+    // and a row that keeps saying "Translation in progress..." drowns out what
+    // the coverage scan actually thinks of the mod.
+    QDateTime builtAt() const { return m_built; }
+    void      setBuilt(const QDateTime &whenUtc) { m_built = whenUtc; }
+
+    // Whether the FILE said anything at all about being built. False for one
+    // written before this existed - which is the caller's cue to look for the
+    // built mod instead of assuming, rather than calling finished work
+    // unfinished forever.
+    bool hasBuildState() const { return m_sawBuilt; }
+
     // Provenance, round-tripped so a state directory is readable by a person
     // wondering what these files are.
     void setMod(const QString &modName, const QString &language);
@@ -91,8 +108,10 @@ public:
 
 private:
     QHash<QString, Entry> m_map;    // normalized(source) -> entry
-    QString m_mod;
-    QString m_language;
+    QString   m_mod;
+    QString   m_language;
+    QDateTime m_built;              // invalid: never built
+    bool      m_sawBuilt = false;   // the file carried a "built" key
 };
 
 // The state filename for one (mod, language) pair, to be resolved against the

@@ -21,6 +21,8 @@ QString norm(const QString &s) { return translation_store::normalize(s); }
 bool Progress::load(const QString &path)
 {
     m_map.clear();
+    m_built = QDateTime();
+    m_sawBuilt = false;
 
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) return true;   // nothing saved yet
@@ -32,6 +34,17 @@ bool Progress::load(const QString &path)
     const QJsonObject root = doc.object();
     m_mod      = root.value(QStringLiteral("mod")).toString();
     m_language = root.value(QStringLiteral("language")).toString();
+
+    // Read into a member on purpose: load() drops every field it does not
+    // name, so anything not read here would be lost by the next save().
+    //
+    // Presence and value are separate questions. A file written before this
+    // existed has no key at all, and that is not the same as one that says
+    // "not built" - the caller answers the first case by looking for the built
+    // mod, and must not confuse it with the second.
+    m_sawBuilt = root.contains(QStringLiteral("built"));
+    m_built    = QDateTime::fromString(
+        root.value(QStringLiteral("built")).toString(), Qt::ISODate);
 
     // Read the unreviewed list first, so the entries loop can consult it.
     // Absent from the list means reviewed: a file somebody edited by hand is
@@ -70,6 +83,12 @@ bool Progress::save(const QString &path) const
     root.insert(QStringLiteral("language"), m_language);
     root.insert(QStringLiteral("saved"),
                 QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+    // Always written, even empty: the key's PRESENCE is what tells a later
+    // read that this file knows whether it was built, so an older file can be
+    // told apart from one that simply is not built yet.
+    root.insert(QStringLiteral("built"),
+                m_built.isValid() ? m_built.toUTC().toString(Qt::ISODate)
+                                  : QString());
     root.insert(QStringLiteral("entries"), entries);
     if (!unreviewed.isEmpty())
         root.insert(QStringLiteral("unreviewed"), unreviewed);

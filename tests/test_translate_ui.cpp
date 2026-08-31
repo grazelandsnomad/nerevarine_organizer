@@ -164,6 +164,9 @@ struct TranslateDialogTestHook {
                                    QString(), progressPath);
     }
     static bool write(TranslateDialog *d) { return d->writeProgress(); }
+    // The real slots, so what the tests pin down is what runs.
+    static void build(TranslateDialog *d) { d->onAccept(); }
+    static void saveProgress(TranslateDialog *d) { d->onSaveProgress(); }
     static TranslateDialog::AcceptPlan plan(TranslateDialog *d)
     { return d->planAccept(); }
     static void advance(TranslateDialog *d) { d->advanceMachineTranslate(); }
@@ -767,6 +770,80 @@ static void testVouchingForALineWithoutEditingIt()
 // act of typing it. That has always been true in the data - the green is what
 // finally says so - and it rests entirely on the guard, so both directions are
 // worth pinning down.
+// Finishing a translation and building the mod left the progress file looking
+// exactly like half-done work, and the scan that runs seconds later read it
+// back and painted "Translation in progress..." over a translation that was
+// finished and shipped - a caption which outranks the coverage verdict, so the
+// row could never say anything else.
+static void testBuildingMarksTheProgressFileFinished()
+{
+    std::cout << "\n[a built translation is not work in progress]\n";
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("p.json"));
+    translation_store::Memory mem;
+
+    {
+        auto *d = TranslateDialogTestHook::makeAt(dungeonStrings(), &mem, path);
+        auto *t = TranslateDialogTestHook::table(d);
+        // Every row answered by hand, so onAccept has something to build and
+        // nothing unreviewed to ask about - no dialog blocks a headless run.
+        for (int r = 0; r < t->rowCount(); ++r)
+            t->item(r, 1)->setText(QStringLiteral("respuesta %1").arg(r));
+        TranslateDialogTestHook::build(d);
+        delete d;
+    }
+
+    translation_progress::Progress p;
+    check("the file is written", p.load(path));
+    check("and it records that it was built", p.builtAt().isValid());
+    check("and says so explicitly", p.hasBuildState());
+    check("the answers are still there to reopen",
+          p.size() == 3, QString::number(p.size()));
+
+    // Reopened, edited, and SAVED rather than built: that is work which is not
+    // in the mod yet, and the row should say so again.
+    {
+        auto *d = TranslateDialogTestHook::makeAt(dungeonStrings(), &mem, path);
+        auto *t = TranslateDialogTestHook::table(d);
+        t->item(0, 1)->setText(QStringLiteral("una palabra distinta"));
+        TranslateDialogTestHook::write(d);
+        delete d;
+    }
+    translation_progress::Progress after;
+    check("an edit saved without rebuilding is in progress again",
+          after.load(path) && !after.builtAt().isValid());
+    check("but the file still knows the question was asked",
+          after.hasBuildState());
+}
+
+// A file written before any of this existed says nothing either way, and that
+// is NOT the same as saying "not built" - the caller tells them apart to avoid
+// calling somebody's finished work unfinished forever.
+static void testAnOlderProgressFileHasNoOpinion()
+{
+    std::cout << "\n[a progress file from before this existed]\n";
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("legacy.json"));
+    QFile f(path);
+    check("the fixture opens",
+          f.open(QIODevice::WriteOnly | QIODevice::Text), path);
+    f.write("{\"version\":1,\"mod\":\"Old\",\"language\":\"spanish\","
+            "\"entries\":{\"Door\":\"Puerta\"}}");
+    f.close();
+
+    translation_progress::Progress p;
+    check("it loads", p.load(path));
+    check("with no opinion about being built", !p.hasBuildState());
+    check("and nothing to report either way", !p.builtAt().isValid());
+    check("its answers survive", p.size() == 1);
+
+    // Rewriting it gives it an opinion, so the fallback stops mattering.
+    check("saving gives it one", p.save(path));
+    translation_progress::Progress again;
+    check("which is now recorded",
+          again.load(path) && again.hasBuildState() && !again.builtAt().isValid());
+}
+
 static void testTypingInARowVouchesForIt()
 {
     std::cout << "\n[a line you typed is a line you have read]\n";
@@ -1752,6 +1829,8 @@ int main(int argc, char **argv)
     testMissingProgressIsNotAnError();
     testEveryRowStillExistsWhenPaged();
     testAKnownNameNeedsNoRepetition();
+    testBuildingMarksTheProgressFileFinished();
+    testAnOlderProgressFileHasNoOpinion();
     testTypingInARowVouchesForIt();
     testVouchingForALineWithoutEditingIt();
     testVouchingCountsAsUnsavedWork();

@@ -1543,8 +1543,10 @@ void TranslateDialog::fillFromProgress()
                  T("translate_resume_stale").arg(stale));
 }
 
-bool TranslateDialog::writeProgress()
+bool TranslateDialog::writeProgress(bool built)
 {
+    m_progress.setBuilt(built ? QDateTime::currentDateTimeUtc() : QDateTime());
+
     if (m_progressPath.isEmpty()) return true;   // nowhere to write, not a failure
 
     for (int i = 0; i < m_rowSource.size(); ++i) {
@@ -1561,6 +1563,9 @@ bool TranslateDialog::writeProgress()
 
 void TranslateDialog::onSaveProgress()
 {
+    // Saved, not shipped - so this is work in progress again, even if a
+    // translation mod was built from an earlier sitting. The row going back to
+    // orange is the honest reading of the button the user just pressed.
     if (!writeProgress()) {
         // Stay open. Closing on a failed write is how a month disappears.
         ui::warn(this, T("translate_machine"),
@@ -1671,8 +1676,15 @@ void TranslateDialog::onAccept()
     }
 
     // A build is a save point too: the same answers, kept where a later
-    // sitting will find them.
-    writeProgress();
+    // sitting will find them - which is what lets a finished translation be
+    // reopened and adjusted rather than started again.
+    //
+    // Written as BUILT. Without that the file is indistinguishable from
+    // half-done work, and the scan that runs moments later reads it back and
+    // paints "Translation in progress..." over a translation that is finished
+    // and shipped - a caption which outranks the coverage verdict, so the row
+    // could never say anything truer.
+    writeProgress(true);
     m_outcome = Outcome::Build;
     accept();
 }

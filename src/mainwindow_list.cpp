@@ -998,10 +998,14 @@ void MainWindow::onContextMenu(const QPoint &pos)
                 // off, and a menu entry disappearing because of a display
                 // setting - while the work and the editor are both fine - is a
                 // different bargain from a row losing its tint.
-                const int started = translationProgressCount(item);
-                if (started > 0) {
+                const auto tp = translationProgressStateFor(item);
+                if (tp.saved > 0) {
+                    // Built already: the way back in is to REVIEW it, not to
+                    // carry on with it, and "Create" would suggest a second
+                    // one when Create updates the mod already built.
                     QAction *act = menu.addAction(
-                        T("translate_continue").arg(started),
+                        (tp.built ? T("translate_review")
+                                  : T("translate_continue")).arg(tp.saved),
                         this, [this, item]{ onTranslateMod(item); });
                     QFont f = act->font();
                     f.setBold(true);
@@ -1410,9 +1414,11 @@ void MainWindow::onItemDoubleClicked(QListWidgetItem *item)
         layout->addLayout(form);
 
         QString nexusUrl = item->data(ModRole::NexusUrl).toString();
-        const int startedHere =
+        const auto tpHere =
             (item->data(ModRole::InstallStatus).toInt() == 1)
-                ? translationProgressCount(item) : 0;
+                ? translationProgressStateFor(item)
+                : TranslationProgressState{};
+        const int startedHere = tpHere.saved;
         // Set by the continue button; acted on after the dialog's own accept
         // path has run - see below.
         bool continueTranslation = false;
@@ -1428,8 +1434,12 @@ void MainWindow::onItemDoubleClicked(QListWidgetItem *item)
             }
             if (startedHere > 0) {
                 auto *contBtn = new QPushButton(
-                    T("mod_edit_continue_translation").arg(startedHere));
-                contBtn->setToolTip(T("mod_edit_continue_translation_tip"));
+                    (tpHere.built ? T("mod_edit_review_translation")
+                                  : T("mod_edit_continue_translation"))
+                        .arg(startedHere));
+                contBtn->setToolTip(tpHere.built
+                    ? T("mod_edit_review_translation_tip")
+                    : T("mod_edit_continue_translation_tip"));
                 // Closes this dialog rather than opening the editor on top of
                 // it. Two reasons: the editor is a large modal of its own, and
                 // a rename typed above is only written when this one is
@@ -2042,13 +2052,34 @@ QString MainWindow::translationProgressPathFor(const QListWidgetItem *item) cons
     return stable;
 }
 
-int MainWindow::translationProgressCount(const QListWidgetItem *item) const
+MainWindow::TranslationProgressState
+MainWindow::translationProgressStateFor(const QListWidgetItem *item) const
 {
+    TranslationProgressState st;
     const QString path = translationProgressPathFor(item);
-    if (path.isEmpty() || !QFileInfo::exists(path)) return 0;
+    if (path.isEmpty() || !QFileInfo::exists(path)) return st;
     translation_progress::Progress p;
-    if (!p.load(path)) return 0;
-    return p.size();
+    if (!p.load(path)) return st;
+    st.saved = p.size();
+
+    if (p.hasBuildState()) {
+        st.built = p.builtAt().isValid();
+        return st;
+    }
+
+    // Written before the file recorded this. Rather than call finished work
+    // unfinished forever, ask the question the file cannot: is the translation
+    // mod sitting in the list already? nameFor exists for exactly this - see
+    // translation_mod.h - and the answer heals itself, because deleting the
+    // translation puts the row back to in-progress, which is then true.
+    const QString wanted = translation_mod::nameFor(
+        item->text().trimmed(), translationLanguage());
+    for (int i = 0; i < m_modList->count(); ++i) {
+        auto *cand = m_modList->item(i);
+        if (cand->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (cand->text().trimmed() == wanted) { st.built = true; break; }
+    }
+    return st;
 }
 
 QString MainWindow::translationLanguage() const

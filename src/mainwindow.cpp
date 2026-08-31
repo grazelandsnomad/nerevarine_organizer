@@ -3460,7 +3460,12 @@ void MainWindow::onTranslationsScanned(
         // and it is what turns "nobody has translated this" into "you are
         // partway through translating it", which are different things to be
         // told and used to look identical.
-        const int started = translationProgressCount(it);
+        // Built work is finished work. Leaving it marked would keep the
+        // orange caption on a translation the user has already shipped, and
+        // that caption outranks the coverage verdict - so the row could never
+        // say what the scan actually found.
+        const auto tp = translationProgressStateFor(it);
+        const int started = tp.built ? 0 : tp.saved;
         it->setData(ModRole::TranslationInProgress, started);
         if (started > 0) ++inProgress;
 

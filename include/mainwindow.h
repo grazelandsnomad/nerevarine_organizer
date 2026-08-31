@@ -499,7 +499,15 @@ private:
     // Keyed on the Nexus mod page, so a rename or a reinstall does not orphan
     // the file. A name-keyed file from before that change is still found.
     QString translationProgressPathFor(const QListWidgetItem *item) const;
-    int     translationProgressCount(const QListWidgetItem *item) const;
+    // What a mod's saved translation work amounts to: how many answers are
+    // stored, and whether they have already been built into a translation mod.
+    //
+    // One helper for all three readers - the scan that paints the row, the
+    // context menu and the Edit Mod button - because they used to stat the
+    // same file separately and could disagree about it.
+    struct TranslationProgressState { int saved = 0; bool built = false; };
+    TranslationProgressState translationProgressStateFor(
+        const QListWidgetItem *item) const;
     // Same, but asks once and stores the answer as the shared default, so no
     // other game or profile is ever asked again. Empty return means the user
     // cancelled and the caller must abort.
