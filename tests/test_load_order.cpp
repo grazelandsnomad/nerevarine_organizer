@@ -1979,6 +1979,20 @@ static void testCanonicalNames()
     check("a proper noun maps to itself",
           lore_overrides::lookup("Skooma", "spanish") == QStringLiteral("Skooma"));
 
+    // A creature the machine translator either leaves in English or invents a
+    // different monster for. "Necrófago" is Bethesda's own Spanish for it.
+    check("a ghoul is a necrofago",
+          lore_overrides::lookup("Ghoul", "spanish")
+              == QString::fromUtf8("Necrófago"));
+    check("and the plural has its own entry, since matching is whole-cell",
+          lore_overrides::lookup("Ghouls", "spanish")
+              == QString::fromUtf8("Necrófagos"));
+    check("case and spacing do not matter for it either",
+          lore_overrides::lookup(" ghoul ", "spanish")
+              == QString::fromUtf8("Necrófago"));
+    check("but it is not translated inside a sentence",
+          lore_overrides::lookup("A Ghoul lurks here", "spanish").isEmpty());
+
     check("an unknown term has no entry",
           lore_overrides::lookup("Iron Sword", "spanish").isEmpty());
     check("a language with no table has no entry",

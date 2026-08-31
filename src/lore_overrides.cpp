@@ -85,6 +85,21 @@ const QHash<QString, QHash<QString, QString>> &table()
          // Already written the other way round, so the shape never matches it.
          {{QStringLiteral("spanish"), QStringLiteral("Devoto del Único")}}},
 
+        // -- Creatures --------------------------------------------------
+        // "Necrófago" is Bethesda's own Spanish for a ghoul, from the Fallout
+        // localisations - which this manager also handles - and it is what
+        // the Spanish-speaking community uses for the creature in Elder
+        // Scrolls mods too. Google renders it as "Ghoul" or invents
+        // "Demonio", neither of which names the thing.
+        //
+        // Plural listed separately because matching is whole-cell: a creature
+        // shows up as "Ghoul" in one record and "Ghouls" in the next, and
+        // "ghouls" is not "ghoul" to a QHash.
+        {QStringLiteral("ghoul"),
+         {{QStringLiteral("spanish"), QStringLiteral("Necrófago")}}},
+        {QStringLiteral("ghouls"),
+         {{QStringLiteral("spanish"), QStringLiteral("Necrófagos")}}},
+
         // -- Proper nouns that must survive untouched -------------------
         // Mapped to themselves on purpose: this is how a name is protected
         // from a translator that would otherwise invent something. See the
