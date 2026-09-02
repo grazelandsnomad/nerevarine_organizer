@@ -999,13 +999,18 @@ void MainWindow::onContextMenu(const QPoint &pos)
                 // setting - while the work and the editor are both fine - is a
                 // different bargain from a row losing its tint.
                 const auto tp = translationProgressStateFor(item);
+                // Gated on `saved`, shown as `done`. A mod whose rows the
+                // machine filled but nobody has read yet has plenty of work on
+                // file and zero of it vouched for; gating on `done` would make
+                // the way back into that work disappear.
                 if (tp.saved > 0) {
                     // Built already: the way back in is to REVIEW it, not to
                     // carry on with it, and "Create" would suggest a second
                     // one when Create updates the mod already built.
                     QAction *act = menu.addAction(
                         (tp.built ? T("translate_review")
-                                  : T("translate_continue")).arg(tp.saved),
+                                  : T("translate_continue"))
+                            .arg(tp.done).arg(tp.total),
                         this, [this, item]{ onTranslateMod(item); });
                     QFont f = act->font();
                     f.setBold(true);
@@ -1436,7 +1441,7 @@ void MainWindow::onItemDoubleClicked(QListWidgetItem *item)
                 auto *contBtn = new QPushButton(
                     (tpHere.built ? T("mod_edit_review_translation")
                                   : T("mod_edit_continue_translation"))
-                        .arg(startedHere));
+                        .arg(tpHere.done).arg(tpHere.total));
                 contBtn->setToolTip(tpHere.built
                     ? T("mod_edit_review_translation_tip")
                     : T("mod_edit_continue_translation_tip"));
@@ -2061,6 +2066,12 @@ MainWindow::translationProgressStateFor(const QListWidgetItem *item) const
     translation_progress::Progress p;
     if (!p.load(path)) return st;
     st.saved = p.size();
+    st.done  = p.doneCount();
+    // A file written before the denominator was stored has no honest total.
+    // Its answer count is the closest stand-in - never LARGER than the truth,
+    // since a blank row is not in the file at all - and the next save replaces
+    // it with the real one.
+    st.total = p.total() > 0 ? p.total() : p.size();
 
     if (p.hasBuildState()) {
         st.built = p.builtAt().isValid();

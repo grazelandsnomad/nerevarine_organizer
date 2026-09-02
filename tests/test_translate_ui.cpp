@@ -836,12 +836,150 @@ static void testAnOlderProgressFileHasNoOpinion()
     check("with no opinion about being built", !p.hasBuildState());
     check("and nothing to report either way", !p.builtAt().isValid());
     check("its answers survive", p.size() == 1);
+    check("and no idea how big the job was", p.total() == 0,
+          QString::number(p.total()));
 
     // Rewriting it gives it an opinion, so the fallback stops mattering.
     check("saving gives it one", p.save(path));
     translation_progress::Progress again;
     check("which is now recorded",
           again.load(path) && again.hasBuildState() && !again.builtAt().isValid());
+}
+
+// The Edit Mod button said "(35 saved)" for days while the user worked through
+// Uncharted Artifacts, because "saved" meant "this row has text in it" - and a
+// machine-translate run puts text in every row at once. The count was pinned at
+// its ceiling before the reading even started, and reading is the whole job.
+//
+// The number has to be the one the editor's own counter shows, from the same
+// definition: a row is done when a human has vouched for it.
+static void testTheCountShownOutsideCountsWhatWasRead()
+{
+    std::cout << "\n[the saved-work count follows the reading]\n";
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("p.json"));
+    translation_store::Memory mem;
+
+    auto *d = TranslateDialogTestHook::makeAt(dungeonStrings(), &mem, path);
+    auto *t = TranslateDialogTestHook::table(d);
+
+    // A machine run: every row answered, nobody has read a word. Guarded, or
+    // onCellChanged would vouch for them on the way in - which is exactly what
+    // must NOT happen for a machine answer.
+    TranslateDialogTestHook::expanding(d) = true;
+    for (int r = 0; r < t->rowCount(); ++r)
+        t->item(r, 1)->setText(QStringLiteral("respuesta %1").arg(r));
+    TranslateDialogTestHook::expanding(d) = false;
+
+    check("the write succeeds", TranslateDialogTestHook::write(d));
+    translation_progress::Progress filled;
+    check("every row has an answer", filled.load(path) && filled.size() == 3,
+          QString::number(filled.size()));
+    check("but nothing is done yet", filled.doneCount() == 0,
+          QString::number(filled.doneCount()));
+    check("and the file knows how big the job is", filled.total() == 3,
+          QString::number(filled.total()));
+
+    // Now the user reads one. This is the step the old count could not see.
+    TranslateDialogTestHook::review(d, 0, true);
+    check("the write succeeds again", TranslateDialogTestHook::write(d));
+    translation_progress::Progress read1;
+    check("the answer count has not moved", read1.load(path) && read1.size() == 3,
+          QString::number(read1.size()));
+    check("the done count has", read1.doneCount() == 1,
+          QString::number(read1.doneCount()));
+
+    TranslateDialogTestHook::review(d, 1, true);
+    TranslateDialogTestHook::write(d);
+    translation_progress::Progress read2;
+    check("and keeps moving, one line at a time",
+          read2.load(path) && read2.doneCount() == 2,
+          QString::number(read2.doneCount()));
+    check("out of a total that stays put", read2.total() == 3,
+          QString::number(read2.total()));
+
+    // Unvouching is the honest reverse, so the number is a reading of the work
+    // rather than a high-water mark.
+    TranslateDialogTestHook::review(d, 1, false);
+    TranslateDialogTestHook::write(d);
+    translation_progress::Progress back;
+    check("taking one back lowers it", back.load(path) && back.doneCount() == 1,
+          QString::number(back.doneCount()));
+    delete d;
+}
+
+// A hand-written file lists no unreviewed rows, and that has always meant "the
+// user's own work" - so all of it is done. The total is the one thing such a
+// file cannot know, and guessing zero would show "(3 of 0 done)".
+static void testAHandWrittenFileReadsAsDone()
+{
+    std::cout << "\n[a file somebody wrote themselves]\n";
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("hand.json"));
+    QFile f(path);
+    check("the fixture opens",
+          f.open(QIODevice::WriteOnly | QIODevice::Text), path);
+    f.write("{\"version\":1,\"mod\":\"Hand\",\"language\":\"spanish\","
+            "\"entries\":{\"Door\":\"Puerta\",\"Key\":\"Llave\"}}");
+    f.close();
+
+    translation_progress::Progress p;
+    check("it loads", p.load(path));
+    check("and all of it counts as read", p.doneCount() == 2,
+          QString::number(p.doneCount()));
+    check("with no total to divide by", p.total() == 0);
+
+    // The unreviewed list is what holds a machine answer back, and it still
+    // does - the two rules have to coexist in one file.
+    p.record(QStringLiteral("Chest"), QStringLiteral("Cofre"), false);
+    check("an unvouched answer does not count", p.doneCount() == 2,
+          QString::number(p.doneCount()));
+    check("even though it is stored", p.size() == 3);
+
+    p.setTotal(9);
+    check("the total round-trips", p.save(path));
+    translation_progress::Progress again;
+    check("through save and load",
+          again.load(path) && again.total() == 9, QString::number(again.total()));
+    check("without disturbing the answers", again.size() == 3);
+    check("or which of them were read", again.doneCount() == 2,
+          QString::number(again.doneCount()));
+}
+
+// The OTHER way in. The tick column sets the dirty flag itself, but the row
+// editor's OK button only calls setReviewed - so walking a mod with Next/OK
+// and vouching without retyping left the dialog looking clean, and Esc closed
+// it without offering to save. The flag belongs where the green bit changes,
+// which covers both routes and any future third.
+//
+// It matters more now than it did: the count on the modlist reads this state,
+// so losing a pass would make the number visibly go backwards.
+static void testVouchingWithoutTypingIsUnsavedWorkToo()
+{
+    std::cout << "\n[a line you vouched for without typing]\n";
+    translation_store::Memory mem;
+    auto *d = TranslateDialogTestHook::make(dungeonStrings(), &mem);
+    auto *t = TranslateDialogTestHook::table(d);
+
+    TranslateDialogTestHook::expanding(d) = true;
+    t->item(0, 1)->setText(QStringLiteral("una respuesta"));
+    TranslateDialogTestHook::expanding(d) = false;
+    TranslateDialogTestHook::setDirty(d, false);
+
+    TranslateDialogTestHook::review(d, 0, true);
+    check("vouching marks the dialog dirty", TranslateDialogTestHook::dirty(d));
+
+    // A no-op must stay a no-op, or every repaint would claim unsaved work.
+    TranslateDialogTestHook::setDirty(d, false);
+    TranslateDialogTestHook::review(d, 0, true);
+    check("vouching again changes nothing", !TranslateDialogTestHook::dirty(d));
+
+    // Refused on a blank row, as it always was - and a refusal is not work.
+    TranslateDialogTestHook::review(d, 1, true);
+    check("a blank row still cannot be vouched for",
+          !TranslateDialogTestHook::reviewed(d, 1));
+    check("and asking did not count as work", !TranslateDialogTestHook::dirty(d));
+    delete d;
 }
 
 static void testTypingInARowVouchesForIt()
@@ -1831,6 +1969,9 @@ int main(int argc, char **argv)
     testAKnownNameNeedsNoRepetition();
     testBuildingMarksTheProgressFileFinished();
     testAnOlderProgressFileHasNoOpinion();
+    testTheCountShownOutsideCountsWhatWasRead();
+    testAHandWrittenFileReadsAsDone();
+    testVouchingWithoutTypingIsUnsavedWorkToo();
     testTypingInARowVouchesForIt();
     testVouchingForALineWithoutEditingIt();
     testVouchingCountsAsUnsavedWork();

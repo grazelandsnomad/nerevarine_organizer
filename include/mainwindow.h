@@ -500,12 +500,24 @@ private:
     // the file. A name-keyed file from before that change is still found.
     QString translationProgressPathFor(const QListWidgetItem *item) const;
     // What a mod's saved translation work amounts to: how many answers are
-    // stored, and whether they have already been built into a translation mod.
+    // stored, how many of those a human has actually vouched for, how big the
+    // job is, and whether it has already been built into a translation mod.
+    //
+    // `saved` and `done` are different questions and the difference is the
+    // point. A machine-translate run fills every row at once, so `saved` hits
+    // its ceiling before the user has read a word and then never moves again -
+    // it is fit to answer "is there work here at all" and unfit to be shown as
+    // progress. `done` is what the user is actually doing.
     //
     // One helper for all three readers - the scan that paints the row, the
     // context menu and the Edit Mod button - because they used to stat the
     // same file separately and could disagree about it.
-    struct TranslationProgressState { int saved = 0; bool built = false; };
+    struct TranslationProgressState {
+        int  saved = 0;         // answers on file - the gate: is there work here
+        int  done  = 0;         // of those, ones a human has vouched for
+        int  total = 0;         // strings the mod offered at the last sitting
+        bool built = false;
+    };
     TranslationProgressState translationProgressStateFor(
         const QListWidgetItem *item) const;
     // Same, but asks once and stores the answer as the shared default, so no

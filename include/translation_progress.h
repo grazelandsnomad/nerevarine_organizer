@@ -101,6 +101,26 @@ public:
     int  size()  const { return int(m_map.size()); }
     bool empty() const { return m_map.isEmpty(); }
 
+    // How many stored answers a human has vouched for.
+    //
+    // The count everything OUTSIDE the editor wants. size() is "has text",
+    // which is what a machine-translate run leaves behind on every row at
+    // once - a number built on it stops moving the moment a mod is pre-filled,
+    // which is exactly when the user starts doing the real work. Entries are
+    // never empty (load skips them, record forgets them), so the review flag
+    // alone decides.
+    int doneCount() const;
+
+    // How many distinct strings the mod offered at the last sitting - the
+    // denominator "N of M done" needs.
+    //
+    // It has to be STORED. Working it out means extracting the plugin, and the
+    // untranslated scan asks this question once per installed mod; 866 of them
+    // is not a question to answer twice. Zero means a file written before this
+    // existed, which is the caller's cue to fall back rather than divide by it.
+    int  total() const { return m_total; }
+    void setTotal(int n) { m_total = n; }
+
     // How many stored answers no longer appear in `sources` - i.e. the mod was
     // updated and those strings went away. They are KEPT; this only counts
     // them so the caller can mention it.
@@ -112,6 +132,7 @@ private:
     QString   m_language;
     QDateTime m_built;              // invalid: never built
     bool      m_sawBuilt = false;   // the file carried a "built" key
+    int       m_total = 0;          // strings the mod offered; 0: unknown
 };
 
 // The state filename for one (mod, language) pair, to be resolved against the

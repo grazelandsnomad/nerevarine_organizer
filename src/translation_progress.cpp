@@ -23,6 +23,7 @@ bool Progress::load(const QString &path)
     m_map.clear();
     m_built = QDateTime();
     m_sawBuilt = false;
+    m_total = 0;
 
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) return true;   // nothing saved yet
@@ -45,6 +46,11 @@ bool Progress::load(const QString &path)
     m_sawBuilt = root.contains(QStringLiteral("built"));
     m_built    = QDateTime::fromString(
         root.value(QStringLiteral("built")).toString(), Qt::ISODate);
+
+    // Unlike "built", absent and zero mean the same thing here - nobody has
+    // told us how big the mod is - so no presence flag is needed.
+    m_total = root.value(QStringLiteral("total")).toInt(0);
+    if (m_total < 0) m_total = 0;
 
     // Read the unreviewed list first, so the entries loop can consult it.
     // Absent from the list means reviewed: a file somebody edited by hand is
@@ -89,6 +95,9 @@ bool Progress::save(const QString &path) const
     root.insert(QStringLiteral("built"),
                 m_built.isValid() ? m_built.toUTC().toString(Qt::ISODate)
                                   : QString());
+    // Only when known, so a file this version never sized keeps saying so
+    // rather than claiming the mod has no strings in it.
+    if (m_total > 0) root.insert(QStringLiteral("total"), m_total);
     root.insert(QStringLiteral("entries"), entries);
     if (!unreviewed.isEmpty())
         root.insert(QStringLiteral("unreviewed"), unreviewed);
@@ -129,6 +138,14 @@ void Progress::setMod(const QString &modName, const QString &language)
 {
     m_mod      = modName;
     m_language = language;
+}
+
+int Progress::doneCount() const
+{
+    int done = 0;
+    for (auto it = m_map.cbegin(); it != m_map.cend(); ++it)
+        if (it.value().reviewed) ++done;
+    return done;
 }
 
 int Progress::staleAgainst(const QStringList &sources) const

@@ -359,8 +359,18 @@ void TranslateDialog::setReviewed(int row, bool reviewed)
     auto *cell = m_table->item(row, ColTranslation);
     if (!cell) return;
     if (reviewed && cell->text().trimmed().isEmpty()) return;
+    if (cell->data(ReviewedRole).toBool() == reviewed) return;   // nothing changed
     ProgrammaticEdit guard(m_expanding);
     cell->setData(ReviewedRole, reviewed);
+    // Vouching IS unsaved work, and this is the one place the green bit
+    // changes - so marking it here covers every route to it, including the
+    // row editor's OK button, which only calls this and used to leave the
+    // dialog looking clean. Esc then closed without offering to save and the
+    // whole reading pass went with it.
+    //
+    // Safe against load: fillFromProgress restores the flag with setData
+    // directly, so opening a file cannot mark it dirty.
+    m_progressDirty = true;
 }
 
 // One pass over every row. Deliberately not a pair of counters kept up to
@@ -1546,6 +1556,10 @@ void TranslateDialog::fillFromProgress()
 bool TranslateDialog::writeProgress(bool built)
 {
     m_progress.setBuilt(built ? QDateTime::currentDateTimeUtc() : QDateTime());
+    // The denominator, stored because nobody outside this dialog can work it
+    // out without re-extracting the plugin. The same number recountProgress
+    // puts on screen, so the button and the counter cannot drift apart.
+    m_progress.setTotal(int(m_rowSource.size()));
 
     if (m_progressPath.isEmpty()) return true;   // nowhere to write, not a failure
 
@@ -1572,9 +1586,12 @@ void TranslateDialog::onSaveProgress()
                  T("translate_save_progress_failed").arg(m_progressPath));
         return;
     }
+    // rowAnswered, not "has text": the same definition the counter, the filter
+    // and now the modlist button all use, so every number the user is shown
+    // means one thing.
     int done = 0;
     for (int i = 0; i < m_rowSource.size(); ++i)
-        if (!m_table->item(i, ColTranslation)->text().trimmed().isEmpty()) ++done;
+        if (rowAnswered(i)) ++done;
 
     m_outcome = Outcome::Saved;
     ui::info(this, T("translate_machine"),
