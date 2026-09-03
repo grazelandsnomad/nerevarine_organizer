@@ -954,6 +954,57 @@ static void testAHandWrittenFileReadsAsDone()
 //
 // It matters more now than it did: the count on the modlist reads this state,
 // so losing a pass would make the number visibly go backwards.
+// The last route that was not marking its work. A machine answer is written
+// under ProgrammaticEdit - deliberately, so it does not read as a hand edit and
+// vouch for itself - which also means onCellChanged never fires and nothing was
+// setting the unsaved-work flag. Translate a mod, press Esc, and every answer
+// went with no prompt and no write.
+//
+// It reproduced inconsistently because fillFromMemory sets the flag at open
+// time whenever the shared memory can answer a row, which masks it on any mod
+// with a common string in it. dungeonStrings has none, so this sees it.
+static void testAMachineAnswerIsUnsavedWorkToo()
+{
+    std::cout << "\n[an answer from the machine is work to save]\n";
+    translation_store::Memory mem;
+    auto *d = TranslateDialogTestHook::make(dungeonStrings(), &mem);
+    auto *t = TranslateDialogTestHook::table(d);
+    const int row = rowOf(t, QStringLiteral("Forfeoranna Heim Catacombs"));
+
+    check("an untouched dialog has nothing to save",
+          !TranslateDialogTestHook::dirty(d));
+
+    TranslateDialogTestHook::apply(d, row, 0, false,
+        QStringLiteral("Nrvaa Catacombs"), QStringLiteral("Catacumbas de Nrvaa"));
+    check("the answer landed", !t->item(row, 1)->text().trimmed().isEmpty(),
+          t->item(row, 1)->text());
+    check("and it is work to save", TranslateDialogTestHook::dirty(d));
+    check("without vouching for itself",
+          !TranslateDialogTestHook::reviewed(d, row));
+
+    // No answer came back for this row: nothing was written, so there is
+    // nothing new to lose.
+    const int other = rowOf(t, QStringLiteral("Forfeoranna Heim Depths"));
+    TranslateDialogTestHook::setDirty(d, false);
+    TranslateDialogTestHook::apply(d, other, 0, false,
+        QStringLiteral("Nrvaa Depths"), QString());
+    check("an empty answer is not unsaved work",
+          !TranslateDialogTestHook::dirty(d));
+
+    // The user's own answer wins and the machine's is dropped - again, nothing
+    // written and nothing to save.
+    t->item(other, 1)->setText(QStringLiteral("mi propia respuesta"));
+    TranslateDialogTestHook::setDirty(d, false);
+    TranslateDialogTestHook::apply(d, other, 0, false,
+        QStringLiteral("Nrvaa Depths"), QStringLiteral("Profundidades de Nrvaa"));
+    check("a row you already answered keeps your wording",
+          t->item(other, 1)->text() == QStringLiteral("mi propia respuesta"),
+          t->item(other, 1)->text());
+    check("and the refused answer is not unsaved work",
+          !TranslateDialogTestHook::dirty(d));
+    delete d;
+}
+
 static void testVouchingWithoutTypingIsUnsavedWorkToo()
 {
     std::cout << "\n[a line you vouched for without typing]\n";
@@ -1972,6 +2023,7 @@ int main(int argc, char **argv)
     testTheCountShownOutsideCountsWhatWasRead();
     testAHandWrittenFileReadsAsDone();
     testVouchingWithoutTypingIsUnsavedWorkToo();
+    testAMachineAnswerIsUnsavedWorkToo();
     testTypingInARowVouchesForIt();
     testVouchingForALineWithoutEditingIt();
     testVouchingCountsAsUnsavedWork();

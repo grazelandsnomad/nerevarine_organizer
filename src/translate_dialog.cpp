@@ -1112,6 +1112,7 @@ void TranslateDialog::applyMachineAnswer(int item, int nameIdx, bool isName,
             ProgrammaticEdit guard(m_expanding);
             m_table->item(item, ColTranslation)->setText(text);
         }
+        m_progressDirty = true;
     } else if (item >= 0 && item < m_table->rowCount()
                && m_table->item(item, ColTranslation)
                       ->text().trimmed().isEmpty()) {
@@ -1125,7 +1126,19 @@ void TranslateDialog::applyMachineAnswer(int item, int nameIdx, bool isName,
             cell->setData(RepairedRole, repaired);
         }
         expandRow(item);
+        m_progressDirty = true;
     }
+
+    // Both writing branches mark it, and the two that do not write - an empty
+    // answer, and a row the user has already filled in - deliberately do not.
+    //
+    // A machine answer is unsaved work like any other. It goes in under
+    // ProgrammaticEdit on purpose, so it does not read as a hand edit and vouch
+    // for itself, and that also means onCellChanged never fires - so nothing
+    // else was marking it. Running the translator over a mod and pressing Esc
+    // threw every answer away with no prompt and no write. It reproduced
+    // inconsistently only because fillFromMemory happens to set the flag at
+    // open time whenever the memory can answer a row.
 
     if (item >= 0) {
         ProgrammaticEdit guard(m_expanding);
