@@ -87,7 +87,12 @@ namespace {
 // exact compare would reject answers that are perfectly correct.
 QString squashed(const QString &s)
 {
-    return s.simplified().replace(QLatin1Char('\u00a0'), QLatin1Char(' '));
+    // QChar::Nbsp, not '\u00a0'. The latter is a NARROW literal, so the
+    // compiler encodes U+00A0 as its two UTF-8 bytes and hands QLatin1Char a
+    // multi-character constant (0xC2A0) that then overflows to a char. It
+    // happens to land on 0xA0, which is the right answer, but only by luck of
+    // which byte survived - and it costs two warnings to get there.
+    return s.simplified().replace(QChar(QChar::Nbsp), QLatin1Char(' '));
 }
 
 } // namespace
