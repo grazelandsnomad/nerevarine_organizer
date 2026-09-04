@@ -16,6 +16,7 @@
 #include <QDialog>
 #include <QHash>
 #include <QList>
+#include <QSet>
 #include <QString>
 
 #include "google_translate.h"
@@ -57,6 +58,11 @@ public:
                     // disables resuming, which is what a caller with nowhere
                     // to write gets.
                     const QString &progressPath = {},
+                    // Source texts the base game already says for the very
+                    // records that carry them - a mod that re-saved a name
+                    // without changing it. Pre-answered with themselves rather
+                    // than hidden, so nothing disappears and nothing is sent.
+                    const QSet<QString> &vanillaSaysIt = {},
                     QWidget *parent = nullptr);
 
     // How the dialog was closed. Saved and Build both accept(), so the caller
@@ -125,6 +131,9 @@ private:
     // Half-finished work. writeProgress reports failure rather than swallowing
     // it: this is the call standing between the user and a month of retyping.
     void fillFromProgress();
+    // Answers the rows the base game already answered. Runs last of the three
+    // fills, so a saved answer or a memory hit always outranks it.
+    void fillFromVanilla();
     // Writes the answers to the progress file. `built` records whether they
     // have just been turned into a translation mod: a build is a save point
     // too, but finished work and half-done work must not look the same on
@@ -229,6 +238,9 @@ private:
     translation_rules::Rules m_rules;
     QString                  m_rulesPath;
     QString                  m_progressPath;
+    QSet<QString>            m_vanillaSaysIt;
+    QLabel                  *m_vanillaNote = nullptr;
+    int                      m_vanillaFilled = 0;
     translation_progress::Progress m_progress;
     Outcome                  m_outcome = Outcome::Cancelled;
     // Answers typed since the last write, so Cancel can ask rather than

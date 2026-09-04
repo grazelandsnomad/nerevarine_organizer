@@ -186,6 +186,7 @@ TranslateDialog::TranslateDialog(const QString &modName,
                                  translation_store::Memory *memory,
                                  const QString &rulesPath,
                                  const QString &progressPath,
+                                 const QSet<QString> &vanillaSaysIt,
                                  QWidget *parent)
     : QDialog(parent)
     , m_strings(strings)
@@ -193,6 +194,7 @@ TranslateDialog::TranslateDialog(const QString &modName,
     , m_memory(memory)
     , m_rulesPath(rulesPath)
     , m_progressPath(progressPath)
+    , m_vanillaSaysIt(vanillaSaysIt)
 {
     if (!m_rulesPath.isEmpty()) m_rules = translation_rules::load(m_rulesPath);
 
@@ -219,6 +221,10 @@ TranslateDialog::TranslateDialog(const QString &modName,
         fillFromProgress();
     }
     fillFromMemory();
+    // Last of the three, and only into rows still blank: what the user saved
+    // and what their memory already knows both outrank the base game's own
+    // wording for a name the mod did not write.
+    fillFromVanilla();
 
     // First page, and land on the first thing still wanting an answer rather
     // than on row one - on a mod this size, row one is where you were a month
@@ -445,6 +451,14 @@ void TranslateDialog::buildUi(const QString &modName)
                  target_language::displayName(m_language)), this);
     intro->setWordWrap(true);
     lay->addWidget(intro);
+
+    // Its own label rather than another line on the paragraph above, which
+    // would reflow the whole dialog. Hidden until fillFromVanilla finds
+    // something, so a mod that wrote all its own names says nothing here.
+    m_vanillaNote = new QLabel(this);
+    m_vanillaNote->setWordWrap(true);
+    m_vanillaNote->hide();
+    lay->addWidget(m_vanillaNote);
 
     // Its own label: translate_intro is a four-line paragraph and reflowing it
     // on every keystroke would make the whole dialog jump.
@@ -1564,6 +1578,43 @@ void TranslateDialog::fillFromProgress()
     if (stale > 0)
         ui::info(this, T("translate_machine"),
                  T("translate_resume_stale").arg(stale));
+}
+
+// Rows the mod re-saved from the base game without changing a character.
+//
+// Answered with themselves and marked read, rather than hidden. Nothing
+// disappears from the editor - the user can still overrule any of them - but
+// nothing is sent to the translator and nothing waits on a human either.
+//
+// An answer equal to its source is an established outcome here, not a special
+// case: lore_overrides.h documents it for "Skooma" -> "Skooma", and planAccept
+// drops such rows so the built plugin carries no change at all.
+void TranslateDialog::fillFromVanilla()
+{
+    m_vanillaFilled = 0;
+    if (m_vanillaSaysIt.isEmpty()) return;
+
+    for (int i = 0; i < m_rowSource.size(); ++i) {
+        auto *cell = m_table->item(i, ColTranslation);
+        if (!cell || !cell->text().trimmed().isEmpty()) continue;
+        if (!m_vanillaSaysIt.contains(m_rowSource[i])) continue;
+        {
+            // Guarded, and ReviewedRole set directly - the same shape
+            // fillFromProgress uses. An unguarded write would read as a hand
+            // edit and mark the dialog dirty before the user has done
+            // anything, offering to save an answer that is recomputed from the
+            // game files every time the window opens.
+            ProgrammaticEdit guard(m_expanding);
+            cell->setText(m_rowSource[i]);
+            cell->setData(ReviewedRole, true);
+        }
+        ++m_vanillaFilled;
+    }
+
+    if (m_vanillaFilled > 0 && m_vanillaNote) {
+        m_vanillaNote->setText(T("translate_vanilla_note").arg(m_vanillaFilled));
+        m_vanillaNote->show();
+    }
 }
 
 bool TranslateDialog::writeProgress(bool built)

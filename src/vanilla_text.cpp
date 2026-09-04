@@ -1,15 +1,16 @@
-#include "vanilla_gmst.h"
+#include "vanilla_text.h"
 
 #include "plugin_strings.h"
 
 #include <QDir>
 #include <QFileInfo>
 
-namespace vanilla_gmst {
+namespace vanilla_text {
 
 bool Table::load(const QString &dataFolder)
 {
     m_map.clear();
+    m_byKey.clear();
     if (dataFolder.isEmpty()) return false;
 
     const QDir dir(dataFolder);
@@ -25,19 +26,37 @@ bool Table::load(const QString &dataFolder)
         const QString path = dir.filePath(QString::fromLatin1(kMasters[i]));
         if (!QFileInfo::exists(path)) continue;
 
-        // The whole-file walk plugin_strings does anyway. Only the GMST keys
-        // are kept, so the large StringSet dies with this scope rather than
-        // being carried around for the life of the dialog.
+        // The whole-file walk plugin_strings does anyway. Only the GMST
+        // settings and the display names are kept, so the large StringSet -
+        // every book and every line of dialogue in the game - dies with this
+        // scope rather than being carried around for the life of the dialog.
         const plugin_strings::StringSet set = plugin_strings::extract(path);
-        for (auto it = set.byKey.cbegin(); it != set.byKey.cend(); ++it) {
-            const QString setting = settingOfKey(it.key());
-            // Later masters win, which is the load order the game uses.
-            if (!setting.isEmpty()) m_map.insert(setting, it.value());
+
+        // Both tiers. NPC_ and CREA names are SECONDARY (plugin_strings.h
+        // calls them proper-noun heavy), so auxByKey is where Fargoth lives -
+        // and it was being walked past.
+        const QHash<QString, QString> *const tiers[] = { &set.byKey, &set.auxByKey };
+        for (const QHash<QString, QString> *tier : tiers) {
+            for (auto it = tier->cbegin(); it != tier->cend(); ++it) {
+                // Later masters win, which is the load order the game uses.
+                if (isDisplayNameKey(it.key())) m_byKey.insert(it.key(), it.value());
+                const QString setting = settingOfKey(it.key());
+                if (!setting.isEmpty()) m_map.insert(setting, it.value());
+            }
         }
         if (i == 0) gotBase = true;
     }
-    if (!gotBase) m_map.clear();
+    if (!gotBase) { m_map.clear(); m_byKey.clear(); }
     return gotBase;
+}
+
+bool Table::saysExactly(const QString &key, const QString &text) const
+{
+    const auto it = m_byKey.constFind(key);
+    // constFind first: an unknown key must not compare equal to a null
+    // QString, which is how an empty table would call every blank name a
+    // match and answer "the base game said that" about a mod's own work.
+    return it != m_byKey.constEnd() && it.value() == text;
 }
 
 QString Table::value(const QString &setting) const
@@ -84,4 +103,11 @@ QString settingOfKey(const QString &key)
     return parts[1];
 }
 
-} // namespace vanilla_gmst
+bool isDisplayNameKey(const QString &key)
+{
+    // "TYPE:<editorid>:SUB:index", read from the right: the subrecord is the
+    // second field from the end however many colons the editor id contains.
+    return key.section(QLatin1Char(':'), -2, -2) == QLatin1String("FNAM");
+}
+
+} // namespace vanilla_text

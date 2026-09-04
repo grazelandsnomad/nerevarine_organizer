@@ -13,7 +13,7 @@
 
 #include "lore_overrides.h"
 #include "term_protect.h"
-#include "vanilla_gmst.h"
+#include "vanilla_text.h"
 #include "google_translate.h"
 #include "markup_protect.h"
 #include "translation_progress.h"
@@ -164,6 +164,16 @@ struct TranslateDialogTestHook {
                                    QString(), progressPath);
     }
     static bool write(TranslateDialog *d) { return d->writeProgress(); }
+    // A dialog told which source texts the base game already says.
+    static TranslateDialog *makeVanilla(const QList<TranslatableString> &strings,
+                                        translation_store::Memory *mem,
+                                        const QSet<QString> &vanilla,
+                                        const QString &progressPath = {})
+    {
+        return new TranslateDialog(QStringLiteral("Familiar Looks"),
+                                   strings, QStringLiteral("spanish"), mem,
+                                   QString(), progressPath, vanilla);
+    }
     // The real slots, so what the tests pin down is what runs.
     static void build(TranslateDialog *d) { d->onAccept(); }
     static void saveProgress(TranslateDialog *d) { d->onSaveProgress(); }
@@ -1132,11 +1142,161 @@ static void testABatchLandsOnTheRightRows()
     delete d;
 }
 
+// Familiar Looks - Unique Characters MacKom-ed is a head replacer. It offered
+// twenty-one strings and earned an HTTP 429 reaching for them: Fargoth,
+// Neloth, Orvas Dren - every one byte-identical to the name Morrowind.esm
+// already gives that very record, because swapping a face re-saves the NPC and
+// leaves the name alone.
+//
+// term_protect cannot see these. It needs a name REPEATED to notice it and an
+// NPC record carries its name once, so `Fargoth` on its own was defined as
+// not-a-name and went to the network. This needs no heuristic: the answer is
+// in the game files.
+static void testAReSavedNameIsTheBaseGameTalking()
+{
+    std::cout << "\n[vanilla_text: a name the mod did not write]\n";
+
+    vanilla_text::Table v;
+    v.insertKey(QStringLiteral("NPC_:fargoth:FNAM:0"), QStringLiteral("Fargoth"));
+    v.insertKey(QStringLiteral("NPC_:neloth:FNAM:0"), QStringLiteral("Neloth"));
+    v.insertKey(QStringLiteral("WEAP:iron dagger:FNAM:0"), QStringLiteral("Iron Dagger"));
+
+    check("a name re-saved unchanged is the game talking",
+          v.saysExactly(QStringLiteral("NPC_:fargoth:FNAM:0"),
+                        QStringLiteral("Fargoth")));
+    check("and it is not only about people",
+          v.saysExactly(QStringLiteral("WEAP:iron dagger:FNAM:0"),
+                        QStringLiteral("Iron Dagger")));
+
+    // The whole point of keying on the record. A mod that renames Fargoth
+    // MEANT to, and must still be asked about it.
+    check("a name the mod changed is the mod's own",
+          !v.saysExactly(QStringLiteral("NPC_:fargoth:FNAM:0"),
+                         QStringLiteral("Fargoth the Bold")));
+
+    // 831 rows on the live list look like this: a vanilla name under an id the
+    // base game never had. Somebody wrote that, so somebody gets asked.
+    check("a vanilla name on a new record is not matched",
+          !v.saysExactly(QStringLiteral("NPC_:mod_fargoth_clone:FNAM:0"),
+                         QStringLiteral("Fargoth")));
+
+    // An empty table must not answer "yes" to everything by comparing an
+    // unknown key against a null QString.
+    vanilla_text::Table empty;
+    check("an empty table claims nothing",
+          !empty.saysExactly(QStringLiteral("NPC_:fargoth:FNAM:0"),
+                             QStringLiteral("Fargoth")));
+    check("not even about a blank name",
+          !empty.saysExactly(QStringLiteral("NPC_:fargoth:FNAM:0"), QString()));
+}
+
+// The filter that makes the table affordable: plugin_strings hands over
+// Morrowind's whole book library and sixty thousand lines of dialogue in the
+// same hash, and keeping that would cost hundreds of megabytes for the life of
+// the process.
+static void testOnlyDisplayNamesAreKept()
+{
+    std::cout << "\n[vanilla_text: which keys are worth keeping]\n";
+
+    check("an NPC display name",
+          vanilla_text::isDisplayNameKey(QStringLiteral("NPC_:fargoth:FNAM:0")));
+    check("a creature display name",
+          vanilla_text::isDisplayNameKey(QStringLiteral("CREA:rat:FNAM:0")));
+    check("an item display name",
+          vanilla_text::isDisplayNameKey(QStringLiteral("BOOK:sc_test:FNAM:0")));
+    check("but not a book's contents",
+          !vanilla_text::isDisplayNameKey(QStringLiteral("BOOK:sc_test:TEXT:0")));
+    check("nor a line of dialogue",
+          !vanilla_text::isDisplayNameKey(QStringLiteral("INFO:12345:NAME:0")));
+    check("nor a game setting",
+          !vanilla_text::isDisplayNameKey(QStringLiteral("GMST:sWerewolfPopup:STRV:0")));
+
+    // Read from the RIGHT. A TES3 editor id is whatever the author typed, and
+    // a colon in one would shift every field after it.
+    check("an editor id with a colon still resolves",
+          vanilla_text::isDisplayNameKey(QStringLiteral("NPC_:odd:name:FNAM:0")));
+}
+
+// What the user sees: the rows are still there, answered with the game's own
+// wording and already ticked. Nothing hidden, nothing sent, nothing waiting.
+static void testVanillaNamesArriveAnswered()
+{
+    std::cout << "\n[a name the base game already answered]\n";
+    translation_store::Memory mem;
+
+    const QList<TranslatableString> strings = {
+        {"a.esp", "NPC_:fargoth:FNAM:0", "Fargoth",     true},
+        {"a.esp", "NPC_:neloth:FNAM:0",  "Neloth",      true},
+        {"a.esp", "BOOK:mod_book:FNAM:0", "Ash Statue", false},
+    };
+    const QSet<QString> vanilla = { QStringLiteral("Fargoth"),
+                                    QStringLiteral("Neloth") };
+
+    auto *d = TranslateDialogTestHook::makeVanilla(strings, &mem, vanilla);
+    auto *t = TranslateDialogTestHook::table(d);
+
+    const int fargoth = rowOf(t, QStringLiteral("Fargoth"));
+    const int statue  = rowOf(t, QStringLiteral("Ash Statue"));
+    check("the rows are all still on offer", t->rowCount() == 3,
+          QString::number(t->rowCount()));
+
+    check("a re-saved name answers itself",
+          t->item(fargoth, 1)->text() == QStringLiteral("Fargoth"),
+          t->item(fargoth, 1)->text());
+    check("and counts as read", TranslateDialogTestHook::reviewed(d, fargoth));
+    check("so it is done", TranslateDialogTestHook::answered(d, fargoth));
+
+    check("the mod's own string is left for the user",
+          t->item(statue, 1)->text().isEmpty(), t->item(statue, 1)->text());
+    check("and is not ticked", !TranslateDialogTestHook::reviewed(d, statue));
+
+    // Recomputed from the game files every time the window opens, so there is
+    // nothing here worth offering to save - and a spurious "unsaved work"
+    // prompt on a dialog nobody has touched is its own annoyance.
+    check("opening the window is not unsaved work",
+          !TranslateDialogTestHook::dirty(d));
+
+    // The built plugin must carry no change at all for these: an answer equal
+    // to its source is dropped, the same contract lore_overrides relies on.
+    const auto plan = TranslateDialogTestHook::plan(d);
+    check("nothing is written back for them", plan.byText.isEmpty(),
+          QString::number(plan.byText.size()));
+    delete d;
+}
+
+// The user's own decisions outrank the base game's wording. fillFromVanilla
+// runs last and only into blank rows for exactly this reason.
+static void testYourOwnAnswerOutranksTheBaseGame()
+{
+    std::cout << "\n[your wording wins over the game's]\n";
+    translation_store::Memory mem;
+    mem.remember(QStringLiteral("Neloth"), QString::fromUtf8("Neloth el Telvanni"));
+
+    const QList<TranslatableString> strings = {
+        {"a.esp", "NPC_:fargoth:FNAM:0", "Fargoth", true},
+        {"a.esp", "NPC_:neloth:FNAM:0",  "Neloth",  true},
+    };
+    const QSet<QString> vanilla = { QStringLiteral("Fargoth"),
+                                    QStringLiteral("Neloth") };
+
+    auto *d = TranslateDialogTestHook::makeVanilla(strings, &mem, vanilla);
+    auto *t = TranslateDialogTestHook::table(d);
+
+    check("a memory hit is not overwritten",
+          t->item(rowOf(t, QStringLiteral("Neloth")), 1)->text()
+              == QString::fromUtf8("Neloth el Telvanni"),
+          t->item(rowOf(t, QStringLiteral("Neloth")), 1)->text());
+    check("and the untouched one still answers itself",
+          t->item(rowOf(t, QStringLiteral("Fargoth")), 1)->text()
+              == QStringLiteral("Fargoth"));
+    delete d;
+}
+
 static void testVanillaGameSettingsAreNotTheMods()
 {
-    std::cout << "\n[vanilla_gmst: what the mod actually changed]\n";
+    std::cout << "\n[vanilla_text: what the mod actually changed]\n";
 
-    vanilla_gmst::Table v;
+    vanilla_text::Table v;
     v.insert(QStringLiteral("sTeleportDisabled"),
              QStringLiteral("Teleportation magic does not work here."));
     v.insert(QStringLiteral("sEffectSummonCreature01"), QStringLiteral("Call Wolf"));
@@ -1146,54 +1306,54 @@ static void testVanillaGameSettingsAreNotTheMods()
 
     // 1. Re-saved untouched. Verbatim from Daedric_Maul.ESP.
     check("a setting re-saved unchanged is the game talking",
-          vanilla_gmst::isDirty(QStringLiteral("sTeleportDisabled"),
+          vanilla_text::isDirty(QStringLiteral("sTeleportDisabled"),
                                 QStringLiteral("Teleportation magic does not work here."), v));
 
     // 2. The setting's own name as its value - an editor opened without the
     // expansion that defines it. Bloodmoon says "Call Wolf".
     check("a setting named after itself is not prose",
-          vanilla_gmst::isDirty(QStringLiteral("sEffectSummonCreature01"),
+          vanilla_text::isDirty(QStringLiteral("sEffectSummonCreature01"),
                                 QStringLiteral("sEffectSummonCreature01"), v));
 
     // 3. Nothing to translate.
     check("a blank value is not translatable",
-          vanilla_gmst::isDirty(QStringLiteral("sNotifyMessage60"), QString(), v));
+          vanilla_text::isDirty(QStringLiteral("sNotifyMessage60"), QString(), v));
     check("nor is one that is only spaces",
-          vanilla_gmst::isDirty(QStringLiteral("sNotifyMessage61"), QStringLiteral("   "), v));
+          vanilla_text::isDirty(QStringLiteral("sNotifyMessage61"), QStringLiteral("   "), v));
 
     // The other half, and the half that decides whether this is safe to ship:
     // mods that edit game settings ON PURPOSE must keep every one of them.
     check("MultiMark keeps the spell it repurposed",
-          !vanilla_gmst::isDirty(QStringLiteral("sEffectSummonCreature04"),
+          !vanilla_text::isDirty(QStringLiteral("sEffectSummonCreature04"),
                                  QStringLiteral("Greater Mark"), v));
     check("Patch for Purists keeps its correction",
-          !vanilla_gmst::isDirty(QStringLiteral("sTrapImpossible"),
+          !vanilla_text::isDirty(QStringLiteral("sTrapImpossible"),
                                  QStringLiteral("Trap too complex; your chance to disarm it is nil."), v));
     check("a setting the game does not define at all is the mod's",
-          !vanilla_gmst::isDirty(QStringLiteral("sSomeModAddedThis"),
+          !vanilla_text::isDirty(QStringLiteral("sSomeModAddedThis"),
                                  QStringLiteral("A brand new message"), v));
 
     // No game files - a Bethesda-engine profile, or openmw.cfg missing. Rules
     // 2 and 3 still answer, which is what keeps that a degraded answer rather
     // than no answer at all.
-    const vanilla_gmst::Table none;
+    const vanilla_text::Table none;
     check("without the base game, a self-named setting is still caught",
-          vanilla_gmst::isDirty(QStringLiteral("sMagicCreature01ID"),
+          vanilla_text::isDirty(QStringLiteral("sMagicCreature01ID"),
                                 QStringLiteral("sMagicCreature01ID"), none));
     check("and a blank one is still caught",
-          vanilla_gmst::isDirty(QStringLiteral("sAnything"), QString(), none));
+          vanilla_text::isDirty(QStringLiteral("sAnything"), QString(), none));
     check("but real text is left alone, because nothing can vouch against it",
-          !vanilla_gmst::isDirty(QStringLiteral("sTeleportDisabled"),
+          !vanilla_text::isDirty(QStringLiteral("sTeleportDisabled"),
                                  QStringLiteral("Teleportation magic does not work here."), none));
 
     // The key format, kept in one place so the call site cannot spell it wrong.
     check("the setting is read out of a plugin_strings key",
-          vanilla_gmst::settingOfKey(QStringLiteral("GMST:sWerewolfPopup:STRV:0"))
+          vanilla_text::settingOfKey(QStringLiteral("GMST:sWerewolfPopup:STRV:0"))
               == QStringLiteral("sWerewolfPopup"));
     check("and another record type is not a GMST",
-          vanilla_gmst::settingOfKey(QStringLiteral("WEAP:DV_daedric_maul:FNAM:0")).isEmpty());
+          vanilla_text::settingOfKey(QStringLiteral("WEAP:DV_daedric_maul:FNAM:0")).isEmpty());
     check("nor is a GMST subrecord that is not its text",
-          vanilla_gmst::settingOfKey(QStringLiteral("GMST:sFoo:INTV:0")).isEmpty());
+          vanilla_text::settingOfKey(QStringLiteral("GMST:sFoo:INTV:0")).isEmpty());
 }
 
 // Some game settings do not hold text at all - their value is an object id the
@@ -1201,48 +1361,48 @@ static void testVanillaGameSettingsAreNotTheMods()
 // there, and the spell then does nothing: no error, no crash, just silence.
 static void testASettingThatHoldsAnObjectIdIsNotText()
 {
-    std::cout << "\n[vanilla_gmst: settings whose value is an id]\n";
+    std::cout << "\n[vanilla_text: settings whose value is an id]\n";
 
     check("a summon's creature id is not text",
-          vanilla_gmst::holdsObjectId(QStringLiteral("sMagicCreature01ID")));
+          vanilla_text::holdsObjectId(QStringLiteral("sMagicCreature01ID")));
     check("nor is a bound item's",
-          vanilla_gmst::holdsObjectId(QStringLiteral("sMagicBoundBattleAxeID")));
+          vanilla_text::holdsObjectId(QStringLiteral("sMagicBoundBattleAxeID")));
 
     // The one a value-shape rule would miss: it has a space in it and is still
     // an id, which is why this is keyed on the setting name.
     check("even when the id contains a space",
-          vanilla_gmst::holdsObjectId(QStringLiteral("sMagicWingedTwilightID")));
+          vanilla_text::holdsObjectId(QStringLiteral("sMagicWingedTwilightID")));
 
     // The adjacent setting in the very same feature IS the effect's display
     // name, and translating that one is right. One character apart, opposite
     // answers - which is the whole reason this is a rule about names.
     check("but the effect's own name is text",
-          !vanilla_gmst::holdsObjectId(QStringLiteral("sEffectSummonCreature04")));
+          !vanilla_text::holdsObjectId(QStringLiteral("sEffectSummonCreature04")));
     check("and so is ordinary prose",
-          !vanilla_gmst::holdsObjectId(QStringLiteral("sTeleportDisabled")));
+          !vanilla_text::holdsObjectId(QStringLiteral("sTeleportDisabled")));
     // Bethesda's convention is capital ID; a word merely ending in those
     // letters is not one of them.
     check("a lowercase ending is not the convention",
-          !vanilla_gmst::holdsObjectId(QStringLiteral("sSomethingid")));
+          !vanilla_text::holdsObjectId(QStringLiteral("sSomethingid")));
 
     // The live case this was found through. MultiMark repoints two of these at
     // its own summons, so isDirty - which asks "did the mod change it" -
     // answers KEEP, and only the id rule refuses.
-    vanilla_gmst::Table v;
+    vanilla_text::Table v;
     v.insert(QStringLiteral("sMagicCreature04ID"),
              QStringLiteral("BM_bear_black_summon"));
     v.insert(QStringLiteral("sEffectSummonCreature04"),
              QStringLiteral("Summon Winged Twilight"));
 
     check("a repointed id does not read as the game talking",
-          !vanilla_gmst::isDirty(QStringLiteral("sMagicCreature04ID"),
+          !vanilla_text::isDirty(QStringLiteral("sMagicCreature04ID"),
                                  QStringLiteral("Teleport_summonMark"), v));
     check("so the id rule is the only thing that catches it",
-          vanilla_gmst::holdsObjectId(QStringLiteral("sMagicCreature04ID")));
+          vanilla_text::holdsObjectId(QStringLiteral("sMagicCreature04ID")));
     check("while the effect name beside it stays offered",
-          !vanilla_gmst::isDirty(QStringLiteral("sEffectSummonCreature04"),
+          !vanilla_text::isDirty(QStringLiteral("sEffectSummonCreature04"),
                                  QStringLiteral("Greater Mark"), v)
-       && !vanilla_gmst::holdsObjectId(QStringLiteral("sEffectSummonCreature04")));
+       && !vanilla_text::holdsObjectId(QStringLiteral("sEffectSummonCreature04")));
 }
 
 // Fifteen minutes was a guess. A block was measured still refusing the very
@@ -2029,6 +2189,10 @@ int main(int argc, char **argv)
     testVouchingCountsAsUnsavedWork();
     testABatchLandsOnTheRightRows();
     testVanillaGameSettingsAreNotTheMods();
+    testAReSavedNameIsTheBaseGameTalking();
+    testOnlyDisplayNamesAreKept();
+    testVanillaNamesArriveAnswered();
+    testYourOwnAnswerOutranksTheBaseGame();
     testASettingThatHoldsAnObjectIdIsNotText();
     testABlockThatOutlivesTheGuess();
     testSeveralStringsInOneRequest();

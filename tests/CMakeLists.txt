@@ -310,7 +310,7 @@ add_executable(test_translate_ui
     ${CMAKE_SOURCE_DIR}/src/target_language.cpp
     ${CMAKE_SOURCE_DIR}/src/plugin_writer.cpp
     ${CMAKE_SOURCE_DIR}/src/plugin_strings.cpp
-    ${CMAKE_SOURCE_DIR}/src/vanilla_gmst.cpp
+    ${CMAKE_SOURCE_DIR}/src/vanilla_text.cpp
     ${CMAKE_SOURCE_DIR}/src/plugin_text.cpp
     ${CMAKE_SOURCE_DIR}/src/prompts.cpp
     ${CMAKE_SOURCE_DIR}/src/subprocess.cpp

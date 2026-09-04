@@ -4,7 +4,7 @@
 #include "mainwindow.h"
 #include "variant_picker.h"
 #include "plugin_strings.h"
-#include "vanilla_gmst.h"
+#include "vanilla_text.h"
 #include "openmwconfigwriter.h"
 #include "translate_dialog.h"
 #include "translation_mod.h"
@@ -1818,11 +1818,11 @@ namespace {
 // the game - so there is no invalidation here beyond the process lifetime.
 //
 // An empty table is a legitimate outcome: a Bethesda-engine profile has no
-// openmw.cfg, and vanilla_gmst::isDirty still answers from the value alone.
-const vanilla_gmst::Table &vanillaGmsts()
+// openmw.cfg, and vanilla_text::isDirty still answers from the value alone.
+const vanilla_text::Table &vanillaText()
 {
     static bool                 loaded = false;
-    static vanilla_gmst::Table  table;
+    static vanilla_text::Table  table;
     if (loaded) return table;
     loaded = true;
 
@@ -1874,6 +1874,23 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
     bool sawPlugin = false;
     bool sawLocalized = false;
     int  skippedVanilla = 0;
+    // Which source texts the base game already says, for the very records that
+    // carry them. Kept per TEXT rather than per key because the dialog dedupes
+    // rows by text - and false wins on merge: one record that wrote this text
+    // itself disqualifies the text everywhere, which errs towards asking.
+    QHash<QString, bool> vanillaSaysIt;
+    // A display name the mod re-saved without changing a character is the base
+    // game talking, exactly as a re-saved game setting is. Answered here
+    // rather than in the dialog because this is where the plugin_strings KEY
+    // is still in hand - the dialog only ever sees the text. See vanilla_text.h.
+    const auto noteVanilla = [&](const QString &key, const QString &text) {
+        if (!vanilla_text::isDisplayNameKey(key)) return;
+        const bool mine = !vanillaText().saysExactly(key, text);
+        auto it = vanillaSaysIt.find(text);
+        if (it == vanillaSaysIt.end()) vanillaSaysIt.insert(text, !mine);
+        else if (mine)                 *it = false;
+    };
+
     QDirIterator dit(modPath, QDir::Files | QDir::NoDotAndDotDot,
                      QDirIterator::Subdirectories);
     while (dit.hasNext()) {
@@ -1899,23 +1916,26 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
             // translating one replaces that setting for the whole game.
             // Daedric Maul is one weapon and 72 re-saved settings; it
             // offered 27 rows and earned a rate-limit block reaching for
-            // them. See vanilla_gmst.h.
-            const QString setting = vanilla_gmst::settingOfKey(it.key());
+            // them. See vanilla_text.h.
+            const QString setting = vanilla_text::settingOfKey(it.key());
             // Two different refusals. isDirty is "this is the base game
             // talking"; holdsObjectId is "this is not text at all" - a setting
             // whose value names a creature or a bound item, which a mod may
             // well have changed on purpose and which still must never be
             // translated, or the spell it drives quietly stops working.
             if (!setting.isEmpty()
-                && (vanilla_gmst::isDirty(setting, it.value(), vanillaGmsts())
-                    || vanilla_gmst::holdsObjectId(setting))) {
+                && (vanilla_text::isDirty(setting, it.value(), vanillaText())
+                    || vanilla_text::holdsObjectId(setting))) {
                 ++skippedVanilla;
                 continue;
             }
+            noteVanilla(it.key(), it.value());
             strings.append({rel, it.key(), it.value(), false});
         }
-        for (auto it = set.auxByKey.cbegin(); it != set.auxByKey.cend(); ++it)
+        for (auto it = set.auxByKey.cbegin(); it != set.auxByKey.cend(); ++it) {
+            noteVanilla(it.key(), it.value());
             strings.append({rel, it.key(), it.value(), true});
+        }
     }
 
     if (!sawPlugin) {
@@ -1949,8 +1969,12 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
     // and the untranslated scan must resolve the very same file.
     const QString progressPath = translationProgressPathFor(item);
 
+    QSet<QString> vanillaAnswers;
+    for (auto it = vanillaSaysIt.cbegin(); it != vanillaSaysIt.cend(); ++it)
+        if (it.value()) vanillaAnswers.insert(it.key());
+
     TranslateDialog dlg(modName, strings, language, &memory, rulesPath,
-                        progressPath, this);
+                        progressPath, vanillaAnswers, this);
     if (dlg.exec() != QDialog::Accepted) {
         // A cancel really is a cancel: nothing typed reaches the memory.
         return;

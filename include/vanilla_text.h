@@ -1,7 +1,29 @@
-#ifndef VANILLA_GMST_H
-#define VANILLA_GMST_H
+#ifndef VANILLA_TEXT_H
+#define VANILLA_TEXT_H
 
-// Keep Morrowind's own game settings out of a mod's translation.
+// Keep Morrowind's own words out of a mod's translation.
+//
+// Two questions, one table, one walk of the game files: which game settings a
+// mod actually changed, and which display names it merely re-saved. Both
+// answer the same underlying one - is this the mod talking, or the base game?
+//
+// -- Part two: the names ----------------------------------------------
+//
+// Familiar Looks - Unique Characters MacKom-ed is a head replacer. It offered
+// twenty-one strings to translate - Fargoth, Neloth, Orvas Dren, Hlormar
+// Wine-Sot - and earned an HTTP 429 reaching for them. All twenty-one are
+// byte-identical to the name Morrowind.esm already gives that very record: the
+// mod re-saves each NPC to swap a face and leaves the name alone.
+//
+// term_protect cannot catch these, and not by oversight. It needs a name
+// REPEATED to notice it, and an NPC record carries its name exactly once. See
+// saysExactly, which needs no heuristic at all because the answer is on disk.
+//
+// Measured across 331 installed plugins: of 44,844 display names offered,
+// 9,775 - 22% - are the base game re-saved untouched. NPC names 34%, clothing
+// 31%, weapons 24%, containers 13%.
+//
+// -- Part one: the game settings --------------------------------------
 //
 // Daedric Maul is a 7 KB mod whose entire content is one weapon. It offered
 // TWENTY-SEVEN strings to translate - "You cannot rest in werewolf form.",
@@ -27,7 +49,7 @@
 // to a translator, and writing the answer into a vanilla game setting, is how
 // a spell ends up named after a variable.
 //
-// -- The rule ---------------------------------------------------------
+// -- The rule, both halves --------------------------------------------
 //
 // A GMST worth translating is one the mod actually CHANGED. Everything else is
 // the base game talking. Measured across 866 installed plugins: of 190 GMST
@@ -42,7 +64,7 @@
 #include <QString>
 #include <QStringList>
 
-namespace vanilla_gmst {
+namespace vanilla_text {
 
 // The base game's string settings, read once from Morrowind.esm and its
 // expansions. An empty table is a legitimate state, not an error - see
@@ -65,9 +87,25 @@ public:
 
     // For tests, and for a caller that has the settings from somewhere else.
     void insert(const QString &setting, const QString &text) { m_map.insert(setting, text); }
+    void insertKey(const QString &key, const QString &text) { m_byKey.insert(key, text); }
+
+    // True when the base game already says exactly this, for this very record -
+    // so the mod re-saved it without changing a character.
+    //
+    // Keyed on the RECORD, not on the text, because those are different
+    // questions. "Fargoth" is a vanilla name wherever it turns up, but a mod
+    // that invents an NPC and calls him Fargoth wrote that, and deserves to be
+    // asked about it. On the live list 3,961 display-name rows match by record;
+    // another 831 carry a vanilla name under a new id and are left alone.
+    //
+    // `key` is a plugin_strings key, "TYPE:<editorid>:SUB:index".
+    bool saysExactly(const QString &key, const QString &text) const;
+
+    int keyCount() const { return int(m_byKey.size()); }
 
 private:
-    QHash<QString, QString> m_map;
+    QHash<QString, QString> m_map;     // GMST setting name -> the game's text
+    QHash<QString, QString> m_byKey;   // plugin_strings key -> the game's text
 };
 
 // True when this GMST is the base game talking rather than the mod.
@@ -113,8 +151,25 @@ bool holdsObjectId(const QString &setting);
 // The GMST setting named by a plugin_strings key ("GMST:sWerewolfPopup:STRV:0"
 // -> "sWerewolfPopup"), or empty when the key is not a GMST string. Keeps the
 // key format in one place rather than spelled out at the call site.
+//
+// Reads the fields from the LEFT, so an editor id containing a colon would
+// throw it off. No vanilla setting name has one and none of Bethesda's do;
+// isDisplayNameKey below counts from the right, where ids are not so tame.
 QString settingOfKey(const QString &key);
 
-} // namespace vanilla_gmst
+// True when a plugin_strings key names a record's DISPLAY NAME - an NPC, a
+// creature, a weapon, a door. "NPC_:fargoth:FNAM:0" yes, "BOOK:sc_x:TEXT:0" no.
+//
+// The filter that makes the table affordable. plugin_strings collects
+// Morrowind's whole book library and its sixty thousand lines of dialogue into
+// the same hash; keeping all of it would cost hundreds of megabytes for the
+// life of the process, where the display names are about 8,600 short strings.
+//
+// Counts fields from the RIGHT. TES3 editor ids are whatever the author typed
+// and a colon in one would shift every field after it, which reading from the
+// left could not survive.
+bool isDisplayNameKey(const QString &key);
 
-#endif // VANILLA_GMST_H
+} // namespace vanilla_text
+
+#endif // VANILLA_TEXT_H
