@@ -29,6 +29,7 @@
 #include <QCheckBox>
 #include <QPushButton>
 #include <QPainter>
+#include <QKeyEvent>
 #include <QPlainTextEdit>
 #include <QStyledItemDelegate>
 #include <QTableWidget>
@@ -176,6 +177,55 @@ public:
 private:
     bool &m_flag;
     bool  m_prev;
+};
+
+
+// The translation box in the row editor, which needs to know whether the row
+// it is showing is a name or a paragraph.
+//
+// A subclass rather than an event filter because this is a key decision about
+// one widget, and a filter would put it three lines away from everything else
+// that is true about this box. No Q_OBJECT: it has no signals of its own, only
+// a callback the dialog fills in.
+class AnswerBox : public QPlainTextEdit {
+public:
+    explicit AnswerBox(QWidget *parent) : QPlainTextEdit(parent) {}
+
+    void setOneLine(bool on) { m_oneLine = on; }
+    std::function<void()> onAnswer;
+
+protected:
+    void keyPressEvent(QKeyEvent *e) override
+    {
+        if (e->key() != Qt::Key_Return && e->key() != Qt::Key_Enter) {
+            QPlainTextEdit::keyPressEvent(e);
+            return;
+        }
+        // accept() in both branches, so the keystroke stops here. Left
+        // unaccepted it would go on to the dialog's default button, and Enter
+        // would both answer the row and press OK.
+        switch (TranslateDialog::enterActionFor(m_oneLine, e->modifiers())) {
+        case TranslateDialog::EnterAction::Answer:
+            e->accept();
+            // Safe to close the dialog from here: accept() only asks the
+            // nested event loop to exit, so this returns before anything is
+            // destroyed - the same path every button on it already takes.
+            if (onAnswer) onAnswer();
+            return;
+        case TranslateDialog::EnterAction::Newline:
+            // Spelled out, because QPlainTextEdit ignores a MODIFIED Return
+            // and would otherwise swallow the keystroke without a sound.
+            e->accept();
+            insertPlainText(QStringLiteral("\n"));
+            return;
+        case TranslateDialog::EnterAction::Default:
+            break;
+        }
+        QPlainTextEdit::keyPressEvent(e);
+    }
+
+private:
+    bool m_oneLine = false;
 };
 
 } // namespace
@@ -416,6 +466,24 @@ void TranslateDialog::scheduleRecount()
 // Prev/Next follow the rows on OFFER, not the raw table, or Next would step
 // into a row the filter is hiding. Side-effect free so they can be tested;
 // openRowEditor itself ends in exec() and cannot be.
+
+bool TranslateDialog::sourceIsOneLine(const QString &source)
+{
+    // Morrowind's book text is CRLF, so \n alone answers for both.
+    return !source.trimmed().contains(QLatin1Char('\n'));
+}
+
+TranslateDialog::EnterAction
+TranslateDialog::enterActionFor(bool oneLine, Qt::KeyboardModifiers mods)
+{
+    // A book or a line of dialogue keeps every key it had. This is the whole
+    // promise that nothing changes for the rows where Enter is structure.
+    if (!oneLine) return EnterAction::Default;
+
+    if (mods.testFlag(Qt::ControlModifier) || mods.testFlag(Qt::ShiftModifier))
+        return EnterAction::Newline;
+    return EnterAction::Answer;
+}
 
 int TranslateDialog::nextVisible(int row) const
 {
@@ -1323,9 +1391,18 @@ void TranslateDialog::openRowEditor(int row)
     dlg.resize(760, 560);
 
     auto *lay = new QVBoxLayout(&dlg);
+    auto *whereRow = new QHBoxLayout;
     auto *where = new QLabel(&dlg);
     where->setStyleSheet(QStringLiteral("font-weight: bold;"));
-    lay->addWidget(where);
+    whereRow->addWidget(where);
+    whereRow->addStretch(1);
+    // Nobody discovers Ctrl+Enter by accident. Dimmer than the row counter,
+    // and empty on a paragraph row - which says nothing rather than claiming
+    // something that is not true there.
+    auto *enterHint = new QLabel(&dlg);
+    enterHint->setEnabled(false);
+    whereRow->addWidget(enterHint);
+    lay->addLayout(whereRow);
 
     lay->addWidget(new QLabel(T("translate_col_source"), &dlg));
     auto *srcBox = new QPlainTextEdit(&dlg);
@@ -1335,7 +1412,7 @@ void TranslateDialog::openRowEditor(int row)
     lay->addWidget(srcBox, 1);
 
     lay->addWidget(new QLabel(T("translate_col_translation"), &dlg));
-    auto *dstBox = new QPlainTextEdit(&dlg);
+    auto *dstBox = new AnswerBox(&dlg);
     dstBox->setLineWrapMode(QPlainTextEdit::WidgetWidth);
     lay->addWidget(dstBox, 1);
 
@@ -1371,9 +1448,15 @@ void TranslateDialog::openRowEditor(int row)
         setReviewed(current, true);
     };
 
-    auto load = [this, srcBox, dstBox, where, prev, next, &current](int r) {
+    auto load = [this, srcBox, dstBox, where, enterHint, prev, next, &current](int r) {
         current = r;
-        srcBox->setPlainText(m_table->item(r, ColSource)->text());
+        const QString source = m_table->item(r, ColSource)->text();
+        srcBox->setPlainText(source);
+        // Per row, because a mod holds both: a rack of armour names and the
+        // book that describes them.
+        const bool oneLine = sourceIsOneLine(source);
+        dstBox->setOneLine(oneLine);
+        enterHint->setText(oneLine ? T("translate_row_enter_hint") : QString());
         dstBox->setPlainText(m_table->item(r, ColTranslation)->text());
         // Counted against the rows on OFFER, not the raw table: with the
         // filter on, "row 3 of 50" is the truth and "row 4102 of 20000" is
@@ -1406,6 +1489,16 @@ void TranslateDialog::openRowEditor(int row)
     });
     QObject::connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
     QObject::connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+
+    // Enter on a one-line row. Deliberately the SAME two calls the Next button
+    // makes, so the keyboard and the mouse cannot drift apart.
+    dstBox->onAnswer = [&] {
+        const int n = nextVisible(current);
+        if (n >= 0) { commit(); go(n); return; }
+        // Last row: accept() makes exec() return Accepted and the commit below
+        // runs once. Committing here as well would run it twice.
+        dlg.accept();
+    };
 
     load(row);
     if (dlg.exec() == QDialog::Accepted) commit();

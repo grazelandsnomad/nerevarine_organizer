@@ -79,6 +79,39 @@ public:
     // whether the memory is worth saving.
     bool memoryChanged() const { return m_memoryChanged; }
 
+    // -- What the Enter key means in the row editor ------------------
+    //
+    // "Indoril Bonesaint Pauldron L" is a name on one line and will never
+    // contain a newline, so a paragraph break is never what was meant - and
+    // reaching for the mouse to press OK after every one of eleven names is
+    // what makes eleven rows feel like eleven rows.
+    //
+    // Side-effect free, for the reason above: openRowEditor ends in exec().
+    // Public because the box that asks them is a file-local widget in the
+    // .cpp, which cannot be named here to be made a friend - and because a
+    // rule with no state to hide loses nothing by being sayable out loud.
+
+    // Whether Enter should answer this row rather than break a line in it.
+    //
+    // Keyed on the ORIGINAL, never on what has been typed. The answer changes
+    // with every keystroke, and a key that quietly changed meaning underneath
+    // the user would be worse than either behaviour on its own.
+    //
+    // A NEWLINE, not a visual line: word wrap is on, so a long source fills
+    // three lines of the box and is still one line of text. Trimmed first, so
+    // a stray trailing newline on an item name does not make it a paragraph.
+    static bool sourceIsOneLine(const QString &source);
+
+    enum class EnterAction {
+        Default,   // let QPlainTextEdit have it - a paragraph break, as always
+        Answer,    // save this row and move on, exactly as Next does
+        Newline,   // an explicit break in a row that would otherwise answer
+    };
+    // Shift counts alongside Ctrl because Shift+Enter is what most hands reach
+    // for, and letting it fall through would insert a Unicode line separator
+    // where a plugin wants a newline.
+    static EnterAction enterActionFor(bool oneLine, Qt::KeyboardModifiers mods);
+
 protected:
     // Covers Esc, the window-manager close and the Cancel button - Qt6's
     // QDialog::closeEvent calls reject(), so this one override catches all

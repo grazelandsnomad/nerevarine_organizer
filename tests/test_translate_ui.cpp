@@ -1292,6 +1292,71 @@ static void testYourOwnAnswerOutranksTheBaseGame()
     delete d;
 }
 
+// Eleven armour pieces, eleven names, and Enter put a paragraph break in each
+// one - so every row ended with a reach for the mouse. On a row whose ORIGINAL
+// is a single line, Enter is the answer.
+//
+// The key actually reaching the box, and the save-and-advance itself, are not
+// reachable from here: openRowEditor ends in exec(). Splitting the rule out is
+// what reduces the untestable part to "call this and do what it says".
+static void testEnterAnswersAOneLineRow()
+{
+    std::cout << "\n[Enter on a row that is a name]\n";
+
+    check("an item name is one line",
+          TranslateDialog::sourceIsOneLine(
+              QStringLiteral("Indoril Bonesaint Pauldron L")));
+    check("so is nothing at all",
+          TranslateDialog::sourceIsOneLine(QString()));
+
+    // Word wrap fills three lines of the box with this and it is still one
+    // line of text. The rule is about newlines, not about pixels.
+    check("a source long enough to wrap is still one line",
+          TranslateDialog::sourceIsOneLine(QStringLiteral(
+              "A very long item name that will certainly wrap around inside "
+              "the editor box more than once before it runs out of words")));
+
+    // A trailing newline on an item name must not turn it into a paragraph.
+    check("a stray trailing newline does not make a paragraph",
+          TranslateDialog::sourceIsOneLine(QStringLiteral("Bonesaint Cuirass\n")));
+
+    check("a book is not one line",
+          !TranslateDialog::sourceIsOneLine(
+              QStringLiteral("On the first day\nthe sky was red")));
+    // Morrowind's book text is CRLF.
+    check("and neither is one with CRLF endings",
+          !TranslateDialog::sourceIsOneLine(
+              QStringLiteral("On the first day\r\nthe sky was red")));
+}
+
+static void testEnterKeepsItsOldMeaningInAParagraph()
+{
+    std::cout << "\n[what Enter does, in both kinds of row]\n";
+    using EA = TranslateDialog::EnterAction;
+
+    check("Enter answers a one-line row",
+          TranslateDialog::enterActionFor(true, Qt::NoModifier) == EA::Answer);
+    check("Ctrl+Enter breaks the line instead",
+          TranslateDialog::enterActionFor(true, Qt::ControlModifier) == EA::Newline);
+    // Shift+Enter is what most hands reach for, and letting it through would
+    // insert a Unicode line separator where a plugin wants a newline.
+    check("and so does Shift+Enter",
+          TranslateDialog::enterActionFor(true, Qt::ShiftModifier) == EA::Newline);
+
+    // The whole promise that nothing changes for books and dialogue: a
+    // multi-line row keeps every key it had, whatever is held down.
+    check("a paragraph row is left alone",
+          TranslateDialog::enterActionFor(false, Qt::NoModifier) == EA::Default);
+    check("even with Ctrl",
+          TranslateDialog::enterActionFor(false, Qt::ControlModifier) == EA::Default);
+    check("even with Shift",
+          TranslateDialog::enterActionFor(false, Qt::ShiftModifier) == EA::Default);
+
+    // Alt is nobody's line-break key; it must not quietly become one.
+    check("Alt does not answer",
+          TranslateDialog::enterActionFor(true, Qt::AltModifier) == EA::Answer);
+}
+
 static void testVanillaGameSettingsAreNotTheMods()
 {
     std::cout << "\n[vanilla_text: what the mod actually changed]\n";
@@ -2189,6 +2254,8 @@ int main(int argc, char **argv)
     testVouchingCountsAsUnsavedWork();
     testABatchLandsOnTheRightRows();
     testVanillaGameSettingsAreNotTheMods();
+    testEnterAnswersAOneLineRow();
+    testEnterKeepsItsOldMeaningInAParagraph();
     testAReSavedNameIsTheBaseGameTalking();
     testOnlyDisplayNamesAreKept();
     testVanillaNamesArriveAnswered();
