@@ -51,6 +51,25 @@ namespace lore_overrides {
 // on the way in; the entry keeps its own capitalisation.
 QString lookup(const QString &text, const QString &token);
 
+// Terms to hold back from the machine translator ENTIRELY, spelled as they
+// appear in a plugin.
+//
+// lookup() above is whole-cell and cannot reach inside a sentence, which is
+// where a term like the Blight mostly lives - 130 of its 131 appearances on
+// one real modlist. These are masked out of the request instead
+// (term_protect.h), so the machine never sees them and the wording comes back
+// ours by construction rather than by correcting it afterwards.
+//
+// The rendering still comes from lookup(); this list only says WHICH terms are
+// worth protecting, and in what casing. Deliberately not everything in the
+// table: a term earns a place here only when the machine reliably gets it
+// wrong mid-sentence AND its capitalisation tells it apart from an ordinary
+// word.
+//
+// Not termsFor() below - that returns lowercased keys, and lowercase is
+// exactly what must NOT be protected.
+QStringList protectedTermsFor(const QString &token);
+
 // Every source term the table holds for a language, for tests and for a
 // future management UI. Empty for a language with no entries.
 QStringList termsFor(const QString &token);

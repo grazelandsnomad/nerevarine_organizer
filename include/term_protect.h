@@ -79,12 +79,27 @@ QStringList findNames(const QStringList &sources,
 // per language, and `[ordinary]` overrides it, so nothing here is final.
 QStringList knownNames();
 
+// Which of `vocabulary` this mod actually says, in the order given.
+//
+// The same case-sensitive whole-word test a knownNames() entry has to pass, so
+// a caller with its own vocabulary - the lore table's protected terms - admits
+// them on the same terms rather than inventing a second rule.
+QStringList mentionedFrom(const QStringList &vocabulary,
+                          const QStringList &sources);
+
 // The token standing in for terms[i]. Word-shaped on purpose - see above.
 QString tokenFor(int index);
 
 // Replace each term with its token. Longest terms first, so a name that
 // contains a shorter name is not half-substituted. Case-sensitive: these are
 // proper nouns and the case is part of them.
+//
+// WHOLE WORDS. A plain substring replace turned "Blighted crops" into
+// "Nrvaaed crops", which came back "Tizoned" - 47 strings on one real modlist
+// would have been mangled that way. It also makes this agree with
+// mentionedIn, which has always used the same boundary to decide whether a
+// term is present at all: deciding a term is here on one rule and substituting
+// it on another is how a term gets replaced somewhere it was never found.
 QString mask(const QString &text, const QStringList &terms);
 
 // Put the terms back. Tolerant of the translator having changed the token's

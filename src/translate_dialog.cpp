@@ -794,6 +794,22 @@ void TranslateDialog::onMachineTranslate()
     // one-answer-everywhere rule was ever after, holds either way.
     m_mtNames = term_protect::findNames(m_rowSource, m_rules.protect,
                                         m_rules.ordinary);
+
+    // The lore table's protected terms are masked exactly like a name, so the
+    // machine never sees "Blight" and cannot decide between "plaga" and
+    // "anublo" row by row. But they are NOT names, and the difference matters:
+    // "cure", "disease" and "storm" are not ordinary words, so letting a lore
+    // term answer looksLikeName below would read "Cure Blight" as somebody's
+    // name and leave the row blank forever. A name is a person nobody
+    // translates; a lore term is a common noun with one settled translation.
+    const QStringList namesOnly = m_mtNames;
+    for (const QString &t : term_protect::mentionedFrom(
+             lore_overrides::protectedTermsFor(m_language), m_rowSource))
+        if (!m_mtNames.contains(t)) m_mtNames << t;
+    // Appended, not merged and re-sorted: findNames already returns its own
+    // entries longest-first and masking runs in list order, so a longer NAME
+    // that happens to contain the term still gets its turn first.
+
     m_nameRendering = QStringList();
     for (int i = 0; i < m_mtNames.size(); ++i) {
         // A name the user has already decided about keeps that decision.
@@ -837,7 +853,10 @@ void TranslateDialog::onMachineTranslate()
         // A row that is somebody's name has nothing in it to translate, and
         // asking anyway is what returned "sin respirar" for "Dagoth Andas".
         // Left blank, which onAccept drops, so the string stays as it is.
-        if (term_protect::looksLikeName(m_rowSource[i], m_mtNames, m_rules.ordinary)) {
+        // namesOnly, not m_mtNames - see above. Everything else in this run
+        // (masking, isOnlyNames, expandRow) uses the merged list, which is
+        // what carries the renderings.
+        if (term_protect::looksLikeName(m_rowSource[i], namesOnly, m_rules.ordinary)) {
             ++names;
             continue;
         }

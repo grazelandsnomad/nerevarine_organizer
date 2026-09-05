@@ -18,6 +18,7 @@
 #include "markup_protect.h"
 #include "translation_progress.h"
 #include "translate_dialog.h"
+#include "translation_mod.h"
 
 #include <QPushButton>
 #include <QTimer>
@@ -1357,6 +1358,81 @@ static void testEnterKeepsItsOldMeaningInAParagraph()
           TranslateDialog::enterActionFor(true, Qt::AltModifier) == EA::Answer);
 }
 
+// The whole point of protecting a term: it never reaches Google, so the wording
+// that comes back is ours by construction rather than by correcting it after
+// the fact. This is the round trip a real Blight sentence takes.
+static void testALoreTermComesBackInOurWording()
+{
+    std::cout << "\n[a protected term keeps our wording through the machine]\n";
+    translation_store::Memory mem;
+    const QList<TranslatableString> strings = {
+        {"a.esp", "INFO:1:NAME:0", "The Blight ravages Vvardenfell", false},
+    };
+    auto *d = TranslateDialogTestHook::make(strings, &mem);
+    auto *t = TranslateDialogTestHook::table(d);
+
+    TranslateDialogTestHook::names(d)      = {QStringLiteral("Blight")};
+    TranslateDialogTestHook::renderings(d) = {QString::fromUtf8("Tizón")};
+
+    const int row = rowOf(t, QStringLiteral("The Blight ravages Vvardenfell"));
+    check("the row exists", row >= 0);
+    // What Google returns for "The Nrvaa ravages Vvardenfell" - it never saw
+    // the word, so it could not get it wrong.
+    TranslateDialogTestHook::deliver(
+        d, row, QString::fromUtf8("El Nrvaa devasta Vvardenfell"));
+
+    check("the term comes back as Tizón, not plaga",
+          t->item(row, 1)->text()
+              == QString::fromUtf8("El Tizón devasta Vvardenfell"),
+          t->item(row, 1)->text());
+    delete d;
+}
+
+// nameFor builds "<source> - <Language> (Nerevarine)"; this reads it back, so
+// a translation row can be told from a mod and pointed at what it translates.
+static void testATranslationNameParsesBack()
+{
+    std::cout << "\n[reading a translation's name back to its source]\n";
+
+    check("a translation names its source",
+          translation_mod::sourceModOf(
+              QStringLiteral("Glass Revamp - Spanish (Nerevarine)"))
+              == QStringLiteral("Glass Revamp"));
+
+    // The separator is the LAST " - ", or this mod - which is really on the
+    // author's list - would parse back to "Gray North".
+    check("a source with its own dash survives",
+          translation_mod::sourceModOf(QStringLiteral(
+              "Gray North - Andavel-Assumanu - Spanish (Nerevarine)"))
+              == QStringLiteral("Gray North - Andavel-Assumanu"),
+          translation_mod::sourceModOf(QStringLiteral(
+              "Gray North - Andavel-Assumanu - Spanish (Nerevarine)")));
+
+    // Language-agnostic on purpose: the row says Spanish whatever the
+    // profile's target is today.
+    for (const char *lang : {"spanish", "french", "german"}) {
+        const QString name = translation_mod::nameFor(
+            QStringLiteral("Some Mod"), QString::fromLatin1(lang));
+        check(QStringLiteral("round-trips through %1").arg(QString::fromLatin1(lang)).toUtf8().constData(),
+              translation_mod::sourceModOf(name) == QStringLiteral("Some Mod"), name);
+    }
+
+    check("an ordinary mod is not a translation",
+          translation_mod::sourceModOf(QStringLiteral("Glass Revamp")).isEmpty());
+    check("nor is one that merely ends in a language",
+          translation_mod::sourceModOf(
+              QStringLiteral("Glass Revamp - Spanish")).isEmpty());
+    check("nor one with the suffix and no language",
+          translation_mod::sourceModOf(
+              QStringLiteral("Glass Revamp (Nerevarine)")).isEmpty());
+    // A language is one word, so this is somebody's mod title, not ours.
+    check("nor one whose 'language' is a sentence",
+          translation_mod::sourceModOf(
+              QStringLiteral("Some Mod - a b c (Nerevarine)")).isEmpty());
+    check("an empty name is not a translation",
+          translation_mod::sourceModOf(QString()).isEmpty());
+}
+
 static void testVanillaGameSettingsAreNotTheMods()
 {
     std::cout << "\n[vanilla_text: what the mod actually changed]\n";
@@ -2254,6 +2330,8 @@ int main(int argc, char **argv)
     testVouchingCountsAsUnsavedWork();
     testABatchLandsOnTheRightRows();
     testVanillaGameSettingsAreNotTheMods();
+    testALoreTermComesBackInOurWording();
+    testATranslationNameParsesBack();
     testEnterAnswersAOneLineRow();
     testEnterKeepsItsOldMeaningInAParagraph();
     testAReSavedNameIsTheBaseGameTalking();

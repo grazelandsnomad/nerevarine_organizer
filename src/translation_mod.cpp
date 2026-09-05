@@ -1,6 +1,7 @@
 #include "translation_mod.h"
 
 #include <QDir>
+#include <QRegularExpression>
 #include <QFileInfo>
 
 namespace translation_mod {
@@ -15,6 +16,31 @@ QString nameFor(const QString &sourceModName, const QString &language)
     return sourceModName.trimmed()
          + QStringLiteral(" - ") + lang
          + QStringLiteral(" (Nerevarine)");
+}
+
+QString sourceModOf(const QString &translationModName)
+{
+    // The inverse of nameFor: "<source> - <Language> (Nerevarine)".
+    //
+    // Language-agnostic, and deliberately so. The row says "Spanish" whatever
+    // the profile's target happens to be today, and a translation that stopped
+    // being recognised because a setting changed would quietly get offered
+    // "Create translation" again.
+    //
+    // Greedy on the left, so the LAST " - " is the separator - which is what
+    // lets a source mod called "Gray North - Andavel-Assumanu" survive being
+    // parsed back out of its own translation's name.
+    static const QRegularExpression re(
+        QStringLiteral("^(.+) - ([^-]+) \\(Nerevarine\\)$"));
+    const QRegularExpressionMatch m = re.match(translationModName.trimmed());
+    if (!m.hasMatch()) return {};
+    const QString source = m.captured(1).trimmed();
+    const QString lang   = m.captured(2).trimmed();
+    // A language is one word. Without this, "Some Mod - a b c (Nerevarine)"
+    // would parse, and a mod that merely ends that way is not ours.
+    if (source.isEmpty() || lang.isEmpty() || lang.contains(QLatin1Char(' ')))
+        return {};
+    return source;
 }
 
 Result build(const QString &sourceModPath,

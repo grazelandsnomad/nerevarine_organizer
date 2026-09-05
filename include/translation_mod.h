@@ -51,6 +51,21 @@ struct Result {
 // detect an existing translation mod without rebuilding one.
 QString nameFor(const QString &sourceModName, const QString &language);
 
+// The source mod a translation was built from, or empty when this name is not
+// one of ours. The inverse of nameFor.
+//
+// A translation mod is not something to translate: offering "Create
+// translation" on "Glass Revamp - Spanish (Nerevarine)" is an offer to
+// translate a Spanish mod into Spanish, and on Morrowind the coverage scan
+// reaches that state by itself - its near-verbatim guard refuses a lightly
+// translated plugin as its own partner.
+//
+// ModRole::IsGeneratedTranslation answers the same question and answers it
+// better, but only for translations built since that flag existed: ten of the
+// eleven on the author's own list predate it. This covers those, and anything
+// restored from an older modlist.
+QString sourceModOf(const QString &translationModName);
+
 // Creates the translation mod under `modsDir` and writes every patched plugin
 // into it. An existing folder of the same name is reused and its plugins
 // overwritten - re-running the editor updates the translation in place rather

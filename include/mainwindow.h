@@ -520,6 +520,15 @@ private:
     };
     TranslationProgressState translationProgressStateFor(
         const QListWidgetItem *item) const;
+    // The row a translation mod translates, or nullptr when this row is not a
+    // translation - or when its source is no longer in the list.
+    //
+    // Flag OR name. ModRole::IsGeneratedTranslation is right whenever it is
+    // set, and translation_mod::sourceModOf covers every translation built
+    // before that flag existed. One helper for all three readers - the context
+    // menu, the Edit Mod button and onTranslateMod itself - so a gate that
+    // lives only in the UI that draws it cannot be walked around.
+    QListWidgetItem *translationSourceRowFor(const QListWidgetItem *item) const;
     // Same, but asks once and stores the answer as the shared default, so no
     // other game or profile is ever asked again. Empty return means the user
     // cancelled and the caller must abort.

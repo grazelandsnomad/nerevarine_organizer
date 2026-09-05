@@ -2008,6 +2008,35 @@ static void testCanonicalNames()
 
     check("the table has Spanish entries",
           !lore_overrides::termsFor("spanish").isEmpty());
+
+    // Morrowind's ash-borne affliction. Google returns "plaga" or "anublo",
+    // and differently in each row, so one mod ends up naming the same disease
+    // three ways.
+    check("the Blight has a settled name",
+          lore_overrides::lookup("the Blight", "spanish")
+              == QString::fromUtf8("el Tizón"));
+    check("and so does the bare word",
+          lore_overrides::lookup("Blight", "spanish")
+              == QString::fromUtf8("Tizón"));
+    check("case and spacing do not matter",
+          lore_overrides::lookup("  THE BLIGHT ", "spanish")
+              == QString::fromUtf8("el Tizón"));
+    // Whole-cell, still. Inside a sentence the masking path handles it - see
+    // protectedTermsFor - and lookup is not asked.
+    check("but not inside a sentence",
+          lore_overrides::lookup("The Blight ravages Vvardenfell", "spanish")
+              .isEmpty());
+
+    // The capitalised word is the affliction; the lowercase one is what
+    // happens to a crop, and 271 strings on the author's list mean the latter.
+    check("Blight is protected from the machine",
+          lore_overrides::protectedTermsFor("spanish")
+              .contains(QStringLiteral("Blight")));
+    check("in the capitalisation that tells it apart",
+          !lore_overrides::protectedTermsFor("spanish")
+              .contains(QStringLiteral("blight")));
+    check("a language with no table protects nothing",
+          lore_overrides::protectedTermsFor("klingon").isEmpty());
 }
 
 } // namespace lo_test
@@ -2117,6 +2146,90 @@ static void testOrdinaryWordsStayTranslatable()
           dwemer == QStringList{QStringLiteral("Dwemer")}, dwemer.join('|'));
     check("nothing repeats, nothing protected",
           term_protect::findNames({"Iron Sword", "Health Potion"}).isEmpty());
+}
+
+// mask() was a plain substring replace, so a term also matched the inside of a
+// longer word: "Blighted crops" became "Nrvaaed crops" and came back
+// "Tizoned". 47 strings on the author's list would have been mangled that way.
+//
+// It also makes mask agree with mentionedIn, which has always used this same
+// boundary to decide whether a term is present - deciding a term is here on
+// one rule and substituting it on another is how a term gets replaced
+// somewhere it was never found.
+static void testMaskTakesWholeWordsOnly()
+{
+    std::cout << "\n[masking a term does not eat the word around it]\n";
+    const QStringList terms{QStringLiteral("Blight")};
+
+    check("a word merely starting with the term is untouched",
+          term_protect::mask("Blighted crops wither", terms)
+              == QStringLiteral("Blighted crops wither"),
+          term_protect::mask("Blighted crops wither", terms));
+    check("and one merely ending with it",
+          term_protect::mask("the Ashblight", terms)
+              == QStringLiteral("the Ashblight"),
+          term_protect::mask("the Ashblight", terms));
+
+    check("the word itself is masked",
+          term_protect::mask("Cure Blight Disease", terms)
+              == QStringLiteral("Cure Nrvaa Disease"),
+          term_protect::mask("Cure Blight Disease", terms));
+    check("and comes back as the chosen wording",
+          term_protect::unmask(QStringLiteral("Curar enfermedad Nrvaa"),
+                               {QString::fromUtf8("Tizón")})
+              == QString::fromUtf8("Curar enfermedad Tizón"));
+
+    // Case-sensitive, which is the entire safety argument for this term.
+    check("the ordinary lowercase word is left alone",
+          term_protect::mask("blighted crops", terms)
+              == QStringLiteral("blighted crops"));
+
+    // Apostrophes are not letters, so a possessive still masks.
+    check("a possessive still masks",
+          term_protect::mask("Fargoth's ring", {QStringLiteral("Fargoth")})
+              == QStringLiteral("Nrvaa's ring"),
+          term_protect::mask("Fargoth's ring", {QStringLiteral("Fargoth")}));
+}
+
+static void testMentionedFromAdmitsOnlyWhatIsSaid()
+{
+    std::cout << "\n[which lore terms this mod actually says]\n";
+    const QStringList vocab{QStringLiteral("Blight")};
+
+    check("a mod that says it gets it",
+          term_protect::mentionedFrom(vocab, {QStringLiteral("the Blight spreads")})
+              == QStringList{QStringLiteral("Blight")});
+    check("a mod that never does gets nothing",
+          term_protect::mentionedFrom(vocab, {QStringLiteral("a silver sword")})
+              .isEmpty());
+    // Case-sensitive, like knownNames(): lowercase prose is prose.
+    check("lowercase prose is not a mention",
+          term_protect::mentionedFrom(vocab, {QStringLiteral("blighted crops")})
+              .isEmpty());
+    // Whole-word, so the term is admitted on the same rule mask substitutes on.
+    check("nor is the inside of a longer word",
+          term_protect::mentionedFrom(vocab, {QStringLiteral("Blightguard")})
+              .isEmpty());
+}
+
+// The reason a lore term must NOT join the list looksLikeName consults.
+// "cure", "disease" and "storm" are not ordinary words, so a row like
+// "Cure Blight" would read as somebody's name and be left blank forever -
+// strictly worse than the machine's wrong guess.
+static void testALoreTermIsNotAName()
+{
+    std::cout << "\n[a lore term is masked, but it is not a name]\n";
+    const QStringList names;          // no NAMES were found in this mod
+
+    check("a row that merely contains the term is not a name",
+          !term_protect::looksLikeName(QStringLiteral("Cure Blight"), names));
+    check("nor is Blight Disease",
+          !term_protect::looksLikeName(QStringLiteral("Blight Disease"), names));
+
+    // And the contrast: were it treated as a name, this is what would happen.
+    check("whereas listing it as one would strand the row",
+          term_protect::looksLikeName(QStringLiteral("Cure Blight"),
+                                      {QStringLiteral("Blight")}));
 }
 
 static void testMaskRoundTrip()
@@ -2669,6 +2782,9 @@ static void run_text_and_language()
     tp_test::testFindsTheName();
     tp_test::testOrdinaryWordsStayTranslatable();
     tp_test::testMaskRoundTrip();
+    tp_test::testMaskTakesWholeWordsOnly();
+    tp_test::testMentionedFromAdmitsOnlyWhatIsSaid();
+    tp_test::testALoreTermIsNotAName();
     tp_test::testPureNameIsNeverSent();
     tp_test::testSeveralNames();
     tp_test::testRenderingIsSubstituted();

@@ -3469,6 +3469,21 @@ void MainWindow::onTranslationsScanned(
         it->setData(ModRole::TranslationInProgress, started);
         if (started > 0) ++inProgress;
 
+        // A translation we built is not a mod that is missing one. Saying "no
+        // translation" about a Spanish mod is nonsense on its face, and on
+        // Morrowind the scan gets there by itself: the near-verbatim guard
+        // refuses a lightly translated plugin as its own partner, so the row
+        // lands on NoTranslation and turns red.
+        //
+        // The flag alone here, not the name too. This runs over every row on
+        // every rescan, and the worst a missed older row can do is wear a
+        // wrong caption - the ACTIONS are gated on the wider test.
+        if (it->data(ModRole::IsGeneratedTranslation).toBool()) {
+            it->setData(ModRole::TranslationState,  0);
+            it->setData(ModRole::TranslationDetail, QStringList());
+            continue;
+        }
+
         const auto found = byModPath.constFind(it->data(ModRole::ModPath).toString());
         if (found == byModPath.constEnd()) {
             it->setData(ModRole::TranslationState,  0);

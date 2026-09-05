@@ -998,6 +998,27 @@ void MainWindow::onContextMenu(const QPoint &pos)
                 // off, and a menu entry disappearing because of a display
                 // setting - while the work and the editor are both fine - is a
                 // different bargain from a row losing its tint.
+                // A translation is not something to translate. Offering
+                // "Create translation" on "Glass Revamp - Spanish
+                // (Nerevarine)" is an offer to translate a Spanish mod into
+                // Spanish, and on Morrowind the scan reaches that state on its
+                // own - the near-verbatim guard refuses a lightly translated
+                // plugin as its own partner, so the row reads "no
+                // translation" and gets the bold create entry.
+                //
+                // The way back in is the SOURCE mod's editor: that is where
+                // the answers live, and building from there updates this very
+                // folder rather than making a second one.
+                if (auto *src = translationSourceRowFor(item)) {
+                    QAction *act = menu.addAction(
+                        T("translate_review_source").arg(src->text().trimmed()),
+                        this, [this, src]{ onTranslateMod(src); });
+                    QFont f = act->font();
+                    f.setBold(true);
+                    act->setFont(f);
+                } else if (translation_mod::sourceModOf(item->text().trimmed()).isEmpty()
+                           && !item->data(ModRole::IsGeneratedTranslation).toBool()) {
+
                 const auto tp = translationProgressStateFor(item);
                 // Gated on `saved`, shown as `done`. A mod whose rows the
                 // machine filled but nobody has read yet has plenty of work on
@@ -1029,6 +1050,11 @@ void MainWindow::onContextMenu(const QPoint &pos)
                     menu.addAction(T("translate_menu"), this, [this, item]{
                         onTranslateMod(item);
                     });
+                }
+                // else: a translation whose source is gone. Nothing
+                // translation-related is offered, because translating a
+                // translation is never the answer - the row is still
+                // openable and still packageable.
                 }
 
                 // Undeclared variant chooser (Main Menu Redone's
@@ -1419,8 +1445,12 @@ void MainWindow::onItemDoubleClicked(QListWidgetItem *item)
         layout->addLayout(form);
 
         QString nexusUrl = item->data(ModRole::NexusUrl).toString();
+        // Same question the context menu asks, same answer. On a translation
+        // row the button reviews what it translates rather than offering to
+        // translate a Spanish mod into Spanish.
+        QListWidgetItem *const transSource = translationSourceRowFor(item);
         const auto tpHere =
-            (item->data(ModRole::InstallStatus).toInt() == 1)
+            (!transSource && item->data(ModRole::InstallStatus).toInt() == 1)
                 ? translationProgressStateFor(item)
                 : TranslationProgressState{};
         const int startedHere = tpHere.saved;
@@ -1428,7 +1458,7 @@ void MainWindow::onItemDoubleClicked(QListWidgetItem *item)
         // path has run - see below.
         bool continueTranslation = false;
 
-        if (!nexusUrl.isEmpty() || startedHere > 0) {
+        if (!nexusUrl.isEmpty() || startedHere > 0 || transSource) {
             auto *extraRow = new QHBoxLayout;
             if (!nexusUrl.isEmpty()) {
                 auto *visitBtn = new QPushButton(T("mod_edit_visit_page"));
@@ -1437,7 +1467,20 @@ void MainWindow::onItemDoubleClicked(QListWidgetItem *item)
                 });
                 extraRow->addWidget(visitBtn);
             }
-            if (startedHere > 0) {
+            if (transSource) {
+                auto *revBtn = new QPushButton(
+                    T("mod_edit_review_source").arg(transSource->text().trimmed()));
+                revBtn->setToolTip(T("mod_edit_review_source_tip"));
+                // Same deferral the continue button uses: the editor is a
+                // large modal of its own, and a rename typed above is only
+                // written when this dialog is accepted.
+                connect(revBtn, &QPushButton::clicked, &dlg,
+                        [&dlg, &continueTranslation]{
+                    continueTranslation = true;
+                    dlg.accept();
+                });
+                extraRow->addWidget(revBtn);
+            } else if (startedHere > 0) {
                 auto *contBtn = new QPushButton(
                     (tpHere.built ? T("mod_edit_review_translation")
                                   : T("mod_edit_continue_translation"))
@@ -1853,6 +1896,17 @@ const vanilla_text::Table &vanillaText()
 void MainWindow::onTranslateMod(QListWidgetItem *item)
 {
     if (!item) return;
+    // Handed a translation mod, work on what it translates. Checked here as
+    // well as in the menus: a gate that lives only in the UI that draws it is
+    // one keyboard shortcut away from not existing - the same reason
+    // onPackageMod re-asks its own question.
+    //
+    // Diverting the ITEM rather than special-casing further down is what keeps
+    // everything else right for free: the progress file, the dialog title,
+    // build()'s output folder and the insert-below-the-source row all stay
+    // keyed on the source mod.
+    if (auto *src = translationSourceRowFor(item)) item = src;
+
     const QString modPath = item->data(ModRole::ModPath).toString();
     const QString modName = item->text().trimmed();
     if (modPath.isEmpty() || !QDir(modPath).exists()) return;
@@ -2079,6 +2133,30 @@ QString MainWindow::translationProgressPathFor(const QListWidgetItem *item) cons
         translation_progress::fileNameFor(name, lang));
     if (QFileInfo::exists(legacy)) return legacy;
     return stable;
+}
+
+QListWidgetItem *
+MainWindow::translationSourceRowFor(const QListWidgetItem *item) const
+{
+    if (!item) return nullptr;
+    if (item->data(ModRole::ItemType).toString() != ItemType::Mod) return nullptr;
+
+    const QString name = item->text().trimmed();
+    // The flag first: it is the only one of the two that a rename cannot
+    // defeat. The name is the fallback for translations built before the flag
+    // existed - ten of the eleven on the author's own list.
+    const bool ours = item->data(ModRole::IsGeneratedTranslation).toBool();
+    const QString source = translation_mod::sourceModOf(name);
+    if (!ours && source.isEmpty()) return nullptr;
+    if (source.isEmpty()) return nullptr;   // flagged, but unparseable: say nothing
+
+    for (int i = 0; i < m_modList->count(); ++i) {
+        auto *cand = m_modList->item(i);
+        if (cand == item) continue;
+        if (cand->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (cand->text().trimmed() == source) return cand;
+    }
+    return nullptr;   // the source was uninstalled; there is nothing to review
 }
 
 MainWindow::TranslationProgressState

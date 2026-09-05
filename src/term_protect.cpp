@@ -161,6 +161,18 @@ QList<QStringList> capitalisedRuns(const QString &text)
 
 } // namespace
 
+QStringList mentionedFrom(const QStringList &vocabulary,
+                          const QStringList &sources)
+{
+    QStringList out;
+    for (const QString &term : vocabulary) {
+        const QString t = term.trimmed();
+        if (t.isEmpty() || out.contains(t)) continue;
+        if (mentionedIn(t, sources)) out << t;
+    }
+    return out;
+}
+
 QStringList findNames(const QStringList &sources)
 {
     return findNames(sources, {}, {});
@@ -264,13 +276,30 @@ QString tokenFor(int index)
          + QChar(u'a' + i % 26);
 }
 
+namespace {
+
+// wordRe, kept. mask() runs once per row per term and a plugin can hold eight
+// thousand rows, so building the same expression a quarter of a million times
+// a run is the difference between instant and noticeable. Terms are bounded by
+// the names one mod uses, so the map cannot grow without limit, and this is
+// only ever reached from the editor's own thread.
+const QRegularExpression &cachedWordRe(const QString &term)
+{
+    static QHash<QString, QRegularExpression> cache;
+    auto it = cache.constFind(term);
+    if (it == cache.constEnd()) it = cache.insert(term, wordRe(term, true));
+    return it.value();
+}
+
+} // namespace
+
 QString mask(const QString &text, const QStringList &terms)
 {
     QString out = text;
     // terms arrive longest first from findNames; honour that so a longer name
     // is substituted before any shorter one nested inside it.
     for (int i = 0; i < terms.size(); ++i)
-        out.replace(terms[i], tokenFor(i), Qt::CaseSensitive);
+        out.replace(cachedWordRe(terms[i]), tokenFor(i));
     return out;
 }
 

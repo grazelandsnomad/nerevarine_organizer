@@ -100,6 +100,25 @@ const QHash<QString, QHash<QString, QString>> &table()
         {QStringLiteral("ghouls"),
          {{QStringLiteral("spanish"), QStringLiteral("Necrófagos")}}},
 
+        // -- Morrowind's own --------------------------------------------
+        // The Blight is the ash-borne affliction Dagoth Ur spreads across
+        // Vvardenfell, and Spanish-speaking Morrowind calls it el Tizon.
+        // Google does not know that: left alone it returns "plaga" or
+        // "anublo", and differently in each row, so one mod ends up naming the
+        // same disease three ways.
+        //
+        // Article and all, because a whole-cell row that says "the Blight"
+        // wants "el Tizon" and not "el el Tizon" - the same reason
+        // "the companions" has an entry of its own above.
+        //
+        // The bare word carries the weight, though: it is also in
+        // protectedTermsFor, which holds it back from the translator INSIDE a
+        // sentence. That is where 130 of its 131 appearances are.
+        {QStringLiteral("blight"),
+         {{QStringLiteral("spanish"), QString::fromUtf8("Tizón")}}},
+        {QStringLiteral("the blight"),
+         {{QStringLiteral("spanish"), QString::fromUtf8("el Tizón")}}},
+
         // -- Proper nouns that must survive untouched -------------------
         // Mapped to themselves on purpose: this is how a name is protected
         // from a translator that would otherwise invent something. See the
@@ -170,6 +189,17 @@ QList<QPair<QString, QString>> patternsFor(const QString &token)
     };
     return norm(token) == QLatin1String("spanish") ? kSpanish
                                                    : QList<QPair<QString, QString>>{};
+}
+
+QStringList protectedTermsFor(const QString &token)
+{
+    if (norm(token) != QLatin1String("spanish")) return {};
+    // Capitalised, because that is the whole safety argument: "Blight" is the
+    // affliction, "blight" is what happens to a crop, and masking is
+    // case-sensitive so the second is never touched. Measured on the live
+    // list: 131 strings say Blight, 271 more say blight and mean the ordinary
+    // word.
+    return { QStringLiteral("Blight") };
 }
 
 QStringList termsFor(const QString &token)
