@@ -1311,6 +1311,11 @@ void testLauncherSyntheticUnderModsRootNotRecreated()
 
 void testUnsatisfiedMasterSuppressesPlugin()
 {
+    // Two things lean on this. The obvious one: OpenMW aborts at launch if a
+    // patch is enabled without its parent. The quieter one: the mod row's
+    // missing-master diamond is now only drawn for plugins the load order
+    // carries, so loosening this suppression would put the plugin back into
+    // the load order AND make the icon start firing again.
     std::cout << "\n[plugin whose master isn't on disk → moved to suppressedPlugins]\n";
     QTemporaryDir tmp;
     QVERIFY_EXIT(tmp.isValid(), 1);

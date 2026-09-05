@@ -482,6 +482,52 @@ static void ms_testSatisfiedMasterNotSuppressed(QDir &root)
     check("no other entries returned",      bad.isEmpty());
 }
 
+// A plugin the load order does not carry is not in the game, so it cannot fail
+// to find a master.
+//
+// Odai - Lifeblood of Balmora bundles "OLOB - Patch for Purists.esp". On a list
+// without Patch for Purists that plugin is dropped from content= and from the
+// load order by findUnsatisfiedMasters above - and the mod row still wore a red
+// "missing masters" diamond about it, permanently, with no way to say "I know".
+static void ms_testCarriedByAsksTheLoadOrder()
+{
+    std::cout << "testCarriedByAsksTheLoadOrder\n";
+    using openmw::carriedBy;
+    const QList<openmw::PluginRef> shipped{
+        {"Odai - Lifeblood of Balmora.esp", "/mods/odai/Odai - Lifeblood of Balmora.esp"},
+        {"OLOB - Patch for Purists.esp",    "/mods/odai/OLOB - Patch for Purists.esp"},
+    };
+
+    const auto carried = carriedBy(shipped, {"Odai - Lifeblood of Balmora.esp"});
+    check("a plugin the load order carries is kept",
+          carried.size() == 1 && carried[0].filename
+              == QStringLiteral("Odai - Lifeblood of Balmora.esp"),
+          QString::number(carried.size()));
+
+    // The whole point: the optional patch is not asked about at all.
+    for (const auto &pr : carried)
+        check("the optional patch is not among them",
+              pr.filename != QStringLiteral("OLOB - Patch for Purists.esp"));
+
+    // The path is carried through, since the caller needs it to read masters.
+    check("the path survives the filter",
+          carried[0].fullPath
+              == QStringLiteral("/mods/odai/Odai - Lifeblood of Balmora.esp"));
+
+    // What the folder spells "OLOB - Dialogue.ESP" an external launcher may
+    // write back in any case it likes, and OpenMW does not care either.
+    const auto shouty = carriedBy({{"OLOB - Dialogue.ESP", "/mods/odai/OLOB - Dialogue.ESP"}},
+                                  {"olob - dialogue.esp"});
+    check("matching is case-insensitive", shouty.size() == 1);
+
+    // Nothing loaded means nothing can fail - the honest answer for a profile
+    // that has not synced yet, not a reason to flag everything.
+    check("an empty load order carries nothing",
+          carriedBy(shipped, {}).isEmpty());
+    check("and an empty mod offers nothing",
+          carriedBy({}, {"anything.esp"}).isEmpty());
+}
+
 // MAST not in the available set -> reported.
 static void ms_testMissingMasterReported(QDir &root)
 {
@@ -617,6 +663,7 @@ static void run_master_satisfaction()
 
     ms_testSatisfiedMasterNotSuppressed(root);
     ms_testMissingMasterReported(root);
+    ms_testCarriedByAsksTheLoadOrder();
     ms_testMasterCaseInsensitive(root);
     ms_testTransitiveSuppression(root);
     ms_testHlaaluSeydaNeenAFFreshScenario(root);

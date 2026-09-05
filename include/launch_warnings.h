@@ -38,7 +38,12 @@ struct Result {
 
 // Walk the modlist, collect launch-blocking warnings. Missing-master plugins
 // are NOT reported: syncOpenMWConfig already suppresses them in the cfg, so
-// warning on launch would be a false alarm (delegate still paints the diamond).
+// warning on launch would be a false alarm.
+//
+// The delegate used to paint a red diamond over that same false alarm. It no
+// longer does: the scan behind it now asks what the load order carries rather
+// than what a mod folder contains, so the two halves of the app finally agree
+// about which plugins are in the game. See openmw::carriedBy.
 Result scan(QListWidget *list,
             const ForbiddenModsRegistry *forbidden,
             const QString &gameId);

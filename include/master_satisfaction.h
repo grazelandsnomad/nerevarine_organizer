@@ -16,6 +16,7 @@
 #include <QList>
 #include <QSet>
 #include <QString>
+#include <QStringList>
 
 namespace openmw {
 
@@ -40,5 +41,24 @@ struct PluginRef {
 QSet<QString> findUnsatisfiedMasters(
     const QList<PluginRef> &plugins,
     QSet<QString>           availableLower);
+
+// Of `plugins`, the ones `loadOrder` actually carries.
+//
+// A plugin the load order does not carry is not in the game - OpenMW never
+// opens it - so it cannot fail to find a master, and saying otherwise is how a
+// mod ends up flagged forever for shipping an optional compatibility patch
+// nobody asked for. Odai - Lifeblood of Balmora bundles a Patch for Purists
+// plugin; on a list without Patch for Purists it was never loaded, never could
+// be, and wore a red "missing masters" diamond regardless.
+//
+// Beside findUnsatisfiedMasters on purpose: that function is usually the very
+// reason a plugin is absent from the load order, and this answer only means
+// anything in the light of it.
+//
+// Case-insensitive, like every other plugin-name comparison here: what the
+// folder spells "OLOB - Dialogue.ESP" an external launcher may write back in
+// any case it likes.
+QList<PluginRef> carriedBy(const QList<PluginRef> &plugins,
+                           const QStringList      &loadOrder);
 
 } // namespace openmw

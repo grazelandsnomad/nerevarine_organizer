@@ -122,6 +122,7 @@
 #include "pluginparser.h"
 #include "modlist_io.h"
 #include "openmwconfigwriter.h"
+#include "master_satisfaction.h"
 #include "log_triage_dialog.h"
 #include "safe_fs.h"
 #include "deps_resolver.h"
@@ -963,12 +964,24 @@ void MainWindow::runMissingMastersScan()
         // masters for groundcover= plugins, so flagging them just produces
         // noise (e.g. TOTSP plugins the user doesn't need).
         if (m_groundcoverApproved.contains(e.modPath)) continue;
+        QList<openmw::PluginRef> shipped;
         for (const auto &p : m_scans->cachedDataFolders(e.modPath, contentExts)) {
             for (const QString &file : p.second) {
+                // Every file on disk can SATISFY a master, whether or not it is
+                // loaded - that is a question about the disk.
                 availableLower.insert(file.toLower());
-                e.plugins.append({QDir(p.first).filePath(file), file});
+                shipped.append({file, QDir(p.first).filePath(file)});
             }
         }
+        // But only a plugin the load order carries can FAIL to find one. The
+        // rest are not in the game: an optional compatibility patch for a mod
+        // the user does not have is dropped by findUnsatisfiedMasters long
+        // before this, and flagging it afterwards is warning about a file
+        // OpenMW is never told to open. See master_satisfaction.h.
+        for (const auto &pr : openmw::carriedBy(shipped, m_loadOrder))
+            e.plugins.append({pr.fullPath, pr.filename});
+        if (e.plugins.isEmpty()) continue;
+
         enabledMods.append(e);
     }
 

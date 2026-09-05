@@ -3,6 +3,7 @@
 #include "pluginparser.h"
 
 #include <QHash>
+#include <QSet>
 
 namespace openmw {
 
@@ -40,6 +41,20 @@ QSet<QString> findUnsatisfiedMasters(
         }
     }
     return unsatisfied;
+}
+
+QList<PluginRef> carriedBy(const QList<PluginRef> &plugins,
+                           const QStringList      &loadOrder)
+{
+    QSet<QString> carried;
+    carried.reserve(loadOrder.size());
+    for (const QString &cf : loadOrder) carried.insert(cf.toLower());
+
+    QList<PluginRef> out;
+    out.reserve(plugins.size());
+    for (const PluginRef &pr : plugins)
+        if (carried.contains(pr.filename.toLower())) out.append(pr);
+    return out;
 }
 
 } // namespace openmw
