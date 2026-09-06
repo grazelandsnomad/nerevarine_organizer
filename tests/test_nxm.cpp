@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QEventLoop>
 #include <QFile>
+#include <QHostInfo>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -105,6 +106,16 @@ static void testNexusModUrlBuild()
     auto rt = parseNexusModUrl(nexusModUrl("oblivion", 12345));
     check("build/parse game",  rt && rt->game  == "oblivion");
     check("build/parse modId", rt && rt->modId == 12345);
+}
+
+// A cheap "is there a network at all" probe: resolve the API host. DNS failing
+// means offline (or a network where the test could only report the weather),
+// and neither is what the reachability test is for.
+static bool networkAvailable()
+{
+    const QHostInfo info =
+        QHostInfo::fromName(QStringLiteral("api.nexusmods.com"));
+    return info.error() == QHostInfo::NoError && !info.addresses().isEmpty();
 }
 
 static void testProtocolFilesExist()
@@ -235,6 +246,14 @@ int main(int argc, char *argv[])
     if (skipIntegration) {
         std::cout << "\n[integration tests skipped - "
                      "NEREVARINE_SKIP_INTEGRATION=1]\n";
+    } else if (!networkAvailable()) {
+        // Offline is a reason to SKIP an integration test, not to redden the
+        // tree: these two exist to catch a broken protocol install and a
+        // changed API host, and an unplugged cable proves neither. Exit 77 -
+        // the automake convention - which tests/CMakeLists.txt registers as
+        // SKIP_RETURN_CODE, so ctest reports "skipped" rather than "failed".
+        std::cout << "\n[integration tests skipped - no network]\n";
+        return 77;
     } else {
         testProtocolFilesExist();
         testNexusApiReachable();

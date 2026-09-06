@@ -360,4 +360,8 @@ set_tests_properties(test_nxm PROPERTIES
     ENVIRONMENT "NEREVARINE_SKIP_INTEGRATION=1")
 
 add_test(NAME test_nxm_integration COMMAND test_nxm)
-set_tests_properties(test_nxm_integration PROPERTIES LABELS "integration")
+set_tests_properties(test_nxm_integration PROPERTIES LABELS "integration"
+    # 77 = "skipped", the automake convention: the binary returns it when there
+    # is no network, so an offline machine reports the test as skipped instead
+    # of failing a tree that has nothing wrong with it.
+    SKIP_RETURN_CODE 77)

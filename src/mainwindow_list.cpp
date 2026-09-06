@@ -2035,7 +2035,14 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
     }
     // A Scribe import is the user's own years of work; losing it because they
     // saved rather than built would be silly. Both exits keep it.
-    if (dlg.memoryChanged()) memory.save(memPath);
+    //
+    // And SAY SO if the write fails. This is the shared memory - the answers a
+    // human vouched for, feeding every future mod - and a full disk is not a
+    // hypothesis on this machine. Swallowing the false here loses them without
+    // a sound.
+    if (dlg.memoryChanged() && !memory.save(memPath))
+        ui::warn(this, T("translate_title").arg(modName),
+                 T("translate_memory_save_failed").arg(memPath));
 
     // Saved, not shipped. No mod is built, no row is added, openmw.cfg is not
     // touched - the point of the button is that a day's work costs none of
