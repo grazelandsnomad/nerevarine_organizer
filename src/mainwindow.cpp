@@ -304,6 +304,10 @@ MainWindow::MainWindow(QWidget *parent)
     // warmDataFoldersCache() on the worker.
     m_scans = new ScanCoordinator(m_modList, this);
     loadModList();
+    // The translate editor's first open builds the vanilla-text table - a walk
+    // of Morrowind's masters, ~94 MB. Start it on a worker now, in the shadow
+    // of the modlist load, so that first open finds it already built.
+    warmVanillaTextAsync();
     loadLoadOrder();
     absorbExternalLoadOrder(); // respect reorders done in OpenMW Launcher
     m_downloadQueue->cleanStaleDownloads();

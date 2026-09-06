@@ -296,6 +296,12 @@ private:
     // asked with: a lore term is masked like a name but is not one, and saying
     // otherwise reads "Cure Blight" as somebody's name.
     QStringList              m_namesOnly;
+    // name index -> rows whose SOURCE says that name. Editing a linked name
+    // used to re-expand every row in the table - fine at 40 rows, a stall at
+    // 8,435 - when only the rows that mention it can possibly change. Built in
+    // rebuildNameList from the same word-boundary test mask() substitutes on,
+    // so the two cannot disagree about where a name is.
+    QHash<int, QList<int>>   m_rowsUsingName;
     int                      m_vanillaFilled = 0;
     translation_progress::Progress m_progress;
     Outcome                  m_outcome = Outcome::Cancelled;

@@ -840,6 +840,20 @@ void TranslateDialog::rebuildNameList()
             known = m_mtNames[i];      // nobody knows better: it is a name
         m_nameRendering << known;
     }
+
+    // The reverse index the propagate path walks. O(names x rows) ONCE per
+    // rebuild - construction and each machine run - instead of O(rows) regex
+    // work per keystroke in a name cell. mentionedFrom is the same
+    // case-sensitive whole-word test mask() uses, so a row is in a name's list
+    // exactly when masking that row would touch it.
+    m_rowsUsingName.clear();
+    QHash<QString, int> indexOf;
+    for (int i = 0; i < m_mtNames.size(); ++i)
+        indexOf.insert(m_mtNames[i].trimmed(), i);
+    for (int r = 0; r < m_rowSource.size(); ++r)
+        for (const QString &n :
+             term_protect::mentionedFrom(m_mtNames, {m_rowSource[r]}))
+            m_rowsUsingName[indexOf.value(n)] << r;
 }
 
 // Rows that are somebody's name: answered with themselves and ticked.
@@ -1749,9 +1763,11 @@ void TranslateDialog::onCellChanged(int row, int column)
     const int nameIdx = nameRowIndex(row);
     if (nameIdx >= 0) {
         // Editing the name here is editing it everywhere - that is the point
-        // of the tint.
+        // of the tint. Only the rows that SAY the name, though: re-expanding
+        // all 8,435 of a big mod's rows per keystroke is a stall, and a row
+        // that never mentions the name cannot change.
         m_nameRendering[nameIdx] = m_table->item(row, ColTranslation)->text().trimmed();
-        for (int r = 0; r < m_table->rowCount(); ++r)
+        for (int r : m_rowsUsingName.value(nameIdx))
             if (r != row) expandRow(r);
         return;
     }

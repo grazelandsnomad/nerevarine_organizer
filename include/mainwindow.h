@@ -529,6 +529,10 @@ private:
     // menu, the Edit Mod button and onTranslateMod itself - so a gate that
     // lives only in the UI that draws it cannot be walked around.
     QListWidgetItem *translationSourceRowFor(const QListWidgetItem *item) const;
+    // Builds the vanilla-text table on a worker so the translate editor's
+    // first open is a cache hit instead of a 94 MB walk on the UI thread.
+    // Defined in mainwindow_list.cpp, where the table's cache lives.
+    void warmVanillaTextAsync();
     // Same, but asks once and stores the answer as the shared default, so no
     // other game or profile is ever asked again. Empty return means the user
     // cancelled and the caller must abort.

@@ -145,6 +145,8 @@ struct TranslateDialogTestHook {
     }
     static QStringList &namesOnly(TranslateDialog *d) { return d->m_namesOnly; }
     static void rebuildNames(TranslateDialog *d) { d->rebuildNameList(); }
+    static QList<int> rowsUsing(TranslateDialog *d, int nameIdx)
+    { return d->m_rowsUsingName.value(nameIdx); }
     static TranslateDialog::MachinePlan machinePlan(TranslateDialog *d)
     { return d->planMachineRun(); }
     static bool cleared(TranslateDialog *d, int r)
@@ -272,6 +274,35 @@ static void testUnguardedWriteIsWhatBlankedIt()
     TranslateDialogTestHook::deliverUnguarded(d, row, QStringLiteral("Profundidades de Nrvaa"));
     check("an unguarded store leaves the row blank - this is what shipped",
           t->item(row, 1)->text().isEmpty(), t->item(row, 1)->text());
+    delete d;
+}
+
+// Editing a linked name used to re-expand EVERY row - fine at 40, a stall per
+// keystroke at 8,435. The propagate path now walks a reverse index built in
+// rebuildNameList from the same word-boundary test mask() substitutes on.
+static void testOnlyRowsSayingTheNameAreReExpanded()
+{
+    std::cout << "\n[the name index knows exactly which rows say it]\n";
+    translation_store::Memory mem;
+    QList<TranslatableString> strings = dungeonStrings();
+    strings.append({"a.esp", "WEAP:sword:FNAM:0", "Iron Sword", false});
+    auto *d = TranslateDialogTestHook::make(strings, &mem);
+    auto *t = TranslateDialogTestHook::table(d);
+
+    // The constructor found the repeated name and built the index.
+    const QStringList &names = TranslateDialogTestHook::names(d);
+    const int idx = names.indexOf(QStringLiteral("Forfeoranna Heim"));
+    check("the repeated name was found", idx >= 0, names.join(", "));
+
+    const QList<int> rows = TranslateDialogTestHook::rowsUsing(d, idx);
+    check("all three rows that say it are indexed", rows.size() == 3,
+          QString::number(rows.size()));
+    check("and the row that never says it is not",
+          !rows.contains(rowOf(t, QStringLiteral("Iron Sword"))));
+    for (const char *src : {"Forfeoranna Heim", "Forfeoranna Heim Catacombs",
+                            "Forfeoranna Heim Depths"})
+        check("each mention is present",
+              rows.contains(rowOf(t, QString::fromLatin1(src))), src);
     delete d;
 }
 
@@ -2695,6 +2726,7 @@ int main(int argc, char **argv)
     testAGuardedWriteDoesNotVouchForARow();
     testProgressSurvivesClosingTheDialog();
     testAMemoryHitDoesNotClobberRestoredWork();
+    testOnlyRowsSayingTheNameAreReExpanded();
     testEditingTheNameRerendersEveryRow();
     testHandEditingARowBreaksItsLink();
     testMarkupIsLiftedOut();
