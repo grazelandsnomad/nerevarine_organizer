@@ -91,6 +91,31 @@ add_executable(test_skse
 target_include_directories(test_skse PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(test_skse PRIVATE Qt6::Core)
 
+# The launch-blocking rules: what stands between "play" and the game starting.
+# launch_warnings.cpp was already free functions with a header - the largest
+# zero-refactor coverage gap in the 2026-09 census - and needed only a target.
+# Widgets because scan() reads QListWidget rows; offscreen platform in main().
+add_executable(test_launch_warnings
+    test_launch_warnings.cpp
+    ${CMAKE_SOURCE_DIR}/src/launch_warnings.cpp
+    ${CMAKE_SOURCE_DIR}/src/settings.cpp
+    ${CMAKE_SOURCE_DIR}/src/pluginparser.cpp
+    ${CMAKE_SOURCE_DIR}/src/forbidden_mods.cpp
+    ${CMAKE_SOURCE_DIR}/src/skse_check.cpp
+    ${CMAKE_SOURCE_DIR}/src/pe_info.cpp
+    ${CMAKE_SOURCE_DIR}/src/reboot_check.cpp
+    ${CMAKE_SOURCE_DIR}/src/translator.cpp
+    ${CMAKE_SOURCE_DIR}/include/forbidden_mods.h
+)
+# Q_OBJECT in ForbiddenModsRegistry; the header is listed so AUTOMOC sees it,
+# the same shape test_settings uses for the same class.
+set_target_properties(test_launch_warnings PROPERTIES AUTOMOC ON)
+target_include_directories(test_launch_warnings PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/generated)
+add_dependencies(test_launch_warnings translation_keys_header)
+target_link_libraries(test_launch_warnings PRIVATE Qt6::Core Qt6::Widgets)
+
 add_executable(test_store_scan
     test_store_scan.cpp
     ${CMAKE_SOURCE_DIR}/src/store_scan.cpp
@@ -356,6 +381,8 @@ foreach(t ${UNIT_TESTS})
     set_tests_properties(${t} PROPERTIES LABELS "unit")
 endforeach()
 
+add_test(NAME test_launch_warnings COMMAND test_launch_warnings)
+set_tests_properties(test_launch_warnings PROPERTIES LABELS "unit")
 add_test(NAME test_nxm COMMAND test_nxm)
 set_tests_properties(test_nxm PROPERTIES
     LABELS "unit"
