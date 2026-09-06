@@ -275,6 +275,11 @@ TranslateDialog::TranslateDialog(const QString &modName,
     // and what their memory already knows both outrank the base game's own
     // wording for a name the mod did not write.
     fillFromVanilla();
+    // Last: a row that is nothing but a name has no answer to wait for, and
+    // leaving it blank made a mod whose every string is a name read "0 done,
+    // 7 left". Needs the name list, which is why that is built here too.
+    rebuildNameList();
+    fillFromNames();
 
     // First page, and land on the first thing still wanting an answer rather
     // than on row one - on a mod this size, row one is where you were a month
@@ -528,6 +533,14 @@ void TranslateDialog::buildUi(const QString &modName)
     m_vanillaNote->hide();
     lay->addWidget(m_vanillaNote);
 
+    // Its own label rather than another sentence on the one above: a mod can
+    // be all base-game names, all its own names, or a mix, and each line
+    // should appear only when it is true.
+    m_namesNote = new QLabel(this);
+    m_namesNote->setWordWrap(true);
+    m_namesNote->hide();
+    lay->addWidget(m_namesNote);
+
     // Its own label: translate_intro is a four-line paragraph and reflowing it
     // on every keystroke would make the whole dialog jump.
     m_countLabel = new QLabel(this);
@@ -718,8 +731,7 @@ int TranslateDialog::cooloffLeftSeconds() const
     const QDateTime blocked = Settings::translateBlockedAt();
     if (!blocked.isValid()) return 0;
     return google_translate::cooloffSecondsLeft(
-        blocked.toSecsSinceEpoch(), QDateTime::currentSecsSinceEpoch(),
-        Settings::translateBlockStrikes());
+        blocked.toSecsSinceEpoch(), QDateTime::currentSecsSinceEpoch());
 }
 
 // The bar is either a run's progress or a cooloff countdown, never both - a run
@@ -747,8 +759,7 @@ void TranslateDialog::updateCooloffDisplay()
         connect(m_mtCooloffTick, &QTimer::timeout,
                 this, &TranslateDialog::updateCooloffDisplay);
     }
-    const int total = google_translate::cooloffMinutesFor(
-                          Settings::translateBlockStrikes()) * 60;
+    const int total = google_translate::kBlockCooloffMinutes * 60;
     m_mtBar->setRange(0, total);
     m_mtBar->setValue(total - left);     // fills as the wait drains
     // No literal '%' in the format: QProgressBar reads %p, %v and %m out of it,
@@ -757,6 +768,100 @@ void TranslateDialog::updateCooloffDisplay()
     m_mtBar->setVisible(true);
     m_mtBtn->setToolTip(T("translate_mt_cooloff_tip").arg(mmss(left)));
     if (!m_mtCooloffTick->isActive()) m_mtCooloffTick->start();
+}
+
+// The mod's proper nouns, and what each should be rendered as.
+//
+// Built at construction as well as before each run: a row that is nothing but
+// somebody's name has no answer to wait for, and leaving it blank made a mod
+// whose every string is a name read "0 done, 7 left" - which is why pressing
+// Machine translate looked like the only way forward on The Beacon of St Rilms,
+// where six of the seven rows needed nothing at all.
+//
+// Pure in everything it reads (m_rowSource and m_rules, both settled before
+// buildUi), so calling it twice gives the same list.
+void TranslateDialog::rebuildNameList()
+{
+    m_mtNames = term_protect::findNames(m_rowSource, m_rules.protect,
+                                        m_rules.ordinary);
+
+    // The lore table's protected terms are masked exactly like a name, so the
+    // machine never sees "Blight" and cannot decide between "plaga" and
+    // "anublo" row by row. But they are NOT names, and the difference matters:
+    // "cure", "disease" and "storm" are not ordinary words, so letting a lore
+    // term answer looksLikeName below would read "Cure Blight" as somebody's
+    // name and leave the row blank forever. A name is a person nobody
+    // translates; a lore term is a common noun with one settled translation.
+    m_namesOnly = m_mtNames;
+    for (const QString &t : term_protect::mentionedFrom(
+             lore_overrides::protectedTermsFor(m_language), m_rowSource))
+        if (!m_mtNames.contains(t)) m_mtNames << t;
+    // Appended, not merged and re-sorted: findNames already returns its own
+    // entries longest-first and masking runs in list order, so a longer NAME
+    // that happens to contain the term still gets its turn first.
+
+    m_nameRendering = QStringList();
+    for (int i = 0; i < m_mtNames.size(); ++i) {
+        // What is already in the name's own row wins, and has to: this list is
+        // rebuilt on every run, so seeding it from anywhere else would throw
+        // away a rendering the user typed - silently, mid-run, into every other
+        // row that mentions the name.
+        QString known;
+        if (m_table) {
+            const int r = rowOfName(m_mtNames[i]);
+            if (r >= 0)
+                if (auto *cell = m_table->item(r, ColTranslation))
+                    known = cell->text().trimmed();
+        }
+        // A name the user has already decided about keeps that decision.
+        if (known.isEmpty())
+            known = m_memory ? m_memory->lookup(m_mtNames[i]) : QString();
+        if (known.isEmpty())
+            known = m_rules.terms.value(m_mtNames[i].trimmed().toLower());
+        if (known.isEmpty())
+            known = lore_overrides::lookup(m_mtNames[i], m_language);
+        if (known.isEmpty())
+            known = m_mtNames[i];      // nobody knows better: it is a name
+        m_nameRendering << known;
+    }
+}
+
+// Rows that are somebody's name: answered with themselves and ticked.
+//
+// The same bargain fillFromVanilla makes, and for the same reason - planAccept
+// drops an answer equal to its source, so the built mod carries no change and
+// the shared memory never sees it. Nothing about the output differs from
+// leaving the row blank, which is what happened before; what differs is that
+// the editor stops calling it unfinished work and the user stops reaching for
+// the network to deal with it.
+void TranslateDialog::fillFromNames()
+{
+    m_namesFilled = 0;
+
+    for (int i = 0; i < m_rowSource.size(); ++i) {
+        auto *cell = m_table->item(i, ColTranslation);
+        if (!cell || !cell->text().trimmed().isEmpty()) continue;
+        // m_namesOnly, not m_mtNames: a lore term is masked like a name but is
+        // not one, and telling looksLikeName otherwise reads "Cure Blight" as
+        // somebody's name and freezes the row. See rebuildNameList.
+        if (!term_protect::looksLikeName(m_rowSource[i], m_namesOnly,
+                                         m_rules.ordinary))
+            continue;
+        {
+            // Guarded, and ReviewedRole set directly - fillFromVanilla's shape.
+            // An unguarded write would read as a hand edit and mark the dialog
+            // dirty before the user has touched anything.
+            ProgrammaticEdit guard(m_expanding);
+            cell->setText(m_rowSource[i]);
+            cell->setData(ReviewedRole, true);
+        }
+        ++m_namesFilled;
+    }
+
+    if (m_namesFilled > 0 && m_namesNote) {
+        m_namesNote->setText(T("translate_names_note").arg(m_namesFilled));
+        m_namesNote->show();
+    }
 }
 
 void TranslateDialog::onMachineTranslate()
@@ -792,36 +897,7 @@ void TranslateDialog::onMachineTranslate()
     // an opinion about is worth exactly itself, which is also what
     // term_protect.h says protection means. Consistency, which is what the
     // one-answer-everywhere rule was ever after, holds either way.
-    m_mtNames = term_protect::findNames(m_rowSource, m_rules.protect,
-                                        m_rules.ordinary);
-
-    // The lore table's protected terms are masked exactly like a name, so the
-    // machine never sees "Blight" and cannot decide between "plaga" and
-    // "anublo" row by row. But they are NOT names, and the difference matters:
-    // "cure", "disease" and "storm" are not ordinary words, so letting a lore
-    // term answer looksLikeName below would read "Cure Blight" as somebody's
-    // name and leave the row blank forever. A name is a person nobody
-    // translates; a lore term is a common noun with one settled translation.
-    const QStringList namesOnly = m_mtNames;
-    for (const QString &t : term_protect::mentionedFrom(
-             lore_overrides::protectedTermsFor(m_language), m_rowSource))
-        if (!m_mtNames.contains(t)) m_mtNames << t;
-    // Appended, not merged and re-sorted: findNames already returns its own
-    // entries longest-first and masking runs in list order, so a longer NAME
-    // that happens to contain the term still gets its turn first.
-
-    m_nameRendering = QStringList();
-    for (int i = 0; i < m_mtNames.size(); ++i) {
-        // A name the user has already decided about keeps that decision.
-        QString known = m_memory ? m_memory->lookup(m_mtNames[i]) : QString();
-        if (known.isEmpty())
-            known = m_rules.terms.value(m_mtNames[i].trimmed().toLower());
-        if (known.isEmpty())
-            known = lore_overrides::lookup(m_mtNames[i], m_language);
-        if (known.isEmpty())
-            known = m_mtNames[i];      // nobody knows better: it is a name
-        m_nameRendering << known;
-    }
+    rebuildNameList();
 
     // Rows already answered are left alone; a lore term or a user rule is a
     // decision and never goes to a machine translator.
@@ -856,7 +932,7 @@ void TranslateDialog::onMachineTranslate()
         // namesOnly, not m_mtNames - see above. Everything else in this run
         // (masking, isOnlyNames, expandRow) uses the merged list, which is
         // what carries the renderings.
-        if (term_protect::looksLikeName(m_rowSource[i], namesOnly, m_rules.ordinary)) {
+        if (term_protect::looksLikeName(m_rowSource[i], m_namesOnly, m_rules.ordinary)) {
             ++names;
             continue;
         }
@@ -938,7 +1014,7 @@ void TranslateDialog::onMachineTranslate()
     m_mtStopped = false;
     // Coming back after a block: open with one request and wait for it. The
     // wait expiring only says our timer ran out, not that Google's did.
-    m_mtProbe   = Settings::translateBlockStrikes() > 0;
+    m_mtProbe   = Settings::translateWasBlocked();
     m_mtBtn->setEnabled(false);
     if (m_mtCooloffTick) m_mtCooloffTick->stop();
     m_mtBar->resetFormat();          // no stale "Blocked - 0:00" into a run
@@ -1142,17 +1218,14 @@ void TranslateDialog::pumpMachineTranslate()
                 // Stamped here, not at teardown: closing the dialog between
                 // the block and the last reply must not lose it.
                 Settings::setTranslateBlockedAt(QDateTime::currentDateTimeUtc());
-                // And each refusal in a row buys a longer wait. Fifteen
-                // minutes was a guess that a twelve-hour block made a liar of,
-                // and returning at full cadence is what renews it.
-                //
-                // Except when this was the probe: finding the same block still
-                // in force is not a new offence, and counting it would let one
-                // bad night ratchet the wait to a day all by itself.
-                if (!(m_mtProbe && m_mtTally.ok == 0)) {
-                    Settings::setTranslateBlockStrikes(
-                        Settings::translateBlockStrikes() + 1);
-                }
+                // And the next run comes back with a single probe request
+                // rather than the whole queue. That is all the flag decides:
+                // the wait itself is one constant, because the ladder that used
+                // to lengthen it could never climb - the clause guarding it
+                // skipped the increase whenever a probe's first request failed,
+                // and a probe only ever runs AFTER the wait expired, which is
+                // exactly the case that proved the wait too short.
+                Settings::setTranslateWasBlocked(true);
             }
 
             for (int i = 0; i < batch.size(); ++i) {
@@ -1296,11 +1369,16 @@ void TranslateDialog::finishMachineTranslate()
     m_mtStopped = false;
     m_mtBar->setVisible(false);
     // A run that got answers and was not turned away means the block has
-    // genuinely lapsed, so the ladder starts over. Without this the wait would
-    // only ever grow, and one bad night would cost a day.
+    // genuinely lapsed, so the next run stops probing and commits its whole
+    // queue again. Without this every later run would crawl one request at a
+    // time forever.
     if (m_mtTally.ok > 0 && m_mtTally.blocked == 0
-        && Settings::translateBlockStrikes() != 0) {
-        Settings::setTranslateBlockStrikes(0);
+        && Settings::translateWasBlocked()) {
+        Settings::setTranslateWasBlocked(false);
+        // And the stamp with it, so "not blocked" is one state rather than two
+        // that can disagree - a cleared flag beside a live stamp would still
+        // refuse the button.
+        Settings::setTranslateBlockedAt(QDateTime());
     }
 
     updateCooloffDisplay();
@@ -1316,8 +1394,7 @@ void TranslateDialog::finishMachineTranslate()
             case google_translate::Failure::Blocked:
                 body = T("translate_mt_blocked")
                            .arg(done)
-                           .arg(google_translate::cooloffMinutesFor(
-                                    Settings::translateBlockStrikes()));
+                           .arg(google_translate::kBlockCooloffMinutes);
                 break;
             case google_translate::Failure::Refused:
                 body = T("translate_mt_refused").arg(done);
@@ -1346,6 +1423,18 @@ void TranslateDialog::finishMachineTranslate()
     }
 }
 
+
+// The inverse of nameRowIndex: the row whose whole source IS this name, or -1.
+// Same case-insensitive whole-cell test, so the two agree about which row a
+// name owns.
+int TranslateDialog::rowOfName(const QString &name) const
+{
+    const QString n = name.trimmed();
+    for (int i = 0; i < m_rowSource.size(); ++i)
+        if (m_rowSource[i].trimmed().compare(n, Qt::CaseInsensitive) == 0)
+            return i;
+    return -1;
+}
 
 int TranslateDialog::nameRowIndex(int row) const
 {

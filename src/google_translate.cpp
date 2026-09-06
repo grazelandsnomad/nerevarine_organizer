@@ -179,18 +179,7 @@ Failure worstOf(const FailureTally &tally)
     return Failure::Ok;
 }
 
-int cooloffMinutesFor(int strikes)
-{
-    // A ladder rather than a formula, so every step is a number somebody chose
-    // and can argue with. Capped at a day: past that the user is better served
-    // by being told to use a different network than by a longer timer.
-    static const int kLadder[] = { 15, 15, 60, 360, 1440 };
-    const int n = qBound(0, strikes, 4);
-    return kLadder[n];
-}
-
-int cooloffSecondsLeft(qint64 blockedAtEpochSec, qint64 nowEpochSec,
-                       int strikes)
+int cooloffSecondsLeft(qint64 blockedAtEpochSec, qint64 nowEpochSec)
 {
     if (blockedAtEpochSec <= 0) return 0;
     // A stamp in the future is a broken clock, not a longer wait. Fail open:
@@ -199,7 +188,7 @@ int cooloffSecondsLeft(qint64 blockedAtEpochSec, qint64 nowEpochSec,
     if (blockedAtEpochSec > nowEpochSec) return 0;
 
     const qint64 elapsed = nowEpochSec - blockedAtEpochSec;
-    const qint64 total   = qint64(cooloffMinutesFor(strikes)) * 60;
+    const qint64 total   = qint64(kBlockCooloffMinutes) * 60;
     if (elapsed >= total) return 0;
     return int(total - elapsed);
 }

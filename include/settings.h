@@ -113,13 +113,19 @@ struct Settings {
     static QDateTime translateBlockedAt();
     static void      setTranslateBlockedAt(const QDateTime &whenUtc);
 
-    // How many times in a row Google has refused. Google's block outlives a
-    // fifteen-minute guess by a wide margin - one was measured still in force
-    // more than twelve hours later - so each repeat lengthens the wait. Reset
-    // to zero by a run that gets an answer; see
-    // google_translate::cooloffMinutesFor.
-    static int  translateBlockStrikes();
-    static void setTranslateBlockStrikes(int strikes);
+    // Whether Google has refused since the last run that got answers.
+    //
+    // Not "how long to wait" - that is one constant now
+    // (google_translate::kBlockCooloffMinutes). This decides only whether the
+    // next run opens with a single PROBE request instead of committing the
+    // whole queue, because a wait expiring says our timer ran out, not that
+    // Google's did.
+    //
+    // Keeps the old "block_strikes" key on purpose: it used to hold a count,
+    // and any count an existing config carries is non-zero, which means exactly
+    // what true means here. Nothing to migrate.
+    static bool translateWasBlocked();
+    static void setTranslateWasBlocked(bool blocked);
     static bool    utilityExplainerSeen();
     static void    setUtilityExplainerSeen(bool seen);
     static bool    uiDarkMode();                 // default false (light)

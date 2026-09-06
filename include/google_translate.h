@@ -162,22 +162,27 @@ Failure worstOf(const FailureTally &tally);
 
 // -- Cooling off after a block -----------------------------------------
 
-// How long to stay off the endpoint once it has answered 429. Measured: the
-// block is sticky, so asking again straight away only re-earns it. Long enough
-// that it has plausibly lapsed, short enough that finishing the mod today is
-// still on the table.
-constexpr int kBlockCooloffMinutes = 15;
-
-// ...and how long after the SECOND, third, fourth. Fifteen minutes was a
-// guess, and the guess was wrong: a block was measured still in force more
-// than twelve hours later, refusing the very first request of a fresh run with
-// both this client's request shape and a browser's. Walking back in at full
-// cadence the moment a short timer expires is how a block gets renewed.
+// How long to stay off the endpoint once it has answered 429.
 //
-// So a repeat lengthens the wait - 15 min, 1 h, 6 h, then a day - and a run
-// that actually gets an answer resets it. `strikes` is how many refusals in a
-// row have happened; 0 and 1 both mean the first.
-int cooloffMinutesFor(int strikes);
+// The block is Google's, on the IP, and sticky: one was measured still in force
+// more than twelve hours later, refusing the very first request of a fresh run
+// with both this client's request shape and a browser's. Nothing here can
+// shorten it. All this number decides is how often the app asks whether it has
+// lifted yet.
+//
+// One wait, not a ladder. There WAS a ladder - 15 min, 1 h, 6 h, a day - and it
+// could never climb past its first rung: the clause meant to avoid punishing a
+// user for "finding the same block still there" skipped the increase whenever a
+// retry's first request failed, and a retry only ever runs AFTER the wait has
+// expired, so it skipped precisely the case that proved the wait too short.
+//
+// It is not missed. Coming back after a block sends exactly ONE request and
+// waits for it (see the probe in translate_dialog.cpp), so checking every
+// fifteen minutes costs four requests an hour - about the cheapest question
+// this app can ask - and the moment one is answered it runs at full speed
+// again. A longer wait would only mean sitting out a block that had already
+// lapsed.
+constexpr int kBlockCooloffMinutes = 15;
 
 // Seconds still to wait. Epoch seconds rather than QDateTime so a test can
 // drive "now" instead of sleeping a quarter of an hour.
@@ -185,8 +190,7 @@ int cooloffMinutesFor(int strikes);
 // A stamp from the FUTURE returns 0, not the full wait: a clock that jumps
 // forward and is then corrected would otherwise lock machine translation out
 // permanently, with no UI anywhere to clear it. This fails open on purpose.
-int cooloffSecondsLeft(qint64 blockedAtEpochSec, qint64 nowEpochSec,
-                       int strikes = 1);
+int cooloffSecondsLeft(qint64 blockedAtEpochSec, qint64 nowEpochSec);
 
 } // namespace google_translate
 

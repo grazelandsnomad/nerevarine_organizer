@@ -167,6 +167,13 @@ private:
     // Answers the rows the base game already answered. Runs last of the three
     // fills, so a saved answer or a memory hit always outranks it.
     void fillFromVanilla();
+    // Rows that are nothing but somebody's name, answered with themselves.
+    // Runs last of the fills, so every real answer outranks it.
+    void fillFromNames();
+    // The mod's proper nouns and their renderings. Built at construction and
+    // again before each run; pure in m_rowSource and m_rules, so the two agree.
+    void rebuildNameList();
+    int  rowOfName(const QString &name) const;
     // Writes the answers to the progress file. `built` records whether they
     // have just been turned into a translation mod: a build is a save point
     // too, but finished work and half-done work must not look the same on
@@ -273,6 +280,12 @@ private:
     QString                  m_progressPath;
     QSet<QString>            m_vanillaSaysIt;
     QLabel                  *m_vanillaNote = nullptr;
+    QLabel                  *m_namesNote   = nullptr;
+    int                      m_namesFilled = 0;
+    // m_mtNames minus the lore terms merged into it. The list looksLikeName is
+    // asked with: a lore term is masked like a name but is not one, and saying
+    // otherwise reads "Cure Blight" as somebody's name.
+    QStringList              m_namesOnly;
     int                      m_vanillaFilled = 0;
     translation_progress::Progress m_progress;
     Outcome                  m_outcome = Outcome::Cancelled;

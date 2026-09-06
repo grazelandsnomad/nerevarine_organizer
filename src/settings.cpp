@@ -376,17 +376,17 @@ void Settings::setTranslateBlockedAt(const QDateTime &whenUtc)
                          whenUtc.toUTC().toString(Qt::ISODate));
 }
 
-int Settings::translateBlockStrikes()
+bool Settings::translateWasBlocked()
 {
-    // Clamped on the way out as well as in: a hand-edited config should not be
-    // able to put the user in a wait no code path can end.
-    const int n = QSettings().value(kTranslateBlockStrikes, 0).toInt();
-    return qBound(0, n, 16);
+    // toInt() rather than toBool(): the key used to hold a count and older
+    // configs still do. Any count above zero means the same thing this flag
+    // means, so they read correctly without a migration.
+    return QSettings().value(kTranslateBlockStrikes, 0).toInt() > 0;
 }
 
-void Settings::setTranslateBlockStrikes(int strikes)
+void Settings::setTranslateWasBlocked(bool blocked)
 {
-    QSettings().setValue(kTranslateBlockStrikes, qBound(0, strikes, 16));
+    QSettings().setValue(kTranslateBlockStrikes, blocked ? 1 : 0);
 }
 
 QString Settings::uiLanguage()

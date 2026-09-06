@@ -130,7 +130,22 @@ struct TranslateDialogTestHook {
         d->m_mtPending.clear();
         if (d->m_mtPace) d->m_mtPace->stop();
         Settings::setTranslateBlockedAt(QDateTime::currentDateTimeUtc());
+        // The real handler sets this too, and it is what makes the NEXT run
+        // come back with a single probe request instead of the whole queue.
+        Settings::setTranslateWasBlocked(true);
     }
+    // How a run went, for the teardown that decides whether the block lifted.
+    static void tally(TranslateDialog *d, int ok, int blocked)
+    {
+        d->m_mtTally = {};
+        for (int i = 0; i < ok; ++i)
+            d->m_mtTally.count(google_translate::Failure::Ok);
+        for (int i = 0; i < blocked; ++i)
+            d->m_mtTally.count(google_translate::Failure::Blocked);
+    }
+    static QStringList &namesOnly(TranslateDialog *d) { return d->m_namesOnly; }
+    static void rebuildNames(TranslateDialog *d) { d->rebuildNameList(); }
+    static QStringList &renderings2(TranslateDialog *d) { return d->m_nameRendering; }
     static int  cooloffLeft(TranslateDialog *d) { return d->cooloffLeftSeconds(); }
     static void refreshCooloff(TranslateDialog *d) { d->updateCooloffDisplay(); }
     static QString barFormat(TranslateDialog *d) { return d->m_mtBar->format(); }
@@ -877,9 +892,15 @@ static void testTheCountShownOutsideCountsWhatWasRead()
     // A machine run: every row answered, nobody has read a word. Guarded, or
     // onCellChanged would vouch for them on the way in - which is exactly what
     // must NOT happen for a machine answer.
+    //
+    // The tick is cleared too. "Forfeoranna Heim" is a bare name, so the editor
+    // answers and ticks it on open; this test is about what a MACHINE answer
+    // counts as, so every row starts from the same place an ordinary one does.
     TranslateDialogTestHook::expanding(d) = true;
-    for (int r = 0; r < t->rowCount(); ++r)
+    for (int r = 0; r < t->rowCount(); ++r) {
         t->item(r, 1)->setText(QStringLiteral("respuesta %1").arg(r));
+        t->item(r, 1)->setData(Qt::UserRole + 4, false);
+    }
     TranslateDialogTestHook::expanding(d) = false;
 
     check("the write succeeds", TranslateDialogTestHook::write(d));
@@ -1023,23 +1044,29 @@ static void testVouchingWithoutTypingIsUnsavedWorkToo()
     auto *d = TranslateDialogTestHook::make(dungeonStrings(), &mem);
     auto *t = TranslateDialogTestHook::table(d);
 
+    // Rows 1 and 2, not 0: row 0 is "Forfeoranna Heim", a bare name, which the
+    // editor now answers and ticks on open - there would be nothing left to
+    // vouch for.
+    const int typed = rowOf(t, QStringLiteral("Forfeoranna Heim Catacombs"));
+    const int blank = rowOf(t, QStringLiteral("Forfeoranna Heim Depths"));
+
     TranslateDialogTestHook::expanding(d) = true;
-    t->item(0, 1)->setText(QStringLiteral("una respuesta"));
+    t->item(typed, 1)->setText(QStringLiteral("una respuesta"));
     TranslateDialogTestHook::expanding(d) = false;
     TranslateDialogTestHook::setDirty(d, false);
 
-    TranslateDialogTestHook::review(d, 0, true);
+    TranslateDialogTestHook::review(d, typed, true);
     check("vouching marks the dialog dirty", TranslateDialogTestHook::dirty(d));
 
     // A no-op must stay a no-op, or every repaint would claim unsaved work.
     TranslateDialogTestHook::setDirty(d, false);
-    TranslateDialogTestHook::review(d, 0, true);
+    TranslateDialogTestHook::review(d, typed, true);
     check("vouching again changes nothing", !TranslateDialogTestHook::dirty(d));
 
     // Refused on a blank row, as it always was - and a refusal is not work.
-    TranslateDialogTestHook::review(d, 1, true);
+    TranslateDialogTestHook::review(d, blank, true);
     check("a blank row still cannot be vouched for",
-          !TranslateDialogTestHook::reviewed(d, 1));
+          !TranslateDialogTestHook::reviewed(d, blank));
     check("and asking did not count as work", !TranslateDialogTestHook::dirty(d));
     delete d;
 }
@@ -1134,8 +1161,18 @@ static void testABatchLandsOnTheRightRows()
     // A row nothing came back for is left blank on purpose: blank keeps the
     // original string in the plugin, and the tally has already said why. This
     // is the path a batch takes when parseResponses refuses to verify it.
+    //
+    // Blanked first: "Forfeoranna Heim" is a bare name, so the editor answers
+    // it with itself on open (fillFromNames). This test is about what a FAILED
+    // answer does, so the row has to start empty the way an ordinary row does.
     const int c = rowOf(t, QStringLiteral("Forfeoranna Heim"));
     check("a third row to leave unanswered", c >= 0 && c != a && c != b);
+    {
+        auto &guard = TranslateDialogTestHook::expanding(d);
+        guard = true;
+        t->item(c, 1)->setText(QString());
+        guard = false;
+    }
     TranslateDialogTestHook::apply(d, c, 0, false,
         QStringLiteral("Nrvaa"), QString());
     check("an unanswered row stays blank rather than guessing",
@@ -1433,6 +1470,137 @@ static void testATranslationNameParsesBack()
           translation_mod::sourceModOf(QString()).isEmpty());
 }
 
+// The Beacon of St Rilms offers seven strings and every one is a name. Six were
+// recognised as such - and left BLANK, so the editor read "0 done, 7 left" and
+// pressing Machine translate looked like the only way forward. One request went
+// out, for the seventh, and Google refused it.
+//
+// A row that is nothing but somebody's name has no answer to wait for. It is
+// answered with itself now, which is what leaving it blank already meant to the
+// built plugin - planAccept drops both - but stops the editor calling it work.
+static void testANameArrivesAnswered()
+{
+    std::cout << "\n[a row that is only a name needs nobody]\n";
+    translation_store::Memory mem;
+    const QList<TranslatableString> strings = {
+        {"a.esp", "NPC_:strb1:FNAM:0", "Dramus Marvayn",  true},
+        {"a.esp", "NPC_:strb2:FNAM:0", "Fevris Marvayn",  true},
+        {"a.esp", "ACTI:strb3:FNAM:0", "A rusted iron key", false},
+    };
+    auto *d = TranslateDialogTestHook::make(strings, &mem);
+    auto *t = TranslateDialogTestHook::table(d);
+
+    const int name  = rowOf(t, QStringLiteral("Dramus Marvayn"));
+    const int prose = rowOf(t, QStringLiteral("A rusted iron key"));
+
+    check("a name answers itself",
+          t->item(name, 1)->text() == QStringLiteral("Dramus Marvayn"),
+          t->item(name, 1)->text());
+    check("and counts as read", TranslateDialogTestHook::reviewed(d, name));
+    check("so it is done", TranslateDialogTestHook::answered(d, name));
+
+    check("a row with something to translate is left for the user",
+          t->item(prose, 1)->text().isEmpty(), t->item(prose, 1)->text());
+    check("and is not ticked", !TranslateDialogTestHook::reviewed(d, prose));
+
+    // Recomputed from the strings every time the window opens, so there is
+    // nothing here worth offering to save.
+    check("opening the window is not unsaved work",
+          !TranslateDialogTestHook::dirty(d));
+
+    // The built plugin must carry no change for them: an answer equal to its
+    // source is dropped before both the mod and the shared memory.
+    const auto plan = TranslateDialogTestHook::plan(d);
+    check("nothing is written back for a name", plan.byText.isEmpty(),
+          QString::number(plan.byText.size()));
+    delete d;
+}
+
+// A lore term is masked like a name but is NOT one. "cure", "disease" and
+// "storm" are not ordinary words, so telling looksLikeName that "Blight" is a
+// name would read "Cure Blight" as somebody's and freeze the row forever.
+static void testALoreTermDoesNotFreezeARow()
+{
+    std::cout << "\n[a lore term must not pre-answer the row around it]\n";
+    translation_store::Memory mem;
+    const QList<TranslatableString> strings = {
+        {"a.esp", "ALCH:a:FNAM:0", "Cure Blight Disease", false},
+        {"a.esp", "SPEL:b:FNAM:0", "Blight Storms",       false},
+    };
+    auto *d = TranslateDialogTestHook::make(strings, &mem);
+    auto *t = TranslateDialogTestHook::table(d);
+
+    for (int r = 0; r < t->rowCount(); ++r)
+        check("the row is left for the machine",
+              t->item(r, 1)->text().isEmpty(),
+              t->item(r, 0)->text() + " -> " + t->item(r, 1)->text());
+
+    // The split that makes it so: the lore terms are merged into the masking
+    // list but never into the list looksLikeName is asked with.
+    check("Blight is masked", TranslateDialogTestHook::names(d)
+              .contains(QStringLiteral("Blight")));
+    check("but it is not offered as a name",
+          !TranslateDialogTestHook::namesOnly(d)
+              .contains(QStringLiteral("Blight")));
+    delete d;
+}
+
+// The name list is rebuilt before every run. It used to be reseeded from the
+// memory and the lore table alone, so a rendering the user had typed into the
+// name's own row was thrown away mid-run - silently, and into every other row
+// that mentions the name. Harmless while name rows were always blank; not once
+// they arrive answered.
+static void testASecondRunKeepsYourWordingForAName()
+{
+    std::cout << "\n[a name you reworded survives the next run]\n";
+    translation_store::Memory mem;
+    // "Forfeoranna Heim" repeats across the three, so findNames keeps it AND
+    // there is a row that is exactly it - which is the shape this is about.
+    auto *d = TranslateDialogTestHook::make(dungeonStrings(), &mem);
+    auto *t = TranslateDialogTestHook::table(d);
+
+    const int row = rowOf(t, QStringLiteral("Forfeoranna Heim"));
+    t->item(row, 1)->setText(QString::fromUtf8("Hogar de los precursores"));
+
+    TranslateDialogTestHook::rebuildNames(d);
+
+    const QStringList &names = TranslateDialogTestHook::names(d);
+    const int idx = names.indexOf(QStringLiteral("Forfeoranna Heim"));
+    check("the name is in the list", idx >= 0);
+    check("and keeps the wording you gave it",
+          TranslateDialogTestHook::renderings2(d).value(idx)
+              == QString::fromUtf8("Hogar de los precursores"),
+          TranslateDialogTestHook::renderings2(d).value(idx));
+    delete d;
+}
+
+// A run that got answers and was not turned away means the block has lifted.
+// Both the flag and the stamp have to go, or the cleared flag would sit beside
+// a live stamp and the button would still refuse.
+static void testAGoodRunClearsTheBlock()
+{
+    std::cout << "\n[a run that works says the block is over]\n";
+    translation_store::Memory mem;
+    auto *d = TranslateDialogTestHook::make(dungeonStrings(), &mem);
+
+    TranslateDialogTestHook::blockNow(d);
+    check("a refusal arms the probe", Settings::translateWasBlocked());
+    check("and stamps the wait", Settings::translateBlockedAt().isValid());
+
+    // Answers, and nothing turned away.
+    TranslateDialogTestHook::tally(d, 4, 0);
+    TranslateDialogTestHook::finish(d);
+    check("a clean run clears the flag", !Settings::translateWasBlocked());
+    check("and the stamp with it", !Settings::translateBlockedAt().isValid());
+
+    // Not driven from here: a run with any failure ends in a blocking ui::warn
+    // (translate_dialog.cpp:1422), which headless would simply hang. The rule
+    // it would check - one 429 anywhere poisons the run, however many rows
+    // succeeded - is the `m_mtTally.blocked == 0` half of the condition above,
+    // and it is the reason the flag is not cleared by the block path itself.
+    delete d;
+}
+
 static void testVanillaGameSettingsAreNotTheMods()
 {
     std::cout << "\n[vanilla_text: what the mod actually changed]\n";
@@ -1546,36 +1714,46 @@ static void testASettingThatHoldsAnObjectIdIsNotText()
        && !vanilla_text::holdsObjectId(QStringLiteral("sEffectSummonCreature04")));
 }
 
-// Fifteen minutes was a guess. A block was measured still refusing the very
-// first request of a fresh run more than twelve hours later, so a repeat has to
-// buy a longer wait than the last one.
-static void testABlockThatOutlivesTheGuess()
+// There WAS a ladder here - 15 min, 1 h, 6 h, a day - and it could never climb
+// past its first rung. The clause meant to avoid punishing a user for "finding
+// the same block still there" skipped the increase whenever a retry's first
+// request failed, and a retry only ever runs AFTER the wait has expired, so it
+// skipped precisely the case that proved the wait too short. Two blocks two
+// days apart both left the counter reading 1.
+//
+// One wait now, because coming back costs a single probe request: checking
+// every fifteen minutes is four requests an hour, and a longer wait would only
+// mean sitting out a block that had already lapsed.
+static void testOneWaitThatDoesNotGrow()
 {
-    std::cout << "\n[google_translate: the cooloff ladder]\n";
+    std::cout << "\n[google_translate: one cooloff, not a ladder]\n";
     using namespace google_translate;
 
-    check("the first block is the old fifteen minutes",
-          cooloffMinutesFor(1) == kBlockCooloffMinutes,
-          QString::number(cooloffMinutesFor(1)));
-    check("an unblocked user is treated as the first too",
-          cooloffMinutesFor(0) == 15);
-    check("the second is an hour",  cooloffMinutesFor(2) == 60);
-    check("the third is six hours", cooloffMinutesFor(3) == 360);
-    check("the fourth is a day",    cooloffMinutesFor(4) == 1440);
-    check("and it stops there rather than growing without end",
-          cooloffMinutesFor(99) == 1440);
-    check("a nonsense count cannot shorten it either",
-          cooloffMinutesFor(-5) == 15);
-
     constexpr qint64 t = 1'700'000'000;
-    check("a second block waits the full hour",
-          cooloffSecondsLeft(t, t, 2) == 60 * 60);
-    check("and is over when the hour is up",
-          cooloffSecondsLeft(t, t + 3600, 2) == 0);
-    check("while the first was already over by then",
-          cooloffSecondsLeft(t, t + 3600, 1) == 0);
+    const int total = kBlockCooloffMinutes * 60;
+
+    check("a fresh block waits the whole fifteen",
+          cooloffSecondsLeft(t, t) == total, QString::number(cooloffSecondsLeft(t, t)));
+    check("and it drains", cooloffSecondsLeft(t, t + 60) == total - 60);
+    check("at the end it is over", cooloffSecondsLeft(t, t + total) == 0);
+    check("and never goes negative", cooloffSecondsLeft(t, t + 100000) == 0);
+    check("no stamp means no wait", cooloffSecondsLeft(0, t) == 0);
+
+    // The whole point: a second refusal is the same wait as the first. Nothing
+    // in the signature can lengthen it any more, which is what makes the
+    // fifteen minutes the countdown shows honest.
+    check("a repeat waits exactly as long as the first",
+          cooloffSecondsLeft(t, t) == cooloffSecondsLeft(t, t));
+    check("and a whole day later there is nothing left to wait",
+          cooloffSecondsLeft(t, t + 86400) == 0);
+
+    // mmss() renders m:ss with no hour field, which is only truthful while the
+    // wait cannot exceed an hour. It cannot.
+    check("the wait stays inside what the countdown can render",
+          kBlockCooloffMinutes < 60, QString::number(kBlockCooloffMinutes));
+
     check("a clock that jumped forward still fails open",
-          cooloffSecondsLeft(t + 500, t, 4) == 0);
+          cooloffSecondsLeft(t + 500, t) == 0);
 }
 
 // One row was one HTTP GET. Project Cyrodiil is 8435 rows.
@@ -2330,6 +2508,10 @@ int main(int argc, char **argv)
     testVouchingCountsAsUnsavedWork();
     testABatchLandsOnTheRightRows();
     testVanillaGameSettingsAreNotTheMods();
+    testANameArrivesAnswered();
+    testALoreTermDoesNotFreezeARow();
+    testASecondRunKeepsYourWordingForAName();
+    testAGoodRunClearsTheBlock();
     testALoreTermComesBackInOurWording();
     testATranslationNameParsesBack();
     testEnterAnswersAOneLineRow();
@@ -2339,7 +2521,7 @@ int main(int argc, char **argv)
     testVanillaNamesArriveAnswered();
     testYourOwnAnswerOutranksTheBaseGame();
     testASettingThatHoldsAnObjectIdIsNotText();
-    testABlockThatOutlivesTheGuess();
+    testOneWaitThatDoesNotGrow();
     testSeveralStringsInOneRequest();
     testOnlyThisPageIsOnScreen();
     testAnAnswerLandsOnAnOffPageRow();
