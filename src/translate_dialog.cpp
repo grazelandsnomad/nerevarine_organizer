@@ -7,6 +7,7 @@
 #include "translator.h"
 #include "target_language.h"
 #include "google_translate.h"
+#include "libre_translate.h"
 #include "lore_overrides.h"
 #include "markup_protect.h"
 #include "term_protect.h"
@@ -744,6 +745,11 @@ QString mmss(int seconds)
 
 int TranslateDialog::cooloffLeftSeconds() const
 {
+    // The cooloff exists because Google blocks by IP. A local server has no
+    // such thing, so switching provider walks straight past a live countdown -
+    // which is much of the point of having the provider at all. One test here
+    // covers the gate, the bar and the tooltip alike.
+    if (Settings::translateProvider() == QLatin1String("local")) return 0;
     const QDateTime blocked = Settings::translateBlockedAt();
     if (!blocked.isValid()) return 0;
     return google_translate::cooloffSecondsLeft(
@@ -958,6 +964,14 @@ void TranslateDialog::onMachineTranslate()
     const QString iso = isoFor(m_language);
     if (iso.isEmpty()) return;
 
+    // Snapshotted per RUN, not read per request: a settings change mid-run
+    // must not split one run across two endpoints, or the tally would blame
+    // one provider for the other's answers.
+    m_mtLocal         = Settings::translateProvider() == QLatin1String("local");
+    m_mtLocalEndpoint = libre_translate::endpointUrl(
+                            Settings::translateLocalEndpoint());
+    m_mtLocalKey      = Settings::translateLocalApiKey();
+
     // Before anything is written. The lore/rule pass below fills answers into
     // the table as it goes, so a gate placed after it would leave half a run's
     // results on screen for a run that never happened.
@@ -1025,7 +1039,9 @@ void TranslateDialog::onMachineTranslate()
         else if (box.clickedButton() != sendSome)      return;
         if (todo.isEmpty()) return;
     } else if (!ui::confirm(this, T("translate_machine"),
-                            T("translate_machine_confirm").arg(todo.size()))) {
+                            (m_mtLocal ? T("translate_machine_confirm_local")
+                                       : T("translate_machine_confirm"))
+                                .arg(todo.size()))) {
         return;
     }
 
@@ -1090,7 +1106,13 @@ void TranslateDialog::onMachineTranslate()
     m_mtStopped = false;
     // Coming back after a block: open with one request and wait for it. The
     // wait expiring only says our timer ran out, not that Google's did.
-    m_mtProbe   = Settings::translateWasBlocked();
+    // Google's alone - a local server was never blocked and owes no probe.
+    m_mtProbe   = !m_mtLocal && Settings::translateWasBlocked();
+    // The pacing is politeness towards Google; a server on this machine is
+    // happier saturated than trickled. Set every run: the timer is reused and
+    // the provider can change between runs.
+    m_mtPace->setInterval(m_mtLocal ? libre_translate::kLocalSpacingMs
+                                    : google_translate::kRequestSpacingMs);
     m_mtBtn->setEnabled(false);
     if (m_mtCooloffTick) m_mtCooloffTick->stop();
     m_mtBar->resetFormat();          // no stale "Blocked - 0:00" into a run
@@ -1183,7 +1205,7 @@ void TranslateDialog::pumpMachineTranslate()
         // Would this one overflow the request? Put it back and send what we
         // have. Asked of google_translate rather than measured here, so the
         // pump and fitBatch cannot drift apart about what fits.
-        if (!payload.isEmpty()
+        if (!m_mtLocal && !payload.isEmpty()
             && !google_translate::fitsInOneRequest(payload + QStringList{sent},
                                                    isoFor(m_language))) {
             m_mtQueue.prepend(item);
@@ -1206,13 +1228,25 @@ void TranslateDialog::pumpMachineTranslate()
         // Only a real batch takes the new path, so the one-string case cannot
         // regress on a shape nobody has been able to confirm yet.
         const bool batched = payload.size() > 1;
-        QNetworkRequest req(batched
-            ? google_translate::requestUrl(payload, isoFor(m_language))
-            : google_translate::requestUrl(payload.first(), isoFor(m_language)));
-        req.setRawHeader("Accept", "application/json");
-        req.setRawHeader("User-Agent", google_translate::userAgent());
-
-        QNetworkReply *reply = m_net->get(req);
+        QNetworkReply *reply = nullptr;
+        if (m_mtLocal) {
+            // POST with q as an array, one string or many - one request
+            // shape, one parser. No browser costume either: a local server
+            // is not fingerprinting its callers.
+            QNetworkRequest req(m_mtLocalEndpoint);
+            req.setHeader(QNetworkRequest::ContentTypeHeader,
+                          QStringLiteral("application/json"));
+            reply = m_net->post(req,
+                libre_translate::requestBody(payload, isoFor(m_language),
+                                             m_mtLocalKey));
+        } else {
+            QNetworkRequest req(batched
+                ? google_translate::requestUrl(payload, isoFor(m_language))
+                : google_translate::requestUrl(payload.first(), isoFor(m_language)));
+            req.setRawHeader("Accept", "application/json");
+            req.setRawHeader("User-Agent", google_translate::userAgent());
+            reply = m_net->get(req);
+        }
         connect(reply, &QNetworkReply::finished, this,
                 [this, reply, batch, payload, batched]() {
             reply->deleteLater();
@@ -1221,11 +1255,18 @@ void TranslateDialog::pumpMachineTranslate()
                 QNetworkRequest::HttpStatusCodeAttribute).toInt();
 
             QStringList answers;
-            // Left guarded: on a 429 the body is an HTML "Sorry..." page, and
-            // there is nothing to gain from putting that through a JSON parser.
+            QString serverSaid;
+            // Read regardless of status: a local server's error body carries
+            // {"error": "..."} - "Invalid API key" names the fix where a bare
+            // 403 does not. Google's 429 page stays unparsed as ever; the
+            // guard below never hands it to a parser.
+            const QByteArray body = reply->readAll();
+            if (m_mtLocal) serverSaid = libre_translate::parseError(body);
             if (reply->error() == QNetworkReply::NoError) {
-                const QByteArray body = reply->readAll();
-                if (batched) {
+                if (m_mtLocal) {
+                    answers = libre_translate::parseResponses(body,
+                                                              int(payload.size()));
+                } else if (batched) {
                     // Checked against the sources Google echoes back, so a
                     // shape this does not read comes out EMPTY rather than
                     // plausible. Mapping answers onto the wrong rows is the
@@ -1272,7 +1313,8 @@ void TranslateDialog::pumpMachineTranslate()
             if (outcome == google_translate::Failure::Ok) m_mtProbe = false;
             if (outcome != google_translate::Failure::Ok
                 && m_mtFirstError.isEmpty()) {
-                m_mtFirstError      = reply->errorString();
+                m_mtFirstError      = serverSaid.isEmpty() ? reply->errorString()
+                                                           : serverSaid;
                 m_mtFirstHttpStatus = http;
             }
 
@@ -1291,6 +1333,11 @@ void TranslateDialog::pumpMachineTranslate()
                 m_mtQueue.clear();
                 m_mtPending.clear();
                 if (m_mtPace) m_mtPace->stop();
+                // Google only. A local server's 429 is its own load
+                // shedding, over the moment it drains - not the IP block the
+                // cooloff machinery exists for, and stamping a fifteen-minute
+                // wait for it would lock the user out of their own hardware.
+                if (!m_mtLocal) {
                 // Stamped here, not at teardown: closing the dialog between
                 // the block and the last reply must not lose it.
                 Settings::setTranslateBlockedAt(QDateTime::currentDateTimeUtc());
@@ -1302,6 +1349,7 @@ void TranslateDialog::pumpMachineTranslate()
                 // and a probe only ever runs AFTER the wait expired, which is
                 // exactly the case that proved the wait too short.
                 Settings::setTranslateWasBlocked(true);
+                }
             }
 
             for (int i = 0; i < batch.size(); ++i) {
@@ -1448,7 +1496,9 @@ void TranslateDialog::finishMachineTranslate()
     // genuinely lapsed, so the next run stops probing and commits its whole
     // queue again. Without this every later run would crawl one request at a
     // time forever.
-    if (m_mtTally.ok > 0 && m_mtTally.blocked == 0
+    // A LOCAL run's success says nothing about Google's block - only a run
+    // that actually faced Google may declare it over.
+    if (!m_mtLocal && m_mtTally.ok > 0 && m_mtTally.blocked == 0
         && Settings::translateWasBlocked()) {
         Settings::setTranslateWasBlocked(false);
         // And the stamp with it, so "not blocked" is one state rather than two
@@ -1468,9 +1518,11 @@ void TranslateDialog::finishMachineTranslate()
         QString body;
         switch (google_translate::worstOf(m_mtTally)) {
             case google_translate::Failure::Blocked:
-                body = T("translate_mt_blocked")
-                           .arg(done)
-                           .arg(google_translate::kBlockCooloffMinutes);
+                body = m_mtLocal
+                    ? T("translate_mt_local_blocked").arg(done)
+                    : T("translate_mt_blocked")
+                          .arg(done)
+                          .arg(google_translate::kBlockCooloffMinutes);
                 break;
             case google_translate::Failure::Refused:
                 body = T("translate_mt_refused").arg(done);

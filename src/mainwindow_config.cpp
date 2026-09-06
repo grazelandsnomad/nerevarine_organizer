@@ -58,6 +58,7 @@
 #include <QActionGroup>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QRadioButton>
 #include <QLabel>
 #include <QDialog>
 #include <QFormLayout>
@@ -986,6 +987,64 @@ void MainWindow::runMissingMastersScan()
     }
 
     m_loadCtl->scanMissingMasters(enabledMods, availableLower);
+}
+
+// The machine-translation provider: Google's free endpoint, or a
+// LibreTranslate-compatible server of the user's own. Kept to one small modal
+// because the real work lives in Settings and the translate pump; this only
+// has to ask the question legibly and hand over the docker one-liner.
+void MainWindow::onSetTranslateProvider()
+{
+    QDialog dlg(this);
+    dlg.setWindowTitle(T("translate_provider_title"));
+    auto *lay = new QVBoxLayout(&dlg);
+
+    auto *why = new QLabel(T("translate_provider_why"), &dlg);
+    why->setWordWrap(true);
+    lay->addWidget(why);
+
+    auto *useGoogle = new QRadioButton(T("translate_provider_google"), &dlg);
+    auto *useLocal  = new QRadioButton(T("translate_provider_local"), &dlg);
+    const bool local = Settings::translateProvider() == QLatin1String("local");
+    (local ? useLocal : useGoogle)->setChecked(true);
+    lay->addWidget(useGoogle);
+    lay->addWidget(useLocal);
+
+    auto *form = new QFormLayout;
+    auto *url = new QLineEdit(Settings::translateLocalEndpoint(), &dlg);
+    auto *key = new QLineEdit(Settings::translateLocalApiKey(), &dlg);
+    key->setPlaceholderText(T("translate_provider_key_hint"));
+    form->addRow(T("translate_provider_url"), url);
+    form->addRow(T("translate_provider_key"), key);
+    lay->addLayout(form);
+
+    // The endpoint fields mean nothing while Google is picked; greying them
+    // says so without hiding where they will be.
+    const auto syncEnabled = [useLocal, url, key] {
+        url->setEnabled(useLocal->isChecked());
+        key->setEnabled(useLocal->isChecked());
+    };
+    syncEnabled();
+    connect(useLocal,  &QRadioButton::toggled, &dlg, syncEnabled);
+
+    auto *hint = new QLabel(T("translate_provider_hint"), &dlg);
+    hint->setWordWrap(true);
+    hint->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    hint->setStyleSheet(QStringLiteral("color: gray;"));
+    lay->addWidget(hint);
+
+    auto *btns = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    lay->addWidget(btns);
+
+    if (dlg.exec() != QDialog::Accepted) return;
+    Settings::setTranslateProvider(useLocal->isChecked()
+                                       ? QStringLiteral("local")
+                                       : QStringLiteral("google"));
+    Settings::setTranslateLocalEndpoint(url->text());
+    Settings::setTranslateLocalApiKey(key->text());
 }
 
 void MainWindow::syncOpenMWConfig()

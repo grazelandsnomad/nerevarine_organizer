@@ -401,6 +401,13 @@ void MainWindow::setupMenuBar()
     m_translationLangMenu = settingsMenu->addMenu(T("menu_translation_language"));
     refreshTranslationLanguageMenu();
 
+    // Which machine does the machine translation. Google's free endpoint
+    // blocks by IP and the block sticks for hours; a LibreTranslate-compatible
+    // server on this very machine has no limit at all. The dialog carries the
+    // one-liner to start one.
+    settingsMenu->addAction(T("menu_translate_provider"), this,
+                            &MainWindow::onSetTranslateProvider);
+
     // Only meaningful for a game with no mod-manager download route, so it is
     // shown only while such a profile is active rather than sitting in the
     // menu doing nothing for every other game.

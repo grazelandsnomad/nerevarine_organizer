@@ -132,6 +132,7 @@ private slots:
     void onContextMenu(const QPoint &pos);
     void onItemDoubleClicked(QListWidgetItem *item);
     void onSetApiKey();
+    void onSetTranslateProvider();
     void onSetModsDir();
     void onSetLanguage(const QString &language);
     void onLaunchOpenMW();

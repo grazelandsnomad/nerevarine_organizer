@@ -192,6 +192,7 @@ add_executable(test_load_order
     ${CMAKE_SOURCE_DIR}/src/translation_rules.cpp
     ${CMAKE_SOURCE_DIR}/src/subprocess.cpp
     ${CMAKE_SOURCE_DIR}/src/google_translate.cpp
+    ${CMAKE_SOURCE_DIR}/src/libre_translate.cpp
     ${CMAKE_SOURCE_DIR}/src/translation_store.cpp
     ${CMAKE_SOURCE_DIR}/src/translation_mod.cpp
     ${CMAKE_SOURCE_DIR}/src/pluginparser.cpp
@@ -305,6 +306,7 @@ add_executable(test_translate_ui
     ${CMAKE_SOURCE_DIR}/src/translation_rules.cpp
     ${CMAKE_SOURCE_DIR}/src/term_protect.cpp
     ${CMAKE_SOURCE_DIR}/src/google_translate.cpp
+    ${CMAKE_SOURCE_DIR}/src/libre_translate.cpp
     ${CMAKE_SOURCE_DIR}/src/settings.cpp
     ${CMAKE_SOURCE_DIR}/src/lore_overrides.cpp
     ${CMAKE_SOURCE_DIR}/src/target_language.cpp

@@ -31,6 +31,10 @@ constexpr auto kTranslationLanguage   = "ui/translation_language";
 // anybody tries.
 constexpr auto kTranslateBlockedAt    = "translate/blocked_at";
 constexpr auto kTranslateBlockStrikes = "translate/block_strikes";
+// The machine-translation provider and the local server's coordinates.
+constexpr auto kTranslateProvider      = "translate/provider";
+constexpr auto kTranslateLocalUrl      = "translate/local_endpoint";
+constexpr auto kTranslateLocalApiKey   = "translate/local_api_key";
 constexpr auto kUiUtilityExplainer    = "ui/utility_explainer_seen";
 constexpr auto kUiDarkMode            = "ui/dark_mode";
 constexpr auto kUiConflictNotices     = "ui/conflict_notices";
@@ -374,6 +378,40 @@ void Settings::setTranslateBlockedAt(const QDateTime &whenUtc)
     // own way; storing local time would let a DST shift move the deadline.
     QSettings().setValue(kTranslateBlockedAt,
                          whenUtc.toUTC().toString(Qt::ISODate));
+}
+
+QString Settings::translateProvider()
+{
+    const QString p = QSettings().value(kTranslateProvider).toString();
+    // Anything unrecognised is Google: the value a hand-edited config most
+    // plausibly meant, and the one that needs no server to exist.
+    return p == QLatin1String("local") ? p : QStringLiteral("google");
+}
+
+void Settings::setTranslateProvider(const QString &provider)
+{
+    QSettings().setValue(kTranslateProvider, provider);
+}
+
+QString Settings::translateLocalEndpoint()
+{
+    const QString u = QSettings().value(kTranslateLocalUrl).toString().trimmed();
+    return u.isEmpty() ? QStringLiteral("http://localhost:5000") : u;
+}
+
+void Settings::setTranslateLocalEndpoint(const QString &url)
+{
+    QSettings().setValue(kTranslateLocalUrl, url.trimmed());
+}
+
+QString Settings::translateLocalApiKey()
+{
+    return QSettings().value(kTranslateLocalApiKey).toString();
+}
+
+void Settings::setTranslateLocalApiKey(const QString &key)
+{
+    QSettings().setValue(kTranslateLocalApiKey, key);
 }
 
 bool Settings::translateWasBlocked()

@@ -18,6 +18,7 @@
 #include <QList>
 #include <QSet>
 #include <QString>
+#include <QUrl>
 
 #include "google_translate.h"
 #include "translation_mod.h"
@@ -270,6 +271,11 @@ private:
     // name has a rendering to substitute.
     QList<int>    m_mtPending;
     bool          m_mtNamePhase = false;
+    // The provider, snapshotted per run so a settings change mid-run cannot
+    // split one run across two endpoints. See onMachineTranslate.
+    bool          m_mtLocal = false;
+    QUrl          m_mtLocalEndpoint;
+    QString       m_mtLocalKey;
     // Guards the programmatic writes that re-expand linked rows, so they do
     // not read as user edits and detach the row they just updated.
     bool          m_expanding = false;

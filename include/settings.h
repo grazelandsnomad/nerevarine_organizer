@@ -126,6 +126,17 @@ struct Settings {
     // what true means here. Nothing to migrate.
     static bool translateWasBlocked();
     static void setTranslateWasBlocked(bool blocked);
+
+    // Which machine-translation endpoint the editor talks to. "google" is the
+    // free public endpoint with all its 429 baggage; "local" is a
+    // LibreTranslate-compatible server the user runs themselves - no rate
+    // limit, no block, no network needed. See libre_translate.h.
+    static QString translateProvider();          // "google" | "local"
+    static void    setTranslateProvider(const QString &provider);
+    static QString translateLocalEndpoint();     // default http://localhost:5000
+    static void    setTranslateLocalEndpoint(const QString &url);
+    static QString translateLocalApiKey();       // empty: server needs none
+    static void    setTranslateLocalApiKey(const QString &key);
     static bool    utilityExplainerSeen();
     static void    setUtilityExplainerSeen(bool seen);
     static bool    uiDarkMode();                 // default false (light)

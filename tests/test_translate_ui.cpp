@@ -15,6 +15,7 @@
 #include "term_protect.h"
 #include "vanilla_text.h"
 #include "google_translate.h"
+#include "libre_translate.h"
 #include "markup_protect.h"
 #include "translation_progress.h"
 #include "translate_dialog.h"
@@ -1790,6 +1791,64 @@ static void testTheClearedListRoundTrips()
           again.load(path) && !again.isCleared(QStringLiteral("Council Club")));
 }
 
+// The local provider. Google blocks by IP for hours at a time - four times in
+// three days of ordinary use - and nothing client-side can shorten it. A
+// LibreTranslate-compatible server on the user's own machine has no limit at
+// all; these pin the request and reply shapes so the pump can trust them.
+static void testLocalTranslatorSpeaksTheProtocol()
+{
+    std::cout << "\n[libre_translate: the request and its answers]\n";
+    using namespace libre_translate;
+
+    check("the endpoint is /translate under the base",
+          endpointUrl(QStringLiteral("http://localhost:5000")).toString()
+              == QStringLiteral("http://localhost:5000/translate"));
+    check("a trailing slash does not double up",
+          endpointUrl(QStringLiteral("http://localhost:5000/")).toString()
+              == QStringLiteral("http://localhost:5000/translate"));
+    check("a user who pasted the full endpoint meant it",
+          endpointUrl(QStringLiteral("http://box:5000/translate")).toString()
+              == QStringLiteral("http://box:5000/translate"));
+    check("no base, no URL", endpointUrl(QString()).isEmpty());
+
+    const QByteArray body = requestBody({QStringLiteral("Iron Sword"),
+                                         QStringLiteral("a rusted key")},
+                                        QStringLiteral("es"));
+    check("q is an array even before it has to be",
+          body.contains("\"q\":[\"Iron Sword\",\"a rusted key\"]"), body);
+    check("plain text, never html", body.contains("\"format\":\"text\""));
+    check("the target rides along", body.contains("\"target\":\"es\""));
+    // The reference server rejects an EMPTY api_key when it has none
+    // configured, so absence is the only safe spelling of "none".
+    check("no key means no field at all", !body.contains("api_key"));
+    check("a key set is a key sent",
+          requestBody({QStringLiteral("x")}, QStringLiteral("es"),
+                      QStringLiteral("sek")).contains("\"api_key\":\"sek\""));
+
+    // The reply, and the refuse-rather-than-guess contract around it.
+    check("an array answer parses in order",
+          parseResponses("{\"translatedText\":[\"Espada\",\"llave\"]}", 2)
+              == QStringList({QStringLiteral("Espada"), QStringLiteral("llave")}));
+    check("UTF-8 comes through whole",
+          parseResponses("{\"translatedText\":[\"Tiz\xC3\xB3n\"]}", 1)
+              == QStringList({QString::fromUtf8("Tiz\xC3\xB3n")}));
+    check("a scalar answer to one question is accepted",
+          parseResponses("{\"translatedText\":\"Espada\"}", 1)
+              == QStringList({QStringLiteral("Espada")}));
+    check("too few answers is nothing, not a guess",
+          parseResponses("{\"translatedText\":[\"Espada\"]}", 2).isEmpty());
+    check("too many is nothing too",
+          parseResponses("{\"translatedText\":[\"a\",\"b\"]}", 1).isEmpty());
+    check("an error body is not answers",
+          parseResponses("{\"error\":\"Slowdown\"}", 1).isEmpty());
+    check("garbage is not answers", parseResponses("<html>", 1).isEmpty());
+
+    check("the server's own words are surfaced",
+          parseError("{\"error\":\"Invalid API key\"}")
+              == QStringLiteral("Invalid API key"));
+    check("no error, no words", parseError("{\"translatedText\":\"x\"}").isEmpty());
+}
+
 static void testVanillaGameSettingsAreNotTheMods()
 {
     std::cout << "\n[vanilla_text: what the mod actually changed]\n";
@@ -2697,6 +2756,7 @@ int main(int argc, char **argv)
     testVouchingCountsAsUnsavedWork();
     testABatchLandsOnTheRightRows();
     testVanillaGameSettingsAreNotTheMods();
+    testLocalTranslatorSpeaksTheProtocol();
     testAClearedRowIsSentAfterAll();
     testTheHeldBackRowsAreOfferedTogether();
     testClearingSurvivesClosingTheWindow();
