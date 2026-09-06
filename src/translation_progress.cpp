@@ -21,6 +21,7 @@ QString norm(const QString &s) { return translation_store::normalize(s); }
 bool Progress::load(const QString &path)
 {
     m_map.clear();
+    m_cleared.clear();
     m_built = QDateTime();
     m_sawBuilt = false;
     m_total = 0;
@@ -59,6 +60,11 @@ bool Progress::load(const QString &path)
     QSet<QString> unreviewed;
     for (const QJsonValue &v : root.value(QStringLiteral("unreviewed")).toArray())
         if (v.isString()) unreviewed.insert(norm(v.toString()));
+
+    // Read into a member, like everything else here: load() drops any field it
+    // does not name, so a list left unread would be erased by the next save.
+    for (const QJsonValue &v : root.value(QStringLiteral("cleared")).toArray())
+        if (v.isString()) m_cleared.insert(norm(v.toString()));
 
     // Same shape as a memory file - {"entries": {"<source>": "<answer>"}} -
     // so one can be read as the other.
@@ -102,6 +108,14 @@ bool Progress::save(const QString &path) const
     if (!unreviewed.isEmpty())
         root.insert(QStringLiteral("unreviewed"), unreviewed);
 
+    // Same shape as unreviewed, and written only when it has something to say:
+    // the ordinary job clears nothing and the file stays as small as it was.
+    if (!m_cleared.isEmpty()) {
+        QJsonArray cleared;
+        for (const QString &k : m_cleared) cleared.append(k);
+        root.insert(QStringLiteral("cleared"), cleared);
+    }
+
     QSaveFile f(path);
     if (!f.open(QIODevice::WriteOnly)) return false;
     // Compact: this one is machine-written and can carry twenty thousand
@@ -126,6 +140,18 @@ void Progress::record(const QString &source, const QString &translation,
     // read as done, and the counter and the filter both believe this.
     if (translation.isEmpty()) { forget(source); return; }
     m_map.insert(norm(source), Entry{translation, reviewed});
+}
+
+void Progress::setCleared(const QString &source, bool cleared)
+{
+    if (source.isEmpty()) return;
+    if (cleared) m_cleared.insert(norm(source));
+    else         m_cleared.remove(norm(source));
+}
+
+bool Progress::isCleared(const QString &source) const
+{
+    return !source.isEmpty() && m_cleared.contains(norm(source));
 }
 
 void Progress::forget(const QString &source)

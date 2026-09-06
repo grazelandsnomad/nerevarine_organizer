@@ -145,6 +145,13 @@ struct TranslateDialogTestHook {
     }
     static QStringList &namesOnly(TranslateDialog *d) { return d->m_namesOnly; }
     static void rebuildNames(TranslateDialog *d) { d->rebuildNameList(); }
+    static TranslateDialog::MachinePlan machinePlan(TranslateDialog *d)
+    { return d->planMachineRun(); }
+    static bool cleared(TranslateDialog *d, int r)
+    { return d->m_table->item(r, 1)->data(Qt::UserRole + 5).toBool(); }
+    // A hand edit: unguarded, exactly as typing into the cell is.
+    static void typeInto(TranslateDialog *d, int r, const QString &text)
+    { d->m_table->item(r, 1)->setText(text); }
     static QStringList &renderings2(TranslateDialog *d) { return d->m_nameRendering; }
     static int  cooloffLeft(TranslateDialog *d) { return d->cooloffLeftSeconds(); }
     static void refreshCooloff(TranslateDialog *d) { d->updateCooloffDisplay(); }
@@ -1601,6 +1608,157 @@ static void testAGoodRunClearsTheBlock()
     delete d;
 }
 
+// Unique Banners and Signs Replacer: the user emptied "Council Club" and
+// friends because the pre-filled answer was the English wording, and Machine
+// translate sent none of them. The name guard looks at the SOURCE and never at
+// what the user did, so eleven of that mod's twenty-one rows could not be
+// reached at all - emptying them changed nothing.
+static void testAClearedRowIsSentAfterAll()
+{
+    std::cout << "\n[a row you emptied is an instruction]\n";
+    translation_store::Memory mem;
+    const QList<TranslatableString> strings = {
+        {"a.esp", "ACTI:a:FNAM:0", "Council Club",  false},
+        {"a.esp", "ACTI:b:FNAM:0", "Halfway Tavern", false},
+        {"a.esp", "ACTI:c:FNAM:0", "A rusted iron key", false},
+    };
+    auto *d = TranslateDialogTestHook::make(strings, &mem);
+    auto *t = TranslateDialogTestHook::table(d);
+
+    const int club  = rowOf(t, QStringLiteral("Council Club"));
+    const int prose = rowOf(t, QStringLiteral("A rusted iron key"));
+
+    // Read as a name on the way in, so answered with itself and held back.
+    check("the guard answers it on open",
+          t->item(club, 1)->text() == QStringLiteral("Council Club"),
+          t->item(club, 1)->text());
+    {
+        const auto plan = TranslateDialogTestHook::machinePlan(d);
+        check("and it is not among the rows to send",
+              !plan.ready.contains(club) && !plan.heldBack.contains(club));
+        check("while a translatable row is", plan.ready.contains(prose));
+    }
+
+    // The user empties it. That is the whole instruction.
+    TranslateDialogTestHook::typeInto(d, club, QString());
+    check("the row is marked as cleared by hand",
+          TranslateDialogTestHook::cleared(d, club));
+    check("and is no longer ticked",
+          !TranslateDialogTestHook::reviewed(d, club));
+
+    const auto plan = TranslateDialogTestHook::machinePlan(d);
+    check("now it is sent", plan.ready.contains(club));
+    check("and not merely offered as a name", !plan.heldBack.contains(club));
+
+    // Typing something takes the instruction back.
+    TranslateDialogTestHook::typeInto(d, club, QStringLiteral("Club del Consejo"));
+    check("answering it stops it being cleared",
+          !TranslateDialogTestHook::cleared(d, club));
+    delete d;
+}
+
+// The rows the guard holds are offered as a second button rather than merely
+// announced. This is the list behind it.
+static void testTheHeldBackRowsAreOfferedTogether()
+{
+    std::cout << "\n[the rows the guard held, offered as a choice]\n";
+    translation_store::Memory mem;
+    const QList<TranslatableString> strings = {
+        {"a.esp", "ACTI:a:FNAM:0", "A rusted iron key",  false},
+        {"a.esp", "ACTI:b:FNAM:0", "The door is locked", false},
+    };
+    auto *d = TranslateDialogTestHook::make(strings, &mem);
+
+    {
+        const auto plan = TranslateDialogTestHook::machinePlan(d);
+        check("both ordinary rows are ready", plan.ready.size() == 2,
+              QString::number(plan.ready.size()));
+        check("and nothing is held back", plan.heldBack.isEmpty());
+    }
+
+    // A row with text is in neither list, whatever else is true of it.
+    TranslateDialogTestHook::typeInto(d, 0, QStringLiteral("una respuesta"));
+    const auto plan = TranslateDialogTestHook::machinePlan(d);
+    check("an answered row is not sent again", !plan.ready.contains(0));
+    check("nor held back", !plan.heldBack.contains(0));
+    check("the other one still is", plan.ready.contains(1));
+    delete d;
+}
+
+// Without this the fix lasts one sitting: the entry is forgotten on save, and
+// the next open pre-fills the row again from the base game or the name guard -
+// ticked, and no longer even blank, so nothing could reach it.
+static void testClearingSurvivesClosingTheWindow()
+{
+    std::cout << "\n[a row you emptied stays empty]\n";
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("p.json"));
+    translation_store::Memory mem;
+    const QList<TranslatableString> strings = {
+        {"a.esp", "ACTI:a:FNAM:0", "Council Club", false},
+    };
+
+    {
+        auto *d = TranslateDialogTestHook::makeAt(strings, &mem, path);
+        auto *t = TranslateDialogTestHook::table(d);
+        check("the guard answered it", !t->item(0, 1)->text().isEmpty());
+        TranslateDialogTestHook::typeInto(d, 0, QString());
+        check("the write succeeds", TranslateDialogTestHook::write(d));
+        delete d;
+    }
+
+    translation_progress::Progress p;
+    check("the file loads", p.load(path));
+    check("it carries no answer for the row", p.size() == 0,
+          QString::number(p.size()));
+    check("but it remembers the row was emptied",
+          p.isCleared(QStringLiteral("Council Club")));
+
+    {
+        auto *d = TranslateDialogTestHook::makeAt(strings, &mem, path);
+        auto *t = TranslateDialogTestHook::table(d);
+        check("reopening leaves it empty", t->item(0, 1)->text().isEmpty(),
+              t->item(0, 1)->text());
+        check("and still marked as cleared",
+              TranslateDialogTestHook::cleared(d, 0));
+        check("so it is offered to the translator",
+              TranslateDialogTestHook::machinePlan(d).ready.contains(0));
+        delete d;
+    }
+}
+
+static void testTheClearedListRoundTrips()
+{
+    std::cout << "\n[translation_progress: rows emptied on purpose]\n";
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("c.json"));
+
+    translation_progress::Progress p;
+    p.record(QStringLiteral("Door"), QStringLiteral("Puerta"), true);
+    p.setCleared(QStringLiteral("Council Club"), true);
+    check("it saves", p.save(path));
+
+    translation_progress::Progress back;
+    check("and loads", back.load(path));
+    check("the answer survives",
+          back.lookup(QStringLiteral("Door")).translation == QStringLiteral("Puerta"));
+    check("the cleared row is remembered",
+          back.isCleared(QStringLiteral("Council Club")));
+    check("without pretending to be an answer", back.size() == 1,
+          QString::number(back.size()));
+    check("case and spacing do not matter",
+          back.isCleared(QStringLiteral("  council club ")));
+    check("a row nobody emptied is not cleared",
+          !back.isCleared(QStringLiteral("Door")));
+
+    // Answering it takes the mark off, and the next save must not resurrect it.
+    back.setCleared(QStringLiteral("Council Club"), false);
+    check("saving again", back.save(path));
+    translation_progress::Progress again;
+    check("and it stays gone",
+          again.load(path) && !again.isCleared(QStringLiteral("Council Club")));
+}
+
 static void testVanillaGameSettingsAreNotTheMods()
 {
     std::cout << "\n[vanilla_text: what the mod actually changed]\n";
@@ -2508,6 +2666,10 @@ int main(int argc, char **argv)
     testVouchingCountsAsUnsavedWork();
     testABatchLandsOnTheRightRows();
     testVanillaGameSettingsAreNotTheMods();
+    testAClearedRowIsSentAfterAll();
+    testTheHeldBackRowsAreOfferedTogether();
+    testClearingSurvivesClosingTheWindow();
+    testTheClearedListRoundTrips();
     testANameArrivesAnswered();
     testALoreTermDoesNotFreezeARow();
     testASecondRunKeepsYourWordingForAName();

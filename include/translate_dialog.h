@@ -173,6 +173,16 @@ private:
     // The mod's proper nouns and their renderings. Built at construction and
     // again before each run; pure in m_rowSource and m_rules, so the two agree.
     void rebuildNameList();
+
+    // What a machine-translate run would do, before anybody is asked anything.
+    // Same shape as AcceptPlan, and for the same reason: onMachineTranslate
+    // ends in a modal, so the judgement lives somewhere a test can reach.
+    struct MachinePlan {
+        QList<int> ready;      // blank and translatable - sent either way
+        QList<int> heldBack;   // blank, read as a name, NOT cleared by hand
+        int        lore = 0;   // answered from the lore table on the way past
+    };
+    MachinePlan planMachineRun();
     int  rowOfName(const QString &name) const;
     // Writes the answers to the progress file. `built` records whether they
     // have just been turned into a translation mod: a build is a save point

@@ -76,6 +76,18 @@ constexpr int PendingRole  = Qt::UserRole + 3;
 // nothing ever destroys a row - and there is no parallel bitset to drift.
 constexpr int ReviewedRole = Qt::UserRole + 4;
 
+// The user emptied this row ON PURPOSE.
+//
+// A row nobody has answered and a row whose answer was thrown away look
+// identical - both are blank - and mean opposite things. Without telling them
+// apart, emptying a pre-filled row achieved nothing: the name guard refused to
+// send it, the lore table put the same answer straight back, and the next time
+// the window opened it was filled in again and ticked.
+//
+// Written only from a HAND edit (onCellChanged) and from the progress file, so
+// nothing the app does for itself can claim the user asked for a blank.
+constexpr int ClearedRole  = Qt::UserRole + 5;
+
 // The per-row "still waiting" marker.
 //
 // The bar at the bottom counts the whole run, which on a 480-row mod tells
@@ -703,6 +715,10 @@ void TranslateDialog::fillFromMemory()
         // other mod would quietly replace it.
         if (!m_table->item(i, ColTranslation)->text().trimmed().isEmpty())
             continue;
+        // Nor over a row the user emptied on purpose: an answer that reached
+        // the shared memory from some earlier sitting is exactly the one they
+        // just threw away.
+        if (m_table->item(i, ColTranslation)->data(ClearedRole).toBool()) continue;
         const QString known = m_memory->lookup(m_rowSource[i]);
         if (known.isEmpty()) continue;
         m_table->item(i, ColTranslation)->setText(known);
@@ -841,6 +857,7 @@ void TranslateDialog::fillFromNames()
     for (int i = 0; i < m_rowSource.size(); ++i) {
         auto *cell = m_table->item(i, ColTranslation);
         if (!cell || !cell->text().trimmed().isEmpty()) continue;
+        if (cell->data(ClearedRole).toBool()) continue;   // emptied on purpose
         // m_namesOnly, not m_mtNames: a lore term is masked like a name but is
         // not one, and telling looksLikeName otherwise reads "Cure Blight" as
         // somebody's name and freezes the row. See rebuildNameList.
@@ -862,6 +879,64 @@ void TranslateDialog::fillFromNames()
         m_namesNote->setText(T("translate_names_note").arg(m_namesFilled));
         m_namesNote->show();
     }
+}
+
+// What a machine-translate run would do, without asking anybody anything.
+//
+// Split out for the reason planAccept is: onMachineTranslate ends in a modal and
+// cannot be driven from a test, so the judgement lives here and the untestable
+// part is reduced to reading which button was pressed.
+//
+// Fills the lore-table rows on the way past - that is a decision, not a
+// question - and reports the rest as two lists: the ones it would send, and the
+// ones it read as names and would not.
+TranslateDialog::MachinePlan TranslateDialog::planMachineRun()
+{
+    // Rows already answered are left alone; a lore term or a user rule is a
+    // decision and never goes to a machine translator.
+    MachinePlan plan;
+    for (int i = 0; i < m_rowSource.size(); ++i) {
+        auto *cell = m_table->item(i, ColTranslation);
+        if (!cell->text().trimmed().isEmpty()) continue;
+
+        // A row the user emptied by hand is an instruction, not a blank: the
+        // answer was wrong, try something else. So it skips BOTH of the reasons
+        // a blank row is otherwise left alone - the lore table, which is where
+        // the rejected answer came from, and the name guard, which would refuse
+        // it for the same reason it refused it the first time.
+        if (cell->data(ClearedRole).toBool()) { plan.ready << i; continue; }
+        // The user's file first, then the built-in lore table: a rule the
+        // user wrote is a decision, the table is a default.
+        QString canonical = m_rules.terms.value(m_rowSource[i].trimmed().toLower());
+        if (canonical.isEmpty())
+            canonical = lore_overrides::lookup(m_rowSource[i], m_language);
+        // Then the same two sources again as SHAPES, for the mod that names a
+        // hundred things one way. Exact entries are tried first on purpose:
+        // that is what lets a name the shape gets wrong keep its own answer.
+        if (canonical.isEmpty())
+            canonical = translation_rules::applyPatterns(m_rowSource[i],
+                                                         m_rules.patterns);
+        if (canonical.isEmpty())
+            canonical = translation_rules::applyPatterns(
+                m_rowSource[i], lore_overrides::patternsFor(m_language));
+        if (!canonical.isEmpty()) {
+            m_table->item(i, ColTranslation)->setText(canonical);
+            ++plan.lore;
+            continue;
+        }
+        // A row that is somebody's name has nothing in it to translate, and
+        // asking anyway is what returned "sin respirar" for "Dagoth Andas".
+        // Left blank, which onAccept drops, so the string stays as it is.
+        // namesOnly, not m_mtNames - see above. Everything else in this run
+        // (masking, isOnlyNames, expandRow) uses the merged list, which is
+        // what carries the renderings.
+        if (term_protect::looksLikeName(m_rowSource[i], m_namesOnly, m_rules.ordinary)) {
+            plan.heldBack << i;
+            continue;
+        }
+        plan.ready << i;
+    }
+    return plan;
 }
 
 void TranslateDialog::onMachineTranslate()
@@ -899,59 +974,46 @@ void TranslateDialog::onMachineTranslate()
     // one-answer-everywhere rule was ever after, holds either way.
     rebuildNameList();
 
-    // Rows already answered are left alone; a lore term or a user rule is a
-    // decision and never goes to a machine translator.
-    QList<int> todo;
-    int lore  = 0;
-    int names = 0;
-    for (int i = 0; i < m_rowSource.size(); ++i) {
-        if (!m_table->item(i, ColTranslation)->text().trimmed().isEmpty())
-            continue;
-        // The user's file first, then the built-in lore table: a rule the
-        // user wrote is a decision, the table is a default.
-        QString canonical = m_rules.terms.value(m_rowSource[i].trimmed().toLower());
-        if (canonical.isEmpty())
-            canonical = lore_overrides::lookup(m_rowSource[i], m_language);
-        // Then the same two sources again as SHAPES, for the mod that names a
-        // hundred things one way. Exact entries are tried first on purpose:
-        // that is what lets a name the shape gets wrong keep its own answer.
-        if (canonical.isEmpty())
-            canonical = translation_rules::applyPatterns(m_rowSource[i],
-                                                         m_rules.patterns);
-        if (canonical.isEmpty())
-            canonical = translation_rules::applyPatterns(
-                m_rowSource[i], lore_overrides::patternsFor(m_language));
-        if (!canonical.isEmpty()) {
-            m_table->item(i, ColTranslation)->setText(canonical);
-            ++lore;
-            continue;
-        }
-        // A row that is somebody's name has nothing in it to translate, and
-        // asking anyway is what returned "sin respirar" for "Dagoth Andas".
-        // Left blank, which onAccept drops, so the string stays as it is.
-        // namesOnly, not m_mtNames - see above. Everything else in this run
-        // (masking, isOnlyNames, expandRow) uses the merged list, which is
-        // what carries the renderings.
-        if (term_protect::looksLikeName(m_rowSource[i], m_namesOnly, m_rules.ordinary)) {
-            ++names;
-            continue;
-        }
-        todo << i;
+    const MachinePlan plan = planMachineRun();
+
+    const int names = int(plan.heldBack.size());
+    if (plan.ready.isEmpty() && plan.heldBack.isEmpty()) {
+        ui::info(this, T("translate_machine"),
+                 plan.lore > 0 ? T("translate_lore_only").arg(plan.lore)
+                               : T("translate_machine_nothing"));
+        return;
     }
 
-    if (todo.isEmpty()) {
-        ui::info(this, T("translate_machine"),
-                 (lore + names) > 0
-                     ? T("translate_lore_only").arg(lore + names)
-                     : T("translate_machine_nothing"));
+    QList<int> todo = plan.ready;
+    if (names > 0) {
+        // Three buttons, so QMessageBox directly - prompts.h says bespoke
+        // button sets belong here rather than in ui::confirm. The held-back
+        // rows used to be a statement; being told a judgement was made and
+        // having no way to disagree with it is what sent the user emptying
+        // eleven cells by hand.
+        QMessageBox box(this);
+        box.setIcon(QMessageBox::Question);
+        box.setWindowTitle(T("translate_machine"));
+        box.setText(T("translate_machine_confirm_names")
+                        .arg(todo.size()).arg(names));
+        QPushButton *sendSome =
+            box.addButton(T("translate_send_judged").arg(todo.size()),
+                          QMessageBox::AcceptRole);
+        QPushButton *sendAll =
+            box.addButton(T("translate_send_all").arg(todo.size() + names),
+                          QMessageBox::ActionRole);
+        box.addButton(QMessageBox::Cancel);
+        // The cautious one is the default: sending a name costs a request and
+        // brings back "sin respirar".
+        box.setDefaultButton(sendSome);
+        box.exec();
+        if (box.clickedButton() == sendAll)            todo += plan.heldBack;
+        else if (box.clickedButton() != sendSome)      return;
+        if (todo.isEmpty()) return;
+    } else if (!ui::confirm(this, T("translate_machine"),
+                            T("translate_machine_confirm").arg(todo.size()))) {
         return;
     }
-    if (!ui::confirm(this, T("translate_machine"),
-                     names > 0
-                         ? T("translate_machine_confirm_names").arg(todo.size())
-                                                               .arg(names)
-                         : T("translate_machine_confirm").arg(todo.size())))
-        return;
 
     // Split the work in two passes. The names have to be answered FIRST,
     // because every other row needs their rendering to substitute back in.
@@ -1669,6 +1731,17 @@ void TranslateDialog::onCellChanged(int row, int column)
     // Not guarded means the user typed it. That is the whole test for "has a
     // human read this": everything the app writes for itself goes through a
     // ProgrammaticEdit guard and lands above this line.
+    auto *edited = m_table->item(row, ColTranslation);
+    const bool nowEmpty = edited && edited->text().trimmed().isEmpty();
+    if (edited) {
+        ProgrammaticEdit guard(m_expanding);
+        edited->setData(ClearedRole, nowEmpty);
+        // setReviewed refuses on a blank row and returns BEFORE its write, so
+        // clearing a pre-filled row used to leave it empty and still ticked -
+        // a state nothing else here expects, and invisible only because every
+        // reader checks the text first.
+        if (nowEmpty) edited->setData(ReviewedRole, false);
+    }
     setReviewed(row, true);
     scheduleRecount();
     m_progressDirty = true;
@@ -1758,6 +1831,13 @@ void TranslateDialog::fillFromProgress()
 {
     int restored = 0;
     for (int i = 0; i < m_rowSource.size(); ++i) {
+        // Before the answers, and whether or not there is one: a cleared row
+        // has no answer by definition, and the mark is what stops the fills
+        // below putting one back.
+        if (m_progress.isCleared(m_rowSource[i])) {
+            ProgrammaticEdit guard(m_expanding);
+            m_table->item(i, ColTranslation)->setData(ClearedRole, true);
+        }
         const auto e = m_progress.lookup(m_rowSource[i]);
         if (e.translation.isEmpty()) continue;
         {
@@ -1798,6 +1878,7 @@ void TranslateDialog::fillFromVanilla()
     for (int i = 0; i < m_rowSource.size(); ++i) {
         auto *cell = m_table->item(i, ColTranslation);
         if (!cell || !cell->text().trimmed().isEmpty()) continue;
+        if (cell->data(ClearedRole).toBool()) continue;   // emptied on purpose
         if (!m_vanillaSaysIt.contains(m_rowSource[i])) continue;
         {
             // Guarded, and ReviewedRole set directly - the same shape
@@ -1832,7 +1913,14 @@ bool TranslateDialog::writeProgress(bool built)
         auto *cell = m_table->item(i, ColTranslation);
         if (!cell) continue;
         const QString t = cell->text().trimmed();
-        if (t.isEmpty()) { m_progress.forget(m_rowSource[i]); continue; }
+        if (t.isEmpty()) {
+            m_progress.forget(m_rowSource[i]);
+            // Whether the blank was the user's doing, so reopening does not
+            // pre-fill the row they just emptied.
+            m_progress.setCleared(m_rowSource[i], cell->data(ClearedRole).toBool());
+            continue;
+        }
+        m_progress.setCleared(m_rowSource[i], false);
         m_progress.record(m_rowSource[i], t, cell->data(ReviewedRole).toBool());
     }
     if (!m_progress.save(m_progressPath)) return false;

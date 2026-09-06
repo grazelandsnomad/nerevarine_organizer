@@ -40,6 +40,7 @@
 
 #include <QDateTime>
 #include <QHash>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 
@@ -75,6 +76,19 @@ public:
 
     void record(const QString &source, const QString &translation, bool reviewed);
     void forget(const QString &source);
+
+    // Rows the user emptied ON PURPOSE.
+    //
+    // A blank row and a row whose answer was thrown away look identical in the
+    // table and mean opposite things: the first is work not started, the second
+    // is "your guess was wrong, try something else". Without this the second
+    // does not survive closing the window - the entry is forgotten, and the
+    // next open pre-fills the row again from the base game or the name guard.
+    //
+    // Its own list rather than an empty entry: entries are never empty by
+    // design, and record() forgets one that is.
+    void setCleared(const QString &source, bool cleared);
+    bool isCleared(const QString &source) const;
 
     // When this work was last built into a translation mod, invalid if never.
     //
@@ -130,6 +144,7 @@ private:
     QHash<QString, Entry> m_map;    // normalized(source) -> entry
     QString   m_mod;
     QString   m_language;
+    QSet<QString>  m_cleared;       // normalized(source) of rows emptied on purpose
     QDateTime m_built;              // invalid: never built
     bool      m_sawBuilt = false;   // the file carried a "built" key
     int       m_total = 0;          // strings the mod offered; 0: unknown
