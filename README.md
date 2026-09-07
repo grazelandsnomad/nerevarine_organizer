@@ -2,28 +2,41 @@
 
 A native Linux mod manager for OpenMW.
 
-## 0.70 - in development
+## 0.71 - in development
 
 Changes for the next release are collected in
-[`docs/release-notes/0.70.md`](docs/release-notes/0.70.md) as they land.
+[`docs/release-notes/0.71.md`](docs/release-notes/0.71.md) as they land.
 
 Guides: [mod conflicts and how to fix each kind](docs/conflicts.md).
 
-### Latest release: 0.5
+### Latest release: 0.70
 
-- **Dark mode.** A toolbar button toggles the whole app between light and
-  dark and remembers the choice; separators follow the theme.
-- **FOMOD case-folder fix** - no more duplicate `Meshes` + `meshes`
-  folders when installing a mod with patches.
-- **FOMOD optional steps** that allow "none" can now be declined, and
-  **installers hidden in a wrapper folder are detected** (Completionist
-  Patch Hub).
-- **Portable Linux builds** - no more `GLIBC_2.xx not found` failures on
-  Fedora / Steam Deck.
+Download: [AppImage or plain Linux
+binary](https://github.com/grazelandsnomad/nerevarine_organizer/releases/tag/v0.70).
+The AppImage is portable and runs on most distros, Steam Deck included.
 
-Full notes: [`docs/release-notes/0.5.md`](docs/release-notes/0.5.md)
-(prior: [0.4](docs/release-notes/0.4.md), [0.3.1](docs/release-notes/0.3.1.md),
-[0.3](docs/release-notes/0.3.md), [0.2](docs/release-notes/0.2.md))
+A translation-heavy release. The editor now answers locally whatever it can
+before reaching for the network, and it no longer has to reach for Google at
+all:
+
+- **Translate mods into your language**, string by string or with machine
+  help, saved as a separate mod so your download is never modified. Work is
+  resumable across sittings, and a shared translation memory means a name is
+  answered once rather than once per mod.
+- **A local translation server** (any LibreTranslate-compatible one) as an
+  alternative to Google's free endpoint, which rate-limits by IP for hours at
+  a time. No limit, no network needed, nothing leaves your machine.
+- **The base game answers for itself.** Proper nouns, and names a mod merely
+  re-saved from Morrowind without changing, arrive already answered instead of
+  being sent off to be mistranslated.
+- **The mod list stopped crying wolf** - no more "missing masters" about an
+  optional patch the manager already declined to load, and a translation mod
+  is no longer offered as something to translate.
+
+Full notes: [`docs/release-notes/0.70.md`](docs/release-notes/0.70.md)
+(prior: [0.5](docs/release-notes/0.5.md), [0.4](docs/release-notes/0.4.md),
+[0.3.1](docs/release-notes/0.3.1.md), [0.3](docs/release-notes/0.3.md),
+[0.2](docs/release-notes/0.2.md))
 
 # Tech Stack
 C++26 and Qt6.
@@ -37,7 +50,7 @@ sudo pacman -S --noconfirm qt6-base qt6-networkauth qt6-svg qtkeychain cmake nin
 
 Ubuntu / Debian:
 ```sh
-sudo apt install qt6-base-dev qt6-networkauth-dev libqt6keychain-dev cmake ninja-build p7zip-full
+sudo apt install qt6-base-dev qt6-networkauth-dev qtkeychain-qt6-dev cmake ninja-build p7zip-full
 ```
 
 Fedora:
@@ -74,6 +87,13 @@ requires a glibc newer than 2.41, but the container is the real fix.
 - [LOOT](https://loot.github.io/) for plugin load-order sorting. Invoked
   on-demand from the toolbar; if missing, the sort step is skipped.
 - `unrar` for `.rar` extraction (preferred over 7z). `unzip` for `.zip`.
+- A **LibreTranslate-compatible server** if you would rather not use Google's
+  free endpoint for machine translation (Settings -> Machine translation
+  provider). One way to get one:
+  ```sh
+  docker run -d -p 5000:5000 libretranslate/libretranslate --load-only en,es
+  ```
+  First start downloads the language models; after that it works offline.
 
 ## Contributing
 

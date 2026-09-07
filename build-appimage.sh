@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # self-contained AppImage: bundles Qt + libs, patches every ELF down to
-# glibc 2.17 so it runs on Steam Deck etc.
+# a glibc old enough for Steam Deck etc.
+#
+# NOT 2.17, whatever this line used to claim: the patching below only clears
+# symbol versions >= 2.42, so the real floor is whatever the BUILD HOST needs.
+# Measured on the published v0.70 AppImage (built on the ubuntu-24.04 runner):
+# GLIBC_2.34. That covers Steam Deck (SteamOS 3.5+ is 2.37), current Fedora and
+# Ubuntu 22.04+, but NOT Ubuntu 20.04 or Debian 11. Build in the older-glibc
+# container (packaging/Dockerfile.portable, via build-portable.sh) if that
+# matters - which is what the README tells people to do.
 # needs cmake, c++23 compiler, qt6 dev, imagemagick, python3.
 # linuxdeploy/-qt/appimagetool pulled into build-appimage/tools/.
 

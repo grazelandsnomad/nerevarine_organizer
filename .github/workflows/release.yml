@@ -77,8 +77,10 @@ jobs:
         run: ./build-release.sh --no-build
 
       - name: Build the portable AppImage
-        # Bundles Qt + deps and patches ELFs down to glibc 2.17 so it runs on
-        # Steam Deck / older distros. Emits the .AppImage at the repo root and a
+        # Bundles Qt + deps and clears glibc symbol versions >= 2.42. The
+        # resulting floor is the runner's own glibc: measured GLIBC_2.34 on
+        # v0.70, which covers Steam Deck and current Fedora/Ubuntu but not
+        # Ubuntu 20.04 or Debian 11. Emits the .AppImage at the repo root and a
         # zipped copy under dist/.
         env:
           CC: gcc-14
