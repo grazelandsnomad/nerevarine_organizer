@@ -129,6 +129,8 @@
 #include "asset_collisions.h"
 #include "modlist_sync_guard.h"
 #include <QFutureWatcher>
+#include <atomic>
+#include <QtConcurrent/QtConcurrent>
 using plugins::collectDataFolders;
 using plugins::readTes3Masters;
 #include <QDropEvent>
@@ -1067,11 +1069,52 @@ void MainWindow::onModlistSummary()
     // The counting/formatting lives in modlist_summary (Qt Core only, unit
     // tested) and the rendering in modlist_summary_dialog; this slot only
     // gathers.  ScanCoordinator::sizeOf checks its cache before falling back to
-    // a synchronous walk, so it's the right resolver for rows the async size
-    // scan hasn't landed on yet.
+    // a synchronous walk - and that fallback stats every file in every mod
+    // folder, which on a real list is 30 GiB and MEASURED AT 5.2 SECONDS with a
+    // warm page cache. The async size scan usually gets there first, but it is
+    // debounced and takes about as long, so clicking this button in the first
+    // seconds after launch - or after installing something - froze the window
+    // for the whole walk.
+    //
+    // So the gather runs on a worker behind the same cancellable progress
+    // dialog onTranslateMod uses. sizeOf is safe to call off-thread: its cache
+    // is mutex-guarded and computeDirSize touches nothing else. `entries` is a
+    // value snapshot; m_scans outlives the wait because exec() below is modal
+    // and waitForFinished follows it.
     modlist_summary::View view;
-    view.stats = modlist_summary::computeStats(
-        entries, [this](const QString &modPath) { return m_scans->sizeOf(modPath); });
+    {
+        auto cancel = std::make_shared<std::atomic<bool>>(false);
+        QProgressDialog progress(T("summary_measuring"), T("summary_measuring_cancel"),
+                                 0, 0, this);
+        progress.setWindowTitle(T("summary_title"));
+        progress.setWindowModality(Qt::WindowModal);
+        progress.setMinimumDuration(150);   // a warm cache never shows it
+        progress.setAutoClose(false);
+        progress.setAutoReset(false);
+
+        ScanCoordinator *scans = m_scans;
+        QFutureWatcher<modlist_summary::Stats> watcher;
+        connect(&watcher, &QFutureWatcherBase::finished,
+                &progress, &QProgressDialog::accept);
+        connect(&progress, &QProgressDialog::canceled, &progress,
+                [cancel] { cancel->store(true); });
+
+        watcher.setFuture(QtConcurrent::run([entries, scans, cancel] {
+            return modlist_summary::computeStats(
+                entries, [scans, cancel](const QString &modPath) -> qint64 {
+                    // A cancelled gather stops measuring and lets the rows it
+                    // has not reached count as unknown - computeStats already
+                    // keeps those out of the byte totals without losing them
+                    // from the counts.
+                    if (cancel->load()) return -1;
+                    return scans->sizeOf(modPath);
+                });
+        }));
+        progress.exec();
+        watcher.waitForFinished();
+        if (cancel->load()) return;
+        view.stats = watcher.result();
+    }
     view.outsideCount = modlist_summary::countOutsideModsDir(entries, m_modsDir);
 
     view.profileName = currentProfile().displayName;

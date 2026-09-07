@@ -778,6 +778,16 @@ static void testComputeStatsSizeFallback()
           asked == QStringList{"/x/unknown"}, asked.join(","));
     check("resolved size is summed",
           filled.totalBytes == 4096 + 1024, QString::number(filled.totalBytes));
+
+    // A resolver that GIVES UP - which is what a cancelled measure does, and
+    // measuring is a five-second walk of every mod folder on a real list -
+    // must read as "unknown", never as a negative contribution.
+    const auto cancelled = modlist_summary::computeStats(
+        rows, [](const QString &) { return qint64(-1); });
+    check("a refusing resolver does not subtract",
+          cancelled.totalBytes == 4096, QString::number(cancelled.totalBytes));
+    check("and the mod is still counted",
+          cancelled.modCount == 2 && cancelled.enabledCount == 2);
 }
 
 static void testCountOutsideModsDir()
