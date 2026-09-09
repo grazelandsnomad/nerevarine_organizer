@@ -1259,6 +1259,99 @@ static void run_fomod_patch_targets()
           !answers("Diamond City Exterior Town Patch"));
 }
 
+// -- The previs group ------------------------------------------------------
+//
+// Vehicle Overhaul Continued, step 2 of 6, exactly as it appears:
+//
+//   Previs Plugins
+//     ( ) Bethesda Previs
+//     (o) PRP v81 Previs          <- the installer's default
+//
+// On a Fallout 4 list with no Previs Repair Pack, that default writes previs
+// plugins keyed to a framework that is not there, and the user had to notice
+// and switch it back by hand.
+static void run_fomod_previs_baseline()
+{
+    std::cout << "=== fomod_hint (vanilla baseline) tests ===\n";
+    using St = fomod::FrameworkChoice::State;
+    const QStringList previs{ QStringLiteral("Bethesda Previs"),
+                              QStringLiteral("PRP v81 Previs") };
+
+    // The reported bug.
+    {
+        const auto c = fomod::chooseFrameworkOption(
+            previs, { QStringLiteral("Commonwealth Iguanas"),
+                      QStringLiteral("Base Object Swapper") });
+        check("the group is recognised at all", !c.states.isEmpty());
+        check("PRP is seen as a mod, and a missing one",
+              c.states.value(1) == St::Missing);
+        check("Bethesda Previs is the base game, not a mod to look up",
+              c.states.value(0) == St::Baseline);
+        check("so the base game's own previs is chosen", c.index == 0);
+        check("and nothing is claimed to be installed", !c.anyInstalled);
+    }
+
+    // With PRP present the mod wins, so installing it later needs no further
+    // work. Both spellings, since the alias is the whole point of the entry.
+    for (const QString &name : { QStringLiteral("Previs Repair Pack"),
+                                 QStringLiteral("PRP v81") }) {
+        const auto c = fomod::chooseFrameworkOption(previs, { name });
+        check(("PRP installed as \"" + name + "\" is found").toUtf8().constData(),
+              c.states.value(1) == St::Installed && c.anyInstalled);
+        check("and it is chosen over the base game", c.index == 1);
+    }
+
+    // knownModIn is what reads the mod out of a label carrying a version and a
+    // category word.
+    check("the acronym is read out of the option label",
+          mod_aliases::knownModIn(QStringLiteral("PRP v81 Previs"))
+              == QStringLiteral("PRP"));
+    check("the base-game option names no mod",
+          mod_aliases::knownModIn(QStringLiteral("Bethesda Previs")).isEmpty());
+    // Case is the whole safety argument for a three-letter needle.
+    check("a lower-case look-alike is not the acronym",
+          mod_aliases::knownModIn(QStringLiteral("prp textures")).isEmpty());
+    check("nor is it found inside a word",
+          mod_aliases::knownModIn(QStringLiteral("PRPX Overhaul")).isEmpty());
+    check("a full name still resolves",
+          mod_aliases::knownModIn(QStringLiteral("Previs Repair Pack v81"))
+              == QStringLiteral("Previs Repair Pack"));
+
+    check("Bethesda Previs reads as the base game",
+          fomod::isVanillaBaseline(QStringLiteral("Bethesda Previs")));
+    check("and so does a vanilla option",
+          fomod::isVanillaBaseline(QStringLiteral("Vanilla Previs")));
+    check("an ordinary option does not",
+          !fomod::isVanillaBaseline(QStringLiteral("High Resolution Textures")));
+
+    // The guard that must survive: identification stays the price of entry, so
+    // every exclusive group that names nothing recognisable is left alone.
+    {
+        const auto c = fomod::chooseFrameworkOption(
+            { QStringLiteral("High Resolution Textures"),
+              QStringLiteral("Low Resolution Textures") },
+            { QStringLiteral("Anything") });
+        check("a group naming no mod is not ours", c.states.isEmpty());
+        check("and nothing is chosen in it", c.index == -1);
+    }
+    // A baseline alone is not enough either - without a framework to be missing
+    // there is no question to answer.
+    {
+        const auto c = fomod::chooseFrameworkOption(
+            { QStringLiteral("Bethesda Previs"),
+              QStringLiteral("Sharper Previs") }, {});
+        check("a baseline with no identifiable rival decides nothing",
+              c.states.isEmpty() && c.index == -1);
+    }
+    // An explicit opt-out still outranks the baseline.
+    {
+        const auto c = fomod::chooseFrameworkOption(
+            { QStringLiteral("Don't Install"), QStringLiteral("Bethesda Previs"),
+              QStringLiteral("PRP v81 Previs") }, {});
+        check("skip-entirely wins over build-against-vanilla", c.index == 0);
+    }
+}
+
 static void run_fomod_hint()
 {
     std::cout << "=== fomod_hint (asksAboutAnotherMod) tests ===\n";
@@ -2243,6 +2336,52 @@ static void run_fomod_wizard_ui()
 {
     std::cout << "=== fomod_wizard_ui (buildUi) tests ===\n";
 
+    // The previs step, as Vehicle Overhaul Continued really ships it: an
+    // exclusive "Previs Plugins" group whose PRP option is the default.
+    {
+        FomodGroup g;
+        g.name = QStringLiteral("Previs Plugins");
+        g.type = QStringLiteral("SelectExactlyOne");
+        g.plugins = { wizardui_mkPlugin("Bethesda Previs", "Optional"),
+                      wizardui_mkPlugin("PRP v81 Previs", "Recommended") };
+        FomodStep st;
+        st.name = QStringLiteral("Previs");
+        st.groups.append(g);
+
+        auto *w = FomodWizardTestHook::build(
+            { st }, {}, { QStringLiteral("Commonwealth Iguanas") });
+        auto *beth = FomodWizardTestHook::btn(w, 0, 0, 0);
+        auto *prp  = FomodWizardTestHook::btn(w, 0, 0, 1);
+        check("without PRP the game's own previs is selected",
+              beth->isChecked() && !prp->isChecked());
+        check("and PRP is marked missing",
+              prp->text().contains(QStringLiteral("not installed")), prp->text());
+        check("with the base game's option explained rather than just ticked",
+              beth->toolTip().contains(QStringLiteral("game's own files")),
+              beth->toolTip());
+        delete w;
+    }
+
+    // And the other way: with PRP installed the FOMOD's default is right and
+    // survives, so nothing here fights the installer for no reason.
+    {
+        FomodGroup g;
+        g.name = QStringLiteral("Previs Plugins");
+        g.type = QStringLiteral("SelectExactlyOne");
+        g.plugins = { wizardui_mkPlugin("Bethesda Previs", "Optional"),
+                      wizardui_mkPlugin("PRP v81 Previs", "Recommended") };
+        FomodStep st;
+        st.name = QStringLiteral("Previs");
+        st.groups.append(g);
+        auto *w = FomodWizardTestHook::build(
+            { st }, {}, { QStringLiteral("Previs Repair Pack") });
+        check("PRP installed keeps PRP selected",
+              FomodWizardTestHook::btn(w, 0, 0, 1)->isChecked());
+        delete w;
+    }
+
+
+
     // Pass C, the untick half: a pre-ticked "Mod Patches" group on a list that
     // holds one of the mods. This is Vehicle Overhaul Continued's real shape -
     // eighteen "<Mod> Patch" options, all Recommended, i.e. ticked.
@@ -2715,6 +2854,7 @@ int main(int argc, char **argv)
     run_bain_hint();
     run_fomod_hint();
     run_fomod_patch_targets();
+    run_fomod_previs_baseline();
     run_fomod_wizard_ui();
     run_bain_wizard_ui();
 

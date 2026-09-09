@@ -1,5 +1,9 @@
 #include "mod_aliases.h"
 
+#include <QRegularExpression>
+
+#include <algorithm>
+
 #include <QHash>
 #include <QList>
 
@@ -52,6 +56,14 @@ const QList<QStringList> &table()
         {"Ashfall"},
         // -- Fallout / Starfield --------------------------------------
         {"F4SE", "Fallout 4 Script Extender"},
+        // PRP is the Previs Repair Pack and, in the Fallout 4 scene, nothing
+        // else - which is the bar this table sets. Here because installers
+        // offer it as an alternative to the game's own previs data and the
+        // wizard has to know whether the user actually has it: Vehicle
+        // Overhaul Continued defaults its "Previs Plugins" group to "PRP v81
+        // Previs", which on a list without PRP writes plugins keyed to a
+        // framework that is not there.
+        {"PRP", "Previs Repair Pack"},
         {"NVSE", "New Vegas Script Extender"},
         {"SFSE", "Starfield Script Extender"},
         {"JIP LN", "JIP LN NVSE"},
@@ -117,4 +129,37 @@ QStringList expand(const QStringList &names)
     return out;
 }
 
+
+QString knownModIn(const QString &text)
+{
+    // Longest entry first, so a name containing a shorter entry as a word is
+    // not claimed by the shorter one.
+    static const QStringList kNames = [] {
+        QStringList out;
+        for (const QStringList &row : table()) out += row;
+        std::sort(out.begin(), out.end(),
+                  [](const QString &a, const QString &b) {
+                      return a.size() > b.size();
+                  });
+        return out;
+    }();
+
+    const QString subject = text.trimmed();
+    if (subject.isEmpty()) return {};
+
+    for (const QString &n : kNames) {
+        // An ALL-CAPS entry is an acronym, and case is the whole of its
+        // safety: "PRP" is a mod, and a three-letter needle matched loosely is
+        // how a short name starts hitting ordinary words. The same argument
+        // mod_match::installedUnderAnyName makes for anchoring, and
+        // lore_overrides::protectedTermsFor for Blight over blight.
+        const bool acronym = (n == n.toUpper());
+        const QRegularExpression re(
+            QStringLiteral("\\b") + QRegularExpression::escape(n) + QStringLiteral("\\b"),
+            acronym ? QRegularExpression::NoPatternOption
+                    : QRegularExpression::CaseInsensitiveOption);
+        if (re.match(subject).hasMatch()) return n;
+    }
+    return {};
+}
 } // namespace mod_aliases

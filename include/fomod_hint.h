@@ -187,7 +187,11 @@ struct FrameworkChoice {
     int  index = -1;
     // Per-option verdicts, index-parallel with the names passed in. A name
     // this cannot identify as a mod gets Unknown and is never judged.
-    enum class State { Unknown, Installed, Missing, OptOut };
+    // Baseline: an option meaning "what the game already ships" - see
+    // isVanillaBaseline. Distinct from OptOut because they are different
+    // answers: OptOut installs nothing, Baseline installs the files built
+    // against the base game's own data.
+    enum class State { Unknown, Installed, Missing, OptOut, Baseline };
     QList<State> states;
     // True when at least one named framework is installed, so the group can
     // actually do something.
@@ -206,7 +210,32 @@ struct FrameworkChoice {
 //
 // Picks an installed framework when there is one, breaking a tie by
 // mod_aliases::frameworkPreference(); otherwise the opt-out option
-// ("Don't Install", "None") when the group offers one.
+// ("Don't Install", "None") when the group offers one, and failing that the
+// base-game baseline ("Bethesda Previs", "Vanilla").
+//
+// Opt-out keeps priority over baseline: a group offering both is offering
+// "skip this entirely" as a distinct and stronger answer than "build against
+// the stock game".
+
+// True when an option means the BASE GAME's own version of something, which by
+// definition needs no mod installed.
+//
+// Vehicle Overhaul Continued asks which previs data to build against:
+//
+//   Previs Plugins
+//     ( ) Bethesda Previs
+//     (o) PRP v81 Previs        <- the installer's default
+//
+// Neither of those is an opt-out. "Bethesda Previs" is not "install nothing",
+// it is "use what Fallout 4 ships", and on a list without the Previs Repair
+// Pack it is the only one of the two that works - so the default quietly
+// installed previs plugins keyed to a framework that was not there.
+//
+// Word-boundary "bethesda" or "vanilla". Deliberately narrow: this only ever
+// acts as a LAST resort, after every named framework has been found missing,
+// so the cost of missing a synonym is the FOMOD's own default surviving - the
+// behaviour that existed before this function.
+bool isVanillaBaseline(const QString &optionName);
 FrameworkChoice chooseFrameworkOption(const QStringList &optionNames,
                                       const QStringList &installedModNames);
 

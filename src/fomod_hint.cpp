@@ -333,6 +333,20 @@ SkyrimRuntime classifyRuntimeVariant(const QString &optionName)
 namespace {
 
 // "Don't Install", "None", "Skip" - the escape hatch a framework group offers.
+} // namespace
+
+bool isVanillaBaseline(const QString &optionName)
+{
+    // Word-boundary so "Bethesda" and "Vanilla" have to be words of the label,
+    // not fragments of something else.
+    static const QRegularExpression re(
+        QStringLiteral("\\b(bethesda|vanilla)\\b"),
+        QRegularExpression::CaseInsensitiveOption);
+    return re.match(optionName.trimmed()).hasMatch();
+}
+
+namespace {
+
 bool isOptOut(const QString &name)
 {
     static const QRegularExpression re(
@@ -350,7 +364,7 @@ FrameworkChoice chooseFrameworkOption(const QStringList &optionNames,
     FrameworkChoice out;
     out.states.reserve(optionNames.size());
 
-    int optOutIdx = -1;
+    int optOutIdx = -1, baselineIdx = -1;
     QList<int> named;          // options identified as mods
     for (int i = 0; i < optionNames.size(); ++i) {
         const QString n = optionNames[i].trimmed();
@@ -359,17 +373,36 @@ FrameworkChoice chooseFrameworkOption(const QStringList &optionNames,
             if (optOutIdx < 0) optOutIdx = i;
             continue;
         }
+        // The base game's own version needs no mod, so it is never looked up
+        // and never counts towards `named` - the guard below still requires a
+        // real framework to have been identified before this group is ours.
+        if (isVanillaBaseline(n)) {
+            out.states << FrameworkChoice::State::Baseline;
+            if (baselineIdx < 0) baselineIdx = i;
+            continue;
+        }
         // Identifiable as a mod only via the alias table. Without that a bare
         // option name is not evidence of anything - the rule that keeps
         // "Normal Maps" quiet elsewhere.
-        if (mod_aliases::aliasesFor(n).isEmpty()
-            && !mod_aliases::frameworkPreference().contains(n, Qt::CaseInsensitive)) {
+        //
+        // The name it goes by, which is not always the whole label: "PRP v81
+        // Previs" carries a version and a category word around the acronym,
+        // and mod_aliases::knownModIn is what reads the mod out of it. The
+        // lookup below then uses that spelling, so every alias comes with it.
+        QString lookup;
+        if (!mod_aliases::aliasesFor(n).isEmpty()
+            || mod_aliases::frameworkPreference().contains(n, Qt::CaseInsensitive))
+            lookup = n;
+        else
+            lookup = mod_aliases::knownModIn(n);
+
+        if (lookup.isEmpty()) {
             out.states << FrameworkChoice::State::Unknown;
             continue;
         }
         named << i;
         const bool have =
-            !mod_match::installedUnderAnyName(n, installedModNames).isEmpty();
+            !mod_match::installedUnderAnyName(lookup, installedModNames).isEmpty();
         if (have) out.anyInstalled = true;
         out.states << (have ? FrameworkChoice::State::Installed
                             : FrameworkChoice::State::Missing);
@@ -399,8 +432,11 @@ FrameworkChoice chooseFrameworkOption(const QStringList &optionNames,
         return out;
     }
 
-    // Nothing installed: the opt-out is the only option that does what it says.
-    out.index = optOutIdx;
+    // Nothing installed. The opt-out is the only option that does what it
+    // says; failing that, the base game's own version is the one that still
+    // works. Opt-out first because "skip this" is the stronger answer when a
+    // group troubles itself to offer both.
+    out.index = (optOutIdx >= 0) ? optOutIdx : baselineIdx;
     return out;
 }
 

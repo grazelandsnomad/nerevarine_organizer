@@ -999,6 +999,17 @@ void FomodWizard::buildUi()
                              QStringLiteral("None of the frameworks this offers "
                                             "is installed, so this is the only "
                                             "option that does what it says."));
+                    } else if (choice.states[pi] == St::Baseline
+                               && !choice.anyInstalled) {
+                        // Not a resignation, unlike the opt-out above: the
+                        // game's own data is a working choice, and the one the
+                        // other options are alternatives TO.
+                        note(QStringLiteral(" \u2705"),
+                             QStringLiteral("This builds against the game's own "
+                                            "files, which are always there. The "
+                                            "mod the other option needs is not "
+                                            "in this modlist, so this is the "
+                                            "one that will work."));
                     }
                 }
 

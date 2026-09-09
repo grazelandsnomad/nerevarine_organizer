@@ -45,6 +45,22 @@ QStringList expand(const QStringList &names);
 // bare word is confident enough to act on needs to tell those apart.
 bool isKnownMod(const QString &name);
 
+// The table entry a piece of text MENTIONS, or "" when it names none.
+//
+// aliasesFor() above is a whole-name lookup, which is the right question for
+// "is this mod installed" and the wrong one for reading an option LABEL: a
+// FOMOD offers "PRP v81 Previs", carrying a version and a category word around
+// the acronym, and no whole-name lookup will ever see the mod in that.
+//
+// Word-boundary, longest entry first so a name holding a shorter entry is not
+// claimed by the shorter one. An ALL-CAPS entry matches case-sensitively -
+// case is the whole safety argument for a three-letter acronym, the same one
+// mod_match documents for anchoring short needles.
+//
+// Returns the table's own spelling, so a caller can hand it straight to
+// installedUnderAnyName() and pick up every alias on the way.
+QString knownModIn(const QString &text);
+
 // Distribution frameworks a FOMOD may offer as alternatives for the same
 // content, most preferred first.
 //
