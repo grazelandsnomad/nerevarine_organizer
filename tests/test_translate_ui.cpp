@@ -563,6 +563,150 @@ static void testTheDevoteeShape()
           shaped("Devotee").isEmpty());
 }
 
+static void testTheNarsisDistrictsAndTheOutlander()
+{
+    std::cout << "\n[lore_overrides: districts, and the word for an outsider]\n";
+    const QString sp = QStringLiteral("spanish");
+    const auto es = [&sp](const char *t) {
+        return lore_overrides::lookup(QString::fromUtf8(t), sp);
+    };
+
+    check("Grand Bazaar", es("Grand Bazaar") == QStringLiteral("Gran Bazar"),
+          es("Grand Bazaar"));
+    // Mournhold's, a different string from Narsis's and said 99 times by
+    // vanilla itself. One entry could not answer both.
+    check("Great Bazaar takes the same name",
+          es("Great Bazaar") == QStringLiteral("Gran Bazar"));
+    check("Market Quarter",
+          es("Market Quarter") == QStringLiteral("Barrio del Mercado"));
+    check("Council Quarter",
+          es("Council Quarter") == QStringLiteral("Barrio del Consejo"));
+    check("Foreign Quarter",
+          es("Foreign Quarter") == QStringLiteral("Barrio Extranjero"));
+    check("Waterfront", es("Waterfront") == QStringLiteral("Ribera"));
+    check("Outlander", es("Outlander") == QStringLiteral("Forastero"));
+    check("and the plural has its own entry, as ghouls does",
+          es("Outlanders") == QStringLiteral("Forasteros"));
+
+    // Case- and whitespace-insensitive on the way in, like every other entry.
+    check("a lower-cased row still finds it",
+          es("  market quarter ") == QStringLiteral("Barrio del Mercado"));
+
+    // The articled forms, for a row that IS the phrase - "el el Gran Bazar" is
+    // what an entry without them would produce.
+    check("the articled form carries one article and not two",
+          es("the Grand Bazaar") == QStringLiteral("el Gran Bazar"));
+    // Capital article on purpose - part of the name, as in La Habana, and
+    // what makes it right at the start of a sentence as well as inside one.
+    check("and the feminine one agrees, article and all",
+          es("the Waterfront") == QStringLiteral("La Ribera"), es("the Waterfront"));
+    check("while the bare form carries none",
+          es("Waterfront") == QStringLiteral("Ribera"));
+
+    // Nothing here leaks into another language.
+    check("no answer for a language the table does not know",
+          lore_overrides::lookup(QStringLiteral("Market Quarter"),
+                                 QStringLiteral("klingon")).isEmpty());
+}
+
+static void testTheDistrictsAreProtectedInsideSentences()
+{
+    std::cout << "\n[term_protect: a district survives a sentence]\n";
+    const QStringList prot =
+        lore_overrides::protectedTermsFor(QStringLiteral("spanish"));
+
+    check("the Blight is still protected", prot.contains(QStringLiteral("Blight")));
+    check("and so are the districts",
+          prot.contains(QStringLiteral("Grand Bazaar"))
+          && prot.contains(QStringLiteral("Market Quarter"))
+          && prot.contains(QStringLiteral("Council Quarter"))
+          && prot.contains(QStringLiteral("Foreign Quarter"))
+          && prot.contains(QStringLiteral("Waterfront")));
+    check("and the outsider, both numbers",
+          prot.contains(QStringLiteral("Outlander"))
+          && prot.contains(QStringLiteral("Outlanders")));
+    check("a language the table does not know protects nothing",
+          lore_overrides::protectedTermsFor(QStringLiteral("klingon")).isEmpty());
+
+    // Only what the mod actually says earns a row, so a mod that never
+    // mentions a district pays nothing for these entries existing.
+    const QStringList narsis{
+        QString::fromUtf8("The Grand Bazaar is a massive building in the "
+                          "Market Quarter west of here."),
+        QString::fromUtf8("The Company keeps an office on the Waterfront."),
+    };
+    const QStringList seen = term_protect::mentionedFrom(prot, narsis);
+    check("the mod's own districts are picked out",
+          seen.contains(QStringLiteral("Grand Bazaar"))
+          && seen.contains(QStringLiteral("Market Quarter")));
+    check("and one it never says is not",
+          !seen.contains(QStringLiteral("Council Quarter")));
+
+    // The whole point: the name comes back in OUR wording, not the
+    // translator's, and identically in every row it appears in.
+    const QStringList terms{QStringLiteral("Grand Bazaar"),
+                            QStringLiteral("Market Quarter")};
+    const QString masked = term_protect::mask(narsis[0], terms);
+    check("neither name reaches the translator",
+          !masked.contains(QStringLiteral("Bazaar"))
+          && !masked.contains(QStringLiteral("Quarter")), masked);
+    // What the machine hands back, with the tokens where Spanish wants them.
+    const QString reply = QString::fromUtf8("%1 es un edificio enorme al oeste "
+                                            "del %2.")
+                              .arg(term_protect::tokenFor(0),
+                                   term_protect::tokenFor(1));
+    check("and the Spanish names are put back in their place",
+          term_protect::unmask(reply, {QStringLiteral("Gran Bazar"),
+                                       QStringLiteral("Barrio del Mercado")})
+              == QString::fromUtf8("Gran Bazar es un edificio enorme al oeste "
+                                   "del Barrio del Mercado."));
+}
+
+static void testTheOneFeminineNameKeepsItsArticle()
+{
+    std::cout << "\n[term_protect: la Ribera, not el Ribera]\n";
+    const QStringList prot =
+        lore_overrides::protectedTermsFor(QStringLiteral("spanish"));
+
+    // Ribera is the only feminine name in the table, and the machine picks the
+    // article for a token it knows nothing about - which for an unknown
+    // Spanish noun means masculine. So the article is protected WITH the name
+    // here, and only here: for the masculine districts the machine contracts
+    // "a el" to "al" by itself, and masking the article away would lose that.
+    check("the articled phrase is protected too",
+          prot.contains(QStringLiteral("the Waterfront")));
+    check("including at the start of a sentence",
+          prot.contains(QStringLiteral("The Waterfront")));
+
+    // mask() takes the longest match first, so the articled phrase wins where
+    // the article is there. That ordering is what makes this work at all.
+    const QStringList terms =
+        term_protect::mentionedFrom(
+            prot, {QString::fromUtf8("The Company keeps an office on the "
+                                     "Waterfront.")});
+    const QString masked = term_protect::mask(
+        QString::fromUtf8("The Company keeps an office on the Waterfront."),
+        terms);
+    check("the article goes with the name, not to the translator",
+          !masked.contains(QStringLiteral("the Waterfront"))
+          && !masked.contains(QStringLiteral("Waterfront")), masked);
+
+    // And the rendering supplies it back, agreeing in gender.
+    const int idx = terms.indexOf(QStringLiteral("the Waterfront"));
+    check("the articled form is the one that matched", idx >= 0);
+    QStringList subs;
+    for (int i = 0; i < terms.size(); ++i)
+        subs << (i == idx ? QString::fromUtf8("La Ribera") : terms[i]);
+    const QString reply = QString::fromUtf8("La Compañía tiene una oficina en %1.")
+                              .arg(term_protect::tokenFor(idx));
+    const QString out = term_protect::unmask(reply, subs);
+    check("so it reads en La Ribera",
+          out == QString::fromUtf8("La Compañía tiene una oficina en La Ribera."),
+          out);
+    check("and never en el Ribera",
+          !out.toLower().contains(QString::fromUtf8("el ribera")));
+}
+
 static void testTheTwoThatTheShapeGetsWrong()
 {
     std::cout << "\n[lore_overrides: exact entries beat the shape]\n";
@@ -2873,6 +3017,9 @@ int main(int argc, char **argv)
     testTheSpinnerMarkDoesNotDetachTheRow();
     testTheDevoteeShape();
     testTheTwoThatTheShapeGetsWrong();
+    testTheNarsisDistrictsAndTheOutlander();
+    testTheDistrictsAreProtectedInsideSentences();
+    testTheOneFeminineNameKeepsItsArticle();
     testUserPatternsFromTheRulesFile();
     testWhatReadsAsAName();
     testTheMorrowindNamingFamilies();
