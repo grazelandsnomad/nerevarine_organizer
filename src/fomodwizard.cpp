@@ -685,9 +685,21 @@ void FomodWizard::buildUi()
 
                 } else {
                     // Pass C: checkbox groups - match each plugin name against
-                    // the modlist; auto-check + annotate on a hit. Nothing when
-                    // absent (unchecked is clear enough for optionals).
+                    // the modlist; auto-check + annotate on a hit.
+                    //
+                    // Absence used to say nothing here, on the grounds that an
+                    // unchecked optional is clear enough. That holds only while
+                    // the FOMOD ships its options OFF. Vehicle Overhaul
+                    // Continued pre-ticks eighteen patches named after the mods
+                    // they patch, so on a list holding none of them the silence
+                    // installed all eighteen. A patch is also the one case this
+                    // could not match even when the mod IS present, because the
+                    // needle was the whole option name and "A Forest Patch"
+                    // never matches a mod called "A Forest".
                     const bool hasPrior = priorGroups.contains(groupKey);
+                    // Only SelectAny may be emptied. SelectAtLeastOne has to
+                    // keep one, and deciding WHICH is not this pass's business.
+                    const bool mayUntick = (group.type == QLatin1String("SelectAny"));
                     for (int pi = 0; pi < group.plugins.size(); ++pi) {
                         QAbstractButton *btn = m_buttons[si][gi].value(pi);
                         if (!btn || !btn->isEnabled()) continue;
@@ -695,10 +707,28 @@ void FomodWizard::buildUi()
                         const QString pluginName = group.plugins[pi].name.trimmed();
                         if (pluginName.length() < 4) continue;
 
+                        // A patch option names the mod it PATCHES, so ask about
+                        // that instead of about the option's own name. Empty
+                        // for everything that is not one, which leaves every
+                        // ordinary option on the path below.
+                        const QStringList patchTargets =
+                            fomod::patchTargetsOf(pluginName, group.name);
+
+                        bool    pluginInstalled = false;
+                        QString matchedMod;
+                        if (!patchTargets.isEmpty()) {
+                            // Any one candidate answering is enough: a combined
+                            // patch offers both halves, and a mod with an
+                            // acronym answers to either spelling.
+                            for (const QString &target : patchTargets) {
+                                matchedMod = mod_match::installedUnderAnyName(
+                                    target, m_installedModNames);
+                                if (!matchedMod.isEmpty()) { pluginInstalled = true; break; }
+                            }
+                        } else {
                         // Plugin name + aliases vs each mod name. Short needles
                         // (< 8 chars) must match start-of-name so "MWSE" doesn't
                         // hit "Graphic Herbalism MWSE - OpenMW".
-                        bool pluginInstalled = false;
                         for (const QString &needle : needlesFor(pluginName)) {
                             const bool shortNeedle = (needle.length() < 8);
                             const QString pat = shortNeedle
@@ -710,6 +740,7 @@ void FomodWizard::buildUi()
                             }
                             if (pluginInstalled) break;
                         }
+                        }
 
                         if (pluginInstalled) {
                             if (!hasPrior) btn->setChecked(true);
@@ -717,6 +748,24 @@ void FomodWizard::buildUi()
                                 QStringLiteral(" \u2705 Recommended. The mod is currently present in the modlist."));
                             recommendedInstalledPlugins.insert(
                                 (quint64(si) << 32) | (quint64(gi) << 16) | quint64(pi));
+                        } else if (!patchTargets.isEmpty()) {
+                            // Say so whether or not it was ticked - "which of
+                            // these do I have?" is the question the list is
+                            // silently asking - but only change a tick the
+                            // FOMOD made, never one the user already chose.
+                            btn->setText(btn->text() +
+                                QStringLiteral(" \u26a0\ufe0f %1 is not installed in this modlist.")
+                                    .arg(patchTargets.first()));
+                            const QString tip = btn->toolTip();
+                            btn->setToolTip((tip.isEmpty() ? QString()
+                                                           : tip + QStringLiteral("\n\n"))
+                                + QStringLiteral("This patch is for %1, which is not in this "
+                                                 "modlist, so its files would be installed for "
+                                                 "nothing. Tick it back if you have that mod "
+                                                 "outside the manager, or are about to add it.")
+                                      .arg(patchTargets.first()));
+                            if (mayUntick && !hasPrior && btn->isChecked())
+                                btn->setChecked(false);
                         }
                     }
                 }

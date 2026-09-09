@@ -4,6 +4,7 @@
 #include "fomod_path.h"
 #include "fomod_copy.h"
 #include "fomod_hint.h"
+#include "mod_match.h"
 #include "mod_aliases.h"
 #include "fomod_scripts.h"
 #include "fomod_install.h"
@@ -1152,6 +1153,112 @@ static void run_bain_hint()
 
 // A Yes/No step only earns a modlist verdict when it is about another mod.
 // Absence of a match is not evidence of absence, so the wording has to carry it.
+// -- Patches named after the mod they patch --------------------------------
+//
+// Every option name below is real, read out of Vehicle Overhaul Continued's
+// ModuleConfig.xml, whose "Mod Patches" group is eighteen options long and
+// ships every one of them ticked.
+static void run_fomod_patch_targets()
+{
+    std::cout << "=== fomod_hint (patchTargetsOf) tests ===\n";
+    const QString grp = QStringLiteral("Mod Patches");
+    const auto target = [&grp](const char *opt) {
+        const QStringList t = fomod::patchTargetsOf(QString::fromUtf8(opt), grp);
+        return t.isEmpty() ? QString() : t.first();
+    };
+
+    check("a plain patch names its mod",
+          target("A Forest Patch") == QStringLiteral("A Forest"));
+    check("and a longer one",
+          target("Boston Airport Redux Patch")
+              == QStringLiteral("Boston Airport Redux"));
+    check("an apostrophe is part of the name",
+          target("Survivalist's Bus Patch") == QStringLiteral("Survivalist's Bus"));
+    check("initials survive",
+          target("P.L.I. Dark Hollow Pond Patch")
+              == QStringLiteral("P.L.I. Dark Hollow Pond"));
+
+    // Authors put their notes AFTER the suffix, so the notes come off first.
+    check("a trailing note is stripped",
+          target("Boston Natural Surroundings Patch [Select Manually]")
+              == QStringLiteral("Boston Natural Surroundings"));
+    check("and so are two of them",
+          target("Boston Natural Surroundings Patch (Green Ver) [Select Manually]")
+              == QStringLiteral("Boston Natural Surroundings"));
+    check("a trailing framework marker goes too",
+          target("Anom's Sanctuary Hills Overhaul Patch (PRP)")
+              == QStringLiteral("Anom's Sanctuary Hills Overhaul"));
+
+    // A parenthesised acronym is the mod's other name, so it is kept as a
+    // second candidate rather than thrown away.
+    {
+        const QStringList t = fomod::patchTargetsOf(
+            QStringLiteral("Fallout Coniferous Revival (FCR) Patch"), grp);
+        check("the acronym becomes a candidate of its own",
+              t == QStringList{QStringLiteral("Fallout Coniferous Revival"),
+                               QStringLiteral("FCR")},
+              t.join(QStringLiteral(" | ")));
+    }
+
+    // A combined patch needs both mods, and the whole phrase leads because
+    // "and" sits inside plenty of single mod names.
+    {
+        const QStringList t = fomod::patchTargetsOf(
+            QStringLiteral("P.L.I. Dark Hollow Pond and Open Commonwealth Patch"), grp);
+        check("a combined patch offers the whole phrase first",
+              t.value(0) == QStringLiteral("P.L.I. Dark Hollow Pond and Open Commonwealth"),
+              t.value(0));
+        check("and each half after it",
+              t.contains(QStringLiteral("P.L.I. Dark Hollow Pond"))
+              && t.contains(QStringLiteral("Open Commonwealth")));
+    }
+
+    // -- and everything that must stay silent ------------------------------
+
+    check("an option that is not a patch says nothing",
+          fomod::patchTargetsOf(QStringLiteral("High Resolution Textures"), grp)
+              .isEmpty());
+    // The remainder has to be name-shaped. These describe what you are
+    // installing, not a mod you are supposed to already have.
+    check("a one-word remainder is not a mod name",
+          fomod::patchTargetsOf(QStringLiteral("Optional Patch"), grp).isEmpty());
+    check("nor is a wholly generic one",
+          fomod::patchTargetsOf(QStringLiteral("Bug Fix Patch"), grp).isEmpty());
+    check("one real word is enough to make it one",
+          fomod::patchTargetsOf(QStringLiteral("Open Commonwealth Patch"), grp)
+              == QStringList{QStringLiteral("Open Commonwealth")});
+
+    // Both halves of the evidence are required: the group has to declare that
+    // these are patches, or "Dark Mode Patch" reads as a missing mod.
+    check("a group that never mentions patches gets no verdict",
+          fomod::patchTargetsOf(QStringLiteral("Dark Mode Patch"),
+                                QStringLiteral("Appearance Options")).isEmpty());
+    check("the same option in a patch group does",
+          !fomod::patchTargetsOf(QStringLiteral("Boston Airport Redux Patch"),
+                                 QStringLiteral("Patches")).isEmpty());
+
+    // The whole point, end to end against a modlist: the mods this Fallout 4
+    // list actually holds keep their patch, and the ones it does not lose it.
+    const QStringList installed{
+        QStringLiteral("Commonwealth Iguanas"),
+        QStringLiteral("Base Object Swapper"),
+        QStringLiteral("Misery Island - Isles Of New England"),
+    };
+    const auto answers = [&](const char *opt) {
+        for (const QString &t : fomod::patchTargetsOf(QString::fromUtf8(opt), grp))
+            if (!mod_match::installedUnderAnyName(t, installed).isEmpty()) return true;
+        return false;
+    };
+    check("a patch for a mod that IS installed is kept",
+          answers("Commonwealth Iguanas Patch"));
+    check("and so is one whose mod is there under a longer name",
+          answers("Misery Island Patch"));
+    check("a patch for a mod that is not installed is not",
+          !answers("Mutant Menagerie Patch"));
+    check("nor is one for a mod nothing on the list resembles",
+          !answers("Diamond City Exterior Town Patch"));
+}
+
 static void run_fomod_hint()
 {
     std::cout << "=== fomod_hint (asksAboutAnotherMod) tests ===\n";
@@ -2136,6 +2243,84 @@ static void run_fomod_wizard_ui()
 {
     std::cout << "=== fomod_wizard_ui (buildUi) tests ===\n";
 
+    // Pass C, the untick half: a pre-ticked "Mod Patches" group on a list that
+    // holds one of the mods. This is Vehicle Overhaul Continued's real shape -
+    // eighteen "<Mod> Patch" options, all Recommended, i.e. ticked.
+    {
+        FomodGroup g;
+        g.name = QStringLiteral("Mod Patches");
+        g.type = QStringLiteral("SelectAny");
+        g.plugins = { wizardui_mkPlugin("A Forest Patch", "Recommended"),
+                      wizardui_mkPlugin("Mutant Menagerie Patch", "Recommended"),
+                      wizardui_mkPlugin("Commonwealth Iguanas Patch", "Recommended"),
+                      wizardui_mkPlugin("Optional Patch", "Recommended") };
+        FomodStep st;
+        st.name = QStringLiteral("Patches");
+        st.groups.append(g);
+
+        auto *w = FomodWizardTestHook::build(
+            { st }, {}, { QStringLiteral("Commonwealth Iguanas"),
+                          QStringLiteral("Base Object Swapper") });
+        auto *forest  = FomodWizardTestHook::btn(w, 0, 0, 0);
+        auto *menag   = FomodWizardTestHook::btn(w, 0, 0, 1);
+        auto *iguanas = FomodWizardTestHook::btn(w, 0, 0, 2);
+        auto *optional = FomodWizardTestHook::btn(w, 0, 0, 3);
+
+        check("a patch for a mod you do not have is unticked",
+              !forest->isChecked() && !menag->isChecked());
+        check("and says which mod is missing",
+              forest->text().contains(QStringLiteral("A Forest is not installed")),
+              forest->text());
+        check("a patch for a mod you DO have stays ticked",
+              iguanas->isChecked());
+        check("and says so",
+              iguanas->text().contains(QStringLiteral("present in the modlist")),
+              iguanas->text());
+        // The generic one is none of this pass's business, so the FOMOD's own
+        // default survives untouched.
+        check("an option that names no mod is left exactly as the FOMOD set it",
+              optional->isChecked()
+              && !optional->text().contains(QStringLiteral("not installed")),
+              optional->text());
+        delete w;
+    }
+
+    // A group the author never called a patch group is left alone entirely,
+    // even when an option happens to end in "Patch".
+    {
+        FomodGroup g;
+        g.name = QStringLiteral("Appearance Options");
+        g.type = QStringLiteral("SelectAny");
+        g.plugins = { wizardui_mkPlugin("Dark Mode Patch", "Recommended") };
+        FomodStep st;
+        st.name = QStringLiteral("Options");
+        st.groups.append(g);
+        auto *w = FomodWizardTestHook::build({ st }, {}, { QStringLiteral("Something Else") });
+        check("no patch group, no verdict",
+              FomodWizardTestHook::btn(w, 0, 0, 0)->isChecked());
+        delete w;
+    }
+
+    // SelectAtLeastOne has to keep one ticked, so this pass must not empty it.
+    {
+        FomodGroup g;
+        g.name = QStringLiteral("Mod Patches");
+        g.type = QStringLiteral("SelectAtLeastOne");
+        g.plugins = { wizardui_mkPlugin("A Forest Patch", "Recommended"),
+                      wizardui_mkPlugin("Frozen Valley Patch", "Recommended") };
+        FomodStep st;
+        st.name = QStringLiteral("Patches");
+        st.groups.append(g);
+        auto *w = FomodWizardTestHook::build({ st }, {}, { QStringLiteral("Nothing Relevant") });
+        check("a group that must keep one is warned about but not emptied",
+              FomodWizardTestHook::btn(w, 0, 0, 0)->isChecked()
+              && FomodWizardTestHook::btn(w, 0, 0, 0)->text()
+                     .contains(QStringLiteral("not installed")));
+        delete w;
+    }
+
+
+
     wizardui_testFindFomodRoot();
     wizardui_testModlistVerdict();
     wizardui_testMissingCitedMod();
@@ -2529,6 +2714,7 @@ int main(int argc, char **argv)
     run_bain();
     run_bain_hint();
     run_fomod_hint();
+    run_fomod_patch_targets();
     run_fomod_wizard_ui();
     run_bain_wizard_ui();
 

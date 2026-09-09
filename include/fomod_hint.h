@@ -112,6 +112,59 @@ QStringList requiredMods(const QString &description,
                          const QString &optionName = {},
                          const QString &groupName = {});
 
+// -- Patches named after the mod they patch ---------------------------
+//
+// Vehicle Overhaul Continued has a step called "Patches" holding a group
+// called "Mod Patches", eighteen options long, every one of them named
+// "<Some Mod> Patch" and every one pre-ticked by the FOMOD:
+//
+//   A Forest Patch            Diamond City Exterior Town Patch
+//   Boston Airport Redux Patch    Fallout Coniferous Revival (FCR) Patch
+//   Mutant Menagerie Patch    Project Apocalyptic Commonwealth (PAC) Patch
+//
+// On a 31-mod Fallout 4 list holding none of them, that installs eighteen
+// patches for mods that are not there - plugins in the load order doing
+// nothing, and overwriting files other mods may want.
+//
+// Pass C already matched option names against the modlist, but only ever
+// TICKED on a hit: "nothing when absent (unchecked is clear enough for
+// optionals)". That reasoning holds only while the FOMOD ships its options
+// off. Ticked by default, absence has to untick or it does nothing at all.
+// It also could not match these even when the mod IS present, because the
+// needle was the whole option name - "A Forest Patch" never matches a mod
+// called "A Forest".
+//
+// -- Why absence is evidence here -------------------------------------
+//
+// Everywhere else in this file a failed lookup means nothing until the thing
+// looked up is known to be a mod name. Here the installer says so itself: the
+// group is called "Mod Patches" and the option is "<X> Patch". That is an
+// author declaring, in two places, that X is a mod. So the same rule is
+// satisfied - by a declaration rather than by a citation or a phrasing.
+//
+// Both halves are required. A group that never mentions patches gets nothing,
+// and neither does an option whose remainder is not name-shaped: "Optional
+// Patch" leaves "Optional", "Bug Fix Patch" leaves two ordinary words, and
+// generic remainders are rejected rather than hunted for in the modlist.
+
+// The mod or mods a patch option is for, best candidate first, or empty when
+// the option is not a patch naming one - which is the common case and the
+// reason this is safe to act on.
+//
+// Trailing notes are stripped before the suffix, since authors put them after
+// it: "Boston Natural Surroundings Patch (Green Ver) [Select Manually]" is a
+// patch for Boston Natural Surroundings. A parenthesised acronym becomes a
+// candidate of its own, so "Fallout Coniferous Revival (FCR) Patch" answers to
+// either spelling.
+//
+// A combined patch ("P.L.I. Dark Hollow Pond and Open Commonwealth Patch")
+// returns the whole phrase AND each side of the "and", so a caller can treat
+// any one of them matching as evidence and leave the option alone. Splitting
+// on "and" is not safe as an ONLY answer - mod_match::isConnector exists
+// because "Complete Alchemy and Cooking Overhaul" is one mod - which is why
+// the whole phrase leads.
+QStringList patchTargetsOf(const QString &optionName, const QString &groupName);
+
 // -- Exclusive groups offering alternative frameworks -----------------
 //
 // Producers of Skyrim asks how to inject its orc-stronghold blacksmith goods:

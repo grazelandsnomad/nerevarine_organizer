@@ -435,4 +435,107 @@ SkyrimRuntime runtimePreferenceForGame(const QString &gameId)
     return SkyrimRuntime::None;
 }
 
+
+namespace {
+
+// Words that make a patch name generic rather than a mod's. A remainder built
+// ENTIRELY from these names an option of this mod, not another mod: "Bug Fix
+// Patch" and "Optional Patch" are about what you are installing, not about
+// what you already have. One non-generic word is enough to make it a name -
+// "Open Commonwealth" keeps "Commonwealth".
+bool genericPatchWord(const QString &w)
+{
+    static const QSet<QString> kWords = {
+        QStringLiteral("bug"),      QStringLiteral("bugs"),
+        QStringLiteral("fix"),      QStringLiteral("fixes"),
+        QStringLiteral("compatibility"), QStringLiteral("compatible"),
+        QStringLiteral("optional"), QStringLiteral("main"),
+        QStringLiteral("core"),     QStringLiteral("extra"),
+        QStringLiteral("extras"),   QStringLiteral("misc"),
+        QStringLiteral("miscellaneous"), QStringLiteral("performance"),
+        QStringLiteral("previs"),   QStringLiteral("precombine"),
+        QStringLiteral("precombines"), QStringLiteral("lite"),
+        QStringLiteral("light"),    QStringLiteral("full"),
+        QStringLiteral("base"),     QStringLiteral("default"),
+        QStringLiteral("alternate"), QStringLiteral("alternative"),
+        QStringLiteral("general"),  QStringLiteral("universal"),
+        QStringLiteral("standalone"), QStringLiteral("standard"),
+        QStringLiteral("version"),  QStringLiteral("ver"),
+        QStringLiteral("all"),      QStringLiteral("only"),
+        QStringLiteral("required"), QStringLiteral("recommended"),
+    };
+    return kWords.contains(w.toLower());
+}
+
+} // namespace
+
+QStringList patchTargetsOf(const QString &optionName, const QString &groupName)
+{
+    // The group has to declare that these are patches. Without it "Dark Mode
+    // Patch" in a group of appearance options would be read as a missing mod.
+    if (!groupName.contains(QLatin1String("patch"), Qt::CaseInsensitive))
+        return {};
+
+    QString name = optionName.trimmed();
+
+    // Trailing notes come AFTER the suffix, so they go first: "... Patch
+    // (Green Ver) [Select Manually]". Repeated, since authors stack them.
+    static const QRegularExpression kTrailingNote(
+        QStringLiteral("\\s*[\\[(][^\\][()]*[\\])]\\s*$"));
+    QString acronym;
+    for (;;) {
+        const auto m = kTrailingNote.match(name);
+        if (!m.hasMatch()) break;
+        name = name.left(m.capturedStart()).trimmed();
+    }
+
+    // Now the suffix itself, which is what makes this a patch at all.
+    static const QRegularExpression kSuffix(
+        QStringLiteral("\\s*\\b(patch|patches)\\s*$"),
+        QRegularExpression::CaseInsensitiveOption);
+    const auto sm = kSuffix.match(name);
+    if (!sm.hasMatch()) return {};
+    name = name.left(sm.capturedStart()).trimmed();
+
+    // A parenthesised acronym INSIDE the remainder is the mod's other name:
+    // "Fallout Coniferous Revival (FCR)". Keep both spellings, drop the
+    // brackets from the primary.
+    static const QRegularExpression kInnerParen(
+        QStringLiteral("\\s*\\(([^()]*)\\)"));
+    for (;;) {
+        const auto m = kInnerParen.match(name);
+        if (!m.hasMatch()) break;
+        const QString inner = m.captured(1).trimmed();
+        if (acronym.isEmpty() && mod_match::looksLikeModName(inner))
+            acronym = inner;
+        name = (name.left(m.capturedStart()) + QLatin1Char(' ')
+                + name.mid(m.capturedEnd())).simplified();
+    }
+
+    if (name.isEmpty() || !mod_match::looksLikeModName(name)) return {};
+
+    // Entirely generic reads as an option of this mod rather than another one.
+    bool anyReal = false;
+    for (const QString &w : name.split(QLatin1Char(' '), Qt::SkipEmptyParts))
+        if (!genericPatchWord(w)) { anyReal = true; break; }
+    if (!anyReal) return {};
+
+    QStringList out{name};
+    if (!acronym.isEmpty()) out << acronym;
+
+    // A combined patch names two mods. The whole phrase leads, because "and"
+    // sits inside plenty of single mod names (mod_match::isConnector), and the
+    // halves follow so a caller can spot either one being installed.
+    static const QRegularExpression kAnd(QStringLiteral("\\s+and\\s+"),
+                                         QRegularExpression::CaseInsensitiveOption);
+    if (name.contains(kAnd)) {
+        for (const QString &part : name.split(kAnd, Qt::SkipEmptyParts)) {
+            const QString p = part.trimmed();
+            if (!p.isEmpty() && mod_match::looksLikeModName(p) && !out.contains(p))
+                out << p;
+        }
+    }
+    return out;
+}
+
 } // namespace fomod
