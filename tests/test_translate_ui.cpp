@@ -1271,6 +1271,84 @@ static void testAReSavedNameIsTheBaseGameTalking()
 // Morrowind's whole book library and sixty thousand lines of dialogue in the
 // same hash, and keeping that would cost hundreds of megabytes for the life of
 // the process.
+// The filter itself. The editor has applied it for a while; the coverage scan
+// did not, and the two halves of the app therefore disagreed about what a mod's
+// content IS - which is how a finished translation came to read "no
+// translation" with its own translation one row below it.
+static void testBaseGameTextIsDroppedFromAModsContent()
+{
+    std::cout << "\n[what the mod says, minus what the base game says]\n";
+
+    vanilla_text::Table v;
+    v.insert(QStringLiteral("sTeleportDisabled"),
+             QStringLiteral("Teleportation magic does not work here."));
+    v.insertKey(QStringLiteral("NPC_:fargoth:FNAM:0"), QStringLiteral("Fargoth"));
+
+    plugin_strings::StringSet set;
+    set.valid = true;
+    set.tes3  = true;
+    // Goes: the game already says exactly this.
+    set.byKey.insert("GMST:sTeleportDisabled:STRV:0",
+                     "Teleportation magic does not work here.");
+    // Goes: an editor placeholder - the setting's own name as its value.
+    set.byKey.insert("GMST:sEffectSummonCreature01:STRV:0",
+                     "sEffectSummonCreature01");
+    // Goes: blank, so there was never anything to translate.
+    set.byKey.insert("GMST:sNotifyMessage60:STRV:0", "");
+    // Goes: the value is an object id the engine looks up, not text.
+    set.byKey.insert("GMST:sMagicCreature01ID:STRV:0", "BM_wolf_grey_summon");
+    // Goes: a display name re-saved verbatim, in the secondary tier where
+    // NPC names live.
+    set.auxByKey.insert("NPC_:fargoth:FNAM:0", "Fargoth");
+
+    // STAYS: a setting the mod really changed. Patch for Purists exists to
+    // correct vanilla wording, and it means every one of them.
+    set.byKey.insert("GMST:sTeleportDisabled2:STRV:0", "You cannot teleport.");
+    // STAYS: the mod's own weapon.
+    set.byKey.insert("WEAP:daedric_maul:FNAM:0", "Daedric Maul");
+    // STAYS: a vanilla NAME on a record the base game never had - somebody
+    // wrote that, so somebody gets asked about it.
+    set.auxByKey.insert("NPC_:mod_fargoth_clone:FNAM:0", "Fargoth");
+
+    vanilla_text::dropBaseGameText(set, v);
+
+    check("the mod's own core strings survive", set.byKey.size() == 2,
+          QString::number(set.byKey.size()));
+    check("including the setting it really changed",
+          set.byKey.contains(QStringLiteral("GMST:sTeleportDisabled2:STRV:0")));
+    check("and its own weapon",
+          set.byKey.contains(QStringLiteral("WEAP:daedric_maul:FNAM:0")));
+    check("the re-saved display name is gone",
+          !set.auxByKey.contains(QStringLiteral("NPC_:fargoth:FNAM:0")));
+    check("but a vanilla name on a new record stays", set.auxByKey.size() == 1,
+          QString::number(set.auxByKey.size()));
+
+    // With no game files the two rules that need none still hold - which is
+    // what makes a missing vanilla folder a degraded answer, not no answer.
+    plugin_strings::StringSet bare;
+    bare.valid = true;
+    bare.byKey.insert("GMST:sSomething:STRV:0", "");
+    bare.byKey.insert("GMST:sOther:STRV:0", "sOther");
+    bare.byKey.insert("GMST:sReal:STRV:0", "Real prose the mod wrote.");
+    bare.auxByKey.insert("NPC_:someone:FNAM:0", "Someone");
+    vanilla_text::dropBaseGameText(bare, vanilla_text::Table{});
+    check("an empty table still drops blanks and placeholders",
+          bare.byKey.size() == 1 && bare.byKey.contains("GMST:sReal:STRV:0"),
+          QString::number(bare.byKey.size()));
+    check("and claims nothing about display names",
+          bare.auxByKey.size() == 1);
+
+    // A Skyrim-shaped key can never match: STRV and FNAM are TES3 spellings,
+    // so this is a no-op there without any game gating.
+    plugin_strings::StringSet tes4;
+    tes4.valid = true;
+    tes4.byKey.insert("BOOK:0001A2B3:FULL:0", "A Dance in Fire");
+    tes4.byKey.insert("GMST:0001A2B4:DATA:0", "");
+    vanilla_text::dropBaseGameText(tes4, v);
+    check("TES4 keys are untouched", tes4.byKey.size() == 2,
+          QString::number(tes4.byKey.size()));
+}
+
 static void testOnlyDisplayNamesAreKept()
 {
     std::cout << "\n[vanilla_text: which keys are worth keeping]\n";
@@ -2770,6 +2848,7 @@ int main(int argc, char **argv)
     testEnterAnswersAOneLineRow();
     testEnterKeepsItsOldMeaningInAParagraph();
     testAReSavedNameIsTheBaseGameTalking();
+    testBaseGameTextIsDroppedFromAModsContent();
     testOnlyDisplayNamesAreKept();
     testVanillaNamesArriveAnswered();
     testYourOwnAnswerOutranksTheBaseGame();

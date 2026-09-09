@@ -1,5 +1,7 @@
 #include "loadordercontroller.h"
 
+#include "translation_coverage.h"
+#include "vanilla_text.h"
 #include "language_guess.h"
 
 #include "async_guarded.h"
@@ -113,11 +115,12 @@ public:
     using Cache = QHash<QString, CachedPluginStrings>;
 
     TranslationScanWorker(const QList<conflict_direction::Mod> &mods,
-                          QString targetLanguage,
+                          QString targetLanguage, QString vanillaDataFolder,
                           Cache *cache, QMutex *cacheMu,
                           QObject *parent = nullptr)
         : QThread(parent), m_mods(mods),
           m_language(std::move(targetLanguage)),
+          m_vanillaFolder(std::move(vanillaDataFolder)),
           m_cache(cache), m_cacheMu(cacheMu) {}
 
     // Read only after finished() fires.
@@ -136,14 +139,13 @@ public:
 protected:
     void run() override
     {
+        // On this thread, deliberately: see m_vanillaFolder. Shared and built
+        // at most once per process, so a warm cache is a hash lookup.
+        const vanilla_text::Table &vanilla = vanilla_text::cached(m_vanillaFolder);
+
         // One entry per plugin across the whole list, so the pairing pass is a
         // plain O(n^2) over plugins rather than a nested walk of mods.
-        struct Entry {
-            int         modIdx = 0;
-            QString     pluginName;   // file name, lower case
-            plugin_strings::StringSet strings;
-        };
-        QList<Entry> entries;
+        QList<translation_coverage::Entry> entries;
         // Lower-cased "<pluginbase>_<language>" tokens found under any enabled
         // mod's Strings/ dir - how a localized plugin gets translated.
         QSet<QString> stringFiles;
@@ -173,7 +175,18 @@ protected:
                  && !lower.endsWith(QLatin1String(".esl"))) continue;
                 sawPlugin = true;
 
-                const auto st = cachedExtract(dit.filePath());
+                auto st = cachedExtract(dit.filePath());
+                if (!st.valid) continue;
+                // AFTER the cache read, never inside it: cachedExtract
+                // memoises the raw StringSet by mtime+size, and filtering in
+                // there would hand a pruned set to every later reader.
+                //
+                // What the mod itself says, which is the only thing a verdict
+                // may be computed from. Without this a mod that re-saved the
+                // base game's own settings looked ~93% identical to its own
+                // finished translation, and the near-verbatim rejector threw
+                // the translation out. See vanilla_text::dropBaseGameText.
+                vanilla_text::dropBaseGameText(st, vanilla);
                 if (!st.valid) continue;
                 // Nothing to say only when BOTH tiers are empty - the real
                 // mesh/texture case. A plugin whose only text is secondary
@@ -186,128 +199,22 @@ protected:
         }
         if (isInterruptionRequested()) return;
 
-        // Pair every plugin with the best candidate from a DIFFERENT mod: the
-        // one sharing the most keys, provided it shares most of the smaller
-        // set. Same-mod plugins are skipped - a mod does not translate itself.
-        for (int a = 0; a < entries.size(); ++a) {
-            if (isInterruptionRequested()) return;
-            if (!entries.isEmpty()) setPercent(90 + 10 * a / entries.size());
-            const Entry &ea = entries[a];
+        // The judgement itself lives in translation_coverage, where a test can
+        // reach it: this is a QThread, and five calibrated thresholds inside
+        // run() had nothing pinning them.
+        QStringList modNames;
+        modNames.reserve(m_mods.size());
+        for (const auto &m : m_mods) modNames << m.name;
 
-            // A localized plugin keeps its text in Strings/, so coverage is a
-            // file-presence question and no comparison is possible.
-            //
-            // But the absence of a Spanish Strings file is only evidence when
-            // the Strings files can be seen AT ALL. Sanguine Symphony is
-            // localized and ships its Strings inside a BSA, which this walk
-            // cannot read (bsareader is TES3-only), so it found nothing - not
-            // even the English set that is definitely in there - and reported
-            // "no translation". Meanwhile the editor refused the same plugin
-            // for being localized, so the manager said both at once.
-            //
-            // Finding SOME Strings file for this plugin is what makes the
-            // missing one meaningful. Finding none means we could not look.
-            if (ea.strings.localized) {
-                const QString base = ea.pluginName.section(QLatin1Char('.'), 0, 0);
-                bool sawAny = false;
-                for (const QString &tok : stringFiles) {
-                    if (tok.startsWith(base + QLatin1Char('_'))) { sawAny = true; break; }
-                }
-                if (m_language.isEmpty() || !sawAny) {
-                    // Nothing to say: no target language set, or the Strings
-                    // are somewhere we cannot read.
-                    noteCoverage(ea.modIdx, ea.pluginName, /*translatable=*/0,
-                                 TranslationCoverage::State::Ok, {}, {});
-                    continue;
-                }
-                const bool covered =
-                    stringFiles.contains(base + QLatin1Char('_') + m_language);
-                noteCoverage(ea.modIdx, ea.pluginName, /*translatable=*/0,
-                             covered ? TranslationCoverage::State::Ok
-                                     : TranslationCoverage::State::NoTranslation,
-                             {}, {});
-                continue;
-            }
+        setPercent(95);
+        const auto verdicts = translation_coverage::judge(
+            entries, stringFiles, modNames, m_language);
+        if (isInterruptionRequested()) return;
 
-            // Core text drives the verdict whenever there is any, so nothing
-            // about the existing results moves. Only when a plugin has none
-            // does the secondary tier take over - and then it may answer the
-            // pairing question but never the percentage (plugin_strings.h).
-            const bool secondaryOnly = ea.strings.byKey.isEmpty();
-            const auto tier = secondaryOnly ? plugin_strings::Tier::Secondary
-                                            : plugin_strings::Tier::Core;
-            const auto keysOf = [tier](const plugin_strings::StringSet &s) {
-                return tier == plugin_strings::Tier::Core ? s.byKey.size()
-                                                          : s.auxByKey.size();
-            };
-
-            int bestShared = 0, bestIdx = -1;
-            plugin_strings::Comparison best;
-            for (int b = 0; b < entries.size(); ++b) {
-                if (b == a || entries[b].modIdx == ea.modIdx) continue;
-                if (entries[b].strings.localized) continue;
-                const auto cmp = plugin_strings::compare(
-                    ea.strings, entries[b].strings, /*maxSamples=*/8, tier);
-                const int smaller = qMin(keysOf(ea.strings),
-                                         keysOf(entries[b].strings));
-                if (smaller <= 0) continue;
-                if (double(cmp.common) < kPairRatio * double(smaller)) continue;
-                // TES3 has no amber verdict to absorb this case (below), so a
-                // candidate that is a near-verbatim COPY - a compatibility
-                // patch or an edited duplicate of the same English plugin -
-                // must not count as a translation partner at all. Measured on
-                // the live Morrowind list: every such pair sits at ~100%
-                // identical, while a real translation measured 1.4% (USSEP-ES),
-                // so 90% cannot misfire on one.
-                if (ea.strings.tes3 && cmp.common >= 10
-                    && double(cmp.identical) >= 0.9 * double(cmp.common))
-                    continue;
-                if (cmp.common > bestShared) {
-                    bestShared = cmp.common;
-                    bestIdx    = b;
-                    best       = cmp;
-                }
-            }
-
-            const int translatable = keysOf(ea.strings);
-            if (bestIdx < 0) {
-                // No partner supplies alternative text - but that has two
-                // causes, and only one of them is a problem. A mod can also
-                // have no partner because it IS the translation: Better Crowd
-                // Citizens Spanish ships only the Spanish version, so nothing
-                // pairs with it and it was flagged red while offering to
-                // translate "Ciudadana" into Spanish. Ask whether there is
-                // anything left to translate before saying there is.
-                if (!m_language.isEmpty()
-                    && language_guess::alreadyInLanguage(
-                           m_mods[ea.modIdx].name, sampleText(ea.strings),
-                           m_language)) {
-                    noteCoverage(ea.modIdx, ea.pluginName, translatable,
-                                 TranslationCoverage::State::Ok, {}, {});
-                    continue;
-                }
-                noteCoverage(ea.modIdx, ea.pluginName, translatable,
-                             TranslationCoverage::State::NoTranslation, {}, {});
-                continue;
-            }
-            // kPartialRatio/kPartialCount were measured on core types only.
-            // Proper-noun-heavy secondary text sits far above that floor while
-            // being perfectly translated, so a partial verdict there would cry
-            // wolf: a covered secondary-only plugin reports Ok until the
-            // threshold has been measured on a real translated pair.
-            // TES3 additionally reports red/Ok only: kPartialRatio/kPartialCount
-            // were calibrated on a TES4 pair (USSEP-ES), and the live Morrowind
-            // list holds no translated pair to measure a TES3 floor against.
-            // Revisit when one exists.
-            const bool partial = !secondaryOnly && !ea.strings.tes3
-                              && best.ratio() >= plugin_strings::kPartialRatio
-                              && best.identical >= plugin_strings::kPartialCount;
-            noteCoverage(ea.modIdx, ea.pluginName, translatable,
-                         partial ? TranslationCoverage::State::Partial
-                                 : TranslationCoverage::State::Ok,
-                         m_mods[entries[bestIdx].modIdx].name, best.samples,
-                         best.common, best.identical);
-        }
+        for (const auto &v : verdicts)
+            noteCoverage(v.modIdx, v.pluginName, v.translatable, v.state,
+                         v.partnerMod, v.samples, v.common, v.identical);
+        setPercent(100);
 
         // Mods that turned out to have nothing to say are dropped here rather
         // than at every call site that reads the map.
@@ -396,6 +303,10 @@ private:
 
     QList<conflict_direction::Mod>      m_mods;
     QString                             m_language;
+    // The FOLDER, resolved on the UI thread; the table is fetched here so a
+    // cold cache costs the worker 94 MB of walking rather than the window.
+    QString                             m_vanillaFolder;
+    const vanilla_text::Table          &m_vanilla = vanilla_text::cached(m_vanillaFolder);
     int                                 m_noPluginMods = 0;
     Cache                              *m_cache   = nullptr;
     QMutex                             *m_cacheMu = nullptr;
@@ -424,7 +335,8 @@ LoadOrderController::~LoadOrderController()
 
 void LoadOrderController::scanTranslations(
     const QList<conflict_direction::Mod> &modsInLoadOrder,
-    const QString &targetLanguage)
+    const QString &targetLanguage,
+    const QString &vanillaDataFolder)
 {
     // Buffer rather than drop when a scan is in flight.
     //
@@ -435,15 +347,17 @@ void LoadOrderController::scanTranslations(
     // there leaves the previous scan's verdict painted, which reads as the
     // feature being broken. So keep the newest request and re-fire once.
     if (m_activeTranslationScanner && m_activeTranslationScanner->isRunning()) {
-        m_pendingTranslationMods     = modsInLoadOrder;
-        m_pendingTranslationLanguage = targetLanguage;
+        m_pendingTranslationMods          = modsInLoadOrder;
+        m_pendingTranslationLanguage      = targetLanguage;
+        m_pendingTranslationVanillaFolder = vanillaDataFolder;
         m_translationScanPending      = true;
         return;
     }
 
     delete m_activeTranslationScanner;
     m_activeTranslationScanner = new TranslationScanWorker(
-        modsInLoadOrder, targetLanguage, &m_stringsCache, m_stringsCacheMu, this);
+        modsInLoadOrder, targetLanguage, vanillaDataFolder,
+        &m_stringsCache, m_stringsCacheMu, this);
 
     // Poll the worker's counter onto the UI rather than have it signal per
     // plugin. 100ms is well under the eye's "is this thing alive" threshold and
@@ -473,7 +387,9 @@ void LoadOrderController::scanTranslations(
         // the user made is always the one reflected on screen.
         if (m_translationScanPending) {
             m_translationScanPending = false;
-            scanTranslations(m_pendingTranslationMods, m_pendingTranslationLanguage);
+            scanTranslations(m_pendingTranslationMods,
+                             m_pendingTranslationLanguage,
+                             m_pendingTranslationVanillaFolder);
         }
     });
     m_activeTranslationScanner->start(QThread::LowPriority);

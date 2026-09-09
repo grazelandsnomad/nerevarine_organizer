@@ -4,6 +4,7 @@
 #include "separatordialog.h"
 #include "modlistdelegate.h"
 #include "modroles.h"
+#include "translation_mod.h"
 #include "translation_progress.h"
 #include "translator.h"
 #include "post_install.h"
@@ -3447,7 +3448,11 @@ void MainWindow::runTranslationScan()
     // localized plugin. The string comparison itself needs no language at all,
     // which is why an empty value (never asked) is fine here and this path
     // does not prompt - see target_language.h.
-    m_loadCtl->scanTranslations(mods, translationLanguage());
+    // The folder, not the table: building it walks 94 MB and belongs on the
+    // scan's worker, not here. Without it the scan counts the base game's own
+    // re-saved text as this mod's, and a finished translation reads as none.
+    m_loadCtl->scanTranslations(mods, translationLanguage(),
+                                vanillaDataFolderPath());
 }
 
 void MainWindow::onTranslationsScanned(
@@ -3479,10 +3484,15 @@ void MainWindow::onTranslationsScanned(
         // refuses a lightly translated plugin as its own partner, so the row
         // lands on NoTranslation and turns red.
         //
-        // The flag alone here, not the name too. This runs over every row on
-        // every rescan, and the worst a missed older row can do is wear a
-        // wrong caption - the ACTIONS are gated on the wider test.
-        if (it->data(ModRole::IsGeneratedTranslation).toBool()) {
+        // Flag OR name, the same test the actions are gated on. The flag alone
+        // was the cheaper choice and its own comment shrugged that a missed
+        // older row would only "wear a wrong caption" - which is precisely the
+        // bug it caused. Unique Snowy Crown - Spanish (Nerevarine) predates the
+        // flag, and once base-game filtering emptied its SOURCE out of the scan
+        // the Spanish row lost its partner and turned red. A row whose name
+        // says Nerevarine built it is not a row missing a translation.
+        if (it->data(ModRole::IsGeneratedTranslation).toBool()
+            || !translation_mod::sourceModOf(it->text().trimmed()).isEmpty()) {
             it->setData(ModRole::TranslationState,  0);
             it->setData(ModRole::TranslationDetail, QStringList());
             continue;

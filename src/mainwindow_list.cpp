@@ -1856,6 +1856,8 @@ void MainWindow::onSortByDate()
 
 namespace {
 
+QString vanillaDataFolder();
+
 // The base game's own game settings, so a mod's re-saved copy of one can be
 // told from a setting it meant to change.
 //
@@ -1868,11 +1870,18 @@ namespace {
 // openmw.cfg, and vanilla_text::isDirty still answers from the value alone.
 const vanilla_text::Table &vanillaText()
 {
-    static bool                 loaded = false;
-    static vanilla_text::Table  table;
-    if (loaded) return table;
-    loaded = true;
+    return vanilla_text::cached(vanillaDataFolder());
+}
 
+// Where the base game lives, or empty when there is none to find.
+//
+// Split from the table so the coverage scan can be handed the PATH and build
+// the table on its own worker - the 94 MB walk must not come back to the UI
+// thread. The caching itself moved into vanilla_text::cached, which guards it
+// properly; what stood here was a plain `static bool loaded` flag that ordered
+// nothing and would have let a worker read a half-built table.
+QString vanillaDataFolder()
+{
 #ifdef Q_OS_WIN
     const QString cfgPath = QDir::homePath()
         + QStringLiteral("/Documents/My Games/OpenMW/openmw.cfg");
@@ -1881,18 +1890,15 @@ const vanilla_text::Table &vanillaText()
         + QStringLiteral("/.config/openmw/openmw.cfg");
 #endif
     QFile cfg(cfgPath);
-    if (!cfg.open(QIODevice::ReadOnly | QIODevice::Text)) return table;
+    if (!cfg.open(QIODevice::ReadOnly | QIODevice::Text)) return {};
 
     const openmw::ImportEntries entries =
         openmw::parseConfigEntries(QString::fromUtf8(cfg.readAll()));
     cfg.close();
 
-    for (const QString &p : entries.dataPaths) {
-        if (!openmw::looksLikeVanillaDataFolder(p)) continue;
-        table.load(p);
-        break;
-    }
-    return table;
+    for (const QString &p : entries.dataPaths)
+        if (openmw::looksLikeVanillaDataFolder(p)) return p;
+    return {};
 }
 
 // Everything onTranslateMod needs off the disk, gathered on a WORKER.
@@ -1996,6 +2002,13 @@ TranslateGather gatherTranslateStrings(const QString &modPath,
 void MainWindow::warmVanillaTextAsync()
 {
     (void)QtConcurrent::run([] { (void)vanillaText(); });
+}
+
+// The path, for the coverage scan to build its own table from on its worker.
+// Cheap: one small config read, no plugin walking.
+QString MainWindow::vanillaDataFolderPath() const
+{
+    return vanillaDataFolder();
 }
 
 void MainWindow::onTranslateMod(QListWidgetItem *item)

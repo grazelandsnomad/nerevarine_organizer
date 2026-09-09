@@ -60,6 +60,8 @@
 // Two of the three rules need no game files at all, so a setup where the
 // vanilla folder cannot be found still gets most of the benefit. See isDirty.
 
+#include "plugin_strings.h"
+
 #include <QHash>
 #include <QString>
 #include <QStringList>
@@ -142,6 +144,48 @@ bool isDirty(const QString &setting, const QString &value, const Table &vanilla)
 // it - MultiMark aims two at its own Mark and Recall summons - so "did the mod
 // change it" answers KEEP, which is exactly the case that breaks.
 bool holdsObjectId(const QString &setting);
+
+// Drop the text the base game says, leaving what the MOD says.
+//
+// Three things go: a game setting the mod did not change, a setting whose value
+// is an object id, and a display name re-saved verbatim. What is left is the
+// mod's own content - which is the only thing a coverage verdict may honestly
+// be computed from.
+//
+// Why this exists as one function rather than twice: the translate editor
+// filtered, the coverage scan did not, and the two halves of the app therefore
+// disagreed about what a mod's content IS. Daedric Maul is 7 KB of one weapon
+// plus 72 re-saved game settings. The editor offered its 2 real strings, the
+// user translated both - and the scan compared all 27 keys, found 25 unchanged
+// because they are Bethesda's words, and its near-verbatim guard concluded the
+// finished translation was a near-copy. The source row read "no translation"
+// with its own translation sitting one row below it.
+//
+// The display-name half is NOT what the editor does with those rows (it
+// pre-answers them rather than hiding them), but it is what the editor
+// effectively PRODUCES: a pre-answered row ships unchanged, so counting it as
+// untranslated is exactly what makes a complete translation look incomplete.
+//
+// Naturally Morrowind-only. "STRV" occurs in one place in plugin_strings - the
+// TES3 tier table - and FNAM likewise, so a Skyrim-shaped key can never match
+// and this is a no-op there. No game gating needed.
+//
+// Degrades honestly with an empty table: isDirty's "blank value" and "value is
+// its own setting name" rules need no game files at all.
+void dropBaseGameText(plugin_strings::StringSet &set, const Table &vanilla);
+
+// The table for `dataFolder`, built once per process and shared.
+//
+// Thread-safe: callers racing on the first build get one table, and every later
+// call reads an immutable one. That matters now that both the UI thread and the
+// coverage scan's worker want it - the caller this replaced guarded its load
+// with a plain `static bool loaded` flag, which orders nothing and would have
+// let the worker read a half-built table.
+//
+// The FOLDER-FINDING deliberately stays with the caller - see the note below.
+// Only the caching moved here, because two callers need the same table and a
+// second cache would be a second answer.
+const Table &cached(const QString &dataFolder);
 
 // Deliberately no "find the vanilla folder" helper here. That needs
 // openmw::looksLikeVanillaDataFolder, and dragging openmwconfigwriter into

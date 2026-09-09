@@ -121,6 +121,7 @@ set(SOURCES
     src/plugin_records.cpp
     src/plugin_strings.cpp
     src/vanilla_text.cpp
+    src/translation_coverage.cpp
     src/scan_overlay.cpp
     src/variant_picker.cpp
     src/firstrunwizard.cpp

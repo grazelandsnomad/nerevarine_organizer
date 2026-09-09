@@ -534,6 +534,9 @@ private:
     // first open is a cache hit instead of a 94 MB walk on the UI thread.
     // Defined in mainwindow_list.cpp, where the table's cache lives.
     void warmVanillaTextAsync();
+    // The base game's Data Files, or empty. Handed to the coverage scan so it
+    // can tell a mod's own text from the base game's it merely re-saved.
+    QString vanillaDataFolderPath() const;
     // Same, but asks once and stores the answer as the shared default, so no
     // other game or profile is ever asked again. Empty return means the user
     // cancelled and the caller must abort.

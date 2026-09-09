@@ -3,6 +3,7 @@
 #include "plugin_strings.h"
 
 #include <QDir>
+#include <QMutex>
 #include <QFileInfo>
 
 namespace vanilla_text {
@@ -108,6 +109,43 @@ bool isDisplayNameKey(const QString &key)
     // "TYPE:<editorid>:SUB:index", read from the right: the subrecord is the
     // second field from the end however many colons the editor id contains.
     return key.section(QLatin1Char(':'), -2, -2) == QLatin1String("FNAM");
+}
+
+void dropBaseGameText(plugin_strings::StringSet &set, const Table &vanilla)
+{
+    // Both tiers: a re-saved display name is base-game text wherever it sits,
+    // and the secondary tier is where NPC and creature names live.
+    for (QHash<QString, QString> *keys : { &set.byKey, &set.auxByKey }) {
+        for (auto it = keys->begin(); it != keys->end(); ) {
+            const QString setting = settingOfKey(it.key());
+            const bool baseGame =
+                (!setting.isEmpty()
+                 && (isDirty(setting, it.value(), vanilla)
+                     || holdsObjectId(setting)))
+                || (isDisplayNameKey(it.key())
+                    && vanilla.saysExactly(it.key(), it.value()));
+            if (baseGame) it = keys->erase(it);
+            else           ++it;
+        }
+    }
+}
+
+const Table &cached(const QString &dataFolder)
+{
+    // Keyed by folder rather than a single slot: a profile switch can point at
+    // a different install, and answering from the previous one would be worse
+    // than rebuilding. In practice there is one entry.
+    static QMutex mu;
+    static QHash<QString, Table> tables;
+
+    QMutexLocker lock(&mu);
+    auto it = tables.constFind(dataFolder);
+    if (it != tables.constEnd()) return it.value();
+    // Built under the lock: a second caller waits for the first rather than
+    // walking 94 MB of masters again, which is the whole point of caching it.
+    Table &t = tables[dataFolder];
+    t.load(dataFolder);
+    return t;
 }
 
 } // namespace vanilla_text

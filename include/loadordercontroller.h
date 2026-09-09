@@ -121,8 +121,14 @@ public:
     //
     // On completion emits translationsScanned with modPath -> coverage. Mods
     // with nothing to translate are omitted rather than sent as Ok.
+    // `vanillaDataFolder` is the base game's Data Files, used to tell a mod's
+    // own text from the base game's that it merely re-saved. Empty is a
+    // legitimate answer (a Bethesda profile has no openmw.cfg) and degrades
+    // rather than breaks - see vanilla_text::dropBaseGameText. The FOLDER, not
+    // the table: building it is a 94 MB walk and belongs on the worker.
     void scanTranslations(const QList<conflict_direction::Mod> &modsInLoadOrder,
-                          const QString &targetLanguage);
+                          const QString &targetLanguage,
+                          const QString &vanillaDataFolder);
 
 signals:
     void conflictsScanned(
@@ -158,6 +164,7 @@ private:
     // conflict scan drops.
     QList<conflict_direction::Mod>      m_pendingTranslationMods;
     QString                             m_pendingTranslationLanguage;
+    QString                             m_pendingTranslationVanillaFolder;
     bool                                m_translationScanPending = false;
     // Drives translationScanProgress off the worker's atomic counter.
     QTimer                             *m_translationProgressTimer = nullptr;

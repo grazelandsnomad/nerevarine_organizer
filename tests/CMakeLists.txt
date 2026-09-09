@@ -91,6 +91,21 @@ add_executable(test_skse
 target_include_directories(test_skse PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(test_skse PRIVATE Qt6::Core)
 
+# The translation-coverage verdict: what decides every red "no translation"
+# caption. It lived inside a QThread until a user's finished translation was
+# disowned by it; extracting it is what made these thresholds testable.
+add_executable(test_translation_coverage
+    test_translation_coverage.cpp
+    ${CMAKE_SOURCE_DIR}/src/translation_coverage.cpp
+    ${CMAKE_SOURCE_DIR}/src/vanilla_text.cpp
+    ${CMAKE_SOURCE_DIR}/src/plugin_strings.cpp
+    ${CMAKE_SOURCE_DIR}/src/plugin_text.cpp
+    ${CMAKE_SOURCE_DIR}/src/language_guess.cpp
+    ${CMAKE_SOURCE_DIR}/src/target_language.cpp
+)
+target_include_directories(test_translation_coverage PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(test_translation_coverage PRIVATE Qt6::Core)
+
 # The launch-blocking rules: what stands between "play" and the game starting.
 # launch_warnings.cpp was already free functions with a header - the largest
 # zero-refactor coverage gap in the 2026-09 census - and needed only a target.
@@ -381,6 +396,8 @@ foreach(t ${UNIT_TESTS})
     set_tests_properties(${t} PROPERTIES LABELS "unit")
 endforeach()
 
+add_test(NAME test_translation_coverage COMMAND test_translation_coverage)
+set_tests_properties(test_translation_coverage PROPERTIES LABELS "unit")
 add_test(NAME test_launch_warnings COMMAND test_launch_warnings)
 set_tests_properties(test_launch_warnings PROPERTIES LABELS "unit")
 add_test(NAME test_nxm COMMAND test_nxm)
