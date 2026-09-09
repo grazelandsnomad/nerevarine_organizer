@@ -97,6 +97,7 @@ target_link_libraries(test_skse PRIVATE Qt6::Core)
 add_executable(test_translation_coverage
     test_translation_coverage.cpp
     ${CMAKE_SOURCE_DIR}/src/translation_coverage.cpp
+    ${CMAKE_SOURCE_DIR}/src/term_protect.cpp
     ${CMAKE_SOURCE_DIR}/src/vanilla_text.cpp
     ${CMAKE_SOURCE_DIR}/src/plugin_strings.cpp
     ${CMAKE_SOURCE_DIR}/src/plugin_text.cpp

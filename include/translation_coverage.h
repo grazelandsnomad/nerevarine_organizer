@@ -53,6 +53,34 @@ struct Verdict {
     int     identical = 0;
 };
 
+// Drop display names that are the mod's own invented proper nouns, leaving the
+// text a translation would actually have to change.
+//
+// True Vvardenfell - Dagoths Domain names one unique flame atronach
+// "Veythrazel" and says nothing else. That is a name in every language, so the
+// finished translation of that mod is the mod - yet the scan counted one
+// untranslated string, found no partner, and painted the row red for work that
+// does not exist.
+//
+// Only FNAM records holding a SINGLE word, and those two restrictions are what
+// make it safe: the same word inside a book or a line of dialogue still has a
+// sentence around it that needs translating, and a display name of several
+// words is a description of a thing rather than what it is called. The judgement itself is
+// term_protect's, not a second opinion - see everyWordIsName for why a lone
+// word is admitted here and refused there.
+//
+// Naturally Morrowind-only, like the display-name half of dropBaseGameText:
+// FNAM is the TES3 subrecord, and a Skyrim name arrives as FULL.
+//
+// `ordinaryOverrides` is `[ordinary]` from the user's rules file, and is the
+// documented way out when this is too eager: a word listed there is ordinary
+// English, so a name built from it stays countable and the mod stays flagged.
+//
+// This changes the FLAG only. The editor still offers the row, so a user who
+// wants to rename Veythrazel in Spanish still can.
+void dropBareNames(plugin_strings::StringSet &set,
+                   const QSet<QString> &ordinaryOverrides);
+
 // A plugin pairs with the candidate sharing the most keys, provided it shares
 // at least this much of the smaller set. Below it the two are different text
 // that happens to overlap, not a translation of one another.

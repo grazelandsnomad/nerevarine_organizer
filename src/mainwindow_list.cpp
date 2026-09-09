@@ -1995,6 +1995,13 @@ TranslateGather gatherTranslateStrings(const QString &modPath,
 
 } // namespace
 
+QString translationRulesPathFor(const QString &language)
+{
+    return resolveUserStatePath(
+        QStringLiteral("translation_rules_%1.txt").arg(
+            language.isEmpty() ? QStringLiteral("default") : language));
+}
+
 // First use of the vanilla table pays for the 94 MB walk. Do it on a worker at
 // startup, so by the time anybody opens the translate editor the table is a
 // cache hit - and if they beat the worker to it, the magic static makes them
@@ -2087,9 +2094,7 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
 
     // Rules live beside the memory and are per language, since a rule is a
     // decision about English -> that language, not about this mod.
-    const QString rulesPath = resolveUserStatePath(
-        QStringLiteral("translation_rules_%1.txt").arg(
-            language.isEmpty() ? QStringLiteral("default") : language));
+    const QString rulesPath = translationRulesPathFor(language);
 
     // Half-finished work, per mod and per language, so a big mod can be done
     // fifteen strings at a time over a month. Shared helper: the context menu

@@ -128,7 +128,8 @@ public:
     // the table: building it is a 94 MB walk and belongs on the worker.
     void scanTranslations(const QList<conflict_direction::Mod> &modsInLoadOrder,
                           const QString &targetLanguage,
-                          const QString &vanillaDataFolder);
+                          const QString &vanillaDataFolder,
+                          const QString &rulesPath);
 
 signals:
     void conflictsScanned(
@@ -165,6 +166,7 @@ private:
     QList<conflict_direction::Mod>      m_pendingTranslationMods;
     QString                             m_pendingTranslationLanguage;
     QString                             m_pendingTranslationVanillaFolder;
+    QString                             m_pendingTranslationRulesPath;
     bool                                m_translationScanPending = false;
     // Drives translationScanProgress off the worker's atomic counter.
     QTimer                             *m_translationProgressTimer = nullptr;

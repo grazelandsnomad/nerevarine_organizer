@@ -3452,7 +3452,8 @@ void MainWindow::runTranslationScan()
     // scan's worker, not here. Without it the scan counts the base game's own
     // re-saved text as this mod's, and a finished translation reads as none.
     m_loadCtl->scanTranslations(mods, translationLanguage(),
-                                vanillaDataFolderPath());
+                                vanillaDataFolderPath(),
+                                translationRulesPathFor(translationLanguage()));
 }
 
 void MainWindow::onTranslationsScanned(

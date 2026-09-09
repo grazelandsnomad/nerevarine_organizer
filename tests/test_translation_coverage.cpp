@@ -107,6 +107,93 @@ void testTheDaedricMaulShape()
     }
 }
 
+// -- The mod whose only string is a name -----------------------------------
+
+// True Vvardenfell - Dagoths Domain ships one unique flame atronach called
+// "Veythrazel" and no other text. That is a name in every language, so there is
+// no translation of that mod to be missing - yet the row read "no translation"
+// and the editor offered the single row to prove it.
+void testAModWhoseOnlyStringIsAName()
+{
+    std::cout << "\n[a mod whose only string is a name needs no translation]\n";
+
+    // The real key and value, as measured out of the plugin:
+    //   CREA  NAME: VV_atronach_flame_Uni   FNAM: Veythrazel
+    plugin_strings::StringSet st;
+    st.valid = true;
+    st.tes3  = true;
+    st.auxByKey.insert(QStringLiteral("CREA:VV_atronach_flame_Uni:FNAM:0"),
+                       QStringLiteral("Veythrazel"));
+    translation_coverage::dropBareNames(st, {});
+    check("an invented creature name is not translatable text", st.empty());
+
+    // A lone word is exactly what term_protect::looksLikeName refuses to call a
+    // name, and the FNAM key is the evidence that lets this admit it. The same
+    // word without that key must survive, or every one-word string in the game
+    // would vanish.
+    plugin_strings::StringSet book;
+    book.valid = true;
+    book.tes3  = true;
+    book.byKey.insert(QStringLiteral("BOOK:some_note:TEXT:0"),
+                      QStringLiteral("Veythrazel"));
+    translation_coverage::dropBareNames(book, {});
+    check("the same word outside a display name is left alone",
+          book.byKey.size() == 1);
+
+    // A display name made of ordinary English is a description of a thing, and
+    // a translation absolutely has to change it.
+    plugin_strings::StringSet real;
+    real.valid = true;
+    real.tes3  = true;
+    real.byKey.insert(QStringLiteral("WEAP:iron_dagger_x:FNAM:0"),
+                      QStringLiteral("Iron Dagger"));
+    real.byKey.insert(QStringLiteral("MISC:key_x:FNAM:0"),
+                      QStringLiteral("Rusty Key"));
+    translation_coverage::dropBareNames(real, {});
+    check("an ordinary English item name stays translatable",
+          real.byKey.size() == 2);
+
+    // Several words are a description of a thing, however invented they look,
+    // and this is the check that keeps the ordinary-word list from having to be
+    // perfect. SM Ceremonial Morag Tong Blade ships exactly one string, and
+    // term_protect knows neither "Ceremonial" nor "Blade", so on the word test
+    // alone the whole phrase read as a name and a mod that genuinely wants
+    // translating quietly stopped being flagged.
+    plugin_strings::StringSet phrase;
+    phrase.valid = true;
+    phrase.tes3  = true;
+    phrase.byKey.insert(QStringLiteral("WEAP:sm_m_blade:FNAM:0"),
+                        QStringLiteral("Ceremonial Morag Tong Blade"));
+    phrase.auxByKey.insert(QStringLiteral("CREA:d_a:FNAM:0"),
+                           QStringLiteral("Dagoth Andas"));
+    translation_coverage::dropBareNames(phrase, {});
+    check("a multi-word display name is never dropped",
+          phrase.byKey.size() == 1 && phrase.auxByKey.size() == 1);
+
+    // [ordinary] in the user's rules file is the way out when this is too
+    // eager: the word becomes ordinary English, so the name stays countable.
+    plugin_strings::StringSet override;
+    override.valid = true;
+    override.tes3  = true;
+    override.auxByKey.insert(QStringLiteral("CREA:VV_atronach_flame_Uni:FNAM:0"),
+                             QStringLiteral("Veythrazel"));
+    translation_coverage::dropBareNames(
+        override, {QStringLiteral("veythrazel")});
+    check("[ordinary] forces a name back into the count",
+          override.auxByKey.size() == 1);
+
+    // And the whole point: with the name gone the plugin carries nothing, which
+    // is what the worker checks before it judges anything at all.
+    plugin_strings::StringSet only;
+    only.valid = true;
+    only.tes3  = true;
+    only.auxByKey.insert(QStringLiteral("CREA:VV_atronach_flame_Uni:FNAM:0"),
+                         QStringLiteral("Veythrazel"));
+    translation_coverage::dropBareNames(only, {});
+    check("so the plugin drops out of the scan entirely",
+          only.empty() && !only.localized);
+}
+
 // -- The protections that must survive it ----------------------------------
 
 void testTheNearVerbatimRejectorStillGuards()
@@ -320,6 +407,7 @@ int main(int argc, char **argv)
     QCoreApplication app(argc, argv);
 
     testTheDaedricMaulShape();
+    testAModWhoseOnlyStringIsAName();
     testTheNearVerbatimRejectorStillGuards();
     testThePairingGate();
     testAModDoesNotTranslateItself();

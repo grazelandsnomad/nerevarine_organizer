@@ -1,6 +1,10 @@
 #include "translation_coverage.h"
 
 #include "language_guess.h"
+#include "term_protect.h"
+#include "vanilla_text.h"
+
+#include <algorithm>
 
 namespace translation_coverage {
 namespace {
@@ -25,6 +29,40 @@ QStringList sampleText(const plugin_strings::StringSet &s)
 }
 
 } // namespace
+
+void dropBareNames(plugin_strings::StringSet &set,
+                   const QSet<QString> &ordinaryOverrides)
+{
+    // Both tiers: a creature or NPC name is Secondary, an item or door name is
+    // Core, and the mod that prompted this holds exactly one of the former.
+    for (QHash<QString, QString> *keys : { &set.byKey, &set.auxByKey }) {
+        for (auto it = keys->begin(); it != keys->end(); ) {
+            // ONE word, and that restriction is doing most of the safety
+            // work. everyWordIsName leans on term_protect's 222-word ordinary
+            // list, which was built to decide what to hide from a translator -
+            // a job where a missing word costs one wasted request. Here it
+            // would cost a mod its red flag, and the list is nowhere near good
+            // enough for that on a phrase: "Ceremonial Morag Tong Blade" is a
+            // real item name that needs translating, and it read as pure name
+            // because neither "Ceremonial" nor "Blade" is in the list.
+            //
+            // A multi-word display name is almost always a description of a
+            // thing. A single invented word is almost always what something is
+            // called. So a phrase stays flagged - the conservative direction,
+            // and what the app already did - and only the lone name goes.
+            const QString value = it.value().trimmed();
+            const bool oneWord =
+                !value.isEmpty()
+                && !std::any_of(value.cbegin(), value.cend(),
+                                [](QChar c) { return c.isSpace(); });
+            if (oneWord && vanilla_text::isDisplayNameKey(it.key())
+                && term_protect::everyWordIsName(value, ordinaryOverrides))
+                it = keys->erase(it);
+            else
+                ++it;
+        }
+    }
+}
 
 QList<Verdict> judge(const QList<Entry> &entries,
                      const QSet<QString> &stringFiles,

@@ -130,6 +130,24 @@ bool isOnlyNames(const QString &masked, int termCount);
 bool looksLikeName(const QString &text, const QStringList &terms,
                    const QSet<QString> &extraOrdinary = {});
 
+// True when every word of `text` reads as part of a name - capitalised, and
+// unknown to ordinaryWords().
+//
+// looksLikeName() above asks the same question but then REFUSES a lone unknown
+// word, on the grounds that one word standing by itself is as likely to be
+// "Dreamer" as "Balen" and guessing wrong mangles a translation. That guard is
+// right for a translation request and wrong for a caller that already holds
+// the missing evidence: a CREA or NPC_ FNAM is, by the record's definition,
+// what the thing is CALLED, so a lone unknown capitalised word there is a name
+// and not a description.
+//
+// So this is the same judgement with the evidence supplied by the caller
+// instead. It decides nothing about translating anything - its one use is
+// letting a mod whose only string is a creature's name stop being reported as
+// untranslated. See translation_coverage::dropBareNames.
+bool everyWordIsName(const QString &text,
+                     const QSet<QString> &extraOrdinary = {});
+
 } // namespace term_protect
 
 #endif // TERM_PROTECT_H

@@ -1,6 +1,7 @@
 #include "loadordercontroller.h"
 
 #include "translation_coverage.h"
+#include "translation_rules.h"
 #include "vanilla_text.h"
 #include "language_guess.h"
 
@@ -116,11 +117,13 @@ public:
 
     TranslationScanWorker(const QList<conflict_direction::Mod> &mods,
                           QString targetLanguage, QString vanillaDataFolder,
+                          QString rulesPath,
                           Cache *cache, QMutex *cacheMu,
                           QObject *parent = nullptr)
         : QThread(parent), m_mods(mods),
           m_language(std::move(targetLanguage)),
           m_vanillaFolder(std::move(vanillaDataFolder)),
+          m_rulesPath(std::move(rulesPath)),
           m_cache(cache), m_cacheMu(cacheMu) {}
 
     // Read only after finished() fires.
@@ -142,6 +145,11 @@ protected:
         // On this thread, deliberately: see m_vanillaFolder. Shared and built
         // at most once per process, so a warm cache is a hash lookup.
         const vanilla_text::Table &vanilla = vanilla_text::cached(m_vanillaFolder);
+        // Only [ordinary] is wanted: the rest of the file says how to TRANSLATE
+        // things, and nothing here translates anything.
+        const QSet<QString> ordinary =
+            m_rulesPath.isEmpty() ? QSet<QString>()
+                                  : translation_rules::load(m_rulesPath).ordinary;
 
         // One entry per plugin across the whole list, so the pairing pass is a
         // plain O(n^2) over plugins rather than a nested walk of mods.
@@ -187,6 +195,11 @@ protected:
                 // finished translation, and the near-verbatim rejector threw
                 // the translation out. See vanilla_text::dropBaseGameText.
                 vanilla_text::dropBaseGameText(st, vanilla);
+                // And the mod's own invented names, which read the same in
+                // every language: True Vvardenfell - Dagoths Domain says
+                // nothing but "Veythrazel" and was reported untranslated for
+                // work that does not exist. See dropBareNames.
+                translation_coverage::dropBareNames(st, ordinary);
                 if (!st.valid) continue;
                 // Nothing to say only when BOTH tiers are empty - the real
                 // mesh/texture case. A plugin whose only text is secondary
@@ -306,7 +319,9 @@ private:
     // The FOLDER, resolved on the UI thread; the table is fetched here so a
     // cold cache costs the worker 94 MB of walking rather than the window.
     QString                             m_vanillaFolder;
-    const vanilla_text::Table          &m_vanilla = vanilla_text::cached(m_vanillaFolder);
+    // Read here too, for the same reason: [ordinary] is the user's override on
+    // dropBareNames, and a file read is not the window's business.
+    QString                             m_rulesPath;
     int                                 m_noPluginMods = 0;
     Cache                              *m_cache   = nullptr;
     QMutex                             *m_cacheMu = nullptr;
@@ -336,7 +351,8 @@ LoadOrderController::~LoadOrderController()
 void LoadOrderController::scanTranslations(
     const QList<conflict_direction::Mod> &modsInLoadOrder,
     const QString &targetLanguage,
-    const QString &vanillaDataFolder)
+    const QString &vanillaDataFolder,
+    const QString &rulesPath)
 {
     // Buffer rather than drop when a scan is in flight.
     //
@@ -350,13 +366,14 @@ void LoadOrderController::scanTranslations(
         m_pendingTranslationMods          = modsInLoadOrder;
         m_pendingTranslationLanguage      = targetLanguage;
         m_pendingTranslationVanillaFolder = vanillaDataFolder;
+        m_pendingTranslationRulesPath     = rulesPath;
         m_translationScanPending      = true;
         return;
     }
 
     delete m_activeTranslationScanner;
     m_activeTranslationScanner = new TranslationScanWorker(
-        modsInLoadOrder, targetLanguage, vanillaDataFolder,
+        modsInLoadOrder, targetLanguage, vanillaDataFolder, rulesPath,
         &m_stringsCache, m_stringsCacheMu, this);
 
     // Poll the worker's counter onto the UI rather than have it signal per
@@ -389,7 +406,8 @@ void LoadOrderController::scanTranslations(
             m_translationScanPending = false;
             scanTranslations(m_pendingTranslationMods,
                              m_pendingTranslationLanguage,
-                             m_pendingTranslationVanillaFolder);
+                             m_pendingTranslationVanillaFolder,
+                             m_pendingTranslationRulesPath);
         }
     });
     m_activeTranslationScanner->start(QThread::LowPriority);

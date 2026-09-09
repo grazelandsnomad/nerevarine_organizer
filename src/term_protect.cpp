@@ -355,6 +355,30 @@ QString unmask(const QString &text, const QStringList &terms)
     return out;
 }
 
+namespace {
+
+QStringList splitWords(const QString &text)
+{
+    static const QRegularExpression kSplit(QStringLiteral("[^\\p{L}\\p{N}']+"),
+                                           QRegularExpression::UseUnicodePropertiesOption);
+    return text.split(kSplit, Qt::SkipEmptyParts);
+}
+
+// Every word capitalised and unknown to ordinaryWords(): the shape of a name
+// rather than of a description. Shared so looksLikeName and everyWordIsName
+// cannot drift into disagreeing about what a name looks like.
+bool allWordsNameLike(const QStringList &words, const QSet<QString> &extra)
+{
+    for (const QString &w : words) {
+        if (isOrdinary(w, extra)) return false;   // a description
+        // A lowercase leftover is prose, not part of a name.
+        if (!w.isEmpty() && !w.front().isUpper()) return false;
+    }
+    return true;
+}
+
+} // namespace
+
 bool looksLikeName(const QString &text, const QStringList &terms,
                    const QSet<QString> &extraOrdinary)
 {
@@ -373,9 +397,7 @@ bool looksLikeName(const QString &text, const QStringList &terms,
         rest.remove(wordRe(term, false));
     }
 
-    static const QRegularExpression kSplit(QStringLiteral("[^\\p{L}\\p{N}']+"),
-                                           QRegularExpression::UseUnicodePropertiesOption);
-    const QStringList words = rest.split(kSplit, Qt::SkipEmptyParts);
+    const QStringList words = splitWords(rest);
 
     // Nothing left but the terms: isOnlyNames territory, and a name.
     if (words.isEmpty()) return !terms.isEmpty();
@@ -387,12 +409,14 @@ bool looksLikeName(const QString &text, const QStringList &terms,
     // one, which is what keying this off `terms` being non-empty would mean.
     if (rest.size() == subject.size() && words.size() < 2) return false;
 
-    for (const QString &w : words) {
-        if (isOrdinary(w, extraOrdinary)) return false;   // a description
-        // A lowercase leftover is prose, not part of a name.
-        if (!w.isEmpty() && !w.front().isUpper()) return false;
-    }
-    return true;
+    return allWordsNameLike(words, extraOrdinary);
+}
+
+bool everyWordIsName(const QString &text, const QSet<QString> &extraOrdinary)
+{
+    const QStringList words = splitWords(text.trimmed());
+    if (words.isEmpty()) return false;
+    return allWordsNameLike(words, extraOrdinary);
 }
 
 bool isOnlyNames(const QString &masked, int termCount)

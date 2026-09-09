@@ -15,6 +15,13 @@
 // Defined in mainwindow.cpp; used there and by the deploy TU's state paths.
 QString resolveUserStatePath(const QString &filename);
 
+// The per-language rules file (translation_rules.h). Shared because the editor
+// and the untranslated scan must resolve the very same file: the scan reads
+// [ordinary] to decide whether a bare display name counts as translatable, and
+// a user who edits the rules from the dialog would otherwise be editing a file
+// the scan never opens. Defined in mainwindow_list.cpp.
+QString translationRulesPathFor(const QString &language);
+
 // LOOT game-id for a profile (empty => LOOT not applicable). Defined in
 // mainwindow.cpp; used by the toolbar/menu gating there and the config TU.
 QString lootGameFor(const QString &profileId);
