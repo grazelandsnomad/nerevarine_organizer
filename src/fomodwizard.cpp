@@ -960,6 +960,47 @@ void FomodWizard::buildUi()
             }
         }
 
+        // A visible one-line explanation under an option, for choices the
+        // wizard makes FOR the user. The reasoning used to live only in
+        // tooltips, which nobody hovers - and "PRP v81 Previs" explains
+        // nothing to someone who has never heard of PRP. Grey and indented,
+        // so it reads as a footnote to the row above it, not another option.
+        const auto addNoteUnder = [](QAbstractButton *btn, const QString &text) {
+            if (!btn || !btn->parentWidget()) return;
+            auto *lay = qobject_cast<QVBoxLayout *>(btn->parentWidget()->layout());
+            if (!lay) return;
+            auto *note = new QLabel(text, btn->parentWidget());
+            note->setWordWrap(true);
+            note->setIndent(22);
+            note->setForegroundRole(QPalette::PlaceholderText);
+            const int at = lay->indexOf(btn);
+            if (at >= 0) lay->insertWidget(at + 1, note);
+            else         lay->addWidget(note);
+        };
+        // What a framework IS, one line each, for the five this wizard can
+        // recognise. Hardcoded English like every other annotation here.
+        // Anything unknown gets the state sentence only - never invented
+        // prose.
+        const auto blurbFor = [](const QString &fullName) -> QString {
+            const QString n = fullName.toLower();
+            if (n == QLatin1String("previs repair pack"))
+                return QStringLiteral("rebuilds the game's precombined meshes "
+                                      "and visibility data (performance and "
+                                      "occlusion)");
+            if (n == QLatin1String("base object swapper"))
+                return QStringLiteral("a framework that swaps placed objects "
+                                      "in the world at runtime");
+            if (n == QLatin1String("container distribution framework"))
+                return QStringLiteral("a framework that distributes items "
+                                      "into the game's containers");
+            if (n == QLatin1String("skypatcher"))
+                return QStringLiteral("a framework that patches game records "
+                                      "at load time");
+            if (n == QLatin1String("baka framework"))
+                return QStringLiteral("a scripting framework extending F4SE");
+            return {};
+        };
+
         // Pass G: exclusive groups whose options name alternative FRAMEWORKS.
         //
         // Producers of Skyrim asks how to inject its orc-stronghold blacksmith
@@ -996,12 +1037,32 @@ void FomodWizard::buildUi()
                         btn->setToolTip((tip.isEmpty() ? QString() : tip + QStringLiteral("\n\n"))
                                         + detail);
                     };
+                    // The resolved framework, spelled out, and what it is -
+                    // visible under the row, because a tooltip is where an
+                    // explanation goes to be missed, and "PRP" explains
+                    // nothing on its own.
+                    const QString full  = choice.fullNames.value(pi);
+                    const QString blurb = blurbFor(full);
+                    const QString what =
+                        full.isEmpty() ? QString()
+                        : (names[pi].contains(full, Qt::CaseInsensitive)
+                               ? full
+                               : QStringLiteral("%1 = %2")
+                                     .arg(names[pi].section(QLatin1Char(' '), 0, 0),
+                                          full))
+                          + (blurb.isEmpty() ? QString()
+                                             : QStringLiteral(" \u2014 %1").arg(blurb));
+
                     // Hardcoded English, like every other annotation in this
                     // file - only the dialog chrome goes through T().
                     if (choice.states[pi] == St::Installed) {
                         note(QStringLiteral(" \u2705"),
                              QStringLiteral("%1 is installed, so this option "
                                             "will work.").arg(names[pi]));
+                        addNoteUnder(btn,
+                            (what.isEmpty() ? QString() : what + QStringLiteral(". "))
+                            + QStringLiteral("Installed in your mod list, so "
+                                             "this option will use it."));
                     } else if (choice.states[pi] == St::Missing) {
                         note(QStringLiteral(" \u26A0\uFE0F not installed"),
                              QStringLiteral("%1 is not installed in this "
@@ -1009,6 +1070,11 @@ void FomodWizard::buildUi()
                                             "configuration files nothing will "
                                             "read - no error, the feature "
                                             "simply does nothing.").arg(names[pi]));
+                        addNoteUnder(btn,
+                            (what.isEmpty() ? QString() : what + QStringLiteral(". "))
+                            + QStringLiteral("Not in your mod list \u2014 pick "
+                                             "this only if you plan to install "
+                                             "it."));
                     } else if (choice.states[pi] == St::OptOut
                                && !choice.anyInstalled) {
                         note(QStringLiteral(" \u2705"),
@@ -1026,6 +1092,12 @@ void FomodWizard::buildUi()
                                             "mod the other option needs is not "
                                             "in this modlist, so this is the "
                                             "one that will work."));
+                        addNoteUnder(btn,
+                            QStringLiteral("The game's own built-in data \u2014 "
+                                           "always present, needs no extra mod. "
+                                           "The safe choice unless you install "
+                                           "the framework the other option "
+                                           "needs."));
                     }
                 }
 
@@ -1086,6 +1158,10 @@ void FomodWizard::buildUi()
                                                    : tip + QStringLiteral("\n\n"))
                                     + detail);
                 };
+                const QString hBlurb = blurbFor(v.framework);
+                const QString hWhat = v.framework
+                    + (hBlurb.isEmpty() ? QString()
+                                        : QStringLiteral(" \u2014 %1").arg(hBlurb));
                 if (v.installed) {
                     annotate(v.positiveIdx,
                              QStringLiteral(" \u2705 uses %1, which is installed")
@@ -1094,11 +1170,19 @@ void FomodWizard::buildUi()
                                             "variant built on it is the one "
                                             "that does everything the mod "
                                             "promises.").arg(v.framework));
+                    addNoteUnder(m_buttons[si][gi].value(v.positiveIdx),
+                        QStringLiteral("Uses %1. Installed in your mod list, "
+                                       "so this variant does everything the "
+                                       "mod promises.").arg(hWhat));
                     annotate(v.negativeIdx, QString(),
                              QStringLiteral("This variant is for lists WITHOUT "
                                             "%1 - which you have installed. "
                                             "The recommended option above "
                                             "actually uses it.").arg(v.framework));
+                    addNoteUnder(m_buttons[si][gi].value(v.negativeIdx),
+                        QStringLiteral("For lists without %1 \u2014 which you "
+                                       "have, so the other variant is the "
+                                       "better fit.").arg(v.framework));
                 } else {
                     annotate(v.negativeIdx,
                              QStringLiteral(" \u2705 works without %1")
@@ -1108,6 +1192,10 @@ void FomodWizard::buildUi()
                                             "that. The other option would "
                                             "install swaps nothing ever "
                                             "triggers.").arg(v.framework));
+                    addNoteUnder(m_buttons[si][gi].value(v.negativeIdx),
+                        QStringLiteral("Works without %1, which is not in "
+                                       "your mod list \u2014 the right pick "
+                                       "for this list.").arg(v.framework));
                     annotate(v.positiveIdx,
                              QStringLiteral(" \u26a0\ufe0f needs %1")
                                  .arg(v.framework),
@@ -1115,6 +1203,10 @@ void FomodWizard::buildUi()
                                             "modlist, so this variant's extra "
                                             "content would silently never "
                                             "fire.").arg(v.framework));
+                    addNoteUnder(m_buttons[si][gi].value(v.positiveIdx),
+                        QStringLiteral("Needs %1. Not in your mod list \u2014 "
+                                       "its extra content would silently "
+                                       "never fire.").arg(hWhat));
                 }
 
                 QAbstractButton *pick = m_buttons[si][gi].value(v.pick);

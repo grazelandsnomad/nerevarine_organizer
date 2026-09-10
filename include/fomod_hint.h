@@ -193,6 +193,12 @@ struct FrameworkChoice {
     // against the base game's own data.
     enum class State { Unknown, Installed, Missing, OptOut, Baseline };
     QList<State> states;
+    // Index-parallel with states: the resolved FULL name of the framework an
+    // option stands for - "PRP v81 Previs" resolves through the alias table
+    // to "Previs Repair Pack". Empty where nothing resolved. The UI wants the
+    // long form: the whole reason a visible note exists is that the short
+    // one is not obvious to everyone.
+    QStringList fullNames;
     // True when at least one named framework is installed, so the group can
     // actually do something.
     bool anyInstalled = false;

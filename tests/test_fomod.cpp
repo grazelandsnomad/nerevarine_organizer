@@ -23,6 +23,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QLabel>
 #include <QRadioButton>
 #include <QSet>
 #include <QString>
@@ -1950,6 +1951,19 @@ static QList<FomodStep> wizardui_yesNoStep(const QString &stepName,
     return { s };
 }
 
+// The visible explanation notes of a group - the grey QLabels the modlist
+// passes insert under the options they judged. Order follows the layout.
+static QStringList wizardui_notesOf(FomodWizard *w, int si, int gi)
+{
+    QStringList out;
+    const int n = FomodWizardTestHook::pluginCount(w, si, gi);
+    if (n == 0) return out;
+    QWidget *box = FomodWizardTestHook::btn(w, si, gi, 0)->parentWidget();
+    for (QLabel *l : box->findChildren<QLabel *>())
+        out << l->text();
+    return out;
+}
+
 // The synthetic "None" radio is the group-box QRadioButton that isn't a plugin
 // button; nullptr for groups without one (SelectExactlyOne, checkboxes).
 static QRadioButton *wizardui_findNoneRadio(FomodWizard *w, int si, int gi)
@@ -2455,6 +2469,18 @@ static void run_fomod_wizard_ui()
               && !neg->text().contains(QStringLiteral("✅")), neg->text());
         check("its tooltip explains instead",
               neg->toolTip().contains(QStringLiteral("WITHOUT")), neg->toolTip());
+        // Visible notes on both rows too, the positive one saying what the
+        // framework actually does.
+        const QStringList vnotes = wizardui_notesOf(w, 0, 0);
+        bool posNote = false, negNote = false;
+        for (const QString &n : vnotes) {
+            if (n.contains(QStringLiteral("swaps placed objects"))) posNote = true;
+            if (n.contains(QStringLiteral("For lists without Base Object Swapper")))
+                negNote = true;
+        }
+        check("the framework variant's note says what BOS does", posNote,
+              vnotes.join(QStringLiteral(" | ")));
+        check("the No-BOS row's note says who it is for", negNote);
         delete w;
     }
     // The mirror: no BOS in the list, the No-BOS half wins and the FOMOD's
@@ -2527,6 +2553,20 @@ static void run_fomod_wizard_ui()
         check("with the base game's option explained rather than just ticked",
               beth->toolTip().contains(QStringLiteral("game's own files")),
               beth->toolTip());
+        // And VISIBLY, not only in tooltips: a note under each judged row,
+        // with PRP spelled out - the acronym is not obvious to everyone.
+        const QStringList notes = wizardui_notesOf(w, 0, 0);
+        bool prpNote = false, bethNote = false;
+        for (const QString &n : notes) {
+            if (n.contains(QStringLiteral("Previs Repair Pack"))
+                && n.contains(QStringLiteral("Not in your mod list")))
+                prpNote = true;
+            if (n.contains(QStringLiteral("game's own built-in data")))
+                bethNote = true;
+        }
+        check("the PRP row explains what PRP is and that it is missing",
+              prpNote, notes.join(QStringLiteral(" | ")));
+        check("the Bethesda row says it needs no extra mod", bethNote);
         delete w;
     }
 

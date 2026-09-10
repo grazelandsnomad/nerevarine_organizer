@@ -370,6 +370,7 @@ FrameworkChoice chooseFrameworkOption(const QStringList &optionNames,
         const QString n = optionNames[i].trimmed();
         if (isOptOut(n)) {
             out.states << FrameworkChoice::State::OptOut;
+            out.fullNames << QString();
             if (optOutIdx < 0) optOutIdx = i;
             continue;
         }
@@ -378,6 +379,7 @@ FrameworkChoice chooseFrameworkOption(const QStringList &optionNames,
         // real framework to have been identified before this group is ours.
         if (isVanillaBaseline(n)) {
             out.states << FrameworkChoice::State::Baseline;
+            out.fullNames << QString();
             if (baselineIdx < 0) baselineIdx = i;
             continue;
         }
@@ -390,6 +392,7 @@ FrameworkChoice chooseFrameworkOption(const QStringList &optionNames,
         // away from them entirely.
         if (!negatedModIn(n).isEmpty()) {
             out.states << FrameworkChoice::State::Unknown;
+            out.fullNames << QString();
             continue;
         }
         // Identifiable as a mod only via the alias table. Without that a bare
@@ -409,9 +412,16 @@ FrameworkChoice chooseFrameworkOption(const QStringList &optionNames,
 
         if (lookup.isEmpty()) {
             out.states << FrameworkChoice::State::Unknown;
+            out.fullNames << QString();
             continue;
         }
         named << i;
+        // The LONG form of what the lookup resolved: "PRP" answers to
+        // "Previs Repair Pack", and the visible note wants that spelling.
+        QString full = lookup;
+        for (const QString &a : mod_aliases::aliasesFor(lookup))
+            if (a.size() > full.size()) full = a;
+        out.fullNames << full;
         const bool have =
             !mod_match::installedUnderAnyName(lookup, installedModNames).isEmpty();
         if (have) out.anyInstalled = true;
