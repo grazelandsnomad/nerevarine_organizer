@@ -23,6 +23,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QImage>
 #include <QLabel>
 #include <QRadioButton>
 #include <QSet>
@@ -1886,9 +1887,10 @@ struct FomodWizardTestHook {
     static FomodWizard *build(const QList<FomodStep> &steps,
                               const QString &prior = {},
                               const QStringList &installed = {},
-                              const QStringList &installedUrls = {})
+                              const QStringList &installedUrls = {},
+                              const QString &root = QStringLiteral("/tmp/nrv_fomod_ui_test"))
     {
-        auto *w = new FomodWizard(QStringLiteral("/tmp/nrv_fomod_ui_test"));
+        auto *w = new FomodWizard(root);
         w->m_steps            = steps;
         w->m_priorChoices     = prior;
         w->m_installedModNames = installed;
@@ -1910,6 +1912,14 @@ struct FomodWizardTestHook {
     static QString collect(FomodWizard *w) { return w->collectChoices(); }
 
     static QString fomodRoot(const QString &p) { return FomodWizard::findFomodRoot(p); }
+
+    static bool parseInto(FomodWizard *w) { return w->parse(); }
+    static FomodWizard *make(const QString &root) { return new FomodWizard(root); }
+    static void preview(FomodWizard *w, QAbstractButton *b) { w->showPreviewFor(b); }
+    static const QList<FomodStep> &steps(FomodWizard *w) { return w->m_steps; }
+    static QLabel *previewImage(FomodWizard *w)   { return w->m_previewImage; }
+    static QLabel *previewCaption(FomodWizard *w) { return w->m_previewCaption; }
+    static QWidget *previewPane(FomodWizard *w)   { return w->m_previewPane; }
 };
 
 static FomodPlugin wizardui_mkPlugin(const QString &name, const QString &type = "Optional")
@@ -2428,6 +2438,104 @@ static void wizardui_testFrameworkGroup()
         auto *w = build({QStringLiteral("Container Distribution Framework")});
         check("CDF chosen when it is the only one present",
               FomodWizardTestHook::btn(w, 0, 0, 1)->isChecked());
+        delete w;
+    }
+}
+
+// -- Option image previews -------------------------------------------------
+//
+// Thirsty AIO's first step reads "Option 1".."Option 4" - for a retexture
+// installer the picture IS the option, and the wizard used to drop every
+// <image> on the floor: never parsed, never shown, choices made blind.
+static void run_fomod_image_preview()
+{
+    std::cout << "=== fomod wizard image previews ===\n";
+
+    // The <image> element parses, backslashes and all.
+    {
+        QTemporaryDir dir;
+        QDir().mkpath(dir.filePath("fomod"));
+        QFile cfg(dir.filePath("fomod/ModuleConfig.xml"));
+        cfg.open(QIODevice::WriteOnly);
+        cfg.write(
+            "<config><moduleName>T</moduleName><installSteps>"
+            "<installStep name=\"S\"><optionalFileGroups>"
+            "<group name=\"G\" type=\"SelectExactlyOne\"><plugins>"
+            "<plugin name=\"Option 1\"><description>d1</description>"
+            "<image path=\"fomod\\Images\\Opt1.JPG\"/>"
+            "<typeDescriptor><type name=\"Optional\"/></typeDescriptor></plugin>"
+            "<plugin name=\"Option 2\"><description>d2</description>"
+            "<typeDescriptor><type name=\"Optional\"/></typeDescriptor></plugin>"
+            "</plugins></group></optionalFileGroups></installStep>"
+            "</installSteps></config>");
+        cfg.close();
+
+        auto *w = FomodWizardTestHook::make(dir.path());
+        check("the config parses", FomodWizardTestHook::parseInto(w));
+        const auto &steps = FomodWizardTestHook::steps(w);
+        check("the image path survives, exactly as the author typed it",
+              steps[0].groups[0].plugins[0].imagePath
+                  == QStringLiteral("fomod\\Images\\Opt1.JPG"));
+        check("an option without one stays empty",
+              steps[0].groups[0].plugins[1].imagePath.isEmpty());
+        delete w;
+    }
+
+    // The pane shows the image - found case-insensitively, since the
+    // declared path is whatever the author typed and the disk holds
+    // whatever the archive held.
+    {
+        QTemporaryDir dir;
+        QDir().mkpath(dir.filePath("fomod/images"));
+        QImage img(4, 4, QImage::Format_RGB32);
+        img.fill(Qt::red);
+        check("the fixture image writes",
+              img.save(dir.filePath("fomod/images/opt1.jpg")));
+
+        FomodPlugin p1 = wizardui_mkPlugin("Option 1", "Optional");
+        p1.imagePath   = QStringLiteral("fomod\\Images\\Opt1.JPG");
+        p1.description = QStringLiteral("Red milk machine");
+        FomodPlugin p2 = wizardui_mkPlugin("Option 2", "Optional");
+        FomodGroup g;
+        g.name = QStringLiteral("Select One");
+        g.type = QStringLiteral("SelectExactlyOne");
+        g.plugins = { p1, p2 };
+        FomodStep st;
+        st.name = QStringLiteral("Milk Vending Machines");
+        st.groups.append(g);
+
+        auto *w = FomodWizardTestHook::build({ st }, {}, {}, {}, dir.path());
+        check("an image anywhere earns the pane",
+              FomodWizardTestHook::previewPane(w) != nullptr);
+        // buildUi ends on the step's default preview: the first option
+        // carrying a picture.
+        QLabel *imgLbl = FomodWizardTestHook::previewImage(w);
+        check("and the picture is actually loaded",
+              imgLbl && !imgLbl->pixmap().isNull());
+        check("with the option named in the caption",
+              FomodWizardTestHook::previewCaption(w)->text()
+                  .contains(QStringLiteral("Option 1")));
+
+        // Hovering / selecting the pictureless option says so rather than
+        // leaving the previous image to be read as this option's.
+        FomodWizardTestHook::preview(w, FomodWizardTestHook::btn(w, 0, 0, 1));
+        check("a pictureless option shows a placeholder, not a stale image",
+              imgLbl->pixmap().isNull() && !imgLbl->text().isEmpty());
+        delete w;
+    }
+
+    // No images anywhere: the dialog keeps its old compact shape.
+    {
+        FomodGroup g;
+        g.name = QStringLiteral("G");
+        g.type = QStringLiteral("SelectAny");
+        g.plugins = { wizardui_mkPlugin("A", "Optional") };
+        FomodStep st;
+        st.name = QStringLiteral("S");
+        st.groups.append(g);
+        auto *w = FomodWizardTestHook::build({ st });
+        check("a pictureless installer builds no pane",
+              FomodWizardTestHook::previewPane(w) == nullptr);
         delete w;
     }
 }
@@ -3064,6 +3172,7 @@ int main(int argc, char **argv)
     run_fomod_patch_targets();
     run_fomod_previs_baseline();
     run_fomod_framework_variant();
+    run_fomod_image_preview();
     run_fomod_wizard_ui();
     run_bain_wizard_ui();
 

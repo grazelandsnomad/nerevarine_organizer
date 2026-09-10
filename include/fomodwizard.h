@@ -3,6 +3,8 @@
 #include <QDialog>
 #include <QList>
 #include <QSet>
+#include <QHash>
+#include <QPixmap>
 #include <QString>
 #include <QStringList>
 
@@ -26,6 +28,10 @@ struct FomodFlagValue {
 struct FomodPlugin {
     QString name;
     QString description;
+    // <image path="fomod\images\x.jpg"> - archive-root-relative, usually
+    // with backslashes; resolved case-insensitively at display time. Empty
+    // when the author supplied none.
+    QString imagePath;
     QString type;   // "Required" | "Recommended" | "Optional" | "NotUsable" | "CouldBeUsable"
     QList<FomodFile> files;    // individual files to install
     QList<FomodFile> folders;  // directories to install (contents copied)
@@ -121,6 +127,20 @@ private:
     // fomod/ModuleConfig.xml (handles Nexus wrapper folders the post-extraction
     // dive heuristic doesn't unwrap), or "" if no FOMOD anywhere in the tree.
     static QString findFomodRoot(const QString &archiveRoot);
+
+    // The option-preview pane: FOMOD authors attach an <image> to their
+    // options - for a retexture installer the picture IS the information -
+    // and the wizard used to drop them on the floor. One pane beside the
+    // steps, following whichever option is hovered or selected; built only
+    // when the FOMOD declares at least one image, so a pictureless installer
+    // keeps its old compact shape.
+    bool eventFilter(QObject *obj, QEvent *ev) override;
+    void showPreviewFor(QAbstractButton *btn);
+    void defaultPreviewForStep(int si);
+    QWidget *m_previewPane    = nullptr;
+    QLabel  *m_previewImage   = nullptr;
+    QLabel  *m_previewCaption = nullptr;
+    QHash<QString, QPixmap> m_previewCache;   // resolved path -> scaled pixmap
 
     QString              m_archiveRoot;
     QString              m_modName;

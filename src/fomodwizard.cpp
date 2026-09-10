@@ -24,6 +24,7 @@
 #include <QScrollArea>
 #include <QSet>
 #include <QStackedWidget>
+#include <QEvent>
 #include <QXmlStreamReader>
 
 QString FomodWizard::findModuleConfig(const QString &archiveRoot)
@@ -207,6 +208,74 @@ static FomodFile parseFileAttrs(const QXmlStreamReader &xml)
     return f;
 }
 
+bool FomodWizard::eventFilter(QObject *obj, QEvent *ev)
+{
+    if (m_previewPane && ev->type() == QEvent::Enter)
+        if (auto *btn = qobject_cast<QAbstractButton *>(obj))
+            showPreviewFor(btn);
+    return QDialog::eventFilter(obj, ev);
+}
+
+void FomodWizard::showPreviewFor(QAbstractButton *btn)
+{
+    if (!m_previewPane || !btn) return;
+    const QString rel  = btn->property("fomodImage").toString();
+    const QString name = btn->property("fomodName").toString();
+    const QString desc = btn->property("fomodDesc").toString();
+
+    QString caption = QStringLiteral("<b>%1</b>").arg(name.toHtmlEscaped());
+    if (!desc.isEmpty())
+        caption += QStringLiteral("<br>%1").arg(desc.toHtmlEscaped());
+    m_previewCaption->setText(caption);
+
+    if (rel.isEmpty()) {
+        m_previewImage->setPixmap({});
+        m_previewImage->setText(T("fomod_no_preview"));
+        return;
+    }
+    // Resolved through the same case-insensitive walk the installer uses for
+    // source files - the declared path is whatever the author typed, usually
+    // with backslashes, and the on-disk case is whatever the archive held.
+    const QString abs = fomod::resolvePath(m_archiveRoot, rel);
+    auto it = m_previewCache.constFind(abs);
+    if (it == m_previewCache.constEnd()) {
+        QPixmap px;
+        if (!abs.isEmpty()) px.load(abs);
+        // Scale ONCE at cache time: authors ship 4K screenshots, and
+        // rescaling one on every hover makes the pointer stutter.
+        if (!px.isNull())
+            px = px.scaled(QSize(376, 500), Qt::KeepAspectRatio,
+                           Qt::SmoothTransformation);
+        it = m_previewCache.insert(abs, px);
+    }
+    if (it->isNull()) {
+        m_previewImage->setPixmap({});
+        m_previewImage->setText(T("fomod_no_preview"));
+    } else {
+        m_previewImage->setText({});
+        m_previewImage->setPixmap(*it);
+    }
+}
+
+void FomodWizard::defaultPreviewForStep(int si)
+{
+    if (!m_previewPane) return;
+    if (si < 0 || si >= m_buttons.size()) return;
+    // The step's answer so far, else the first option that has a picture -
+    // arriving on a page with a stale image from the previous step reads as
+    // the wrong option being illustrated.
+    QAbstractButton *fallback = nullptr;
+    for (const auto &grp : m_buttons[si])
+        for (QAbstractButton *btn : grp) {
+            if (!btn) continue;
+            if (btn->isChecked()) { showPreviewFor(btn); return; }
+            if (!fallback
+                && !btn->property("fomodImage").toString().isEmpty())
+                fallback = btn;
+        }
+    if (fallback) showPreviewFor(fallback);
+}
+
 bool FomodWizard::parse()
 {
     QString configPath = findModuleConfig(m_archiveRoot);
@@ -267,6 +336,10 @@ bool FomodWizard::parse()
 
                         if (nameIs("description")) {
                             plugin.description = xml.readElementText();
+                        }
+                        else if (nameIs("image")) {
+                            plugin.imagePath =
+                                xml.attributes().value("path").toString();
                         }
                         else if (nameIs("files")) {
                             while (!xml.atEnd()) {
@@ -385,7 +458,43 @@ void FomodWizard::buildUi()
     mainLayout->addWidget(m_titleLbl);
 
     m_stack = new QStackedWidget(this);
-    mainLayout->addWidget(m_stack, 1);
+
+    // Any option with a picture earns the whole dialog a preview pane: for a
+    // retexture installer ("Option 1".."Option 4") the image IS the option,
+    // and without it the choice is a guessing game. Pictureless installers
+    // keep the old compact shape.
+    bool anyImage = false;
+    for (const FomodStep &st : m_steps)
+        for (const FomodGroup &g : st.groups)
+            for (const FomodPlugin &pl : g.plugins)
+                if (!pl.imagePath.isEmpty()) { anyImage = true; break; }
+
+    if (anyImage) {
+        auto *row = new QHBoxLayout;
+        row->setSpacing(8);
+        row->addWidget(m_stack, 1);
+
+        m_previewPane = new QWidget(this);
+        m_previewPane->setFixedWidth(380);
+        auto *pv = new QVBoxLayout(m_previewPane);
+        pv->setContentsMargins(0, 0, 0, 0);
+        m_previewImage = new QLabel(m_previewPane);
+        m_previewImage->setMinimumHeight(240);
+        m_previewImage->setAlignment(Qt::AlignCenter);
+        m_previewImage->setFrameShape(QFrame::StyledPanel);
+        pv->addWidget(m_previewImage, 1);
+        m_previewCaption = new QLabel(m_previewPane);
+        m_previewCaption->setWordWrap(true);
+        m_previewCaption->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+        m_previewCaption->setMaximumHeight(120);
+        pv->addWidget(m_previewCaption);
+        row->addWidget(m_previewPane);
+
+        mainLayout->addLayout(row, 1);
+        setMinimumSize(940, 480);
+    } else {
+        mainLayout->addWidget(m_stack, 1);
+    }
 
     m_buttons.resize(m_steps.size());
     for (int si = 0; si < m_steps.size(); ++si) {
@@ -451,6 +560,16 @@ void FomodWizard::buildUi()
                 if (!plugin.description.isEmpty())
                     btn->setToolTip(plugin.description);
 
+                // The preview pane follows the pointer and the selection.
+                // Data rides on the button itself so one filter serves all.
+                if (m_previewPane) {
+                    btn->setProperty("fomodImage", group.plugins[pi].imagePath);
+                    btn->setProperty("fomodName",  group.plugins[pi].name);
+                    btn->setProperty("fomodDesc",  group.plugins[pi].description);
+                    btn->installEventFilter(this);
+                    connect(btn, &QAbstractButton::toggled, this,
+                            [this, btn](bool on) { if (on) showPreviewFor(btn); });
+                }
                 boxLay->addWidget(btn);
                 m_buttons[si][gi].append(btn);
             }
@@ -1394,14 +1513,17 @@ void FomodWizard::buildUi()
     connect(m_prevBtn,   &QPushButton::clicked, this, [this] {
         m_stack->setCurrentIndex(--m_curPage);
         updateButtons();
+        defaultPreviewForStep(m_curPage);
     });
     connect(m_nextBtn,   &QPushButton::clicked, this, [this] {
         m_stack->setCurrentIndex(++m_curPage);
         updateButtons();
+        defaultPreviewForStep(m_curPage);
     });
     connect(m_installBtn, &QPushButton::clicked, this, &QDialog::accept);
 
     updateButtons();
+    defaultPreviewForStep(m_curPage);
 }
 
 void FomodWizard::updateButtons()
