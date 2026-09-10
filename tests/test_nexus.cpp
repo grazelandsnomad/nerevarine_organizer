@@ -570,6 +570,112 @@ static void testAutoLinkEmptyUrlNoop()
     check("empty NexusUrl → no actions", acts.isEmpty());
 }
 
+// -- The description's own structure ---------------------------------------
+//
+// Vehicle Overhaul Continued links 38 mods and the dialog cried "may be
+// required" about every one. The description is not flat: the author wrote a
+// Requirements section, an optional/patches wall, and a "my other mods" tail,
+// and the section a link sits under is the author saying how much you need it.
+static void testParseReadsSections()
+{
+    std::cout << "testParseReadsSections\n";
+    const auto u = [](int id) {
+        return QString("https://www.nexusmods.com/fallout4/mods/%1").arg(id);
+    };
+    const QString desc =
+        "[size=5]Requirements[/size]\n"
+        "[url=" + u(1) + "]Vehicle Overhaul[/url] - the base mod\n"
+        "[url=" + u(2) + "]PRP Stable Edition[/url]\n"
+        "[b]Optional:[/b]\n"
+        "[url=" + u(3) + "]A Forest[/url]\n"
+        "Patches:\n"
+        "[url=" + u(4) + "]Mutant Menagerie[/url]\n"
+        "[size=4]My other mods[/size]\n"
+        "[url=" + u(5) + "]Something Else Entirely[/url]\n";
+
+    QMap<int, QString> idToUrl;
+    idToUrl.insert(1, u(1));   // Vehicle Overhaul installed, PRP not
+
+    const auto r = deps::parseDescriptionDeps(desc, "fallout4", 999, idToUrl);
+    check("five links, five classifications", r.classified.size() == 5);
+    const auto cls = [&r](int id) {
+        for (const auto &d : r.classified)
+            if (d.modId == id) return d.cls;
+        return deps::DepClass::Unclassified;
+    };
+    check("a link under Requirements is hard",
+          cls(1) == deps::DepClass::Hard && cls(2) == deps::DepClass::Hard);
+    check("a link under Optional is optional",
+          cls(3) == deps::DepClass::Optional);
+    check("and so is one under Patches",
+          cls(4) == deps::DepClass::Optional);
+    // The reset rule: any unrecognised heading ends the section, so the
+    // author's self-promotion tail never inherits "optional" - or worse,
+    // "required" - from whatever came before it.
+    check("a link under My Other Mods is neither",
+          cls(5) == deps::DepClass::Unclassified);
+
+    // Classification never touches the two lists the caller already relies
+    // on: presence still comes from the modlist and nothing else.
+    check("the installed one is present and knows its row",
+          r.presentUrls == QStringList{u(1)});
+    check("the rest are missing", r.missingModIds == QList<int>({2, 3, 4, 5}));
+    for (const auto &d : r.classified)
+        if (d.modId == 1)
+            check("the classified entry carries the installed URL",
+                  d.installed && d.installedUrl == u(1));
+}
+
+static void testParseInlineCuesOutrankTheSection()
+{
+    std::cout << "testParseInlineCuesOutrankTheSection\n";
+    const auto u = [](int id) {
+        return QString("https://www.nexusmods.com/fallout4/mods/%1").arg(id);
+    };
+    const QString desc =
+        "[size=5]Requirements[/size]\n"
+        "[url=" + u(1) + "]Core Framework[/url]\n"
+        "[url=" + u(2) + "]Nice Extra[/url] (optional)\n"
+        "Some story about the mod.\n"
+        "Requires [url=" + u(3) + "]Script Extender[/url] to run at all.\n"
+        "[url=" + u(4) + "]Patch Hub[/url] - required if you use Horizon.\n";
+
+    const auto r = deps::parseDescriptionDeps(desc, "fallout4", 999, {});
+    const auto cls = [&r](int id) {
+        for (const auto &d : r.classified)
+            if (d.modId == id) return d.cls;
+        return deps::DepClass::Unclassified;
+    };
+    check("the section still speaks for a silent line",
+          cls(1) == deps::DepClass::Hard);
+    check("(optional) on the line outranks the Requirements heading",
+          cls(2) == deps::DepClass::Optional);
+    check("Requires in plain prose is hard without any heading",
+          cls(3) == deps::DepClass::Hard);
+    // "required if you use X" is a condition. Promoting it would flag a
+    // Horizon patch as a hard requirement for everyone without Horizon.
+    check("required-if is not a requirement",
+          cls(4) != deps::DepClass::Hard);
+
+    // A heading can also disarm itself.
+    const auto r2 = deps::parseDescriptionDeps(
+        "Optional requirements:\n[url=" + u(9) + "]Soft Dep[/url]\n",
+        "fallout4", 999, {});
+    check("an Optional Requirements section is optional",
+          !r2.classified.isEmpty()
+          && r2.classified.first().cls == deps::DepClass::Optional);
+
+    // And prose is never a heading, however loudly it mentions requirements.
+    const auto r3 = deps::parseDescriptionDeps(
+        "This mod has no requirements at all, which is nice, and here is a "
+        "very long sentence about that fact to prove the point conclusively.\n"
+        "[url=" + u(8) + "]Linked For Flavour[/url]\n",
+        "fallout4", 999, {});
+    check("a long sentence sets no section",
+          !r3.classified.isEmpty()
+          && r3.classified.first().cls == deps::DepClass::Unclassified);
+}
+
 static void testParseEmptyDescription()
 {
     std::cout << "testParseEmptyDescription\n";
@@ -1144,6 +1250,8 @@ static void run_deps_resolver()
     testAutoLinkEmptyUrlNoop();
 
     testParseEmptyDescription();
+    testParseReadsSections();
+    testParseInlineCuesOutrankTheSection();
     testParseClassifiesHits();
     testParseSelfReferenceExcluded();
     testParseDuplicatesDeduped();

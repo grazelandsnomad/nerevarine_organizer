@@ -1,5 +1,6 @@
 #pragma once
 
+#include "deps_resolver.h" // for deps::ClassifiedDep in signal
 #include "nexusclient.h"   // for NexusClient::FileEntry in signal
 
 #include <QList>
@@ -89,7 +90,8 @@ signals:
     void dependenciesScanned(QListWidgetItem *item, const QString &game, int modId,
                              const QString &title,
                              const QStringList &presentDeps,
-                             const QList<int> &missingModIds);
+                             const QList<int> &missingModIds,
+                             const QList<deps::ClassifiedDep> &classified);
     void dependencyScanFailed(QListWidgetItem *item, const QString &game, int modId);
     // From fetchChangelog; entries empty on failure or no changelog. game +
     // modId echo back so the receiver can filter without touching the

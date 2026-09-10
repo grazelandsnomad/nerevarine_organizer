@@ -50,7 +50,8 @@ void NexusController::scanDependencies(QListWidgetItem *item,
         emit dependenciesScanned(item, game, modId,
                                  info->name,
                                  parsed.presentUrls,
-                                 parsed.missingModIds);
+                                 parsed.missingModIds,
+                                 parsed.classified);
     });
 }
 

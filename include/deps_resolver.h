@@ -51,10 +51,39 @@ struct AutoLinkAction {
     QString urlToAppend;
 };
 
+// How strongly the description's own structure vouches for a link.
+//
+// A Nexus description is not a flat list: authors write it in sections -
+// "Requirements", "Optional", "Patches", "My other mods" - and the section a
+// link sits under is the author saying how much you need it. Vehicle Overhaul
+// Continued links 38 mods, of which a handful are requirements and the rest
+// are patch targets; flattening them made the dialog cry "may be required"
+// about all 38.
+//
+// Unclassified is the honest default: a link under no recognised heading gets
+// no promotion and no demotion. The Nexus "Requirements" TABLE (the dropdown
+// at the top of a page) is NOT available - the v1 API does not carry it and
+// the HTML page sits behind Cloudflare - so a page whose author only filled
+// the table classifies everything Unclassified, and the caller degrades to
+// the flat list.
+enum class DepClass { Hard, Optional, Unclassified };
+
+// One same-game link out of a description, in description order.
+struct ClassifiedDep {
+    int      modId     = 0;
+    bool     installed = false;
+    QString  installedUrl;          // the modlist's own URL, when installed
+    DepClass cls       = DepClass::Unclassified;
+};
+
 // Result of regex-scanning a mod's description for dependency URLs.
 struct DescriptionDeps {
     QStringList presentUrls;      // hits resolving to an installed mod
     QList<int>  missingModIds;    // hits that didn't; caller may prompt
+    // Every hit again, with the class its section and line give it. The two
+    // lists above are unchanged on purpose - they feed DependsOn recording
+    // and the dialog trigger, and neither is this classification's business.
+    QList<ClassifiedDep> classified;
 };
 
 // Resolve `target`'s DependsOn against the snapshot. hasInListDep ignores

@@ -106,7 +106,8 @@ private slots:
                                const QString &game, int modId,
                                const QString &title,
                                const QStringList &presentDeps,
-                               const QList<int> &missing);
+                               const QList<int> &missing,
+                               const QList<deps::ClassifiedDep> &classified);
     void onDependencyScanFailed(QListWidgetItem *item,
                                 const QString &game, int modId);
     void onVerificationStarted(const QString &archivePath);

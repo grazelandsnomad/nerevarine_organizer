@@ -439,7 +439,8 @@ void MainWindow::onDependenciesScanned(QListWidgetItem *item,
                                        const QString &game, int modId,
                                        const QString &title,
                                        const QStringList &presentDeps,
-                                       const QList<int> &missing)
+                                       const QList<int> &missing,
+                                       const QList<deps::ClassifiedDep> &classified)
 {
     // Cache the Nexus mod-page title for later use (e.g. naming a FOMOD
     // install's output folder something meaningful instead of "fomod_install").
@@ -466,7 +467,25 @@ void MainWindow::onDependenciesScanned(QListWidgetItem *item,
     box.setMinimumWidth(520);
     auto *v = new QVBoxLayout(&box);
 
-    auto *header = new QLabel(T("deps_warn_body").arg(missing.size()), &box);
+    // The description's own structure, when it has one: the mod page writes
+    // its links in sections, and a handful of hard requirements deserve to be
+    // read differently from thirty patch targets. No hard link found means
+    // the author kept no such section the API can see (the Nexus requirements
+    // TABLE is not in the v1 API), and the dialog stays the flat list it was.
+    bool anyHard = false;
+    for (const auto &d : classified)
+        if (d.cls == deps::DepClass::Hard) { anyHard = true; break; }
+
+    int hardCount = 0;
+    if (anyHard)
+        for (const auto &d : classified)
+            if (d.cls == deps::DepClass::Hard) ++hardCount;
+
+    auto *header = new QLabel(
+        anyHard ? T("deps_warn_body_classified")
+                      .arg(hardCount).arg(int(classified.size()) - hardCount)
+                : T("deps_warn_body").arg(missing.size()),
+        &box);
     header->setWordWrap(true);
     v->addWidget(header);
 
@@ -476,7 +495,9 @@ void MainWindow::onDependenciesScanned(QListWidgetItem *item,
     scrollLayout->setContentsMargins(0, 0, 0, 0);
     scrollLayout->setSpacing(2);
 
-    for (int id : missing) {
+    // A missing mod's row: async-named label + Visit. Shared by both the
+    // sectioned and the flat layout, so the two cannot drift.
+    const auto addMissingRow = [&](int id) {
         const QString depUrl = nexusModUrl(game, id);
 
         auto *row = new QWidget(scrollContainer);
@@ -518,6 +539,61 @@ void MainWindow::onDependenciesScanned(QListWidgetItem *item,
             safeLbl->setText(name);
             safeLbl->setToolTip(depUrl);
         });
+    };
+
+    if (!anyHard) {
+        for (int id : missing) addMissingRow(id);
+    } else {
+        // An installed link's row: green tick and the modlist's own name for
+        // it - no fetch, the answer is already in the list.
+        const auto installedName = [this](const QString &url) {
+            const QString key = deps::urlKey(url);
+            for (int i = 0; i < m_modList->count(); ++i) {
+                auto *it = m_modList->item(i);
+                if (it->data(ModRole::ItemType).toString() != ItemType::Mod)
+                    continue;
+                if (deps::urlKey(it->data(ModRole::NexusUrl).toString()) == key) {
+                    const QString custom =
+                        it->data(ModRole::CustomName).toString();
+                    return custom.isEmpty() ? it->text() : custom;
+                }
+            }
+            return url;
+        };
+        const auto addInstalledRow = [&](const deps::ClassifiedDep &d) {
+            auto *lbl = new QLabel(
+                QStringLiteral("\u2705 ") + installedName(d.installedUrl)
+                    + QStringLiteral(" \u2014 ") + T("deps_warn_installed"),
+                scrollContainer);
+            lbl->setToolTip(d.installedUrl);
+            lbl->setTextInteractionFlags(Qt::TextSelectableByMouse);
+            scrollLayout->addWidget(lbl);
+        };
+        const auto addSectionHeader = [&](const QString &text) {
+            auto *lbl = new QLabel(text, scrollContainer);
+            QFont f = lbl->font();
+            f.setBold(true);
+            lbl->setFont(f);
+            lbl->setContentsMargins(0, 6, 0, 2);
+            scrollLayout->addWidget(lbl);
+        };
+        // Missing first in each section - they are the action items - then
+        // the installed ones, ticked, so "which of these do I already have"
+        // is answered instead of left as homework.
+        const auto addSection = [&](deps::DepClass wanted, bool hardHalf) {
+            for (const auto &d : classified)
+                if ((hardHalf ? d.cls == wanted : d.cls != deps::DepClass::Hard)
+                    && !d.installed)
+                    addMissingRow(d.modId);
+            for (const auto &d : classified)
+                if ((hardHalf ? d.cls == wanted : d.cls != deps::DepClass::Hard)
+                    && d.installed)
+                    addInstalledRow(d);
+        };
+        addSectionHeader(T("deps_warn_hard_header"));
+        addSection(deps::DepClass::Hard, true);
+        addSectionHeader(T("deps_warn_opt_header"));
+        addSection(deps::DepClass::Optional, false);
     }
     scrollLayout->addStretch();
 
