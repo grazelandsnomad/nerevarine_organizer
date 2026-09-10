@@ -47,11 +47,47 @@ void NexusController::scanDependencies(QListWidgetItem *item,
         }
         const auto parsed = deps::parseDescriptionDeps(
             info->description, game, modId, installedIdToUrl);
-        emit dependenciesScanned(item, game, modId,
-                                 info->name,
-                                 parsed.presentUrls,
-                                 parsed.missingModIds,
-                                 parsed.classified);
+
+        // Second source: the page's AUTHORED requirements table, which the
+        // v1 API does not carry. Chained, and every failure - network, a
+        // GraphQL error, an adult-gated page, a missing game_id - lands in
+        // the same place: an empty table, and the dialog exactly as the
+        // description alone would build it.
+        const QString title = info->name;
+        const auto finish = [this, item, game, modId, title, parsed,
+                             installedIdToUrl](
+                                const QList<deps::TableRequirement> &table) {
+            const auto merged = deps::mergeRequirements(
+                parsed.classified, table, installedIdToUrl);
+            // A missing TABLE row must pop the dialog even when the
+            // description links nothing at all - Baka Framework is a hard
+            // requirement precisely nobody linked.
+            QList<int> missing = parsed.missingModIds;
+            for (const auto &d : merged)
+                if (!d.installed && !missing.contains(d.modId))
+                    missing.append(d.modId);
+            emit dependenciesScanned(item, game, modId, title,
+                                     parsed.presentUrls, missing, merged);
+        };
+
+        if (info->gameIdNumeric <= 0) { finish({}); return; }
+        QNetworkReply *rq =
+            m_client->requestModRequirements(info->gameIdNumeric, modId);
+        connect(rq, &QNetworkReply::finished, this, [rq, finish]() {
+            rq->deleteLater();
+            QList<deps::TableRequirement> table;
+            if (rq->error() == QNetworkReply::NoError) {
+                const auto rows =
+                    NexusClient::parseModRequirements(rq->readAll());
+                if (rows) {
+                    for (const auto &r : *rows) {
+                        if (r.external || r.modId <= 0) continue;
+                        table.append({r.modId, r.name, r.notes});
+                    }
+                }
+            }
+            finish(table);
+        });
     });
 }
 

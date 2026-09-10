@@ -222,6 +222,66 @@ DepClass inlineClass(const QString &plain)
 
 } // namespace
 
+DepClass classifyRequirementNote(const QString &notes)
+{
+    const QString plain = notes.simplified();
+    if (plain.isEmpty()) return DepClass::Optional;
+    // The same vocabulary as inlineClass above, and the same if-rule: a
+    // condition is not a requirement. Softeners first, so "Optional - only
+    // required with X" stays soft.
+    if (hasWord(plain, "optional") || hasWord(plain, "patch")
+        || hasWord(plain, "patches") || hasWord(plain, "recommended")
+        || hasWord(plain, "soft"))
+        return DepClass::Optional;
+    const bool hard = hasWord(plain, "required") || hasWord(plain, "requires")
+                   || hasWord(plain, "requirement") || hasWord(plain, "needed")
+                   || hasWord(plain, "necessary") || hasWord(plain, "mandatory");
+    if (hard) return hasWord(plain, "if") ? DepClass::Optional
+                                          : DepClass::Hard;
+    return DepClass::Optional;
+}
+
+QList<ClassifiedDep>
+mergeRequirements(const QList<ClassifiedDep> &fromDescription,
+                  const QList<TableRequirement> &table,
+                  const QMap<int, QString> &installedIdToUrl)
+{
+    QList<ClassifiedDep> out = fromDescription;
+
+    QHash<int, int> posOf;
+    for (int i = 0; i < out.size(); ++i) posOf.insert(out[i].modId, i);
+
+    for (const TableRequirement &t : table) {
+        if (t.modId <= 0) continue;
+        const DepClass cls = classifyRequirementNote(t.notes);
+        auto it = posOf.constFind(t.modId);
+        if (it != posOf.constEnd()) {
+            // In both sources: the author's explicit row beats whatever the
+            // description's headings suggested, and brings its note along.
+            ClassifiedDep &d = out[it.value()];
+            d.cls  = cls;
+            d.name = t.name;
+            d.note = t.notes;
+            continue;
+        }
+        // Table-only - the Baka Framework case: a hard requirement the
+        // description never links, invisible to the old scan entirely.
+        ClassifiedDep d;
+        d.modId = t.modId;
+        d.cls   = cls;
+        d.name  = t.name;
+        d.note  = t.notes;
+        auto hit = installedIdToUrl.constFind(t.modId);
+        if (hit != installedIdToUrl.constEnd()) {
+            d.installed    = true;
+            d.installedUrl = hit.value();
+        }
+        out << d;
+        posOf.insert(t.modId, out.size() - 1);
+    }
+    return out;
+}
+
 DescriptionDeps
 parseDescriptionDeps(const QString &description,
                      const QString &game,

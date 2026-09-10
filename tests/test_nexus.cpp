@@ -676,6 +676,129 @@ static void testParseInlineCuesOutrankTheSection()
           && r3.classified.first().cls == deps::DepClass::Unclassified);
 }
 
+// -- The page's authored requirements table --------------------------------
+//
+// The JSON below is the real v2 GraphQL reply for Vehicle Overhaul Continued
+// (fallout4/93291), trimmed to three of its rows. Baka Framework is the case
+// that forced this: a hard requirement the description never links, so the
+// description-only scan could not see it at all.
+static void testParseModRequirements()
+{
+    std::cout << "testParseModRequirements\n";
+    const QByteArray real = R"({"data":{"mod":{"modRequirements":{
+      "nexusRequirements":{"nodes":[
+        {"modId":"43627","modName":"Baka Framework",
+         "notes":"Hard Requirement. Necessary for Base Object Swapper",
+         "url":"","externalRequirement":false},
+        {"modId":"67528","modName":"Base Object Swapper",
+         "notes":"Hard Requirement. Used to add a chance for Vanilla Vehicles to be swapped with new alternatives. ",
+         "url":"","externalRequirement":false},
+        {"modId":"45330","modName":"A Forest",
+         "notes":"Patch Available in FOMOD Installer.",
+         "url":"","externalRequirement":false}
+    ]}}}}})";
+
+    const auto rows = NexusClient::parseModRequirements(real);
+    check("the real payload parses", rows.has_value());
+    check("all three rows arrive", rows->size() == 3);
+    check("ids arrive as numbers despite the ID-string encoding",
+          rows->at(0).modId == 43627);
+    check("the author's name is kept",
+          rows->at(0).name == QStringLiteral("Baka Framework"));
+    check("and the note verbatim",
+          rows->at(0).notes == QStringLiteral(
+              "Hard Requirement. Necessary for Base Object Swapper"));
+
+    // Every failure shape degrades, never crashes.
+    check("garbage is an error",
+          !NexusClient::parseModRequirements("not json").has_value());
+    check("a GraphQL error reply is an error, not half a payload",
+          !NexusClient::parseModRequirements(
+              R"({"errors":[{"message":"boom"}],"data":{"mod":null}})")
+               .has_value());
+    check("a null mod (adult-gated, unknown) is an error",
+          !NexusClient::parseModRequirements(R"({"data":{"mod":null}})")
+               .has_value());
+}
+
+static void testRequirementNotesClassify()
+{
+    std::cout << "testRequirementNotesClassify\n";
+    using deps::DepClass;
+    const auto cls = deps::classifyRequirementNote;
+    check("Hard Requirement promotes",
+          cls("Hard Requirement. Necessary for Base Object Swapper")
+              == DepClass::Hard);
+    check("a patch note does not",
+          cls("Patch Available in FOMOD Installer.") == DepClass::Optional);
+    check("an empty note must not shout", cls("") == DepClass::Optional);
+    check("required-if is a condition, not a requirement",
+          cls("Required if you use Horizon") == DepClass::Optional);
+    check("optional wins over required in one note",
+          cls("Optional - only required with the HD pack")
+              == DepClass::Optional);
+}
+
+static void testMergeTableIntoClassified()
+{
+    std::cout << "testMergeTableIntoClassified\n";
+    using deps::DepClass;
+    // The description saw Base Object Swapper (installed, mis-read as
+    // Optional by its heading) and A Forest. It never linked Baka.
+    QList<deps::ClassifiedDep> fromDesc;
+    {
+        deps::ClassifiedDep bos;
+        bos.modId = 67528; bos.installed = true;
+        bos.installedUrl = "https://www.nexusmods.com/fallout4/mods/67528";
+        bos.cls = DepClass::Optional;
+        deps::ClassifiedDep forest;
+        forest.modId = 45330; forest.cls = DepClass::Optional;
+        fromDesc << bos << forest;
+    }
+    const QList<deps::TableRequirement> table{
+        {43627, "Baka Framework",
+         "Hard Requirement. Necessary for Base Object Swapper"},
+        {67528, "Base Object Swapper", "Hard Requirement."},
+        {45330, "A Forest", "Patch Available in FOMOD Installer."},
+    };
+    QMap<int, QString> idToUrl;
+    idToUrl.insert(67528, "https://www.nexusmods.com/fallout4/mods/67528");
+
+    const auto merged = deps::mergeRequirements(fromDesc, table, idToUrl);
+    check("no duplicates: two description rows plus table-only Baka",
+          merged.size() == 3);
+    const auto find = [&merged](int id) -> const deps::ClassifiedDep & {
+        static deps::ClassifiedDep none;
+        for (const auto &d : merged) if (d.modId == id) return d;
+        return none;
+    };
+    check("Baka appears at all - the whole point",
+          find(43627).modId == 43627);
+    check("as a hard requirement", find(43627).cls == DepClass::Hard);
+    check("named by the table, so the dialog needs no fetch",
+          find(43627).name == QStringLiteral("Baka Framework"));
+    check("and not installed on this list", !find(43627).installed);
+    check("the table's class beats the description's heading",
+          find(67528).cls == DepClass::Hard);
+    check("without losing what the modlist knew",
+          find(67528).installed);
+    check("the note rides along for the tooltip",
+          find(67528).note == QStringLiteral("Hard Requirement."));
+    check("a soft table row stays soft",
+          find(45330).cls == DepClass::Optional);
+}
+
+static void testParseModInfoKeepsGameId()
+{
+    std::cout << "testParseModInfoKeepsGameId\n";
+    const auto info = NexusClient::parseModInfo(
+        R"({"name":"X","description":"d","game_id":1151})");
+    check("game_id survives the parse",
+          info.has_value() && info->gameIdNumeric == 1151);
+    check("and defaults to zero when absent",
+          NexusClient::parseModInfo(R"({"name":"X"})")->gameIdNumeric == 0);
+}
+
 static void testParseEmptyDescription()
 {
     std::cout << "testParseEmptyDescription\n";
@@ -1249,6 +1372,10 @@ static void run_deps_resolver()
     testAutoLinkIgnoresOtherUrls();
     testAutoLinkEmptyUrlNoop();
 
+    testParseModRequirements();
+    testRequirementNotesClassify();
+    testMergeTableIntoClassified();
+    testParseModInfoKeepsGameId();
     testParseEmptyDescription();
     testParseReadsSections();
     testParseInlineCuesOutrankTheSection();

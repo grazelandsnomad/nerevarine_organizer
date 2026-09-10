@@ -53,6 +53,67 @@ QNetworkReply *NexusClient::requestChangelog(const QString &game, int modId)
         QString("/v1/games/%1/mods/%2/changelogs.json").arg(game).arg(modId));
 }
 
+QNetworkReply *NexusClient::requestModRequirements(int gameIdNumeric, int modId)
+{
+    // v2 GraphQL, not the v1 REST base: the requirements table lives nowhere
+    // else. Unauthenticated on purpose - the data is public and v2 does not
+    // take the v1 apikey. dlcRequirements is not asked for: DLC cannot be
+    // installed from here, so listing it would only be noise.
+    QNetworkRequest req{QUrl(QStringLiteral("https://api.nexusmods.com/v2/graphql"))};
+    req.setHeader(QNetworkRequest::ContentTypeHeader,
+                  QStringLiteral("application/json"));
+    req.setRawHeader("Accept", "application/json");
+
+    QJsonObject vars;
+    vars.insert(QStringLiteral("m"), QString::number(modId));
+    vars.insert(QStringLiteral("g"), QString::number(gameIdNumeric));
+    QJsonObject body;
+    body.insert(QStringLiteral("query"), QStringLiteral(
+        "query($m: ID!, $g: ID!) { mod(modId: $m, gameId: $g) {"
+        " modRequirements { nexusRequirements { nodes {"
+        " modId modName notes url externalRequirement } } } } }"));
+    body.insert(QStringLiteral("variables"), vars);
+    return m_nam->post(req, QJsonDocument(body).toJson(QJsonDocument::Compact));
+}
+
+std::expected<QList<NexusClient::Requirement>, NexusClient::NexusError>
+NexusClient::parseModRequirements(const QByteArray &json)
+{
+    QJsonParseError err{};
+    const QJsonDocument doc = QJsonDocument::fromJson(json, &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject())
+        return std::unexpected(NexusError{NexusError::Kind::InvalidJson, {}});
+
+    const QJsonObject root = doc.object();
+    // A GraphQL error reply is a 200 with an "errors" array; treat it as the
+    // wrong shape so the caller degrades rather than reads half a payload.
+    if (root.contains(QLatin1String("errors")))
+        return std::unexpected(NexusError{NexusError::Kind::WrongShape, {}});
+
+    const QJsonValue mod = root[QLatin1String("data")][QLatin1String("mod")];
+    if (!mod.isObject())    // unknown mod, adult-gated, or schema drift
+        return std::unexpected(NexusError{NexusError::Kind::WrongShape, {}});
+
+    const QJsonArray nodes = mod[QLatin1String("modRequirements")]
+                                [QLatin1String("nexusRequirements")]
+                                [QLatin1String("nodes")].toArray();
+    QList<Requirement> out;
+    out.reserve(nodes.size());
+    for (const QJsonValue &v : nodes) {
+        const QJsonObject o = v.toObject();
+        Requirement r;
+        // IDs arrive as GraphQL ID strings ("43627"), not numbers.
+        r.modId    = o[QLatin1String("modId")].toString().toInt();
+        r.name     = o[QLatin1String("modName")].toString().trimmed();
+        r.notes    = o[QLatin1String("notes")].toString().trimmed();
+        r.external = o[QLatin1String("externalRequirement")].toBool();
+        if (r.modId <= 0 && !r.external) continue;   // nothing to point at
+        if (r.name.isEmpty()) continue;
+        out << r;
+    }
+    return out;
+}
+
 QNetworkReply *NexusClient::requestModFiles(const QString &game, int modId)
 {
     return buildGet(QString("/v1/games/%1/mods/%2/files.json").arg(game).arg(modId));
@@ -137,6 +198,7 @@ NexusClient::parseModInfo(const QByteArray &json)
     info.name             = obj["name"].toString().trimmed();
     info.description      = obj["description"].toString();
     info.updatedTimestamp = obj["updated_timestamp"].toInteger();
+    info.gameIdNumeric    = obj["game_id"].toInt();
     return info;
 }
 

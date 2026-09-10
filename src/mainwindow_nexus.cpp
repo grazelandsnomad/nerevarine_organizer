@@ -495,17 +495,32 @@ void MainWindow::onDependenciesScanned(QListWidgetItem *item,
     scrollLayout->setContentsMargins(0, 0, 0, 0);
     scrollLayout->setSpacing(2);
 
-    // A missing mod's row: async-named label + Visit. Shared by both the
-    // sectioned and the flat layout, so the two cannot drift.
+    // Names and notes the authored requirements table already supplied, so a
+    // row it covers needs no network fetch and can show the author's own
+    // wording in its tooltip.
+    QHash<int, QPair<QString, QString>> tableText;   // id -> (name, note)
+    for (const auto &d : classified)
+        if (!d.name.isEmpty()) tableText.insert(d.modId, {d.name, d.note});
+
+    // A missing mod's row: named label + Visit. Shared by both the
+    // sectioned and the flat layout, so the two cannot drift. The name comes
+    // from the table when it has one; otherwise the async fetch fills it in.
     const auto addMissingRow = [&](int id) {
         const QString depUrl = nexusModUrl(game, id);
+        const auto    known  = tableText.constFind(id);
 
         auto *row = new QWidget(scrollContainer);
         auto *h   = new QHBoxLayout(row);
         h->setContentsMargins(0, 0, 0, 0);
 
-        auto *nameLbl = new QLabel(T("deps_warn_loading_name").arg(id), row);
-        nameLbl->setToolTip(depUrl);
+        auto *nameLbl = new QLabel(known != tableText.constEnd()
+                                       ? known->first
+                                       : T("deps_warn_loading_name").arg(id),
+                                   row);
+        nameLbl->setToolTip(known != tableText.constEnd()
+                                && !known->second.isEmpty()
+                            ? depUrl + QStringLiteral("\n\n") + known->second
+                            : depUrl);
         nameLbl->setTextInteractionFlags(Qt::TextSelectableByMouse);
         h->addWidget(nameLbl, 1);
 
@@ -515,6 +530,9 @@ void MainWindow::onDependenciesScanned(QListWidgetItem *item,
         h->addWidget(visitBtn);
 
         scrollLayout->addWidget(row);
+
+        // The table already named it - nothing to fetch.
+        if (known != tableText.constEnd()) return;
 
         // Fetch the mod's Nexus "name" so the label becomes readable.
         // QPointer guards against callbacks firing after the dialog is
@@ -565,7 +583,9 @@ void MainWindow::onDependenciesScanned(QListWidgetItem *item,
                 QStringLiteral("\u2705 ") + installedName(d.installedUrl)
                     + QStringLiteral(" \u2014 ") + T("deps_warn_installed"),
                 scrollContainer);
-            lbl->setToolTip(d.installedUrl);
+            lbl->setToolTip(d.note.isEmpty()
+                                ? d.installedUrl
+                                : d.installedUrl + QStringLiteral("\n\n") + d.note);
             lbl->setTextInteractionFlags(Qt::TextSelectableByMouse);
             scrollLayout->addWidget(lbl);
         };

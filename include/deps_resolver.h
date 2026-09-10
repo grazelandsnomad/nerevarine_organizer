@@ -74,6 +74,13 @@ struct ClassifiedDep {
     bool     installed = false;
     QString  installedUrl;          // the modlist's own URL, when installed
     DepClass cls       = DepClass::Unclassified;
+    // Filled only for rows that came from (or matched) the page's authored
+    // requirements table: the author's own name for the mod, and the note
+    // exactly as written - "Hard Requirement. Necessary for Base Object
+    // Swapper". The dialog shows the name without a network fetch and puts
+    // the note in the tooltip verbatim.
+    QString  name;
+    QString  note;
 };
 
 // Result of regex-scanning a mod's description for dependency URLs.
@@ -175,6 +182,36 @@ parseDescriptionDeps(const QString &description,
                      const QString &game,
                      int selfModId,
                      const QMap<int, QString> &installedIdToUrl);
+
+// The class an authored requirements-table NOTE gives its row.
+//
+// The table is the author's explicit list, and the note is where they say how
+// much you need each entry. "Hard Requirement. Necessary for Base Object
+// Swapper" promotes; "Patch Available in FOMOD Installer." does not; an EMPTY
+// note stays Optional - Nexus's own popup hedges the whole table with "some
+// of these may be required", so an unmarked row must not shout. The same
+// if-disarms-required rule as the description classifier: "Required if you
+// use Horizon" is a condition.
+DepClass classifyRequirementNote(const QString &notes);
+
+// One row of the page's authored table, already parsed (NexusClient does the
+// JSON; this stays Qt-network-free and testable).
+struct TableRequirement {
+    int     modId = 0;
+    QString name;
+    QString notes;
+};
+
+// The description's classification and the author's table, merged into one
+// deduped list for the dialog: description order first, table-only rows
+// appended. Where both sources hold the same id, the TABLE's class and note
+// win - an author's explicit row beats heading inference - but the
+// description's position is kept. `installedIdToUrl` resolves installed-ness
+// for table-only rows exactly as parseDescriptionDeps did for links.
+QList<ClassifiedDep>
+mergeRequirements(const QList<ClassifiedDep> &fromDescription,
+                  const QList<TableRequirement> &table,
+                  const QMap<int, QString> &installedIdToUrl);
 
 // Selection-driven row highlight roles. The delegate paints them as a
 // tinted row band + edge stripes to surface "dep of the selected mod" /

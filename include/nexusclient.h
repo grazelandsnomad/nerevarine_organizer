@@ -42,6 +42,13 @@ public:
 
     // GET /v1/games/{game}/mods/{modId}/changelogs.json - version history
     QNetworkReply *requestChangelog(const QString &game, int modId);
+    // The mod page's authored requirements table, from the v2 GraphQL
+    // endpoint (api.nexusmods.com/v2/graphql) - public, unauthenticated, and
+    // what Nexus's own app runs on. The v1 API does not carry this table at
+    // all, which is why the deps dialog used to miss a mod the author lists
+    // as "Hard Requirement" but never links in the description.
+    // `gameIdNumeric` comes from ModInfo::gameIdNumeric.
+    QNetworkReply *requestModRequirements(int gameIdNumeric, int modId);
 
     // GET /v1/games/{game}/mods/{modId}/files/{fileId}/download_link.json
     // key/expires are the signed nxms:// params; empty for premium "Mod
@@ -94,10 +101,30 @@ public:
         QString name;
         QString description;
         qint64  updatedTimestamp = 0; // seconds since epoch, 0 if missing
+        // Nexus's NUMERIC game id ("game_id": 1151 for fallout4). The v2
+        // requirements query below is addressed by number, not domain, and
+        // this reply already carries it - no lookup table needed.
+        int     gameIdNumeric   = 0;
     };
     // Top level must be a JSON object. Missing individual fields aren't an
     // error - they keep their defaults (Nexus omits optional fields).
     static std::expected<ModInfo, NexusError> parseModInfo(const QByteArray &json);
+
+    // One row of the mod page's own "Requirements" table - the authored
+    // list, with the author's note ("Hard Requirement. Necessary for Base
+    // Object Swapper"). Served by the v2 GraphQL endpoint, which the v1 API
+    // never exposed; see requestModRequirements.
+    struct Requirement {
+        int     modId = 0;
+        QString name;
+        QString notes;
+        bool    external = false;   // off-Nexus URL; kept but not resolvable
+    };
+    // The nexusRequirements rows out of a v2 reply. GraphQL errors, missing
+    // fields or a null mod all come back as an error/empty rather than a
+    // crash - the caller degrades to the description-only dialog.
+    static std::expected<QList<Requirement>, NexusError>
+    parseModRequirements(const QByteArray &json);
 
     struct ValidatedUser {
         qint64  userId      = 0;
