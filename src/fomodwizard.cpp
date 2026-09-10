@@ -711,8 +711,14 @@ void FomodWizard::buildUi()
                         // that instead of about the option's own name. Empty
                         // for everything that is not one, which leaves every
                         // ordinary option on the path below.
+                        // "Foo - No BOS Patch" is a patch for Foo, for
+                        // people WITHOUT BOS - not a patch for a mod called
+                        // "Foo - No BOS". A negated name is Pass H territory
+                        // in exclusive groups and silence everywhere else.
                         const QStringList patchTargets =
-                            fomod::patchTargetsOf(pluginName, group.name);
+                            fomod::negatedModIn(pluginName).isEmpty()
+                                ? fomod::patchTargetsOf(pluginName, group.name)
+                                : QStringList();
 
                         bool    pluginInstalled = false;
                         QString matchedMod;
@@ -861,6 +867,16 @@ void FomodWizard::buildUi()
                                  pi < m_buttons[si][gi].size(); ++pi) {
                     const QList<NexusModRef> &cited = perPlugin[pi];
                     if (cited.isEmpty()) continue;   // no citation, no verdict
+
+                    // A "(No BOS)" option routinely cites BOS's page - to say
+                    // what it does WITHOUT. Vouching for it because the cited
+                    // mod is installed recommends the wrong half of a variant
+                    // pair, and unticking it because the mod is missing kills
+                    // the one option made for that list. Not this pass's
+                    // group either way: Pass H owns variant pairs, and a
+                    // negated name elsewhere is safest left alone.
+                    if (!fomod::negatedModIn(group.plugins[pi].name).isEmpty())
+                        continue;
 
                     QAbstractButton *btn = m_buttons[si][gi][pi];
                     if (!btn) continue;
@@ -1033,6 +1049,83 @@ void FomodWizard::buildUi()
             }
         }
 
+
+        // Pass H: one mod, offered with and without a framework.
+        //
+        // Vehicle Overhaul Continued opens on "Vehicle Overhaul Continued"
+        // vs "Vehicle Overhaul Continued (No BOS) [v1.2.2]", defaulting to
+        // the No-BOS half - which on a list that HAS Base Object Swapper
+        // silently gives up every swap the framework would drive. Worse,
+        // Pass G briefly made it so: its mentioned-word lookup identified
+        // the "(No BOS)" option AS Base Object Swapper and green-ticked the
+        // wrong half, which is why chooseFrameworkOption now refuses negated
+        // names outright. The marker is the evidence (fomod_hint.h), and the
+        // modlist answers which half works.
+        for (int si = 0; si < m_steps.size(); ++si) {
+            const FomodStep &step = m_steps[si];
+            for (int gi = 0; gi < step.groups.size(); ++gi) {
+                const FomodGroup &group = step.groups[gi];
+                if (group.type != QLatin1String("SelectExactlyOne")
+                    && group.type != QLatin1String("SelectAtMostOne")) continue;
+
+                QStringList names;
+                names.reserve(group.plugins.size());
+                for (const FomodPlugin &p : group.plugins) names << p.name;
+
+                const auto v =
+                    fomod::chooseFrameworkVariant(names, m_installedModNames);
+                if (v.pick < 0 || v.pick >= m_buttons[si][gi].size()) continue;
+
+                const auto annotate = [&](int pi, const QString &label,
+                                          const QString &detail) {
+                    QAbstractButton *btn = m_buttons[si][gi].value(pi);
+                    if (!btn) return;
+                    if (!label.isEmpty()) btn->setText(btn->text() + label);
+                    const QString tip = btn->toolTip();
+                    btn->setToolTip((tip.isEmpty() ? QString()
+                                                   : tip + QStringLiteral("\n\n"))
+                                    + detail);
+                };
+                if (v.installed) {
+                    annotate(v.positiveIdx,
+                             QStringLiteral(" \u2705 uses %1, which is installed")
+                                 .arg(v.framework),
+                             QStringLiteral("%1 is in this modlist, so the "
+                                            "variant built on it is the one "
+                                            "that does everything the mod "
+                                            "promises.").arg(v.framework));
+                    annotate(v.negativeIdx, QString(),
+                             QStringLiteral("This variant is for lists WITHOUT "
+                                            "%1 - which you have installed. "
+                                            "The recommended option above "
+                                            "actually uses it.").arg(v.framework));
+                } else {
+                    annotate(v.negativeIdx,
+                             QStringLiteral(" \u2705 works without %1")
+                                 .arg(v.framework),
+                             QStringLiteral("%1 is not in this modlist, and "
+                                            "this variant exists for exactly "
+                                            "that. The other option would "
+                                            "install swaps nothing ever "
+                                            "triggers.").arg(v.framework));
+                    annotate(v.positiveIdx,
+                             QStringLiteral(" \u26a0\ufe0f needs %1")
+                                 .arg(v.framework),
+                             QStringLiteral("%1 is not installed in this "
+                                            "modlist, so this variant's extra "
+                                            "content would silently never "
+                                            "fire.").arg(v.framework));
+                }
+
+                QAbstractButton *pick = m_buttons[si][gi].value(v.pick);
+                if (pick && pick->isEnabled()) pick->setChecked(true);
+                // Settled by what is installed, not by preference - the same
+                // doctrine as Pass F - so the prior-choices block must not
+                // undo it.
+                openMwOverriddenGroups.insert((quint64(si) << 16) | quint64(gi));
+            }
+        }
+
         // Pass F: options whose description names a mod they REQUIRE.
         //
         // Grand Solitude's "SMIM Rotor" ships ticked and reads "Required
@@ -1058,6 +1151,11 @@ void FomodWizard::buildUi()
 
                 for (int pi = 0; pi < group.plugins.size() &&
                                  pi < m_buttons[si][gi].size(); ++pi) {
+                    // Same negation guard as Pass E: a "(No X)" option that
+                    // mentions X in its prose is not an option FOR X.
+                    if (!fomod::negatedModIn(group.plugins[pi].name).isEmpty())
+                        continue;
+
                     const QStringList needed =
                         fomod::requiredMods(group.plugins[pi].description,
                                             group.plugins[pi].name, group.name);

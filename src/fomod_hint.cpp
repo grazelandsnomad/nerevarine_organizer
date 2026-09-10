@@ -381,6 +381,17 @@ FrameworkChoice chooseFrameworkOption(const QStringList &optionNames,
             if (baselineIdx < 0) baselineIdx = i;
             continue;
         }
+        // A name that NEGATES a framework must never be identified as that
+        // framework. knownModIn reads mentioned words, so without this,
+        // "Vehicle Overhaul Continued (No BOS)" identified as Base Object
+        // Swapper, reported it Installed, wore the green tick and got
+        // SELECTED - a regression the day the mentioned-word lookup went in.
+        // Variant pairs belong to chooseFrameworkVariant; this group walks
+        // away from them entirely.
+        if (!negatedModIn(n).isEmpty()) {
+            out.states << FrameworkChoice::State::Unknown;
+            continue;
+        }
         // Identifiable as a mod only via the alias table. Without that a bare
         // option name is not evidence of anything - the rule that keeps
         // "Normal Maps" quiet elsewhere.
@@ -571,6 +582,107 @@ QStringList patchTargetsOf(const QString &optionName, const QString &groupName)
                 out << p;
         }
     }
+    return out;
+}
+
+
+namespace {
+
+// The negation marker, capturing the token: "(No BOS)", "No-BOS", "Non BOS",
+// "without BOS". Word-bounded on both sides so "Nordic" never reads as a
+// negation. The token itself is one word - a framework's short form - or a
+// spelled-out name captured up to the closing bracket.
+const QRegularExpression &negationRe()
+{
+    static const QRegularExpression re(
+        QStringLiteral("\\b(?:no|non|without)[-\\s]+([A-Za-z][A-Za-z0-9 ]*?)"
+                       "(?=\\s*[\\])\\.,]|\\s*$|\\s+[-\\x{2013}])"),
+        QRegularExpression::CaseInsensitiveOption);
+    return re;
+}
+
+// Decoration a variant name carries that is not part of its identity:
+// "[v1.2.2]"-style tags and whatever bracket pair the negation left empty.
+QString stripDecoration(QString name)
+{
+    static const QRegularExpression kBracketTag(
+        QStringLiteral("\\s*\\[[^\\]]*\\]"));
+    static const QRegularExpression kEmptyParens(
+        QStringLiteral("\\s*\\(\\s*\\)"));
+    name.remove(kBracketTag);
+    name.remove(kEmptyParens);
+    return name.simplified();
+}
+
+} // namespace
+
+QString negatedModIn(const QString &optionName)
+{
+    auto it = negationRe().globalMatch(optionName);
+    while (it.hasNext()) {
+        const auto m = it.next();
+        // Longest resolvable tail first: "without Base Object Swapper"
+        // captures the full phrase, but a capture like "BOS Patch" should
+        // still find BOS - trim words off the right until something answers.
+        QStringList words = m.captured(1).simplified()
+                                .split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        while (!words.isEmpty()) {
+            const QString full =
+                mod_aliases::frameworkForToken(words.join(QLatin1Char(' ')));
+            if (!full.isEmpty()) return full;
+            words.removeLast();
+        }
+    }
+    return {};
+}
+
+FrameworkVariantChoice
+chooseFrameworkVariant(const QStringList &optionNames,
+                       const QStringList &installedModNames)
+{
+    FrameworkVariantChoice out;
+
+    // One negated option, one framework. A second pair for the same
+    // framework means a shape this does not understand, and silence beats a
+    // guess - the rule every pass in this file lives by.
+    int     negIdx = -1;
+    QString framework;
+    for (int i = 0; i < optionNames.size(); ++i) {
+        const QString f = negatedModIn(optionNames[i]);
+        if (f.isEmpty()) continue;
+        if (negIdx >= 0) return {};          // two negated options
+        negIdx    = i;
+        framework = f;
+    }
+    if (negIdx < 0) return {};
+
+    // The positive sibling: same name once the marker and decoration are
+    // gone. The marker is removed by matching it and cutting the capture.
+    QString negBase = optionNames[negIdx];
+    {
+        const auto m = negationRe().match(negBase);
+        if (m.hasMatch())
+            negBase = negBase.left(m.capturedStart())
+                    + negBase.mid(m.capturedEnd());
+    }
+    negBase = stripDecoration(negBase);
+    if (negBase.isEmpty()) return {};
+
+    for (int i = 0; i < optionNames.size(); ++i) {
+        if (i == negIdx) continue;
+        if (stripDecoration(optionNames[i])
+                .compare(negBase, Qt::CaseInsensitive) == 0) {
+            if (out.positiveIdx >= 0) return {};   // two positive siblings
+            out.positiveIdx = i;
+        }
+    }
+    if (out.positiveIdx < 0) return {};
+
+    out.negativeIdx = negIdx;
+    out.framework   = framework;
+    out.installed   = !mod_match::installedUnderAnyName(
+                           framework, installedModNames).isEmpty();
+    out.pick        = out.installed ? out.positiveIdx : out.negativeIdx;
     return out;
 }
 

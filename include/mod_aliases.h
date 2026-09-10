@@ -75,6 +75,13 @@ QString knownModIn(const QString &text);
 // consulted.
 QStringList frameworkPreference();
 
+// The full framework name a short variant-marker token stands for ("BOS" ->
+// "Base Object Swapper"), or "" for anything else. ONLY for callers that
+// found the token inside a negation marker of an installer option name -
+// that context is what makes a short form safe that the alias table above
+// rightly refuses ("BOS" can read Brotherhood of Steel). See the .cpp.
+QString frameworkForToken(const QString &token);
+
 } // namespace mod_aliases
 
 #endif // MOD_ALIASES_H

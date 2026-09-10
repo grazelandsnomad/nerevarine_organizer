@@ -1352,6 +1352,92 @@ static void run_fomod_previs_baseline()
     }
 }
 
+// -- One mod, with and without a framework ---------------------------------
+//
+// The real step 1 of Vehicle Overhaul Continued: an exclusive pair where the
+// FOMOD defaults to the No-BOS half, on a list that has Base Object Swapper.
+static void run_fomod_framework_variant()
+{
+    std::cout << "=== fomod_hint (framework variants) tests ===\n";
+    const QStringList pair{
+        QStringLiteral("Vehicle Overhaul Continued"),
+        QStringLiteral("Vehicle Overhaul Continued (No BOS) [v1.2.2]") };
+
+    // The reported bug: BOS installed, so the variant that uses it wins.
+    {
+        const auto v = fomod::chooseFrameworkVariant(
+            pair, { QStringLiteral("Base Object Swapper") });
+        check("the pair is recognised", v.pick >= 0);
+        check("BOS resolves to its full name",
+              v.framework == QStringLiteral("Base Object Swapper"));
+        check("and it is seen as installed", v.installed);
+        check("so the framework variant is picked", v.pick == 0);
+    }
+    // And the previs-shaped mirror: without BOS the No-BOS half exists for
+    // exactly that list.
+    {
+        const auto v = fomod::chooseFrameworkVariant(
+            pair, { QStringLiteral("Commonwealth Iguanas") });
+        check("without BOS the No-BOS variant is picked", v.pick == 1);
+        check("and nothing pretends it is installed", !v.installed);
+    }
+
+    // In modding, "BOS" is Base Object Swapper - the Brotherhood reading
+    // lives in lore and content names, which is why the token resolves here
+    // (a variant marker) and not in the global alias table (matched against
+    // mod names, where the faction sense occurs).
+    check("the marker names the framework",
+          fomod::negatedModIn(pair[1]) == QStringLiteral("Base Object Swapper"));
+    check("a spelled-out marker works too",
+          fomod::negatedModIn(QStringLiteral("Foo (without Base Object Swapper)"))
+              == QStringLiteral("Base Object Swapper"));
+    check("and a hyphenated one",
+          fomod::negatedModIn(QStringLiteral("Foo Non-BOS Edition"))
+              == QStringLiteral("Base Object Swapper"));
+
+    // The guard most worth pinning: an unresolvable token is a CONTENT
+    // variant, and everything stays silent.
+    check("No Clutter is not a framework",
+          fomod::negatedModIn(QStringLiteral("Some Mod (No Clutter)")).isEmpty());
+    {
+        const auto v = fomod::chooseFrameworkVariant(
+            { QStringLiteral("Some Mod"), QStringLiteral("Some Mod (No Clutter)") },
+            { QStringLiteral("Base Object Swapper") });
+        check("a content pair decides nothing", v.pick == -1);
+    }
+    // A negated option with no positive sibling is not a pair.
+    {
+        const auto v = fomod::chooseFrameworkVariant(
+            { QStringLiteral("Completely Different Mod"),
+              QStringLiteral("Some Mod (No BOS)") },
+            { QStringLiteral("Base Object Swapper") });
+        check("no sibling, no verdict", v.pick == -1);
+    }
+
+    // The regression that produced the screenshot: Pass G's mentioned-word
+    // lookup identified the "(No BOS)" option AS Base Object Swapper -
+    // installed, green tick, selected. A negated name is never the framework
+    // it negates, so the framework-group chooser walks away from the pair.
+    {
+        const auto g = fomod::chooseFrameworkOption(
+            pair, { QStringLiteral("Base Object Swapper") });
+        check("the framework-group pass leaves a variant pair alone",
+              g.states.isEmpty() && g.index == -1);
+    }
+
+    check("the token map answers BOS",
+          mod_aliases::frameworkForToken(QStringLiteral("BOS"))
+              == QStringLiteral("Base Object Swapper"));
+    check("and CDF",
+          mod_aliases::frameworkForToken(QStringLiteral("CDF"))
+              == QStringLiteral("Container Distribution Framework"));
+    check("and a full name answers for itself",
+          mod_aliases::frameworkForToken(QStringLiteral("SkyPatcher"))
+              == QStringLiteral("SkyPatcher"));
+    check("but not arbitrary words",
+          mod_aliases::frameworkForToken(QStringLiteral("Clutter")).isEmpty());
+}
+
 static void run_fomod_hint()
 {
     std::cout << "=== fomod_hint (asksAboutAnotherMod) tests ===\n";
@@ -2336,6 +2422,88 @@ static void run_fomod_wizard_ui()
 {
     std::cout << "=== fomod_wizard_ui (buildUi) tests ===\n";
 
+    // Pass H end to end: the real Vehicle Overhaul Continued pair, with the
+    // FOMOD's own default on the No-BOS half and Base Object Swapper in the
+    // list. Its description cites BOS's page, which used to earn it a green
+    // "installed ✓" from Pass E - on exactly the wrong variant.
+    {
+        FomodGroup g;
+        g.name = QStringLiteral("Plugins");
+        g.type = QStringLiteral("SelectExactlyOne");
+        FomodPlugin bosVariant  = wizardui_mkPlugin("Vehicle Overhaul Continued", "Optional");
+        FomodPlugin noBos = wizardui_mkPlugin(
+            "Vehicle Overhaul Continued (No BOS) [v1.2.2]", "Recommended");
+        noBos.description = QStringLiteral(
+            "Version without Base Object Swapper "
+            "(https://www.nexusmods.com/fallout4/mods/61180).");
+        g.plugins = { bosVariant, noBos };
+        FomodStep st;
+        st.name = QStringLiteral("Main Files");
+        st.groups.append(g);
+
+        auto *w = FomodWizardTestHook::build(
+            { st }, {}, { QStringLiteral("Base Object Swapper") },
+            { QStringLiteral("https://www.nexusmods.com/fallout4/mods/61180") });
+        auto *pos = FomodWizardTestHook::btn(w, 0, 0, 0);
+        auto *neg = FomodWizardTestHook::btn(w, 0, 0, 1);
+        check("with BOS installed the framework variant is selected",
+              pos->isChecked() && !neg->isChecked());
+        check("and says why", pos->text().contains(QStringLiteral("which is installed")),
+              pos->text());
+        check("the No-BOS row carries no installed-checkmark badge",
+              !neg->text().contains(QStringLiteral("✓"))
+              && !neg->text().contains(QStringLiteral("✅")), neg->text());
+        check("its tooltip explains instead",
+              neg->toolTip().contains(QStringLiteral("WITHOUT")), neg->toolTip());
+        delete w;
+    }
+    // The mirror: no BOS in the list, the No-BOS half wins and the FOMOD's
+    // wrong-for-this-list default would have been corrected the other way.
+    {
+        FomodGroup g;
+        g.name = QStringLiteral("Plugins");
+        g.type = QStringLiteral("SelectExactlyOne");
+        g.plugins = { wizardui_mkPlugin("Vehicle Overhaul Continued", "Recommended"),
+                      wizardui_mkPlugin("Vehicle Overhaul Continued (No BOS) [v1.2.2]",
+                                        "Optional") };
+        FomodStep st;
+        st.name = QStringLiteral("Main Files");
+        st.groups.append(g);
+        auto *w = FomodWizardTestHook::build(
+            { st }, {}, { QStringLiteral("Commonwealth Iguanas") });
+        check("without BOS the No-BOS variant is selected",
+              FomodWizardTestHook::btn(w, 0, 0, 1)->isChecked());
+        check("and the framework variant is warned",
+              FomodWizardTestHook::btn(w, 0, 0, 0)->text()
+                  .contains(QStringLiteral("needs Base Object Swapper")));
+        delete w;
+    }
+    // The Pass E guard on its own ground: a checkbox "No BOS" patch citing
+    // BOS's page, with BOS missing, used to be unticked as "for a mod you
+    // don't have". It exists for precisely that list - left alone now.
+    {
+        FomodGroup g;
+        g.name = QStringLiteral("Patches");
+        g.type = QStringLiteral("SelectAny");
+        FomodPlugin p = wizardui_mkPlugin("Foo - No BOS Patch", "Recommended");
+        p.description = QStringLiteral(
+            "For people not using Base Object Swapper "
+            "(https://www.nexusmods.com/fallout4/mods/61180).");
+        g.plugins = { p };
+        FomodStep st;
+        st.name = QStringLiteral("Patches");
+        st.groups.append(g);
+        auto *w = FomodWizardTestHook::build({ st }, {}, { QStringLiteral("Whatever") });
+        auto *btn = FomodWizardTestHook::btn(w, 0, 0, 0);
+        check("a negated-name option is not unticked by the citation pass",
+              btn->isChecked());
+        check("and carries no warning badge",
+              !btn->text().contains(QStringLiteral("⚠")), btn->text());
+        delete w;
+    }
+
+
+
     // The previs step, as Vehicle Overhaul Continued really ships it: an
     // exclusive "Previs Plugins" group whose PRP option is the default.
     {
@@ -2855,6 +3023,7 @@ int main(int argc, char **argv)
     run_fomod_hint();
     run_fomod_patch_targets();
     run_fomod_previs_baseline();
+    run_fomod_framework_variant();
     run_fomod_wizard_ui();
     run_bain_wizard_ui();
 

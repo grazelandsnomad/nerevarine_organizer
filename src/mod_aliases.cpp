@@ -106,6 +106,28 @@ bool isKnownMod(const QString &name)
     return index().constFind(key) != index().constEnd();
 }
 
+QString frameworkForToken(const QString &token)
+{
+    // The full FRAMEWORK name a variant-marker token stands for.
+    //
+    // Not another alias lookup - BOS already sits in the table above, and in
+    // MODDING it reads Base Object Swapper almost without exception (the
+    // Brotherhood of Steel sense lives in lore and content names, not in
+    // installer markers). What this answers is narrower: is the token a
+    // FRAMEWORK at all. The variant logic ("<Mod>" vs "<Mod> (No BOS)") must
+    // only fire for frameworks, whose presence genuinely decides which half
+    // works - not for every acronym the table knows.
+    const QString t = token.trimmed().toLower();
+    if (t == QLatin1String("bos"))
+        return QStringLiteral("Base Object Swapper");
+    if (t == QLatin1String("cdf"))
+        return QStringLiteral("Container Distribution Framework");
+    // Full names answer for themselves, so a spelled-out marker works too.
+    for (const QString &full : frameworkPreference())
+        if (t == full.toLower()) return full;
+    return {};
+}
+
 QStringList frameworkPreference()
 {
     // SkyPatcher first: it is depended upon by far more mods than the others

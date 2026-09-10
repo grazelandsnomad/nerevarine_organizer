@@ -239,6 +239,47 @@ bool isVanillaBaseline(const QString &optionName);
 FrameworkChoice chooseFrameworkOption(const QStringList &optionNames,
                                       const QStringList &installedModNames);
 
+// -- Variants of one mod, with and without a framework ----------------
+//
+// Vehicle Overhaul Continued opens on an exclusive pair:
+//
+//   Plugins
+//     ( ) Vehicle Overhaul Continued                     <- uses Base Object Swapper
+//     (o) Vehicle Overhaul Continued (No BOS) [v1.2.2]   <- the FOMOD's default
+//
+// With Base Object Swapper installed, the default is the wrong half: the mod
+// runs, but every swap chance BOS would drive is quietly gone. Nothing chose
+// here - chooseFrameworkOption identifies options that ARE frameworks, and
+// these are the mod's own name plus a negation marker.
+//
+// The marker is the evidence. "(No BOS)" is the author saying, in the option
+// name itself, that BOS is a mod this variant does without - which is what
+// licenses resolving a token the global alias table rightly refuses
+// (mod_aliases::frameworkForToken). A token that resolves to nothing ("No
+// Clutter") means a CONTENT variant, and everything here stays silent.
+
+// The framework an option name declares itself to be WITHOUT - "(No BOS)",
+// "No-BOS", "Non-BOS", "without BOS" - resolved to its full name, or "".
+QString negatedModIn(const QString &optionName);
+
+struct FrameworkVariantChoice {
+    int     positiveIdx = -1;     // the variant that uses the framework
+    int     negativeIdx = -1;     // the "(No X)" variant
+    QString framework;            // full name, e.g. "Base Object Swapper"
+    bool    installed = false;
+    int     pick = -1;            // index to select; -1 = not our group
+};
+
+// Decide an exclusive group offering the same mod with and without a
+// framework. Pairs a negated option with the sibling whose name matches once
+// the marker and decoration brackets ("[v1.2.2]") are stripped; no pair, or
+// two pairs for one framework, and the group is left alone. Installed
+// framework -> the positive variant; missing -> the negative one, which
+// exists for exactly that list.
+FrameworkVariantChoice
+chooseFrameworkVariant(const QStringList &optionNames,
+                       const QStringList &installedModNames);
+
 // -- Skyrim runtime pairs ---------------------------------------------
 //
 // SKSE-plugin mods routinely offer their DLL per game runtime: "SSE v1.6.629+
