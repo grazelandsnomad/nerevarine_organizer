@@ -73,6 +73,19 @@ bool forceRemoveRecursively(const QString &path);
 // space does nothing because space was never the problem.
 QString writableFilePath(const QString &dir, const QString &filename);
 
+// Is `path` a download that finished, judged against the size the server
+// promised? False for anything else - missing, a directory, empty, the wrong
+// length.
+//
+// `expectedBytes <= 0` means the size is UNKNOWN, and the honest answer is
+// then false. That looks over-cautious until you consider what reusing an
+// unmeasurable file costs: a half-written archive looks perfectly valid by
+// magic bytes, so it would be handed to the installer, fail verification, and
+// be DELETED - turning "resume where you left off" into an extra round trip.
+// Refusing is the conservative direction, and a fresh download is exactly
+// what would have happened anyway.
+bool isCompleteDownload(const QString &path, qint64 expectedBytes);
+
 } // namespace safefs
 
 #endif // SAFE_FS_H

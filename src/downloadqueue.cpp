@@ -223,22 +223,18 @@ void DownloadQueue::fetchDownloadLink(const QString &game, int modId, int fileId
 bool DownloadQueue::haveUsableArchive(const QString &path,
                                       QListWidgetItem *placeholder) const
 {
-    const QFileInfo fi(path);
-    if (!fi.exists() || !fi.isFile() || fi.size() <= 0) return false;
-
-    // Nexus told us how big the file is (files.json size_in_bytes, stashed on
-    // the placeholder for post-download verification). An exact match is both
-    // the cheapest and the strongest check available here - a partial
-    // download cannot pass it.
+    // The size Nexus promised for THIS file (files.json size_in_bytes, kept on
+    // the placeholder for post-download verification). An exact match is the
+    // cheapest and strongest check available here: a partial download cannot
+    // pass it, and neither can a different file from the same mod page.
+    //
+    // Nothing deeper is attempted on purpose. The obvious alternative -
+    // archiveProblem() - shells out to `7z t`, synchronously, on the UI
+    // thread: on a 450 MB archive that is a multi-second freeze, to answer a
+    // question md5 verification downstream answers anyway.
     const qint64 expected = placeholder
         ? placeholder->data(ModRole::ExpectedSize).toLongLong() : 0;
-    if (expected > 0) return fi.size() == expected;
-
-    // No expected size: fall back to the same shape checks a fresh download
-    // gets. No content-type to offer - there was no HTTP reply - which only
-    // disables the error-page test, and an error page would fail the magic
-    // test anyway.
-    return archiveProblem(path, QString(), placeholder).isEmpty();
+    return safefs::isCompleteDownload(path, expected);
 }
 
 // Append to the queue and build its UI row.

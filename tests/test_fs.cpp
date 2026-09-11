@@ -403,6 +403,46 @@ static void testWritablePathKeepsExtensionAndWalksSuffixes()
           got == QDir(tmp.path()).filePath("Mod-123-1-0_3.7z"), got);
 }
 
+// -- Is a download finished? -----------------------------------------------
+//
+// Cancelling an install keeps its archive so installing again reuses it
+// instead of pulling half a gigabyte down a second time. What must never
+// happen is reusing a HALF-written one: it would pass any magic-byte test,
+// fail verification, and be deleted - costing the user the very download the
+// feature exists to save.
+static void run_is_complete_download()
+{
+    std::cout << "\n[safefs::isCompleteDownload]\n";
+    QTemporaryDir dir;
+    const QString full = dir.filePath("mod.zip");
+    {
+        QFile f(full);
+        check("fixture opens", f.open(QIODevice::WriteOnly));
+        f.write(QByteArray(1000, 'x'));
+    }
+
+    check("the promised size, exactly, is a finished download",
+          safefs::isCompleteDownload(full, 1000));
+    // The case that matters: a transfer that stopped early.
+    check("short of it is not",
+          !safefs::isCompleteDownload(full, 5000));
+    check("and longer than it is not either",
+          !safefs::isCompleteDownload(full, 900));
+    // No promised size means no way to tell complete from truncated, and
+    // guessing wrong deletes the file. Refusing costs one fresh download,
+    // which is what would have happened regardless.
+    check("an unknown size refuses rather than guesses",
+          !safefs::isCompleteDownload(full, 0)
+          && !safefs::isCompleteDownload(full, -1));
+    check("a missing file is not a download",
+          !safefs::isCompleteDownload(dir.filePath("nope.zip"), 1000));
+    // A directory can own the name - an earlier extract of a bare-UUID
+    // download lands exactly like that (see writableFilePath).
+    QDir().mkpath(dir.filePath("adir"));
+    check("nor is a directory",
+          !safefs::isCompleteDownload(dir.filePath("adir"), 1000));
+}
+
 static void run_safe_fs()
 {
     testWritablePathFreeName();
@@ -501,6 +541,7 @@ int main(int argc, char **argv)
     QCoreApplication app(argc, argv);
 
     run_safe_fs();
+    run_is_complete_download();
     run_fs_utils();
 
     std::cout << "\n"

@@ -61,6 +61,13 @@ bool forceRemoveRecursively(const QString &path)
     return QDir(path).removeRecursively();
 }
 
+bool isCompleteDownload(const QString &path, qint64 expectedBytes)
+{
+    if (expectedBytes <= 0) return false;
+    const QFileInfo fi(path);
+    return fi.exists() && fi.isFile() && fi.size() == expectedBytes;
+}
+
 QString writableFilePath(const QString &dir, const QString &filename)
 {
     const QDir d(dir);
