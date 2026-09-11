@@ -245,9 +245,23 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
     // got to.
     const int translationStarted = m_untranslatedNotices
         ? index.data(ModRole::TranslationInProgress).toInt() : 0;
+    // A row that IS a translation says which mod it belongs to. Unlike every
+    // other caption here this one is GOOD news, so it never takes the slot
+    // from a warning: it fills in only when nothing else claimed it. A
+    // translation almost always overwrites its source's files, and
+    // "overwritten by" is the half the user has to act on.
+    const QString translationOf = m_untranslatedNotices
+            && index.data(ModRole::IsTranslationOfOther).toBool()
+        ? index.data(ModRole::TranslationPartner).toString() : QString();
+    bool capLoseIsTranslation = false;
     if (translationStarted > 0) {
         capLose = tr("Translation in progress…");
         capLoseIsRecords = false;
+    } else if (translationState == 0 && !translationOf.isEmpty()
+               && capLose.isEmpty()) {
+        capLose = tr("translation of %1").arg(translationOf);
+        capLoseIsRecords    = false;
+        capLoseIsTranslation = true;
     } else if (translationState != 0) {
         const QStringList d = index.data(ModRole::TranslationDetail).toStringList();
         const QStringList head = d.value(0).split('\t');
@@ -282,9 +296,14 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
     // something is there but not doing its whole job.
     // Dark orange for work in progress - deliberately not the red of "nobody
     // has translated this", because the answer to that one is now "you are".
+    // Violet for "translation of X" - the colour the user asked for, and
+    // deliberately warmer than the record-clash purple below it so the two
+    // read apart across rows. They can never collide on one row: this caption
+    // only fills a slot nothing else wanted.
     const QColor capLoseColor =
           translationStarted > 0  ? (darkRow ? QColor(255, 178,  92) : QColor(204, 102, 0))
         : translationState == 1 ? (darkRow ? QColor(255, 190, 190) : QColor(140, 12, 12))
+        : capLoseIsTranslation  ? (darkRow ? QColor(229, 160, 245) : QColor(123, 31, 162))
         : capLoseIsRecords      ? (darkRow ? QColor(190, 155, 250) : QColor(110, 70, 185))
         :                         (darkRow ? QColor(250, 175,  90) : QColor(185, 88,   0));
 
@@ -448,6 +467,23 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
     // say about it - the row is worth finding again tomorrow either way.
     const int startedHl = m_untranslatedNotices
         ? index.data(ModRole::TranslationInProgress).toInt() : 0;
+    // Good news washes last and washes lightest. A completed pair must never
+    // colour over a conflict, an untranslated warning or a selection - those
+    // are all things to act on, and this is a thing to notice.
+    const bool pairHl = m_untranslatedNotices && hlRole == 0 && conflictHl == 0
+                     && translationHl == 0 && startedHl == 0
+                     && index.data(ModRole::IsTranslationOfOther).toBool();
+    if (pairHl) {
+        painter->save();
+        painter->fillRect(option.rect, QColor(156, 39, 176, 40));
+        const int stripeW = 6;
+        const QColor stripe(142, 36, 170);
+        painter->fillRect(QRect(option.rect.left(), option.rect.top(),
+                                stripeW, option.rect.height()), stripe);
+        painter->fillRect(QRect(option.rect.right() - stripeW + 1, option.rect.top(),
+                                stripeW, option.rect.height()), stripe);
+        painter->restore();
+    }
     if (hlRole == 0 && conflictHl == 0 && (translationHl > 0 || startedHl > 0)) {
         painter->save();
         const bool none = (translationHl == 1);

@@ -38,6 +38,15 @@ namespace ModRole {
     // check in DownloadQueue::enqueueDownload catches the across-restart
     // case, so this need not be serialized.
     constexpr int PendingArchive    = Qt::UserRole + 54; // QString absolute path
+    // The mod this row translates, as the user declared it (a mod path).
+    // Persisted, and it OUTRANKS whatever the scan worked out - a person
+    // saying so is better evidence than any heuristic, and it is how a wrong
+    // guess gets corrected.
+    constexpr int TranslationOf     = Qt::UserRole + 55; // QString mod path
+    // Resolved for painting, not persisted: the partner's display name, and
+    // whether THIS row is the translation (rather than the source).
+    constexpr int TranslationPartner   = Qt::UserRole + 56; // QString
+    constexpr int IsTranslationOfOther = Qt::UserRole + 57; // bool
     constexpr int DependsOn         = Qt::UserRole + 25; // QStringList of Nexus URLs this mod depends on
     constexpr int HighlightRole     = Qt::UserRole + 26; // int: 0=none, 1=dependency of selected, 2=uses selected
     constexpr int HasMissingDependency  = Qt::UserRole + 27; // bool: ≥1 DependsOn URL is missing/disabled/uninstalled

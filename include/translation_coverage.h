@@ -48,6 +48,16 @@ struct Verdict {
     int     translatable = 0;
     TranslationCoverage::State state = TranslationCoverage::State::Ok;
     QString partnerMod;             // empty unless something paired
+    // The partner's Entry::modIdx, or -1. The NAME cannot identify a row -
+    // two mods may share one - and the caller needs a mod path to link the
+    // two rows together.
+    int     partnerModIdx = -1;
+    // Does THIS mod's own text already read as the target language? Set only
+    // when something paired, because that is the only time the question is
+    // asked: of a pair, the side in the target language is the translation
+    // and the other is the source. Without it the two rows are
+    // indistinguishable - both share the same keys, which is the whole point.
+    bool    readsAsTarget = false;
     QStringList samples;
     int     common    = 0;
     int     identical = 0;

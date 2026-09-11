@@ -51,6 +51,9 @@ struct ModEntry {
     // ModRole::IsGeneratedTranslation.
     bool      isGeneratedTranslation = false;
     QString   fomodChoices;            // serialized "si:gi:pi;..."
+    // Mod path this entry translates, set by hand from the context menu.
+    // Empty means "let the scan decide".
+    QString   translationOf;
     QString   bainChoices;             // ";"-joined BAIN package names chosen at install
 
     // Install / download.

@@ -624,7 +624,11 @@ private:
     // carry no plugin. Shown in the summary so it reports what it checked
     // rather than implying it checked everything.
     void onTranslationsScanned(const QHash<QString, TranslationCoverage> &byModPath,
-                               int modsWithoutPlugins);
+                               int modsWithoutPlugins,
+                               const QHash<QString, QString> &pairs);
+    // Paint "translation of X" on the row that IS the translation. `pairs` is
+    // what the scan worked out; a hand-set ModRole::TranslationOf outranks it.
+    void applyTranslationPairs(const QHash<QString, QString> &pairs);
     // Wipe the roles when the toggle goes off, so a stale verdict can't be
     // left painted on a row.
     void clearTranslationMarks();

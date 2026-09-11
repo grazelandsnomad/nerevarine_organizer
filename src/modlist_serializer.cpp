@@ -104,6 +104,7 @@ QJsonObject modToJson(const ModEntry &e)
         o.insert(QStringLiteral("generated_translation"), true);
     if (e.isFavorite)                o.insert(QStringLiteral("favorite"), true);
     if (!e.fomodChoices.isEmpty())   o.insert(QStringLiteral("fomod"),    e.fomodChoices);
+    if (!e.translationOf.isEmpty())  o.insert(QStringLiteral("transof"),  e.translationOf);
     if (!e.bainChoices.isEmpty())    o.insert(QStringLiteral("bain"),     e.bainChoices);
     if (!e.videoUrl.isEmpty())       o.insert(QStringLiteral("video"),    e.videoUrl);
     if (!e.sourceUrl.isEmpty())      o.insert(QStringLiteral("source"),   e.sourceUrl);
@@ -189,6 +190,7 @@ ModEntry modFromJson(const QJsonObject &o)
         o.value(QStringLiteral("generated_translation")).toBool(false);
     e.isFavorite      = o.value(QStringLiteral("favorite")).toBool(false);
     e.fomodChoices    = o.value(QStringLiteral("fomod")).toString();
+    e.translationOf   = o.value(QStringLiteral("transof")).toString();
     e.bainChoices     = o.value(QStringLiteral("bain")).toString();
     e.videoUrl        = o.value(QStringLiteral("video")).toString();
     e.sourceUrl       = o.value(QStringLiteral("source")).toString();

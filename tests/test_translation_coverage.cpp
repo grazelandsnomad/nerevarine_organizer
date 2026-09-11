@@ -194,6 +194,90 @@ void testAModWhoseOnlyStringIsAName()
           only.empty() && !only.localized);
 }
 
+// -- Which of the pair is the translation ----------------------------------
+//
+// Padre Mateo - A Quest Mod and Padre Mateo - A Quest Mod Spanish Traduccion
+// pair on shared keys, and nothing in that fact says which is which: the
+// whole reason they pair is that they carry the SAME keys. The language of
+// the text is what tells them apart.
+void testThePairNamesItsTranslation()
+{
+    std::cout << "\n[a pairing says which side is the translation]\n";
+    // Written the way a translator actually writes item names, because that
+    // is what the language test reads: function words and accents. A set of
+    // bare one-word nouns carries neither and stays undecided - silence over
+    // a guess, which is this heuristic's whole contract.
+    const QStringList en{
+        QStringLiteral("Rusty can of beans"),
+        QStringLiteral("Bottle of dirty water"),
+        QStringLiteral("Box of tools"),
+        QStringLiteral("Lost ammunition"),
+        QStringLiteral("Roll of duct tape"),
+        QStringLiteral("Handful of screws"),
+        QStringLiteral("Piece of scrap metal"),
+        QStringLiteral("Bag of cement"),
+        QStringLiteral("Broken alarm clock"),
+        QStringLiteral("Tin of coffee"),
+        QStringLiteral("Jar of adhesive"),
+        QStringLiteral("Set of wrenches")};
+    const QStringList es{
+        QString::fromUtf8("Lata oxidada de judías"),
+        QString::fromUtf8("Botella de agua sucia"),
+        QString::fromUtf8("Caja de herramientas"),
+        QString::fromUtf8("Munición perdida"),
+        QString::fromUtf8("Rollo de cinta adhesiva"),
+        QString::fromUtf8("Puñado de tornillos"),
+        QString::fromUtf8("Trozo de chatarra"),
+        QString::fromUtf8("Saco de cemento"),
+        QString::fromUtf8("Despertador roto"),
+        QString::fromUtf8("Bote de café"),
+        QString::fromUtf8("Tarro de pegamento"),
+        QString::fromUtf8("Juego de llaves inglesas")};
+    QHash<QString, QString> english, spanish;
+    for (int i = 0; i < en.size(); ++i) {
+        const QString k = QStringLiteral("MISC:junk%1:FULL:0").arg(i);
+        english.insert(k, en[i]);
+        spanish.insert(k, es[i]);
+    }
+    const QStringList names{QStringLiteral("Padre Mateo - A Quest Mod"),
+                            QStringLiteral("Padre Mateo Spanish Traduccion")};
+    plugin_strings::StringSet enSet, esSet;
+    enSet.valid = esSet.valid = true;    // TES4-family: no tes3 flag
+    enSet.byKey = english;
+    esSet.byKey = spanish;
+    const QList<Entry> entries{{0, "padre.esp", enSet}, {1, "padre.esp", esSet}};
+    const auto all = translation_coverage::judge(entries, {}, names, "spanish");
+
+    const auto src = verdictFor(all, 0), tr = verdictFor(all, 1);
+    check("the two pair at all",
+          src.partnerModIdx == 1 && tr.partnerModIdx == 0);
+    check("the Spanish side reads as the target language", tr.readsAsTarget);
+    check("and the English side does not", !src.readsAsTarget);
+
+    // The guard that matters: two mods in the SAME language pair happily -
+    // a compatibility patch and the mod it patches share keys too - and
+    // neither is a translation of the other. No direction, no claim.
+    QHash<QString, QString> other = english;
+    other["MISC:junk0:FULL:0"] = QStringLiteral("Rusty tin of beans");
+    plugin_strings::StringSet en2;
+    en2.valid = true;
+    en2.byKey = other;
+    const QList<Entry> bothEnglish{{0, "a.esp", enSet}, {1, "a.esp", en2}};
+    const auto pair2 = translation_coverage::judge(
+        bothEnglish, {}, {QStringLiteral("Some Mod"), QStringLiteral("Some Patch")},
+        "spanish");
+    check("two English mods name no translation direction",
+          !verdictFor(pair2, 0).readsAsTarget
+          && !verdictFor(pair2, 1).readsAsTarget);
+
+    // Nothing paired, nothing to ask.
+    const QList<Entry> lonely{{0, "solo.esp", enSet}};
+    check("an unpaired mod reports no partner index",
+          verdictFor(translation_coverage::judge(
+                         lonely, {}, {QStringLiteral("Solo")}, "spanish"), 0)
+              .partnerModIdx == -1);
+}
+
 // -- The protections that must survive it ----------------------------------
 
 void testTheNearVerbatimRejectorStillGuards()
@@ -435,6 +519,7 @@ int main(int argc, char **argv)
 
     testTheDaedricMaulShape();
     testAModWhoseOnlyStringIsAName();
+    testThePairNamesItsTranslation();
     testTheNearVerbatimRejectorStillGuards();
     testThePairingGate();
     testAModDoesNotTranslateItself();

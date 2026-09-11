@@ -1061,6 +1061,43 @@ void MainWindow::onContextMenu(const QPoint &pos)
                 // openable and still packageable.
                 }
 
+                // Say by hand what the scan could not work out - a translation
+                // shipped under a name nothing matches, or a pairing it read
+                // backwards. Persisted, and it wins over the scan.
+                menu.addSeparator();
+                if (!item->data(ModRole::TranslationOf).toString().isEmpty()) {
+                    menu.addAction(T("translate_not_a_translation"), this,
+                                   [this, item] {
+                        item->setData(ModRole::TranslationOf, QVariant());
+                        item->setData(ModRole::TranslationPartner,   QVariant());
+                        item->setData(ModRole::IsTranslationOfOther, false);
+                        saveModList();
+                        m_modList->viewport()->update();
+                    });
+                } else {
+                    QMenu *of = menu.addMenu(T("translate_is_translation_of"));
+                    const QString selfPath = item->data(ModRole::ModPath).toString();
+                    int offered = 0;
+                    for (int r = 0; r < m_modList->count() && offered < 200; ++r) {
+                        auto *cand = m_modList->item(r);
+                        if (cand == item) continue;
+                        if (cand->data(ModRole::ItemType).toString() != ItemType::Mod)
+                            continue;
+                        const QString path = cand->data(ModRole::ModPath).toString();
+                        if (path.isEmpty() || path == selfPath) continue;
+                        const QString custom = cand->data(ModRole::CustomName).toString();
+                        const QString label  = custom.isEmpty() ? cand->text().trimmed()
+                                                                : custom;
+                        of->addAction(label, this, [this, item, path] {
+                            item->setData(ModRole::TranslationOf, path);
+                            saveModList();
+                            runTranslationScan();
+                        });
+                        ++offered;
+                    }
+                    of->setEnabled(offered > 0);
+                }
+
                 // Undeclared variant chooser (Main Menu Redone's
                 // mainmenuwallpapers/ shape): the mod ships N alternatives and
                 // its readme says "copy the one you want" - no FOMOD, no BAIN,

@@ -142,9 +142,15 @@ signals:
     // built into an SKSE DLL, an MCM menu or packed in a BSA is invisible to
     // it. Reported so the summary can say what it did NOT check instead of
     // claiming everything is covered.
+    // `pairs` maps a mod's path to the path of the mod supplying its
+    // alternative text - the translation relationship, both directions. Kept
+    // OUT of `byModPath` on purpose: that map drops everything it has nothing
+    // to say about, so its callers read absence as "fine", and a successful
+    // pairing is exactly such a case.
     void translationsScanned(
         const QHash<QString, TranslationCoverage> &byModPath,
-        int modsWithoutPlugins);
+        int modsWithoutPlugins,
+        const QHash<QString, QString> &pairs);
     // 0-100 while a translation scan runs, polled off the worker. Emitted at 0
     // the moment a scan starts, so the UI can put its progress panel up before
     // the first plugin is read.

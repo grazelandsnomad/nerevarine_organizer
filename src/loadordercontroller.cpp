@@ -128,6 +128,7 @@ public:
 
     // Read only after finished() fires.
     const QHash<QString, TranslationCoverage> &results() const { return m_results; }
+    const QHash<QString, QString> &pairs() const { return m_pairs; }
     // Enabled mods that carried no plugin at all. Not a failure - most are
     // meshes or SKSE libraries with genuinely nothing to translate - but the
     // scan did not look INSIDE them, so the summary must not claim it did.
@@ -227,6 +228,28 @@ protected:
         for (const auto &v : verdicts)
             noteCoverage(v.modIdx, v.pluginName, v.translatable, v.state,
                          v.partnerMod, v.samples, v.common, v.identical);
+
+        // The pairing, DIRECTED: translation -> source. Recorded separately
+        // from the coverage map, which throws away everything it has nothing
+        // to complain about - and a successful pairing is precisely that.
+        //
+        // A mod with several plugins votes once per plugin, so collect the
+        // language verdict first and let any plugin reading as the target
+        // language speak for the mod.
+        QHash<int, bool> inTarget;
+        for (const auto &v : verdicts)
+            if (v.readsAsTarget) inTarget.insert(v.modIdx, true);
+        for (const auto &v : verdicts) {
+            if (v.partnerModIdx < 0 || v.partnerModIdx >= m_mods.size()) continue;
+            if (v.modIdx < 0 || v.modIdx >= m_mods.size())                continue;
+            // One side in the target language and the other not. Two English
+            // mods that merely share keys - a compatibility patch and the mod
+            // it patches - name no direction, and get no claim made about
+            // them.
+            if (!inTarget.value(v.modIdx) || inTarget.value(v.partnerModIdx))
+                continue;
+            m_pairs.insert(m_mods[v.modIdx].path, m_mods[v.partnerModIdx].path);
+        }
         setPercent(100);
 
         // Mods that turned out to have nothing to say are dropped here rather
@@ -326,6 +349,7 @@ private:
     Cache                              *m_cache   = nullptr;
     QMutex                             *m_cacheMu = nullptr;
     QHash<QString, TranslationCoverage> m_results;
+    QHash<QString, QString>             m_pairs;   // mod path -> partner path
     std::atomic<int>                    m_percent{0};
 };
 
@@ -397,9 +421,10 @@ void LoadOrderController::scanTranslations(
         // Read before the worker is destroyed - it is what lets the summary
         // say what it did not examine.
         const int noPlugin = m_activeTranslationScanner->modsWithoutPlugins();
+        const auto pairs   = m_activeTranslationScanner->pairs();
         m_activeTranslationScanner->deleteLater();
         m_activeTranslationScanner = nullptr;
-        emit translationsScanned(results, noPlugin);
+        emit translationsScanned(results, noPlugin, pairs);
         // Serve whatever came in while this one was running, so the last edit
         // the user made is always the one reflected on screen.
         if (m_translationScanPending) {

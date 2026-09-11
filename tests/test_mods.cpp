@@ -419,6 +419,39 @@ static void testPathReferencedIn()
           !mod_sharing::pathReferencedIn(QString(), profiles));
 }
 
+// A hand-set "this translates that" is worth nothing if it does not survive a
+// restart - it is the user correcting the scan, and the scan will just
+// disagree again next time it runs.
+static void testTranslationOfRoundTrip()
+{
+    std::cout << "\n[translationOf survives a save/load cycle]\n";
+    ModEntry e;
+    e.itemType      = QStringLiteral("mod");
+    e.displayName   = QStringLiteral("Padre Mateo Spanish Traduccion");
+    e.modPath       = QStringLiteral("/mods/padre-es");
+    e.checked       = true;
+    e.translationOf = QStringLiteral("/mods/padre-en");
+
+    const QList<ModEntry> back =
+        modlist_serializer::parseModlist(modlist_serializer::serializeModlist({e}));
+    check("the row comes back", back.size() == 1);
+    if (!back.isEmpty())
+        check("and still knows what it translates",
+              back.first().translationOf == QStringLiteral("/mods/padre-en"),
+              back.first().translationOf);
+
+    // Absent is the normal case - every mod that is not a translation - and
+    // must stay empty rather than becoming a stray key.
+    ModEntry plain;
+    plain.itemType    = QStringLiteral("mod");
+    plain.displayName = QStringLiteral("Padre Mateo - A Quest Mod");
+    plain.modPath     = QStringLiteral("/mods/padre-en");
+    const QList<ModEntry> back2 =
+        modlist_serializer::parseModlist(modlist_serializer::serializeModlist({plain}));
+    check("a mod with no link keeps none",
+          !back2.isEmpty() && back2.first().translationOf.isEmpty());
+}
+
 static void testRoundTripPreservesSharedRow()
 {
     std::cout << "\n[shared row survives serialize -> parse]\n";
@@ -454,6 +487,7 @@ static void run_mod_sharing()
     testAppendAndDedup();
     testPathReferencedIn();
     testRoundTripPreservesSharedRow();
+    testTranslationOfRoundTrip();
 }
 
 // === install_layout ===

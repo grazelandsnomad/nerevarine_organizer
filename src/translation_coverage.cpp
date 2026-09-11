@@ -233,7 +233,16 @@ QList<Verdict> judge(const QList<Entry> &entries,
                           && best.identical >= plugin_strings::kPartialCount;
         v.state      = partial ? TranslationCoverage::State::Partial
                                : TranslationCoverage::State::Ok;
-        v.partnerMod = nameOf(entries[bestIdx].modIdx);
+        v.partnerMod    = nameOf(entries[bestIdx].modIdx);
+        v.partnerModIdx = entries[bestIdx].modIdx;
+        // Same test the no-partner branch above uses, asked of a paired mod
+        // so the caller can tell translation from source. Only here, so a
+        // list with nothing paired pays nothing for it.
+        v.readsAsTarget =
+            !targetLanguage.isEmpty()
+            && language_guess::alreadyInLanguage(nameOf(ea.modIdx),
+                                                 sampleText(ea.strings),
+                                                 targetLanguage);
         v.samples    = best.samples;
         v.common     = best.common;
         v.identical  = best.identical;

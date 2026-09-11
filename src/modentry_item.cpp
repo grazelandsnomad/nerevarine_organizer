@@ -39,6 +39,7 @@ ModEntry ModEntry::fromItem(const QListWidgetItem *item)
     e.isGeneratedTranslation =
         item->data(ModRole::IsGeneratedTranslation).toBool();
     e.fomodChoices = item->data(ModRole::FomodChoices).toString();
+    e.translationOf = item->data(ModRole::TranslationOf).toString();
     e.bainChoices  = item->data(ModRole::BainChoices).toString();
 
     e.installStatus    = item->data(ModRole::InstallStatus).toInt();

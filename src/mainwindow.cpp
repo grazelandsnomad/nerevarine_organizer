@@ -3458,8 +3458,11 @@ void MainWindow::runTranslationScan()
 
 void MainWindow::onTranslationsScanned(
     const QHash<QString, TranslationCoverage> &byModPath,
-    int modsWithoutPlugins)
+    int modsWithoutPlugins,
+    const QHash<QString, QString> &pairs)
 {
+    applyTranslationPairs(pairs);
+
     int flagged = 0, noTranslation = 0, inProgress = 0;
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *it = m_modList->item(i);
@@ -3558,12 +3561,53 @@ void MainWindow::onTranslationsScanned(
     m_translationOverlay->showResult(msg);
 }
 
+void MainWindow::applyTranslationPairs(const QHash<QString, QString> &pairs)
+{
+    // Path -> the name the user sees, so the caption can name the partner the
+    // way the list does rather than by folder.
+    QHash<QString, QString> nameByPath;
+    for (int i = 0; i < m_modList->count(); ++i) {
+        auto *it = m_modList->item(i);
+        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        const QString path = it->data(ModRole::ModPath).toString();
+        if (path.isEmpty()) continue;
+        const QString custom = it->data(ModRole::CustomName).toString();
+        nameByPath.insert(path, custom.isEmpty() ? it->text().trimmed() : custom);
+    }
+
+    for (int i = 0; i < m_modList->count(); ++i) {
+        auto *it = m_modList->item(i);
+        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+
+        // The user's own answer first, and it is not a hint: a person saying
+        // "this translates that" outranks anything inferred, and is how a
+        // wrong guess gets corrected.
+        QString partnerPath = it->data(ModRole::TranslationOf).toString();
+        if (partnerPath.isEmpty())
+            partnerPath = pairs.value(it->data(ModRole::ModPath).toString());
+
+        // The scan's map is DIRECTED - only the translation side is a key -
+        // so being in it at all is the claim. A partner that is not in the
+        // list any more names nothing worth painting.
+        const QString partnerName = nameByPath.value(partnerPath);
+        if (partnerPath.isEmpty() || partnerName.isEmpty()) {
+            it->setData(ModRole::TranslationPartner,   QVariant());
+            it->setData(ModRole::IsTranslationOfOther, false);
+            continue;
+        }
+        it->setData(ModRole::TranslationPartner,   partnerName);
+        it->setData(ModRole::IsTranslationOfOther, true);
+    }
+}
+
 void MainWindow::clearTranslationMarks()
 {
     for (int i = 0; i < m_modList->count(); ++i) {
         m_modList->item(i)->setData(ModRole::TranslationState,  0);
         m_modList->item(i)->setData(ModRole::TranslationDetail, QStringList());
         m_modList->item(i)->setData(ModRole::TranslationInProgress, 0);
+        m_modList->item(i)->setData(ModRole::TranslationPartner,   QVariant());
+        m_modList->item(i)->setData(ModRole::IsTranslationOfOther, false);
     }
     m_modList->viewport()->update();
 }

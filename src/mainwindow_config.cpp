@@ -1443,6 +1443,8 @@ void MainWindow::loadModList(const QString &path,
             item->setData(ModRole::IsFavorite, true);
         if (!e.fomodChoices.isEmpty())
             item->setData(ModRole::FomodChoices, e.fomodChoices);
+        if (!e.translationOf.isEmpty())
+            item->setData(ModRole::TranslationOf, e.translationOf);
         if (!e.bainChoices.isEmpty())
             item->setData(ModRole::BainChoices, e.bainChoices);
         if (!e.videoUrl.isEmpty())
