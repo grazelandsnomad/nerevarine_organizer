@@ -220,6 +220,27 @@ void DownloadQueue::fetchDownloadLink(const QString &game, int modId, int fileId
     });
 }
 
+bool DownloadQueue::haveUsableArchive(const QString &path,
+                                      QListWidgetItem *placeholder) const
+{
+    const QFileInfo fi(path);
+    if (!fi.exists() || !fi.isFile() || fi.size() <= 0) return false;
+
+    // Nexus told us how big the file is (files.json size_in_bytes, stashed on
+    // the placeholder for post-download verification). An exact match is both
+    // the cheapest and the strongest check available here - a partial
+    // download cannot pass it.
+    const qint64 expected = placeholder
+        ? placeholder->data(ModRole::ExpectedSize).toLongLong() : 0;
+    if (expected > 0) return fi.size() == expected;
+
+    // No expected size: fall back to the same shape checks a fresh download
+    // gets. No content-type to offer - there was no HTTP reply - which only
+    // disables the error-page test, and an error page would fail the magic
+    // test anyway.
+    return archiveProblem(path, QString(), placeholder).isEmpty();
+}
+
 // Append to the queue and build its UI row.
 void DownloadQueue::enqueueDownload(QListWidgetItem *placeholder,
                                     const QUrl      &url,
@@ -228,6 +249,22 @@ void DownloadQueue::enqueueDownload(QListWidgetItem *placeholder,
     // a new download means the manual-fallback dialog did its job; close it
     if (placeholder) {
         if (auto box = m_manualDlBoxes.take(placeholder); box) box->close();
+    }
+
+    // Already on disk? Hand it straight to the installer. Cancelling a wizard
+    // now keeps the archive, so re-installing lands here with the whole file
+    // already downloaded - and transferring it again is the one thing the
+    // user cannot get back.
+    //
+    // Same path the download itself would pick, so what is checked is exactly
+    // what would have been written.
+    const QString existing = safefs::writableFilePath(m_modsDir, filename);
+    if (haveUsableArchive(existing, placeholder)) {
+        writeDiag(QStringLiteral("reuse %1 path=%2").arg(filename, existing));
+        emit statusMessage(T("status_reusing_archive").arg(filename), 4000);
+        if (placeholder) placeholder->setData(ModRole::DownloadProgress, -1);
+        emit extractionRequested(existing, placeholder);
+        return;
     }
 
     QueuedDownload q;

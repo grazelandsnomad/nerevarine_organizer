@@ -148,6 +148,15 @@ private:
     // an error page served as 200, a tiny body, or (when Nexus gave no md5/size)
     // an archive whose magic is present but that fails a structural `7z t`.
     // `ctype` is the response Content-Type.
+    // Is a file already sitting where this download would land, and is it
+    // worth handing to the installer instead of transferring it again?
+    //
+    // Deliberately lenient, because it does not have to be strict: reuse
+    // still goes through the normal verify-then-extract path, so a truncated
+    // or corrupt file fails md5/size verification, gets deleted there, and
+    // the next attempt downloads fresh. The worst case is today's behaviour.
+    bool haveUsableArchive(const QString &path, QListWidgetItem *placeholder) const;
+
     QString archiveProblem(const QString &savePath, const QString &ctype,
                            QListWidgetItem *placeholder) const;
 

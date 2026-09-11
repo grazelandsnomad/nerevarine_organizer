@@ -31,6 +31,13 @@ namespace ModRole {
     // resolves, used by verification before extractAndAdd, cleared on success.
     constexpr int ExpectedMd5       = Qt::UserRole + 23; // QString lower-case hex
     constexpr int ExpectedSize      = Qt::UserRole + 24; // qint64 bytes (size_in_bytes from Nexus)
+    // Archive kept on disk after the user CANCELLED an install, so installing
+    // again reuses it instead of pulling the file down a second time. Set at
+    // cancel, consulted before any download is started, cleared once the
+    // archive is consumed or gone. Session-only on purpose: the filename
+    // check in DownloadQueue::enqueueDownload catches the across-restart
+    // case, so this need not be serialized.
+    constexpr int PendingArchive    = Qt::UserRole + 54; // QString absolute path
     constexpr int DependsOn         = Qt::UserRole + 25; // QStringList of Nexus URLs this mod depends on
     constexpr int HighlightRole     = Qt::UserRole + 26; // int: 0=none, 1=dependency of selected, 2=uses selected
     constexpr int HasMissingDependency  = Qt::UserRole + 27; // bool: ≥1 DependsOn URL is missing/disabled/uninstalled

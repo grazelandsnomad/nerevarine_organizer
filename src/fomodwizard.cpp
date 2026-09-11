@@ -22,6 +22,8 @@
 #include <QRadioButton>
 #include <QRegularExpression>
 #include <QScrollArea>
+#include <QScrollBar>
+#include <QApplication>
 #include <QSet>
 #include <QStackedWidget>
 #include <QEvent>
@@ -211,6 +213,134 @@ static FomodFile parseFileAttrs(const QXmlStreamReader &xml)
     return f;
 }
 
+namespace {
+
+// The full-size image window's contents: fitted to the window by default,
+// the file's own pixels on click, and panned by dragging.
+//
+// Its own class because the gesture is stateful across three events, and the
+// wizard's eventFilter already had three unrelated jobs. Nothing here is a
+// QObject subclass needing moc - no signals, no slots, just an event filter
+// on the one label it owns.
+class ZoomView : public QScrollArea {
+public:
+    ZoomView(const QPixmap &full, QSize fitted, QWidget *parent)
+        : QScrollArea(parent), m_full(full), m_fitted(fitted)
+    {
+        m_label = new QLabel(this);
+        m_label->setAlignment(Qt::AlignCenter);
+        setWidget(m_label);
+        // Explicit geometry. widgetResizable(true) stretches the label to the
+        // viewport, which fights every resize() below and leaves panning with
+        // nothing to scroll.
+        setWidgetResizable(false);
+        setAlignment(Qt::AlignCenter);
+        m_label->installEventFilter(this);
+
+        // Only worth a zoom when fitting actually cost pixels: a small image
+        // already blown up to the 2x cap has none left to reveal, and a
+        // toggle that changes nothing is worse than no toggle.
+        m_canZoom = fitted.width() < full.width();
+        apply(false, QPoint());
+    }
+
+protected:
+    bool eventFilter(QObject *obj, QEvent *ev) override
+    {
+        if (obj != m_label) return QScrollArea::eventFilter(obj, ev);
+        auto *me = (ev->type() == QEvent::MouseButtonPress
+                 || ev->type() == QEvent::MouseMove
+                 || ev->type() == QEvent::MouseButtonRelease)
+                   ? static_cast<QMouseEvent *>(ev) : nullptr;
+
+        if (me && ev->type() == QEvent::MouseButtonPress
+            && me->button() == Qt::LeftButton) {
+            m_pressPos    = me->pos();
+            m_pressScroll = QPoint(horizontalScrollBar()->value(),
+                                   verticalScrollBar()->value());
+            m_dragged = false;
+            m_label->setCursor(Qt::ClosedHandCursor);
+            return true;
+        }
+        if (me && ev->type() == QEvent::MouseMove
+            && (me->buttons() & Qt::LeftButton)) {
+            const QPoint d = me->pos() - m_pressPos;
+            // A hand never holds perfectly still, so a few pixels are still a
+            // click. Qt's own threshold, the one every drag in the toolkit
+            // uses.
+            if (!m_dragged
+                && d.manhattanLength() >= QApplication::startDragDistance())
+                m_dragged = true;
+            if (m_dragged) {
+                horizontalScrollBar()->setValue(m_pressScroll.x() - d.x());
+                verticalScrollBar()->setValue(m_pressScroll.y() - d.y());
+            }
+            return true;
+        }
+        if (me && ev->type() == QEvent::MouseButtonRelease
+            && me->button() == Qt::LeftButton) {
+            // A drag moved the image and must not ALSO change the zoom, or
+            // every attempt to look around would throw the user back out to
+            // the fitted view.
+            if (!m_dragged && m_canZoom) apply(!m_actual, me->pos());
+            else                         updateCursor();
+            return true;
+        }
+        return QScrollArea::eventFilter(obj, ev);
+    }
+
+private:
+    // `anchor` is where the user clicked, in label coordinates, so the zoom
+    // lands on what they were looking at instead of the top-left corner.
+    void apply(bool actual, QPoint anchor)
+    {
+        const QSizeF before = m_label->pixmap().size();
+        QPointF rel(0.5, 0.5);
+        if (!anchor.isNull() && before.width() > 0 && before.height() > 0)
+            rel = QPointF(anchor.x() / before.width(),
+                          anchor.y() / before.height());
+
+        m_actual = actual;
+        const QPixmap shown = actual
+            ? m_full
+            : m_full.scaled(m_fitted, Qt::KeepAspectRatio,
+                            Qt::SmoothTransformation);
+        m_label->setPixmap(shown);
+        m_label->resize(shown.size());
+
+        horizontalScrollBar()->setValue(
+            int(rel.x() * shown.width())  - viewport()->width()  / 2);
+        verticalScrollBar()->setValue(
+            int(rel.y() * shown.height()) - viewport()->height() / 2);
+        updateCursor();
+    }
+
+    void updateCursor()
+    {
+        // What the pointer promises has to be what a click does: a hand where
+        // there is something to drag, a finger where a click zooms in.
+        const bool pannable = horizontalScrollBar()->maximum() > 0
+                           || verticalScrollBar()->maximum() > 0;
+        m_label->setCursor(pannable   ? Qt::OpenHandCursor
+                           : m_canZoom ? Qt::PointingHandCursor
+                                       : Qt::ArrowCursor);
+        m_label->setToolTip(m_canZoom
+            ? (m_actual ? T("fomod_preview_fit") : T("fomod_preview_actual"))
+            : QString());
+    }
+
+    QLabel *m_label = nullptr;
+    QPixmap m_full;
+    QSize   m_fitted;
+    bool    m_canZoom = false;
+    bool    m_actual  = false;
+    bool    m_dragged = false;
+    QPoint  m_pressPos;
+    QPoint  m_pressScroll;
+};
+
+} // namespace
+
 QSize FomodWizard::previewFitSize(QSize native, QSize available,
                                   double maxUpscale)
 {
@@ -243,34 +373,9 @@ void FomodWizard::openFullImage()
         avail = sc->availableGeometry().size() * 0.9;
     const QSize fitted = previewFitSize(full.size(), avail);
 
-    auto *lbl = new QLabel(win);
-    lbl->setAlignment(Qt::AlignCenter);
-    lbl->setPixmap(full.scaled(fitted, Qt::KeepAspectRatio,
-                               Qt::SmoothTransformation));
-
-    auto *area = new QScrollArea(win);
-    area->setWidget(lbl);
-    area->setWidgetResizable(true);
-    area->setAlignment(Qt::AlignCenter);
-
     auto *lay = new QVBoxLayout(win);
     lay->setContentsMargins(0, 0, 0, 0);
-    lay->addWidget(area);
-
-    // Only worth offering when fitting actually cost pixels: a small image
-    // blown up to the 2x cap already shows every one it has, and a toggle
-    // that does nothing is worse than no toggle.
-    const bool shrunk = fitted.width() < full.width();
-    if (shrunk) {
-        lbl->setToolTip(T("fomod_preview_actual"));
-        lbl->setCursor(Qt::PointingHandCursor);
-        // The path rides on the label, not in a capture: the window outlives
-        // this call and the pane may have moved to another option by the
-        // time the toggle is used.
-        lbl->installEventFilter(this);
-        lbl->setProperty("fomodFullPath", m_previewAbsPath);
-        lbl->setProperty("fomodFitted",   fitted);
-    }
+    lay->addWidget(new ZoomView(full, fitted, win));
 
     win->resize(fitted + QSize(2, 2));
     win->show();
@@ -282,32 +387,12 @@ bool FomodWizard::eventFilter(QObject *obj, QEvent *ev)
         if (auto *btn = qobject_cast<QAbstractButton *>(obj))
             showPreviewFor(btn);
 
-    if (ev->type() == QEvent::MouseButtonRelease
+    // The pane: open the picture properly. Everything the full-size window
+    // does with the mouse belongs to ZoomView, not here.
+    if (obj == m_previewImage && ev->type() == QEvent::MouseButtonRelease
         && static_cast<QMouseEvent *>(ev)->button() == Qt::LeftButton) {
-        // The pane: open the picture properly.
-        if (obj == m_previewImage) { openFullImage(); return true; }
-        // Inside the full-size window: swap between the fitted view and the
-        // file's own pixels, scrollbars and all. Only installed on labels
-        // where fitting had to shrink the image.
-        if (auto *lbl = qobject_cast<QLabel *>(obj)) {
-            const QString path = lbl->property("fomodFullPath").toString();
-            if (!path.isEmpty()) {
-                const QPixmap full(path);
-                if (!full.isNull()) {
-                    const QSize fitted = lbl->property("fomodFitted").toSize();
-                    const bool showingActual =
-                        lbl->pixmap().size() == full.size();
-                    lbl->setPixmap(showingActual
-                        ? full.scaled(fitted, Qt::KeepAspectRatio,
-                                      Qt::SmoothTransformation)
-                        : full);
-                    lbl->resize(lbl->pixmap().size());
-                    lbl->setToolTip(showingActual ? T("fomod_preview_actual")
-                                                  : T("fomod_preview_fit"));
-                }
-                return true;
-            }
-        }
+        openFullImage();
+        return true;
     }
     return QDialog::eventFilter(obj, ev);
 }

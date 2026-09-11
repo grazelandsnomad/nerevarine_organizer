@@ -226,16 +226,21 @@ void MainWindow::onExtractionCancelled(const QString &archivePath,
                                        const QString &extractDir,
                                        const QUuid &installToken)
 {
-    // Same teardown as a FOMOD-cancel: wipe the partial output and the staged
-    // archive, roll the row back (or restore a pending merge target), persist.
+    // Same teardown as a FOMOD-cancel: wipe the partial output, roll the row
+    // back (or restore a pending merge target), persist.
     // extractDir is empty when the cancel landed before extraction started -
     // QDir("").removeRecursively() would act on the CWD, so guard it.
     if (!extractDir.isEmpty())
         QDir(extractDir).removeRecursively();
-    QFile::remove(archivePath);
+    // The ARCHIVE stays. Cancelling is "not now", not "that was broken": the
+    // download already succeeded and was verified, and throwing it away means
+    // the next attempt pulls the whole file down again - half a gigabyte, on
+    // an account with no premium, to reach the same wizard. Failure paths
+    // still delete; success paths still clean up.
 
     QString profileKey;
     if (QListWidgetItem *ph = findPlaceholderByToken(installToken, &profileKey)) {
+        ph->setData(ModRole::PendingArchive, archivePath);
         if (profileKey.isEmpty()) {
             resetPlaceholderAfterInstallCancel(ph, archivePath);
         } else {
@@ -303,8 +308,9 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
             QListWidgetItem *fph = findPlaceholderByToken(installToken, &fkey);
             if (fomodPath.isEmpty()) {
                 QDir(extractDir).removeRecursively();
-                QFile::remove(archivePath);
+                // Archive kept - see onExtractionCancelled.
                 if (fph) {
+                    fph->setData(ModRole::PendingArchive, archivePath);
                     if (fkey.isEmpty()) {
                         resetPlaceholderAfterInstallCancel(fph, archivePath);
                     } else {
@@ -430,8 +436,9 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
             QListWidgetItem *bph = findPlaceholderByToken(installToken, &fkey);
             if (stagedPath.isEmpty()) {
                 QDir(extractDir).removeRecursively();
-                QFile::remove(archivePath);
+                // Archive kept - see onExtractionCancelled.
                 if (bph) {
+                    bph->setData(ModRole::PendingArchive, archivePath);
                     if (fkey.isEmpty()) {
                         resetPlaceholderAfterInstallCancel(bph, archivePath);
                     } else {

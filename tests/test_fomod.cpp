@@ -25,6 +25,7 @@
 #include <QFileInfo>
 #include <QImage>
 #include <QMouseEvent>
+#include <QScrollBar>
 #include <QLabel>
 #include <QRadioButton>
 #include <QSet>
@@ -2579,6 +2580,54 @@ static void run_fomod_image_preview()
                 QCoreApplication::sendEvent(big, &click);
                 check("and clicking it reaches the file's own resolution",
                       big->pixmap().size() == QSize(800, 600),
+                      QStringLiteral("%1x%2").arg(big->pixmap().width())
+                                             .arg(big->pixmap().height()));
+            }
+
+            // -- the gesture: drag moves the image, a click changes the zoom --
+            QScrollArea *area = popup->findChild<QScrollArea *>();
+            if (big && area) {
+                // Send a real press/move/release trio, the way a mouse does.
+                const auto send = [big](QEvent::Type t, QPoint p,
+                                        Qt::MouseButton b, Qt::MouseButtons held) {
+                    QMouseEvent e(t, QPointF(p), QPointF(p), b, held,
+                                  Qt::NoModifier);
+                    QCoreApplication::sendEvent(big, &e);
+                };
+                // Zoomed to 1:1 above, so the image now overflows the window -
+                // which is the only state in which panning means anything.
+                check("zoomed in, there is something to pan",
+                      area->horizontalScrollBar()->maximum() > 0
+                      || area->verticalScrollBar()->maximum() > 0);
+
+                const int h0 = area->horizontalScrollBar()->value();
+                const int v0 = area->verticalScrollBar()->value();
+                const QSize zoomed = big->pixmap().size();
+
+                send(QEvent::MouseButtonPress, QPoint(400, 300),
+                     Qt::LeftButton, Qt::LeftButton);
+                send(QEvent::MouseMove, QPoint(340, 240),
+                     Qt::NoButton, Qt::LeftButton);
+                send(QEvent::MouseButtonRelease, QPoint(340, 240),
+                     Qt::LeftButton, Qt::NoButton);
+
+                check("dragging moves the image",
+                      area->horizontalScrollBar()->value() != h0
+                      || area->verticalScrollBar()->value() != v0);
+                // The whole point: looking around must not also zoom out.
+                check("and dragging does not change the zoom",
+                      big->pixmap().size() == zoomed);
+
+                // A hand never holds perfectly still, so a couple of pixels
+                // is still a click.
+                send(QEvent::MouseButtonPress, QPoint(400, 300),
+                     Qt::LeftButton, Qt::LeftButton);
+                send(QEvent::MouseMove, QPoint(402, 301),
+                     Qt::NoButton, Qt::LeftButton);
+                send(QEvent::MouseButtonRelease, QPoint(402, 301),
+                     Qt::LeftButton, Qt::NoButton);
+                check("a small twitch still counts as a click, and zooms out",
+                      big->pixmap().size() != zoomed,
                       QStringLiteral("%1x%2").arg(big->pixmap().width())
                                              .arg(big->pixmap().height()));
             }

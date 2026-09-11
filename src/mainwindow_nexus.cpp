@@ -371,6 +371,20 @@ void MainWindow::handleNxmUrl(const QString &url)
     // Runs alongside fetchDownloadLink; only consulted at finish-time.
     m_nexusCtl->fetchExpectedChecksum(placeholder, game, modId, fileId);
 
+    // A cancelled install leaves its archive on disk (mainwindow_install.cpp).
+    // Catching it HERE rather than in the download queue is what saves a free
+    // account the whole nxm round trip through the browser - by the time the
+    // queue sees a filename, that has already been paid.
+    const QString kept = placeholder->data(ModRole::PendingArchive).toString();
+    if (!kept.isEmpty() && QFileInfo(kept).isFile()) {
+        placeholder->setData(ModRole::PendingArchive, QVariant());
+        placeholder->setData(ModRole::DownloadProgress, -1);
+        statusBar()->showMessage(
+            T("status_reusing_archive").arg(QFileInfo(kept).fileName()), 4000);
+        (void)verifyAndExtract(kept, placeholder);
+        return;
+    }
+
     m_downloadQueue->fetchDownloadLink(game, modId, fileId, key, expires, placeholder);
 }
 
