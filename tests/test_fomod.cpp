@@ -24,6 +24,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
+#include <QMouseEvent>
 #include <QLabel>
 #include <QRadioButton>
 #include <QSet>
@@ -1916,6 +1917,7 @@ struct FomodWizardTestHook {
     static bool parseInto(FomodWizard *w) { return w->parse(); }
     static FomodWizard *make(const QString &root) { return new FomodWizard(root); }
     static void preview(FomodWizard *w, QAbstractButton *b) { w->showPreviewFor(b); }
+    static void openFull(FomodWizard *w) { w->openFullImage(); }
     static const QList<FomodStep> &steps(FomodWizard *w) { return w->m_steps; }
     static QLabel *previewImage(FomodWizard *w)   { return w->m_previewImage; }
     static QLabel *previewCaption(FomodWizard *w) { return w->m_previewCaption; }
@@ -2442,6 +2444,33 @@ static void wizardui_testFrameworkGroup()
     }
 }
 
+// The arithmetic behind the full-size window, pinned against fixed numbers -
+// it cannot be pinned against whatever monitor runs the tests.
+static void run_fomod_preview_fit()
+{
+    std::cout << "=== fomod preview sizing ===\n";
+    const auto fit = &FomodWizard::previewFitSize;
+
+    // A small screenshot must grow to be worth opening - but only so far.
+    // 400x300 fits 3.6 times over in 1080p, and 3.6x of a small JPEG is mush.
+    check("a small image is upscaled, capped at 2x",
+          fit(QSize(400, 300), QSize(1920, 1080), 2.0) == QSize(800, 600));
+    // A 4K shot fits nowhere near, so it comes down whole, Nexus-lightbox
+    // style, and the 1:1 toggle is what recovers its real pixels.
+    check("a huge image is shrunk to fit",
+          fit(QSize(3840, 2160), QSize(1920, 1080), 2.0) == QSize(1920, 1080));
+    check("an exact fit is left alone",
+          fit(QSize(800, 600), QSize(800, 600), 2.0) == QSize(800, 600));
+    // The tighter of the two axes decides, or a panorama would overflow.
+    check("a wide image is limited by width",
+          fit(QSize(1000, 100), QSize(800, 800), 2.0) == QSize(800, 80));
+    check("a tall one by height",
+          fit(QSize(100, 1000), QSize(800, 800), 2.0) == QSize(80, 800));
+    check("nothing in, nothing out",
+          fit(QSize(), QSize(1920, 1080), 2.0).isEmpty()
+          && fit(QSize(800, 600), QSize(), 2.0).isEmpty());
+}
+
 // -- Option image previews -------------------------------------------------
 //
 // Thirsty AIO's first step reads "Option 1".."Option 4" - for a retexture
@@ -2456,7 +2485,7 @@ static void run_fomod_image_preview()
         QTemporaryDir dir;
         QDir().mkpath(dir.filePath("fomod"));
         QFile cfg(dir.filePath("fomod/ModuleConfig.xml"));
-        cfg.open(QIODevice::WriteOnly);
+        check("the fixture config opens", cfg.open(QIODevice::WriteOnly));
         cfg.write(
             "<config><moduleName>T</moduleName><installSteps>"
             "<installStep name=\"S\"><optionalFileGroups>"
@@ -2487,7 +2516,9 @@ static void run_fomod_image_preview()
     {
         QTemporaryDir dir;
         QDir().mkpath(dir.filePath("fomod/images"));
-        QImage img(4, 4, QImage::Format_RGB32);
+        // 800x600 on purpose: bigger than the pane's 376px column, so
+        // "the window shows the original" is a claim with teeth.
+        QImage img(800, 600, QImage::Format_RGB32);
         img.fill(Qt::red);
         check("the fixture image writes",
               img.save(dir.filePath("fomod/images/opt1.jpg")));
@@ -2516,11 +2547,57 @@ static void run_fomod_image_preview()
               FomodWizardTestHook::previewCaption(w)->text()
                   .contains(QStringLiteral("Option 1")));
 
+        // The pane deliberately holds a SHRUNKEN copy, so the full-size
+        // window must go back to the file. This is the whole point: if it
+        // reused the cache it would be enlarging a 376px thumbnail.
+        check("the pane's own copy is scaled down", imgLbl->pixmap().width() <= 376);
+        check("and it invites a click",
+              imgLbl->cursor().shape() == Qt::PointingHandCursor
+              && !imgLbl->toolTip().isEmpty());
+
+        FomodWizardTestHook::openFull(w);
+        QDialog *popup = nullptr;
+        for (QDialog *d : w->findChildren<QDialog *>())
+            if (d != w) popup = d;
+        check("clicking the preview opens a window", popup != nullptr);
+        if (popup) {
+            QLabel *big = popup->findChild<QLabel *>();
+            // Bigger than the pane's 376px column is the invariant claim:
+            // whatever this machine's screen is, the window cannot have been
+            // built from the cached thumbnail.
+            check("showing more than the thumbnail held",
+                  big && !big->pixmap().isNull() && big->pixmap().width() > 376,
+                  big ? QString::number(big->pixmap().width())
+                      : QStringLiteral("none"));
+            // The headless screen is 800x600, so a 800x600 fixture opens
+            // shrunk to fit it - which is the case the 1:1 toggle exists for.
+            // Click it and the file's own pixels must appear.
+            if (big && big->pixmap().width() < 800) {
+                QMouseEvent click(QEvent::MouseButtonRelease, QPointF(1, 1),
+                                  QPointF(1, 1), Qt::LeftButton, Qt::LeftButton,
+                                  Qt::NoModifier);
+                QCoreApplication::sendEvent(big, &click);
+                check("and clicking it reaches the file's own resolution",
+                      big->pixmap().size() == QSize(800, 600),
+                      QStringLiteral("%1x%2").arg(big->pixmap().width())
+                                             .arg(big->pixmap().height()));
+            }
+            popup->close();
+        }
+
         // Hovering / selecting the pictureless option says so rather than
         // leaving the previous image to be read as this option's.
         FomodWizardTestHook::preview(w, FomodWizardTestHook::btn(w, 0, 0, 1));
         check("a pictureless option shows a placeholder, not a stale image",
               imgLbl->pixmap().isNull() && !imgLbl->text().isEmpty());
+        check("with no click affordance left behind",
+              imgLbl->cursor().shape() != Qt::PointingHandCursor
+              && imgLbl->toolTip().isEmpty());
+        // And a click there opens nothing, because there is nothing to open.
+        const int before = int(w->findChildren<QDialog *>().size());
+        FomodWizardTestHook::openFull(w);
+        check("a placeholder click opens no window",
+              int(w->findChildren<QDialog *>().size()) == before);
         delete w;
     }
 
@@ -3173,6 +3250,7 @@ int main(int argc, char **argv)
     run_fomod_previs_baseline();
     run_fomod_framework_variant();
     run_fomod_image_preview();
+    run_fomod_preview_fit();
     run_fomod_wizard_ui();
     run_bain_wizard_ui();
 

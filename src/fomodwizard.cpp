@@ -25,6 +25,9 @@
 #include <QSet>
 #include <QStackedWidget>
 #include <QEvent>
+#include <QGuiApplication>
+#include <QScreen>
+#include <QMouseEvent>
 #include <QXmlStreamReader>
 
 QString FomodWizard::findModuleConfig(const QString &archiveRoot)
@@ -208,11 +211,104 @@ static FomodFile parseFileAttrs(const QXmlStreamReader &xml)
     return f;
 }
 
+QSize FomodWizard::previewFitSize(QSize native, QSize available,
+                                  double maxUpscale)
+{
+    if (native.isEmpty() || available.isEmpty()) return {};
+    const double k = qMin(qMin(double(available.width())  / native.width(),
+                               double(available.height()) / native.height()),
+                          maxUpscale);
+    return QSize(qMax(1, qRound(native.width()  * k)),
+                 qMax(1, qRound(native.height() * k)));
+}
+
+void FomodWizard::openFullImage()
+{
+    // Nothing shown, nothing to open - which is exactly the placeholder case.
+    if (m_previewAbsPath.isEmpty()) return;
+
+    // The FILE, not m_previewCache: that holds a 376px thumbnail, and
+    // enlarging it would be the opposite of "full resolution".
+    const QPixmap full(m_previewAbsPath);
+    if (full.isNull()) return;
+
+    auto *win = new QDialog(this, Qt::Window);
+    win->setAttribute(Qt::WA_DeleteOnClose);
+    win->setWindowTitle(m_previewName.isEmpty()
+                            ? T("fomod_preview_window")
+                            : m_previewName);
+
+    QSize avail(1280, 800);
+    if (QScreen *sc = screen() ? screen() : QGuiApplication::primaryScreen())
+        avail = sc->availableGeometry().size() * 0.9;
+    const QSize fitted = previewFitSize(full.size(), avail);
+
+    auto *lbl = new QLabel(win);
+    lbl->setAlignment(Qt::AlignCenter);
+    lbl->setPixmap(full.scaled(fitted, Qt::KeepAspectRatio,
+                               Qt::SmoothTransformation));
+
+    auto *area = new QScrollArea(win);
+    area->setWidget(lbl);
+    area->setWidgetResizable(true);
+    area->setAlignment(Qt::AlignCenter);
+
+    auto *lay = new QVBoxLayout(win);
+    lay->setContentsMargins(0, 0, 0, 0);
+    lay->addWidget(area);
+
+    // Only worth offering when fitting actually cost pixels: a small image
+    // blown up to the 2x cap already shows every one it has, and a toggle
+    // that does nothing is worse than no toggle.
+    const bool shrunk = fitted.width() < full.width();
+    if (shrunk) {
+        lbl->setToolTip(T("fomod_preview_actual"));
+        lbl->setCursor(Qt::PointingHandCursor);
+        // The path rides on the label, not in a capture: the window outlives
+        // this call and the pane may have moved to another option by the
+        // time the toggle is used.
+        lbl->installEventFilter(this);
+        lbl->setProperty("fomodFullPath", m_previewAbsPath);
+        lbl->setProperty("fomodFitted",   fitted);
+    }
+
+    win->resize(fitted + QSize(2, 2));
+    win->show();
+}
+
 bool FomodWizard::eventFilter(QObject *obj, QEvent *ev)
 {
     if (m_previewPane && ev->type() == QEvent::Enter)
         if (auto *btn = qobject_cast<QAbstractButton *>(obj))
             showPreviewFor(btn);
+
+    if (ev->type() == QEvent::MouseButtonRelease
+        && static_cast<QMouseEvent *>(ev)->button() == Qt::LeftButton) {
+        // The pane: open the picture properly.
+        if (obj == m_previewImage) { openFullImage(); return true; }
+        // Inside the full-size window: swap between the fitted view and the
+        // file's own pixels, scrollbars and all. Only installed on labels
+        // where fitting had to shrink the image.
+        if (auto *lbl = qobject_cast<QLabel *>(obj)) {
+            const QString path = lbl->property("fomodFullPath").toString();
+            if (!path.isEmpty()) {
+                const QPixmap full(path);
+                if (!full.isNull()) {
+                    const QSize fitted = lbl->property("fomodFitted").toSize();
+                    const bool showingActual =
+                        lbl->pixmap().size() == full.size();
+                    lbl->setPixmap(showingActual
+                        ? full.scaled(fitted, Qt::KeepAspectRatio,
+                                      Qt::SmoothTransformation)
+                        : full);
+                    lbl->resize(lbl->pixmap().size());
+                    lbl->setToolTip(showingActual ? T("fomod_preview_actual")
+                                                  : T("fomod_preview_fit"));
+                }
+                return true;
+            }
+        }
+    }
     return QDialog::eventFilter(obj, ev);
 }
 
@@ -228,11 +324,19 @@ void FomodWizard::showPreviewFor(QAbstractButton *btn)
         caption += QStringLiteral("<br>%1").arg(desc.toHtmlEscaped());
     m_previewCaption->setText(caption);
 
-    if (rel.isEmpty()) {
+    m_previewName = name;
+
+    // The affordance must never lie: no picture, no pointing hand, no path
+    // for a click to act on.
+    const auto showPlaceholder = [this] {
+        m_previewAbsPath.clear();
         m_previewImage->setPixmap({});
         m_previewImage->setText(T("fomod_no_preview"));
-        return;
-    }
+        m_previewImage->setCursor(Qt::ArrowCursor);
+        m_previewImage->setToolTip({});
+    };
+
+    if (rel.isEmpty()) { showPlaceholder(); return; }
     // Resolved through the same case-insensitive walk the installer uses for
     // source files - the declared path is whatever the author typed, usually
     // with backslashes, and the on-disk case is whatever the archive held.
@@ -249,11 +353,13 @@ void FomodWizard::showPreviewFor(QAbstractButton *btn)
         it = m_previewCache.insert(abs, px);
     }
     if (it->isNull()) {
-        m_previewImage->setPixmap({});
-        m_previewImage->setText(T("fomod_no_preview"));
+        showPlaceholder();
     } else {
+        m_previewAbsPath = abs;
         m_previewImage->setText({});
         m_previewImage->setPixmap(*it);
+        m_previewImage->setCursor(Qt::PointingHandCursor);
+        m_previewImage->setToolTip(T("fomod_preview_click"));
     }
 }
 
@@ -482,6 +588,7 @@ void FomodWizard::buildUi()
         m_previewImage->setMinimumHeight(240);
         m_previewImage->setAlignment(Qt::AlignCenter);
         m_previewImage->setFrameShape(QFrame::StyledPanel);
+        m_previewImage->installEventFilter(this);
         pv->addWidget(m_previewImage, 1);
         m_previewCaption = new QLabel(m_previewPane);
         m_previewCaption->setWordWrap(true);

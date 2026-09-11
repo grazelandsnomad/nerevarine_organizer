@@ -5,6 +5,7 @@
 #include <QSet>
 #include <QHash>
 #include <QPixmap>
+#include <QSize>
 #include <QString>
 #include <QStringList>
 
@@ -104,6 +105,20 @@ public:
     // True when archiveRoot has fomod/ModuleConfig.xml (case-insensitive).
     static bool hasFomod(const QString &archiveRoot);
 
+    // How big to show an option's image in the full-size window: fit it into
+    // `available`, but never enlarge it past `maxUpscale`.
+    //
+    // Both halves earn their place. A 400x300 screenshot on a 1080p desktop
+    // would fit 3.6 times over, and blowing it up that far is a blurry mess -
+    // hence the cap. A 4K screenshot fits nowhere, so it comes down to the
+    // screen and arrives whole, the way a Nexus lightbox opens.
+    //
+    // Free of widgets and of any screen lookup on purpose: the arithmetic is
+    // the part worth pinning, and it cannot be pinned against whatever
+    // monitor the test machine happens to have.
+    static QSize previewFitSize(QSize native, QSize available,
+                                double maxUpscale = 2.0);
+
 private:
     // Test hook: test_fomod_wizard_ui.cpp drives buildUi() with a hand-built
     // m_steps and inspects m_buttons plus the synthetic "None" radio that
@@ -137,10 +152,21 @@ private:
     bool eventFilter(QObject *obj, QEvent *ev) override;
     void showPreviewFor(QAbstractButton *btn);
     void defaultPreviewForStep(int si);
+    // Clicking the pane opens the picture properly. Reloads the ORIGINAL file
+    // rather than the pane's cached thumbnail - see m_previewCache, which
+    // holds pixmaps already shrunk to the pane's width, and is therefore the
+    // one thing that must not be the source here.
+    void openFullImage();
     QWidget *m_previewPane    = nullptr;
     QLabel  *m_previewImage   = nullptr;
     QLabel  *m_previewCaption = nullptr;
     QHash<QString, QPixmap> m_previewCache;   // resolved path -> scaled pixmap
+    // What the pane is showing right now, kept because the full-size window
+    // needs the file itself and the cache above cannot supply it. Empty while
+    // a placeholder ("no preview") is displayed, which is also what makes
+    // clicking a no-op there.
+    QString m_previewAbsPath;
+    QString m_previewName;                    // option name, for the title
 
     QString              m_archiveRoot;
     QString              m_modName;
