@@ -1,6 +1,7 @@
 #include "translation_coverage.h"
 
 #include "language_guess.h"
+#include "target_language.h"
 #include "term_protect.h"
 #include "vanilla_text.h"
 
@@ -101,6 +102,8 @@ QList<Verdict> judge(const QList<Entry> &entries,
         // one meaningful. Finding none means we could not look.
         if (ea.strings.localized) {
             const QString base = ea.pluginName.section(QLatin1Char('.'), 0, 0);
+            // Prefix-only, so this half already covers both naming
+            // conventions below and needs no widening of its own.
             bool sawAny = false;
             for (const QString &tok : stringFiles) {
                 if (tok.startsWith(base + QLatin1Char('_'))) { sawAny = true; break; }
@@ -112,9 +115,27 @@ QList<Verdict> judge(const QList<Entry> &entries,
                 out << v;
                 continue;
             }
-            v.state = stringFiles.contains(base + QLatin1Char('_') + targetLanguage)
-                          ? TranslationCoverage::State::Ok
-                          : TranslationCoverage::State::NoTranslation;
+            // Bethesda does not name string tables the same way in every
+            // game, so both spellings are accepted. Skyrim writes the word -
+            // Skyrim_English.STRINGS - and Fallout 4 writes the ISO code,
+            // measured in its own Interface archive:
+            //
+            //   STRINGS/Fallout4_en.STRINGS
+            //   STRINGS/Fallout4_es.STRINGS
+            //
+            // Matching the word alone asked a Fallout 4 plugin for
+            // "<base>_spanish", never found "<base>_es", and called a fully
+            // translated plugin untranslated.
+            //
+            // Either spelling, never one instead of the other: a plugin ships
+            // one convention or the other, and both are correct.
+            const QString iso = target_language::isoCode(targetLanguage);
+            const bool haveTable =
+                stringFiles.contains(base + QLatin1Char('_') + targetLanguage)
+                || (!iso.isEmpty()
+                    && stringFiles.contains(base + QLatin1Char('_') + iso));
+            v.state = haveTable ? TranslationCoverage::State::Ok
+                                : TranslationCoverage::State::NoTranslation;
             out << v;
             continue;
         }

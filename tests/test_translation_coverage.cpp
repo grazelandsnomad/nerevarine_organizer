@@ -342,6 +342,33 @@ void testTheLocalizedStringsRule()
           verdictFor(translation_coverage::judge(
                          entries, {QStringLiteral("sanguine_english")},
                          names, QString()), 0).state == State::Ok);
+
+    // Bethesda writes those filenames two ways, and only one of them is a
+    // word. Measured inside this machine's own Fallout 4 install:
+    // STRINGS/Fallout4_en.STRINGS, STRINGS/Fallout4_es.STRINGS. Asking for
+    // "<base>_spanish" there finds nothing and calls a fully translated
+    // plugin untranslated.
+    const QList<Entry> fo4{{0, "scrapheap.esp", loc}};
+    const QStringList fo4Names{QStringLiteral("Scrap Heap")};
+    check("the ISO spelling counts as translated too",
+          verdictFor(translation_coverage::judge(
+                         fo4, {QStringLiteral("scrapheap_en"),
+                               QStringLiteral("scrapheap_es")},
+                         fo4Names, "spanish"), 0).state == State::Ok);
+    // The widening must not make everything pass: English-only is still
+    // untranslated under either convention.
+    check("but English-only stays untranslated",
+          verdictFor(translation_coverage::judge(
+                         fo4, {QStringLiteral("scrapheap_en")},
+                         fo4Names, "spanish"), 0).state == State::NoTranslation);
+    // A language the table has no code for falls back to the word alone,
+    // rather than matching on an empty suffix - which would make "scrapheap_"
+    // match and every plugin read as translated.
+    check("a language with no ISO code does not match on an empty suffix",
+          verdictFor(translation_coverage::judge(
+                         fo4, {QStringLiteral("scrapheap_en")},
+                         fo4Names, QStringLiteral("klingon")), 0).state
+              == State::NoTranslation);
 }
 
 void testAModThatIsItselfTheTranslation()
