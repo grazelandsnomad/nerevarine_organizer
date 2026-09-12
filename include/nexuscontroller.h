@@ -87,11 +87,16 @@ signals:
     void fileListFetched(QListWidgetItem *item, const QString &game, int modId,
                          const QList<NexusClient::FileEntry> &files);
     void fileListFetchFailed(QListWidgetItem *item, const QString &reason, int httpStatus);
+    // `gameIdNumeric` is Nexus's own numeric id for `game` (fallout4 = 1151),
+    // read off the same reply this scan already parsed. The v2 endpoint is
+    // addressed by number, and re-deriving it from the domain would mean
+    // keeping a second table in step with theirs.
     void dependenciesScanned(QListWidgetItem *item, const QString &game, int modId,
                              const QString &title,
                              const QStringList &presentDeps,
                              const QList<int> &missingModIds,
-                             const QList<deps::ClassifiedDep> &classified);
+                             const QList<deps::ClassifiedDep> &classified,
+                             int gameIdNumeric);
     void dependencyScanFailed(QListWidgetItem *item, const QString &game, int modId);
     // From fetchChangelog; entries empty on failure or no changelog. game +
     // modId echo back so the receiver can filter without touching the

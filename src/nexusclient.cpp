@@ -76,6 +76,59 @@ QNetworkReply *NexusClient::requestModRequirements(int gameIdNumeric, int modId)
     return m_nam->post(req, QJsonDocument(body).toJson(QJsonDocument::Compact));
 }
 
+QNetworkReply *NexusClient::requestModNames(int gameIdNumeric,
+                                            const QList<int> &modIds)
+{
+    QNetworkRequest req{QUrl(QStringLiteral("https://api.nexusmods.com/v2/graphql"))};
+    req.setHeader(QNetworkRequest::ContentTypeHeader,
+                  QStringLiteral("application/json"));
+    req.setRawHeader("Accept", "application/json");
+
+    // CompositeIdInput is {gameId: Int, modId: Int} - the NUMERIC game id,
+    // which the v1 mod-info reply already carries as game_id.
+    QJsonArray ids;
+    for (int id : modIds) {
+        if (id <= 0) continue;
+        QJsonObject one;
+        one.insert(QStringLiteral("gameId"), gameIdNumeric);
+        one.insert(QStringLiteral("modId"),  id);
+        ids.append(one);
+    }
+    QJsonObject vars;
+    vars.insert(QStringLiteral("ids"), ids);
+    QJsonObject body;
+    body.insert(QStringLiteral("query"), QStringLiteral(
+        "query($ids: [CompositeIdInput!]!) { legacyMods(ids: $ids) {"
+        " nodes { modId name } } }"));
+    body.insert(QStringLiteral("variables"), vars);
+    return m_nam->post(req, QJsonDocument(body).toJson(QJsonDocument::Compact));
+}
+
+QHash<int, QString> NexusClient::parseModNames(const QByteArray &json)
+{
+    QHash<int, QString> out;
+    QJsonParseError err{};
+    const QJsonDocument doc = QJsonDocument::fromJson(json, &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) return out;
+    const QJsonObject root = doc.object();
+    if (root.contains(QLatin1String("errors"))) return out;
+
+    const QJsonArray nodes = root[QLatin1String("data")]
+                                 [QLatin1String("legacyMods")]
+                                 [QLatin1String("nodes")].toArray();
+    for (const QJsonValue &v : nodes) {
+        const QJsonObject o = v.toObject();
+        // modId comes back as a NUMBER here, unlike the ID strings the
+        // requirements query returns - so accept either rather than assume.
+        const int id = o[QLatin1String("modId")].isString()
+            ? o[QLatin1String("modId")].toString().toInt()
+            : o[QLatin1String("modId")].toInt();
+        const QString name = o[QLatin1String("name")].toString().trimmed();
+        if (id > 0 && !name.isEmpty()) out.insert(id, name);
+    }
+    return out;
+}
+
 std::expected<QList<NexusClient::Requirement>, NexusClient::NexusError>
 NexusClient::parseModRequirements(const QByteArray &json)
 {

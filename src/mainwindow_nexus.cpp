@@ -454,7 +454,8 @@ void MainWindow::onDependenciesScanned(QListWidgetItem *item,
                                        const QString &title,
                                        const QStringList &presentDeps,
                                        const QList<int> &missing,
-                                       const QList<deps::ClassifiedDep> &classified)
+                                       const QList<deps::ClassifiedDep> &classified,
+                                       int gameIdNumeric)
 {
     // Cache the Nexus mod-page title for later use (e.g. naming a FOMOD
     // install's output folder something meaningful instead of "fomod_install").
@@ -486,19 +487,26 @@ void MainWindow::onDependenciesScanned(QListWidgetItem *item,
     // read differently from thirty patch targets. No hard link found means
     // the author kept no such section the API can see (the Nexus requirements
     // TABLE is not in the v1 API), and the dialog stays the flat list it was.
-    bool anyHard = false;
-    for (const auto &d : classified)
-        if (d.cls == deps::DepClass::Hard) { anyHard = true; break; }
-
-    int hardCount = 0;
-    if (anyHard)
-        for (const auto &d : classified)
-            if (d.cls == deps::DepClass::Hard) ++hardCount;
+    // The gate is "did the author say ANYTHING", not "is something
+    // mandatory". Necessity - Nexus Essentials Merged lists seven entries and
+    // marks every one soft ("soft requirement", "patch available"); an
+    // anyHard test threw all seven away and showed 158 undifferentiated
+    // links - the case that most deserves the split, since 151 of them are
+    // then nobody's problem.
+    int hardCount = 0, optCount = 0, otherCount = 0;
+    for (const auto &d : classified) {
+        switch (d.cls) {
+        case deps::DepClass::Hard:     ++hardCount;  break;
+        case deps::DepClass::Optional: ++optCount;   break;
+        default:                       ++otherCount; break;
+        }
+    }
+    const bool anyClassified = (hardCount + optCount) > 0;
 
     auto *header = new QLabel(
-        anyHard ? T("deps_warn_body_classified")
-                      .arg(hardCount).arg(int(classified.size()) - hardCount)
-                : T("deps_warn_body").arg(missing.size()),
+        anyClassified ? T("deps_warn_body_classified")
+                            .arg(hardCount).arg(optCount).arg(otherCount)
+                      : T("deps_warn_body").arg(missing.size()),
         &box);
     header->setWordWrap(true);
     v->addWidget(header);
@@ -515,6 +523,11 @@ void MainWindow::onDependenciesScanned(QListWidgetItem *item,
     QHash<int, QPair<QString, QString>> tableText;   // id -> (name, note)
     for (const auto &d : classified)
         if (!d.name.isEmpty()) tableText.insert(d.modId, {d.name, d.note});
+
+    // Rows still needing a name, filled in by one batched request once the
+    // list is built. QPointer because the dialog can be dismissed before the
+    // reply lands, and a raw QLabel* would dangle.
+    QHash<int, QPointer<QLabel>> pending;
 
     // A missing mod's row: named label + Visit. Shared by both the
     // sectioned and the flat layout, so the two cannot drift. The name comes
@@ -547,33 +560,14 @@ void MainWindow::onDependenciesScanned(QListWidgetItem *item,
 
         // The table already named it - nothing to fetch.
         if (known != tableText.constEnd()) return;
-
-        // Fetch the mod's Nexus "name" so the label becomes readable.
-        // QPointer guards against callbacks firing after the dialog is
-        // dismissed - the label would otherwise be a dangling pointer.
-        // This one stays a direct NexusClient call: the target is a QLabel,
-        // not a QListWidgetItem, so the controller's item-keyed signals
-        // don't fit.  Acceptable because the dialog's lifetime is bounded
-        // and QPointer already handles the dangling case.
-        QPointer<QLabel> safeLbl(nameLbl);
-        QNetworkReply *nrep = m_nexus->requestModInfo(game, id);
-        connect(nrep, &QNetworkReply::finished, this,
-                [nrep, safeLbl, id, depUrl]() {
-            nrep->deleteLater();
-            if (!safeLbl) return;
-            QString name;
-            if (nrep->error() == QNetworkReply::NoError) {
-                const auto info = NexusClient::parseModInfo(nrep->readAll());
-                if (info) name = info->name;
-            }
-            if (name.isEmpty())
-                name = QString("Mod #%1").arg(id);
-            safeLbl->setText(name);
-            safeLbl->setToolTip(depUrl);
-        });
+        // Otherwise it joins the batch below. One request names them all;
+        // asking v1 per row cost 158 calls to open this dialog on a
+        // link-heavy mod, against a non-premium allowance of about a hundred
+        // an hour.
+        pending.insert(id, nameLbl);
     };
 
-    if (!anyHard) {
+    if (!anyClassified) {
         for (int id : missing) addMissingRow(id);
     } else {
         // An installed link's row: green tick and the modlist's own name for
@@ -614,26 +608,86 @@ void MainWindow::onDependenciesScanned(QListWidgetItem *item,
         // Missing first in each section - they are the action items - then
         // the installed ones, ticked, so "which of these do I already have"
         // is answered instead of left as homework.
-        const auto addSection = [&](deps::DepClass wanted, bool hardHalf) {
+        const auto addSection = [&](deps::DepClass wanted) {
             for (const auto &d : classified)
-                if ((hardHalf ? d.cls == wanted : d.cls != deps::DepClass::Hard)
-                    && !d.installed)
-                    addMissingRow(d.modId);
+                if (d.cls == wanted && !d.installed) addMissingRow(d.modId);
             for (const auto &d : classified)
-                if ((hardHalf ? d.cls == wanted : d.cls != deps::DepClass::Hard)
-                    && d.installed)
-                    addInstalledRow(d);
+                if (d.cls == wanted && d.installed)  addInstalledRow(d);
         };
-        addSectionHeader(T("deps_warn_hard_header"));
-        addSection(deps::DepClass::Hard, true);
-        addSectionHeader(T("deps_warn_opt_header"));
-        addSection(deps::DepClass::Optional, false);
+        // Three sections, because "the author called this optional" and "the
+        // description merely links it" are different facts and lumping them
+        // together wastes the only classification there is. Each appears only
+        // if it has rows, so a page with nothing but hard requirements shows
+        // one heading, not three.
+        if (hardCount > 0) {
+            addSectionHeader(T("deps_warn_hard_header"));
+            addSection(deps::DepClass::Hard);
+        }
+        if (optCount > 0) {
+            addSectionHeader(T("deps_warn_opt_header"));
+            addSection(deps::DepClass::Optional);
+        }
+        if (otherCount > 0) {
+            addSectionHeader(T("deps_warn_other_header"));
+            addSection(deps::DepClass::Unclassified);
+        }
     }
     scrollLayout->addStretch();
+
+    // One request for every name the table did not supply. v2 answers them
+    // together; anything it misses falls back to the old per-mod v1 call, so
+    // a failure here costs nothing but the speed.
+    if (!pending.isEmpty()) {
+        const QList<int> want = pending.keys();
+        const int numericGame = gameIdNumeric;
+        QPointer<QDialog> safeBox(&box);
+        const auto fallbackName = [this, game](int id, QPointer<QLabel> lbl) {
+            if (!lbl) return;
+            QNetworkReply *nrep = m_nexus->requestModInfo(game, id);
+            connect(nrep, &QNetworkReply::finished, this, [nrep, lbl, id]() {
+                nrep->deleteLater();
+                if (!lbl) return;
+                QString name;
+                if (nrep->error() == QNetworkReply::NoError) {
+                    const auto info = NexusClient::parseModInfo(nrep->readAll());
+                    if (info) name = info->name;
+                }
+                lbl->setText(name.isEmpty() ? QString("Mod #%1").arg(id) : name);
+            });
+        };
+
+        if (numericGame > 0) {
+            QNetworkReply *rep = m_nexus->requestModNames(numericGame, want);
+            connect(rep, &QNetworkReply::finished, this,
+                    [this, rep, pending, safeBox, fallbackName]() {
+                rep->deleteLater();
+                if (!safeBox) return;          // dialog already dismissed
+                const QHash<int, QString> names =
+                    rep->error() == QNetworkReply::NoError
+                        ? NexusClient::parseModNames(rep->readAll())
+                        : QHash<int, QString>{};
+                for (auto it = pending.cbegin(); it != pending.cend(); ++it) {
+                    if (!it.value()) continue;
+                    const auto hit = names.constFind(it.key());
+                    if (hit != names.constEnd()) it.value()->setText(*hit);
+                    else                         fallbackName(it.key(), it.value());
+                }
+            });
+        } else {
+            // No numeric game id on this row - nothing to batch with, so the
+            // old path names every row individually.
+            for (auto it = pending.cbegin(); it != pending.cend(); ++it)
+                fallbackName(it.key(), it.value());
+        }
+    }
 
     auto *scrollArea = new QScrollArea(&box);
     scrollArea->setWidget(scrollContainer);
     scrollArea->setWidgetResizable(true);
+    // Long mod names used to widen the rows until the Visit buttons sat off
+    // the right edge, reachable only by scrolling sideways. The names elide
+    // instead, as the file picker below already does.
+    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     scrollArea->setFrameShape(QFrame::StyledPanel);
     scrollArea->setMaximumHeight(320);
     v->addWidget(scrollArea, 1);

@@ -54,8 +54,9 @@ void NexusController::scanDependencies(QListWidgetItem *item,
         // the same place: an empty table, and the dialog exactly as the
         // description alone would build it.
         const QString title = info->name;
+        const int gameNum   = info->gameIdNumeric;
         const auto finish = [this, item, game, modId, title, parsed,
-                             installedIdToUrl](
+                             installedIdToUrl, gameNum](
                                 const QList<deps::TableRequirement> &table) {
             const auto merged = deps::mergeRequirements(
                 parsed.classified, table, installedIdToUrl);
@@ -67,7 +68,8 @@ void NexusController::scanDependencies(QListWidgetItem *item,
                 if (!d.installed && !missing.contains(d.modId))
                     missing.append(d.modId);
             emit dependenciesScanned(item, game, modId, title,
-                                     parsed.presentUrls, missing, merged);
+                                     parsed.presentUrls, missing, merged,
+                                     gameNum);
         };
 
         if (info->gameIdNumeric <= 0) { finish({}); return; }

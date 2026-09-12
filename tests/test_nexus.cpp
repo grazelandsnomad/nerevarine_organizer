@@ -799,6 +799,93 @@ static void testParseModInfoKeepsGameId()
           NexusClient::parseModInfo(R"({"name":"X"})")->gameIdNumeric == 0);
 }
 
+// -- Naming many rows in one request ---------------------------------------
+//
+// The missing-requirements dialog named each row with its own v1 call. On a
+// mod whose description links 158 others that is 158 requests to open one
+// dialog, against a non-premium allowance of roughly a hundred an hour.
+static void testParseModNames()
+{
+    std::cout << "testParseModNames\n";
+    // Shape captured from the live v2 endpoint. Note modId arrives as a
+    // NUMBER here, where the requirements query returns ID strings.
+    const QByteArray real = R"({"data":{"legacyMods":{"nodes":[
+        {"modId":69798,"name":"RobCo Patcher"},
+        {"modId":68166,"name":"Faction Reinforcements"},
+        {"modId":63025,"name":"Lootable Cars - Exiguous"}
+    ],"totalCount":3}}})";
+    const auto names = NexusClient::parseModNames(real);
+    check("every row is named", names.size() == 3);
+    check("and by the right id",
+          names.value(69798) == QStringLiteral("RobCo Patcher")
+          && names.value(63025) == QStringLiteral("Lootable Cars - Exiguous"));
+
+    // An id given as a string must still resolve - the two v2 queries this
+    // app uses disagree about that, so neither shape may be assumed.
+    check("a string id resolves too",
+          NexusClient::parseModNames(
+              R"({"data":{"legacyMods":{"nodes":[{"modId":"42147","name":"F4SE"}]}}})")
+              .value(42147) == QStringLiteral("F4SE"));
+
+    // Every failure is empty, never a crash: the caller then names rows the
+    // old way, one at a time.
+    check("garbage names nothing",
+          NexusClient::parseModNames("not json").isEmpty());
+    check("a GraphQL error names nothing",
+          NexusClient::parseModNames(
+              R"({"errors":[{"message":"boom"}],"data":null})").isEmpty());
+    check("and a nameless node is skipped",
+          NexusClient::parseModNames(
+              R"({"data":{"legacyMods":{"nodes":[{"modId":1,"name":""}]}}})")
+              .isEmpty());
+}
+
+// The gate in front of the sectioned dialog. Necessity - Nexus Essentials
+// Merged is the case that broke it: seven entries, every note soft, so a
+// "is anything mandatory" test threw away the only structure there was.
+static void testSoftOnlyTableStillClassifies()
+{
+    std::cout << "testSoftOnlyTableStillClassifies\n";
+    using deps::DepClass;
+    // The real table, verbatim.
+    const QList<deps::TableRequirement> table{
+        {42147, "Fallout 4 Script Extender (F4SE)", "soft requirement"},
+        {68166, "Faction Reinforcements",           "patch available"},
+        {63025, "Lootable Cars - Exiguous",         "patch available"},
+        {62110, "Looted World",                     "patch available"},
+        {49741, "Recruit Jenny (K1-98) as a Settler",
+                "patch available for ESL version"},
+        {54704, "Recruit Virgil as Settler", "patch available for ESL version"},
+        {69798, "RobCo Patcher",             "patch available"},
+    };
+    QMap<int, QString> installed;
+    installed.insert(63025, "https://www.nexusmods.com/fallout4/mods/63025");
+
+    // A description link the author never mentioned, standing for the ~151
+    // others on that page.
+    QList<deps::ClassifiedDep> fromDesc;
+    { deps::ClassifiedDep d; d.modId = 111222; fromDesc << d; }
+
+    const auto merged = deps::mergeRequirements(fromDesc, table, installed);
+    int hard = 0, opt = 0, other = 0;
+    for (const auto &d : merged) {
+        if      (d.cls == DepClass::Hard)     ++hard;
+        else if (d.cls == DepClass::Optional) ++opt;
+        else                                  ++other;
+    }
+    check("nothing is mandatory here", hard == 0);
+    check("but all seven are explicitly optional", opt == 7, QString::number(opt));
+    check("and the unmentioned link stays unclassified", other == 1);
+    // Which is the point: a gate asking "is anything mandatory" hides seven
+    // answered questions, while "did the author say anything" shows them.
+    check("so the dialog has something to say", (hard + opt) > 0);
+    // Installed-ness must not move a row out of its class.
+    for (const auto &d : merged)
+        if (d.modId == 63025)
+            check("an installed entry keeps its optional class",
+                  d.installed && d.cls == DepClass::Optional);
+}
+
 static void testParseEmptyDescription()
 {
     std::cout << "testParseEmptyDescription\n";
@@ -1373,6 +1460,8 @@ static void run_deps_resolver()
     testAutoLinkEmptyUrlNoop();
 
     testParseModRequirements();
+    testParseModNames();
+    testSoftOnlyTableStillClassifies();
     testRequirementNotesClassify();
     testMergeTableIntoClassified();
     testParseModInfoKeepsGameId();

@@ -4,6 +4,7 @@
 #include <QByteArray>
 #include <QList>
 #include <QObject>
+#include <QHash>
 #include <QString>
 
 #include <expected>
@@ -120,6 +121,18 @@ public:
         QString notes;
         bool    external = false;   // off-Nexus URL; kept but not resolvable
     };
+    // Display names for many mods in ONE request, from the same v2 endpoint.
+    //
+    // The dialog that needs this had been asking v1 for one mod at a time -
+    // 158 requests to open a single dialog on a mod with a link-heavy
+    // description, against a non-premium allowance of about a hundred an
+    // hour. `legacyMods(ids: [{gameId, modId}, ...])` answers them all at
+    // once.
+    QNetworkReply *requestModNames(int gameIdNumeric, const QList<int> &modIds);
+    // modId -> name. Empty on a GraphQL error, a null payload or garbage, so
+    // the caller falls back to naming rows one at a time.
+    static QHash<int, QString> parseModNames(const QByteArray &json);
+
     // The nexusRequirements rows out of a v2 reply. GraphQL errors, missing
     // fields or a null mod all come back as an error/empty rather than a
     // crash - the caller degrades to the description-only dialog.
