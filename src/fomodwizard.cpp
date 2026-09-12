@@ -99,9 +99,11 @@ FomodWizard::run(const QString &archiveRoot,
                  QWidget *parent,
                  const QStringList &installedModNames,
                  const QString &gameId,
-                 const QStringList &installedNexusUrls)
+                 const QStringList &installedNexusUrls,
+                 const game_runtime::Probe &runtime)
 {
     FomodWizard dlg(archiveRoot, parent);
+    dlg.m_runtime           = runtime;
     dlg.m_priorChoices      = priorChoices;
     dlg.m_installedModNames = installedModNames;
     dlg.m_gameId            = gameId;
@@ -142,13 +144,15 @@ void FomodWizard::showAsync(
     const QStringList &installedModNames,
     std::function<void(const QString &, const QString &)> onDone,
     const QString &gameId,
-    const QStringList &installedNexusUrls)
+    const QStringList &installedNexusUrls,
+    const game_runtime::Probe &runtime)
 {
     auto *dlg = new FomodWizard(archiveRoot, parent);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->m_priorChoices      = priorChoices;
     dlg->m_installedModNames = installedModNames;
     dlg->m_gameId            = gameId;
+    dlg->m_runtime           = runtime;
     dlg->m_installedNexusKeys = nexusKeys(installedNexusUrls);
 
     if (!dlg->parse()) {
@@ -832,6 +836,42 @@ void FomodWizard::buildUi()
         // name - see mod_match.h.
         const auto needlesFor = &mod_match::needlesFor;
 
+        const auto addNoteUnder = [](QAbstractButton *btn, const QString &text) {
+            if (!btn || !btn->parentWidget()) return;
+            auto *lay = qobject_cast<QVBoxLayout *>(btn->parentWidget()->layout());
+            if (!lay) return;
+            auto *note = new QLabel(text, btn->parentWidget());
+            note->setWordWrap(true);
+            note->setIndent(22);
+            note->setForegroundRole(QPalette::PlaceholderText);
+            const int at = lay->indexOf(btn);
+            if (at >= 0) lay->insertWidget(at + 1, note);
+            else         lay->addWidget(note);
+        };
+        // What a framework IS, one line each, for the five this wizard can
+        // recognise. Hardcoded English like every other annotation here.
+        // Anything unknown gets the state sentence only - never invented
+        // prose.
+        const auto blurbFor = [](const QString &fullName) -> QString {
+            const QString n = fullName.toLower();
+            if (n == QLatin1String("previs repair pack"))
+                return QStringLiteral("rebuilds the game's precombined meshes "
+                                      "and visibility data (performance and "
+                                      "occlusion)");
+            if (n == QLatin1String("base object swapper"))
+                return QStringLiteral("a framework that swaps placed objects "
+                                      "in the world at runtime");
+            if (n == QLatin1String("container distribution framework"))
+                return QStringLiteral("a framework that distributes items "
+                                      "into the game's containers");
+            if (n == QLatin1String("skypatcher"))
+                return QStringLiteral("a framework that patches game records "
+                                      "at load time");
+            if (n == QLatin1String("baka framework"))
+                return QStringLiteral("a scripting framework extending F4SE");
+            return {};
+        };
+
         for (int si = 0; si < m_steps.size(); ++si) {
             const FomodStep &step = m_steps[si];
             for (int gi = 0; gi < step.groups.size(); ++gi) {
@@ -919,18 +959,52 @@ void FomodWizard::buildUi()
                     // both kinds, so a stray "AE" in an unrelated option name
                     // never draws a tick.
                     {
-                        const auto pref = fomod::runtimePreferenceForGame(m_gameId);
-                        if (pref != fomod::SkyrimRuntime::None) {
-                            bool haveAe = false, haveSe = false;
-                            int prefIdx = -1;
-                            for (int pi = 0; pi < group.plugins.size(); ++pi) {
-                                const auto v = fomod::classifyRuntimeVariant(
-                                    group.plugins[pi].name);
-                                haveAe |= (v == fomod::SkyrimRuntime::AE);
-                                haveSe |= (v == fomod::SkyrimRuntime::SE);
-                                if (v == pref && prefIdx == -1) prefIdx = pi;
+                        const auto pref = fomod::runtimePreferenceForGame(
+                            m_gameId, m_runtime.game);
+                        bool haveCur = false, haveLeg = false;
+                        int prefIdx = -1, optOutIdx = -1;
+                        for (int pi = 0; pi < group.plugins.size(); ++pi) {
+                            const auto v = fomod::classifyRuntimeVariant(
+                                group.plugins[pi].name, m_gameId);
+                            haveCur |= (v == fomod::Runtime::Current);
+                            haveLeg |= (v == fomod::Runtime::Legacy);
+                            if (v == pref && prefIdx == -1) prefIdx = pi;
+                            // "None - install none of these" is the answer when
+                            // the extender is absent. isOptOut is anchored and
+                            // will not see it, and loosening that would weaken
+                            // Pass G, so only the leading token is tested here.
+                            if (optOutIdx == -1 && v == fomod::Runtime::None
+                                && fomod::isOptOutLabel(
+                                       group.plugins[pi].name.section(
+                                           QLatin1Char('-'), 0, 0)))
+                                optOutIdx = pi;
+                        }
+                        if (haveCur && haveLeg) {
+                            // An extender plugin is worth nothing without the
+                            // extender. Ask first, because "which build" is
+                            // the wrong question when the answer is "none".
+                            const bool haveExt = m_runtime.extenderPresent;
+                            const QString ver = m_runtime.game.valid
+                                ? m_runtime.game.shortString() : QString();
+
+                            if (!haveExt && optOutIdx != -1) {
+                                if (auto *btn = m_buttons[si][gi].value(optOutIdx);
+                                    btn && btn->isEnabled())
+                                    btn->setChecked(true);
+                                for (int pi = 0; pi < group.plugins.size(); ++pi) {
+                                    const auto v = fomod::classifyRuntimeVariant(
+                                        group.plugins[pi].name, m_gameId);
+                                    if (v == fomod::Runtime::None) continue;
+                                    if (auto *b = m_buttons[si][gi].value(pi))
+                                        addNoteUnder(b, QStringLiteral(
+                                            "No script extender found in your "
+                                            "game folder, so a plugin built for "
+                                            "it would never load."));
+                                }
+                                openMwOverriddenGroups.insert(groupKey);
+                                continue;
                             }
-                            if (haveAe && haveSe && prefIdx != -1) {
+                            if (prefIdx != -1 && haveExt) {
                                 QAbstractButton *btn =
                                     m_buttons[si][gi].value(prefIdx);
                                 if (btn && btn->isEnabled()) {
@@ -938,6 +1012,14 @@ void FomodWizard::buildUi()
                                     btn->setText(btn->text() + QStringLiteral(
                                         " ✅ Recommended - matches "
                                         "your game version."));
+                                    addNoteUnder(btn, ver.isEmpty()
+                                        ? QStringLiteral(
+                                            "Matches the script extender "
+                                            "installed in your game folder.")
+                                        : QStringLiteral(
+                                            "Your game reports version %1, and "
+                                            "a matching script extender is "
+                                            "installed beside it.").arg(ver));
                                 }
                                 openMwOverriddenGroups.insert(groupKey);
                                 continue;  // settled; skip Pass B
@@ -1276,42 +1358,6 @@ void FomodWizard::buildUi()
         // tooltips, which nobody hovers - and "PRP v81 Previs" explains
         // nothing to someone who has never heard of PRP. Grey and indented,
         // so it reads as a footnote to the row above it, not another option.
-        const auto addNoteUnder = [](QAbstractButton *btn, const QString &text) {
-            if (!btn || !btn->parentWidget()) return;
-            auto *lay = qobject_cast<QVBoxLayout *>(btn->parentWidget()->layout());
-            if (!lay) return;
-            auto *note = new QLabel(text, btn->parentWidget());
-            note->setWordWrap(true);
-            note->setIndent(22);
-            note->setForegroundRole(QPalette::PlaceholderText);
-            const int at = lay->indexOf(btn);
-            if (at >= 0) lay->insertWidget(at + 1, note);
-            else         lay->addWidget(note);
-        };
-        // What a framework IS, one line each, for the five this wizard can
-        // recognise. Hardcoded English like every other annotation here.
-        // Anything unknown gets the state sentence only - never invented
-        // prose.
-        const auto blurbFor = [](const QString &fullName) -> QString {
-            const QString n = fullName.toLower();
-            if (n == QLatin1String("previs repair pack"))
-                return QStringLiteral("rebuilds the game's precombined meshes "
-                                      "and visibility data (performance and "
-                                      "occlusion)");
-            if (n == QLatin1String("base object swapper"))
-                return QStringLiteral("a framework that swaps placed objects "
-                                      "in the world at runtime");
-            if (n == QLatin1String("container distribution framework"))
-                return QStringLiteral("a framework that distributes items "
-                                      "into the game's containers");
-            if (n == QLatin1String("skypatcher"))
-                return QStringLiteral("a framework that patches game records "
-                                      "at load time");
-            if (n == QLatin1String("baka framework"))
-                return QStringLiteral("a scripting framework extending F4SE");
-            return {};
-        };
-
         // Pass G: exclusive groups whose options name alternative FRAMEWORKS.
         //
         // Producers of Skyrim asks how to inject its orc-stronghold blacksmith

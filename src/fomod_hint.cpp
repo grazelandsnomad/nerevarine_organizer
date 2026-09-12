@@ -8,6 +8,7 @@
 #include <QStringList>
 
 #include <algorithm>
+#include <tuple>
 #include <utility>
 
 namespace fomod {
@@ -298,11 +299,31 @@ QStringList requiredMods(const QString &description,
     return out;
 }
 
-SkyrimRuntime classifyRuntimeVariant(const QString &optionName)
+Runtime classifyRuntimeVariant(const QString &optionName, const QString &gameId)
 {
     const QString n = optionName.toLower();
 
     bool ae = false, se = false;
+
+    // Fallout 4's own vocabulary for the same split. Its versions are 1.10.163
+    // (original) and 1.10.980 / 1.11.240 and up (post-next-gen), and the scene
+    // writes the two sides as OG / NG, "old gen" / "next gen", and - as the
+    // installer that prompted this does - OG / AE.
+    if (gameId.compare(QLatin1String("fallout4"), Qt::CaseInsensitive) == 0) {
+        static const QRegularExpression kOgTok(QStringLiteral("\\bog\\b"));
+        static const QRegularExpression kNgTok(QStringLiteral("\\bng\\b"));
+        static const QRegularExpression kOld(QStringLiteral("\\b1[._]10[._]163\\b"));
+        static const QRegularExpression kNew(
+            QStringLiteral("\\b1[._]10[._]9\\d\\d\\b|\\b1[._]11[._]"));
+        if (kOgTok.match(n).hasMatch() || kOld.match(n).hasMatch()
+            || n.contains(QLatin1String("old gen"))
+            || n.contains(QLatin1String("old-gen")))
+            se = true;
+        if (kNgTok.match(n).hasMatch() || kNew.match(n).hasMatch()
+            || n.contains(QLatin1String("next gen"))
+            || n.contains(QLatin1String("next-gen")))
+            ae = true;
+    }
 
     // Version numbers first: "v1.6.629+", "1.6.xxx", "1.6.1170" / "1.5.97",
     // "1.5.x". Word-bounded so "11.6" or a date can't match.
@@ -326,8 +347,8 @@ SkyrimRuntime classifyRuntimeVariant(const QString &optionName)
 
     // A name carrying both signals ("1.5.97 - 1.6.317 bridge build") is not a
     // side of a pair; say nothing rather than guess.
-    if (ae == se) return SkyrimRuntime::None;
-    return ae ? SkyrimRuntime::AE : SkyrimRuntime::SE;
+    if (ae == se) return Runtime::None;
+    return ae ? Runtime::Current : Runtime::Legacy;
 }
 
 namespace {
@@ -355,6 +376,12 @@ bool isOptOut(const QString &name)
         QRegularExpression::CaseInsensitiveOption);
     return re.match(name).hasMatch();
 }
+
+} // namespace
+
+bool isOptOutLabel(const QString &name) { return isOptOut(name.trimmed()); }
+
+namespace {
 
 } // namespace
 
@@ -462,15 +489,15 @@ FrameworkChoice chooseFrameworkOption(const QStringList &optionNames,
 }
 
 QString betterRuntimeFile(const QString &chosen, const QStringList &candidates,
-                          SkyrimRuntime pref)
+                          Runtime pref)
 {
-    if (pref == SkyrimRuntime::None) return {};
+    if (pref == Runtime::None) return {};
 
-    const SkyrimRuntime got = classifyRuntimeVariant(chosen);
+    const Runtime got = classifyRuntimeVariant(chosen);
     // Unclassifiable, or already right: nothing to say. Silence when the file
     // name carries no runtime marking is the whole reason this is safe to run
     // on every download.
-    if (got == SkyrimRuntime::None || got == pref) return {};
+    if (got == Runtime::None || got == pref) return {};
 
     // Among the siblings, the first that suits the profile. First rather than
     // best: Nexus lists newest first, and for a runtime that is the build a
@@ -482,14 +509,33 @@ QString betterRuntimeFile(const QString &chosen, const QStringList &candidates,
     return {};
 }
 
-SkyrimRuntime runtimePreferenceForGame(const QString &gameId)
+Runtime runtimePreferenceForGame(const QString &gameId,
+                                 const pe_info::Version &gameVersion)
 {
     if (gameId == QLatin1String("skyrimanniversaryedition"))
-        return SkyrimRuntime::AE;
+        return Runtime::Current;
     if (gameId == QLatin1String("skyrimspecialedition")
         || gameId == QLatin1String("enderalspecialedition"))
-        return SkyrimRuntime::SE;
-    return SkyrimRuntime::None;
+        return Runtime::Legacy;
+
+    // Fallout 4 ships both runtimes under one id, so the executable decides.
+    //
+    // The boundary is 1.10.163 - the last build before the April 2024
+    // next-gen update - and it is expressed as "newer than", not as a test
+    // against 1.10.980, because Bethesda kept going: a real install measured
+    // while writing this reports 1.11.240, which a 1.10-shaped rule reads as
+    // the ORIGINAL game and answers backwards.
+    if (gameId == QLatin1String("fallout4")) {
+        if (!gameVersion.valid) return Runtime::None;   // no fact, no verdict
+        const auto tuple = [](const pe_info::Version &v) {
+            return std::tuple(v.major, v.minor, v.build);
+        };
+        pe_info::Version lastOld;
+        lastOld.major = 1; lastOld.minor = 10; lastOld.build = 163;
+        return tuple(gameVersion) > tuple(lastOld) ? Runtime::Current
+                                                   : Runtime::Legacy;
+    }
+    return Runtime::None;
 }
 
 

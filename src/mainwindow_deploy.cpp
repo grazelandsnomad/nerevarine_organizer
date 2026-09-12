@@ -1485,6 +1485,37 @@ void MainWindow::launchProgram(QString &storedPath,
 // scanMissingDependencies + an on-the-fly `collectDataFolders` call -
 // no background work, no fresh scans.  If every bucket is empty the
 // dialog isn't shown at all.
+const game_runtime::Probe &MainWindow::gameRuntimeProbe()
+{
+    const QString id = m_profiles && !m_profiles->isEmpty()
+        ? currentProfile().id : QString();
+    if (id == m_gameRuntimeFor) return m_gameRuntime;   // cached per profile
+
+    m_gameRuntimeFor = id;
+    m_gameRuntime    = {};
+    if (id.isEmpty()) return m_gameRuntime;
+
+    // Same exe resolution the script-extender check performs, for the same
+    // reason: the path the profile launches is the one whose version counts.
+    QString exe = Settings::gameExePath(id);
+    if (!QFileInfo::exists(exe)) exe = GameProfileRegistry::findSteamGameExe(id);
+    if (!QFileInfo::exists(exe)) exe = GameProfileRegistry::findGogGameExe(id);
+    if (exe.isEmpty()) return m_gameRuntime;
+
+    const QFileInfo fi(exe);
+    // The loader's stem, from the adapter's own list: "f4se_loader.exe" ->
+    // "f4se", which is what the runtime DLL beside it is named after.
+    QString prefix;
+    if (const GameAdapter *ad = GameAdapterRegistry::find(id)) {
+        const QStringList loaders = ad->scriptExtenderLoaders();
+        if (!loaders.isEmpty())
+            prefix = QFileInfo(loaders.first()).completeBaseName()
+                         .section(QStringLiteral("_loader"), 0, 0);
+    }
+    m_gameRuntime = game_runtime::probe(fi.absolutePath(), fi.fileName(), prefix);
+    return m_gameRuntime;
+}
+
 // The paths for skse_check::gather, which does the reading. Only the "where"
 // lives here: which exe this profile launches, where its Data/ is, and which
 // mod put each file there according to the deploy manifest.

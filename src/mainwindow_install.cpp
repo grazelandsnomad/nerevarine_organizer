@@ -354,7 +354,11 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
         // Game id, so runtime-pair DLL groups ("SSE v1.6.629+" vs "v1.5.97")
         // pre-select the side matching this profile.
         m_profiles->isEmpty() ? QString() : currentProfile().id,
-        installedNexusUrls);
+        installedNexusUrls,
+        // What the installed game says about itself, so a runtime-pair group
+        // ("OG" / "AE") can be answered from the executable rather than left
+        // on the installer's default.
+        gameRuntimeProbe());
         return; // wizard is now shown; callback drives the rest
     }
 

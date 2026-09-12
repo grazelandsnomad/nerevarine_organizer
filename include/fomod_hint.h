@@ -19,6 +19,7 @@
 // verdict - silence rather than a guess.
 
 #include "nxmurl.h"
+#include "pe_info.h"
 
 #include <QList>
 #include <QStringList>
@@ -223,6 +224,15 @@ struct FrameworkChoice {
 // "skip this entirely" as a distinct and stronger answer than "build against
 // the stock game".
 
+// True when an option label means "install nothing" - "None", "Don't
+// Install", "Skip". Anchored: the WHOLE label has to say it, so an option
+// merely mentioning none is untouched.
+//
+// Exposed because a caller sometimes holds a label with a trailing
+// explanation ("None - install none of these") and can strip it itself; the
+// anchoring must stay strict here, since chooseFrameworkOption leans on it.
+bool isOptOutLabel(const QString &name);
+
 // True when an option means the BASE GAME's own version of something, which by
 // definition needs no mod installed.
 //
@@ -297,18 +307,37 @@ chooseFrameworkVariant(const QStringList &optionNames,
 // a group contains BOTH kinds, so a lone "AE" in some unrelated name never
 // draws a tick.
 
-enum class SkyrimRuntime { None, SE, AE };
+// Two sides of one game's runtime split. Named for the shape rather than for
+// Skyrim's vocabulary, because the same pass now answers Fallout 4: there
+// "Legacy" is the original game and "Current" the post-next-gen build, and a
+// type called SkyrimRuntime deciding a Fallout 4 install is how the next
+// reader is misled.
+enum class Runtime { None, Legacy, Current };
 
 // Which runtime an option name is built for. Version numbers are the strongest
 // signal (1.6.x = AE, 1.5.x = SE), then the words ("anniversary" / the phrase
 // "special edition"), then bare AE/SE word-tokens ("SSE" never matches SE).
 // Conflicting signals return None rather than a guess.
-SkyrimRuntime classifyRuntimeVariant(const QString &optionName);
+//
+// `gameId` selects the vocabulary. Empty keeps Skyrim's, which is what every
+// caller wanted before Fallout 4 existed here. "fallout4" adds its own: OG /
+// "old gen" / 1.10.163 for Legacy, NG / AE / "next gen" / 1.10.980+ / 1.11+
+// for Current - the scene uses all of those spellings for the same split.
+Runtime classifyRuntimeVariant(const QString &optionName,
+                               const QString &gameId = {});
 
-// The runtime the active game profile runs: skyrimanniversaryedition is 1.6.x,
-// skyrimspecialedition 1.5.97, and Enderal SE ships pinned to 1.5.97 too.
-// None for everything else, which disables the pass entirely.
-SkyrimRuntime runtimePreferenceForGame(const QString &gameId);
+// The runtime the installed game actually runs.
+//
+// Skyrim answers from the id alone - skyrimanniversaryedition is 1.6.x,
+// skyrimspecialedition 1.5.97, Enderal SE pinned to 1.5.97 - because there the
+// split IS the profile. Fallout 4 cannot: one id covers both, so it answers
+// from `gameVersion`, which the caller reads off the executable.
+//
+// None for everything else, and for a Fallout 4 with no readable version:
+// without the fact there is no verdict, which disables the pass exactly as
+// before.
+Runtime runtimePreferenceForGame(const QString &gameId,
+                                 const pe_info::Version &gameVersion = {});
 
 // Also used by the DOWNLOAD path, not just the wizard: a mod page routinely
 // carries one file per runtime, and the names say which is which -
@@ -326,7 +355,7 @@ SkyrimRuntime runtimePreferenceForGame(const QString &gameId);
 // files carry no version marking produces silence, exactly as the wizard pass
 // does.
 QString betterRuntimeFile(const QString &chosen, const QStringList &candidates,
-                          SkyrimRuntime pref);
+                          Runtime pref);
 
 } // namespace fomod
 

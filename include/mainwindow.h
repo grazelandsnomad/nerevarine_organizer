@@ -27,6 +27,7 @@
 #include "download_watch.h"   // Watcher* member, and StickyKind routing
 #include "modentry.h"
 #include "deps_resolver.h"            // ModEntry complete type: QList<ModEntry> by value below
+#include "game_runtime.h"             // game_runtime::Probe, cached per profile
 
 class QAction;
 class QCloseEvent;
@@ -489,7 +490,13 @@ private:
     // override when it has one, else the shared default. Empty means the user
     // has never been asked - callers must not read that as English, which is
     // the bug this replaced (see target_language.h).
-    QString translationLanguage() const;
+    // What the installed game says about itself, cached per profile: the
+    // executable's version and whether a script extender sits beside it.
+    // Fallout 4 ships both runtimes under one game id, so the profile cannot
+    // answer "which build is this" and the install has to.
+    const game_runtime::Probe &gameRuntimeProbe();
+
+        QString translationLanguage() const;
     // Where this mod's half-finished translation lives, and whether any of it
     // exists yet.
     //
@@ -727,6 +734,8 @@ private:
     // order. Drives rowOrderForPersist() so saves never write the sorted order.
     bool                   m_viewSortActive = false;
     QString                m_apiKey;
+    game_runtime::Probe  m_gameRuntime;        // cached; see gameRuntimeProbe()
+    QString              m_gameRuntimeFor;     // profile id the cache is for
     // API-key persistence - prefers QKeychain (libsecret/KWallet/DPAPI),
     // migrates from old QSettings storage on first run when keychain is
     // available. See impls for the fallback when keychain isn't linked.

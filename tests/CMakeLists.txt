@@ -38,6 +38,8 @@ add_executable(test_fomod
     ${CMAKE_SOURCE_DIR}/src/bain.cpp
     ${CMAKE_SOURCE_DIR}/src/bainwizard.cpp
     ${CMAKE_SOURCE_DIR}/src/fomodwizard.cpp
+    ${CMAKE_SOURCE_DIR}/src/game_runtime.cpp
+    ${CMAKE_SOURCE_DIR}/src/pe_info.cpp
     ${CMAKE_SOURCE_DIR}/src/translator.cpp
     ${CMAKE_SOURCE_DIR}/include/fomodwizard.h
     ${CMAKE_SOURCE_DIR}/include/bainwizard.h

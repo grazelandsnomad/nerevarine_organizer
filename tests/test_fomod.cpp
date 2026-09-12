@@ -4,6 +4,7 @@
 #include "fomod_path.h"
 #include "fomod_copy.h"
 #include "fomod_hint.h"
+#include "game_runtime.h"
 #include "mod_match.h"
 #include "mod_aliases.h"
 #include "fomod_scripts.h"
@@ -1442,6 +1443,105 @@ static void run_fomod_framework_variant()
           mod_aliases::frameworkForToken(QStringLiteral("Clutter")).isEmpty());
 }
 
+// -- Which game build is installed -----------------------------------------
+//
+// Skyrim answers from the profile, because AE and SE are separate game ids.
+// Fallout 4 cannot: one id, two runtimes, so the executable decides.
+static void run_fomod_fallout4_runtime()
+{
+    std::cout << "=== fomod_hint (Fallout 4 runtime) tests ===\n";
+    using RT = fomod::Runtime;
+    const auto ver = [](int a, int b, int c) {
+        pe_info::Version v; v.major = a; v.minor = b; v.build = c; v.valid = true;
+        return v;
+    };
+
+    // The reported install, measured: Fallout4.exe reports 1.11.240.0 and
+    // f4se_1_11_240.dll sits beside it. A rule written around the April-2024
+    // "1.10.980" split alone reads this as the ORIGINAL game and recommends
+    // the wrong file, which is why the boundary is "newer than 1.10.163".
+    check("1.11.240 is the current runtime",
+          fomod::runtimePreferenceForGame("fallout4", ver(1, 11, 240))
+              == RT::Current);
+    check("so is the first next-gen build",
+          fomod::runtimePreferenceForGame("fallout4", ver(1, 10, 980))
+              == RT::Current);
+    check("the last pre-update build is legacy",
+          fomod::runtimePreferenceForGame("fallout4", ver(1, 10, 163))
+              == RT::Legacy);
+    check("and anything older still is",
+          fomod::runtimePreferenceForGame("fallout4", ver(1, 10, 26))
+              == RT::Legacy);
+    // No fact, no verdict - the silence the pass relies on.
+    check("an unreadable version decides nothing",
+          fomod::runtimePreferenceForGame("fallout4", {}) == RT::None);
+
+    // Skyrim keeps answering from the id, version or no version.
+    check("Skyrim AE still answers from its profile",
+          fomod::runtimePreferenceForGame("skyrimanniversaryedition") == RT::Current);
+    check("Skyrim SE too, and a version does not sway it",
+          fomod::runtimePreferenceForGame("skyrimspecialedition", ver(1, 11, 240))
+              == RT::Legacy);
+
+    // The Fallout 4 vocabulary for the same split. "AE" is what the installer
+    // that prompted this uses; the scene also writes NG / next gen.
+    check("OG is the legacy side",
+          fomod::classifyRuntimeVariant("OG", "fallout4") == RT::Legacy);
+    check("AE is the current one",
+          fomod::classifyRuntimeVariant("AE", "fallout4") == RT::Current);
+    check("and so is NG",
+          fomod::classifyRuntimeVariant("NG", "fallout4") == RT::Current);
+    check("version numbers work too",
+          fomod::classifyRuntimeVariant("For 1.10.163", "fallout4") == RT::Legacy
+          && fomod::classifyRuntimeVariant("For 1.11.240", "fallout4") == RT::Current);
+    // Without the game id the Fallout vocabulary must stay dormant, or "OG"
+    // in a Skyrim option would start meaning something.
+    check("OG says nothing without the Fallout 4 vocabulary",
+          fomod::classifyRuntimeVariant("OG") == RT::None);
+    check("while Skyrim's own names still classify",
+          fomod::classifyRuntimeVariant("SSE v1.5.97 ('Special Edition')")
+              == RT::Legacy);
+
+    // The opt-out this group offers carries an explanation after a dash, so
+    // the anchored test has to be given the leading token.
+    check("a bare None is an opt-out",
+          fomod::isOptOutLabel(QStringLiteral("None")));
+    check("with its explanation attached it is not, until trimmed",
+          !fomod::isOptOutLabel(QStringLiteral("None - install none of these"))
+          && fomod::isOptOutLabel(
+                 QStringLiteral("None - install none of these")
+                     .section(QLatin1Char('-'), 0, 0)));
+}
+
+// The probe that reads those facts off a real install.
+static void run_game_runtime_probe()
+{
+    std::cout << "=== game_runtime::probe ===\n";
+    QTemporaryDir dir;
+    // The loader names the runtime it hooks in its own filename - which is
+    // how F4SE is found at all, since script extenders are installed into the
+    // game folder rather than through a mod manager.
+    QFile dll(dir.filePath("f4se_1_11_240.dll"));
+    check("fixture loader writes", dll.open(QIODevice::WriteOnly));
+    dll.write("MZ");
+    dll.close();
+
+    const auto p = game_runtime::probe(dir.path(), QStringLiteral("Fallout4.exe"),
+                                       QStringLiteral("f4se"));
+    check("the extender is found", p.extenderPresent);
+    check("and names its runtime",
+          p.extender.major == 1 && p.extender.minor == 11 && p.extender.build == 240);
+    // No exe in the fixture, so the game half stays unanswered rather than
+    // inventing a version.
+    check("a missing executable yields no version", !p.game.valid);
+
+    const auto empty = game_runtime::probe(dir.path(), QStringLiteral("Fallout4.exe"),
+                                           QStringLiteral("skse64"));
+    check("a different extender is not found", !empty.extenderPresent);
+    check("and an empty root decides nothing",
+          !game_runtime::probe({}, {}, {}).extenderPresent);
+}
+
 static void run_fomod_hint()
 {
     std::cout << "=== fomod_hint (asksAboutAnotherMod) tests ===\n";
@@ -1489,23 +1589,23 @@ static void run_fomod_hint()
 
     // -- classifyRuntimeVariant: which Skyrim runtime an option is built for --
     std::cout << "[runtime-pair options classify by version, words, then tokens]\n";
-    using RT = fomod::SkyrimRuntime;
+    using RT = fomod::Runtime;
     struct RtCase { const char *name; RT wanted; };
     static const RtCase kRt[] = {
         // The Spell Perk Item Distributor pair this was built from.
-        {"SSE v1.6.629+ (\"Anniversary Edition\")",  RT::AE},
-        {"SSE v1.5.97 (\"Special Edition\")",        RT::SE},
+        {"SSE v1.6.629+ (\"Anniversary Edition\")",  RT::Current},
+        {"SSE v1.5.97 (\"Special Edition\")",        RT::Legacy},
         // Version number alone is enough, in either spelling.
-        {"1.6.1170",                                 RT::AE},
-        {"DLL for 1.6.xxx",                          RT::AE},
-        {"1.5.97 build",                             RT::SE},
-        {"1_6_640",                                  RT::AE},
+        {"1.6.1170",                                 RT::Current},
+        {"DLL for 1.6.xxx",                          RT::Current},
+        {"1.5.97 build",                             RT::Legacy},
+        {"1_6_640",                                  RT::Current},
         // Words without a version.
-        {"Anniversary Edition DLL",                  RT::AE},
-        {"Special Edition (pre-AE update)",          RT::SE},   // version words beat the AE aside
+        {"Anniversary Edition DLL",                  RT::Current},
+        {"Special Edition (pre-AE update)",          RT::Legacy},   // version words beat the AE aside
         // Bare tokens, word-bounded: SSE must never read as SE.
-        {"AE",                                       RT::AE},
-        {"SE",                                       RT::SE},
+        {"AE",                                       RT::Current},
+        {"SE",                                       RT::Legacy},
         {"SSE",                                      RT::None},
         {"Base install",                             RT::None},
         // Both signals at once is not a side of a pair.
@@ -1516,8 +1616,8 @@ static void run_fomod_hint()
     };
     for (const RtCase &c : kRt) {
         const auto got = fomod::classifyRuntimeVariant(QString::fromUtf8(c.name));
-        check(c.wanted == RT::AE ? "reads as AE"
-            : c.wanted == RT::SE ? "reads as SE" : "stays unclassified",
+        check(c.wanted == RT::Current ? "reads as AE"
+            : c.wanted == RT::Legacy ? "reads as SE" : "stays unclassified",
               got == c.wanted, QString::fromUtf8(c.name));
     }
 
@@ -1671,35 +1771,35 @@ static void run_fomod_hint()
 
         // On an AE profile, grabbing the 1.5.97 build is the mistake to catch.
         check("the Special Edition build is flagged on an AE profile",
-              fomod::betterRuntimeFile(page[2], page, RT::AE)
-                  == page[0], fomod::betterRuntimeFile(page[2], page, RT::AE));
+              fomod::betterRuntimeFile(page[2], page, RT::Current)
+                  == page[0], fomod::betterRuntimeFile(page[2], page, RT::Current));
         check("and the newest AE build is the one offered",
-              fomod::betterRuntimeFile(page[2], page, RT::AE)
+              fomod::betterRuntimeFile(page[2], page, RT::Current)
                   .contains(QStringLiteral("1.6.629")));
 
         // The right build says nothing at all.
         check("the AE build on an AE profile is fine",
-              fomod::betterRuntimeFile(page[0], page, RT::AE).isEmpty());
+              fomod::betterRuntimeFile(page[0], page, RT::Current).isEmpty());
         check("the older AE build is also fine - still 1.6.x",
-              fomod::betterRuntimeFile(page[1], page, RT::AE).isEmpty());
+              fomod::betterRuntimeFile(page[1], page, RT::Current).isEmpty());
 
         // Mirrored for an SE profile.
         check("the AE build is flagged on an SE profile",
-              fomod::betterRuntimeFile(page[0], page, RT::SE) == page[2]);
+              fomod::betterRuntimeFile(page[0], page, RT::Legacy) == page[2]);
 
         // A file whose name carries no version marking is not a verdict.
         check("an unmarked optional file says nothing",
-              fomod::betterRuntimeFile(page[3], page, RT::AE).isEmpty());
+              fomod::betterRuntimeFile(page[3], page, RT::Current).isEmpty());
         // Neither is a page that offers only one kind.
         check("nothing to switch to means silence",
               fomod::betterRuntimeFile(
-                  page[2], {page[2], page[3]}, RT::AE).isEmpty());
+                  page[2], {page[2], page[3]}, RT::Current).isEmpty());
         // And a profile with no runtime (Morrowind, Oldrim) never fires.
         check("a game with no runtime split is unaffected",
               fomod::betterRuntimeFile(page[2], page, RT::None).isEmpty());
         check("empty inputs are safe",
-              fomod::betterRuntimeFile(QString(), page, RT::AE).isEmpty()
-                  && fomod::betterRuntimeFile(page[2], {}, RT::AE).isEmpty());
+              fomod::betterRuntimeFile(QString(), page, RT::Current).isEmpty()
+                  && fomod::betterRuntimeFile(page[2], {}, RT::Current).isEmpty());
     }
 
     std::cout << "\n[an option that is a patch FOR another mod]\n";
@@ -1790,11 +1890,11 @@ static void run_fomod_hint()
 
     std::cout << "\n[profile id decides the preferred runtime]\n";
     check("skyrimanniversaryedition prefers AE",
-          fomod::runtimePreferenceForGame("skyrimanniversaryedition") == RT::AE);
+          fomod::runtimePreferenceForGame("skyrimanniversaryedition") == RT::Current);
     check("skyrimspecialedition prefers SE",
-          fomod::runtimePreferenceForGame("skyrimspecialedition") == RT::SE);
+          fomod::runtimePreferenceForGame("skyrimspecialedition") == RT::Legacy);
     check("Enderal SE runs the 1.5.97 engine",
-          fomod::runtimePreferenceForGame("enderalspecialedition") == RT::SE);
+          fomod::runtimePreferenceForGame("enderalspecialedition") == RT::Legacy);
     check("other games disable the pass",
           fomod::runtimePreferenceForGame("morrowind") == RT::None
           && fomod::runtimePreferenceForGame("skyrim") == RT::None);
@@ -1890,9 +1990,13 @@ struct FomodWizardTestHook {
                               const QString &prior = {},
                               const QStringList &installed = {},
                               const QStringList &installedUrls = {},
-                              const QString &root = QStringLiteral("/tmp/nrv_fomod_ui_test"))
+                              const QString &root = QStringLiteral("/tmp/nrv_fomod_ui_test"),
+                              const QString &gameId = {},
+                              const game_runtime::Probe &runtime = {})
     {
         auto *w = new FomodWizard(root);
+        w->m_gameId  = gameId;
+        w->m_runtime = runtime;
         w->m_steps            = steps;
         w->m_priorChoices     = prior;
         w->m_installedModNames = installed;
@@ -2670,6 +2774,74 @@ static void run_fomod_wizard_ui()
 {
     std::cout << "=== fomod_wizard_ui (buildUi) tests ===\n";
 
+    // The real F4SE group from Necessity - Nexus Essentials Merged, on the
+    // install that reported it: Fallout4.exe 1.11.240 with f4se_1_11_240.dll
+    // beside it. The installer defaults to "None"; the manager knows better.
+    {
+        FomodGroup g;
+        g.name = QStringLiteral("F4SE");
+        g.type = QStringLiteral("SelectExactlyOne");
+        g.plugins = { wizardui_mkPlugin("OG", "Optional"),
+                      wizardui_mkPlugin("AE", "Optional"),
+                      wizardui_mkPlugin("None - install none of these",
+                                        "Recommended") };
+        FomodStep st;
+        st.name = QStringLiteral("Necessity - Nexus Essentials Merges");
+        st.groups.append(g);
+
+        game_runtime::Probe rt;
+        rt.game.major = 1; rt.game.minor = 11; rt.game.build = 240;
+        rt.game.valid = true;
+        rt.extenderPresent = true;
+
+        auto *w = FomodWizardTestHook::build(
+            { st }, {}, {}, {}, QStringLiteral("/tmp/nrv_f4se_test"),
+            QStringLiteral("fallout4"), rt);
+        check("the AE build is selected",
+              FomodWizardTestHook::btn(w, 0, 0, 1)->isChecked());
+        check("and the installer's None default is dropped",
+              !FomodWizardTestHook::btn(w, 0, 0, 2)->isChecked());
+        bool saysVersion = false;
+        for (const QString &n : wizardui_notesOf(w, 0, 0))
+            if (n.contains(QStringLiteral("1.11.240"))) saysVersion = true;
+        check("with the version it matched shown on the row", saysVersion,
+              wizardui_notesOf(w, 0, 0).join(QStringLiteral(" | ")));
+        delete w;
+    }
+
+    // Same group, no script extender in the game folder: an F4SE plugin would
+    // never load, so "which build" is the wrong question.
+    {
+        FomodGroup g;
+        g.name = QStringLiteral("F4SE");
+        g.type = QStringLiteral("SelectExactlyOne");
+        g.plugins = { wizardui_mkPlugin("OG", "Optional"),
+                      wizardui_mkPlugin("AE", "Recommended"),
+                      wizardui_mkPlugin("None - install none of these",
+                                        "Optional") };
+        FomodStep st;
+        st.name = QStringLiteral("Main");
+        st.groups.append(g);
+
+        game_runtime::Probe rt;
+        rt.game.major = 1; rt.game.minor = 11; rt.game.build = 240;
+        rt.game.valid = true;
+        rt.extenderPresent = false;
+
+        auto *w = FomodWizardTestHook::build(
+            { st }, {}, {}, {}, QStringLiteral("/tmp/nrv_f4se_none"),
+            QStringLiteral("fallout4"), rt);
+        check("with no extender installed, None is chosen",
+              FomodWizardTestHook::btn(w, 0, 0, 2)->isChecked());
+        bool explained = false;
+        for (const QString &n : wizardui_notesOf(w, 0, 0))
+            if (n.contains(QStringLiteral("No script extender"))) explained = true;
+        check("and the runtime options say why", explained);
+        delete w;
+    }
+
+
+
     // Pass H end to end: the real Vehicle Overhaul Continued pair, with the
     // FOMOD's own default on the No-BOS half and Base Object Swapper in the
     // list. Its description cites BOS's page, which used to earn it a green
@@ -3298,6 +3470,8 @@ int main(int argc, char **argv)
     run_fomod_patch_targets();
     run_fomod_previs_baseline();
     run_fomod_framework_variant();
+    run_fomod_fallout4_runtime();
+    run_game_runtime_probe();
     run_fomod_image_preview();
     run_fomod_preview_fit();
     run_fomod_wizard_ui();

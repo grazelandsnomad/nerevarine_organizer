@@ -100,6 +100,7 @@ set(SOURCES
     src/game_store.cpp
     src/markup_protect.cpp
     src/pe_info.cpp
+    src/game_runtime.cpp
     src/skse_check.cpp
     src/mod_aliases.cpp
     src/mod_match.cpp

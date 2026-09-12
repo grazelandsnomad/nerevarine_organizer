@@ -847,15 +847,17 @@ void MainWindow::onFileListFetched(QListWidgetItem *item,
     // fires when the page offers BOTH kinds, so a page with a single
     // unmarked file never draws a recommendation.
     {
+        const QString gid =
+            m_profiles->isEmpty() ? QString() : currentProfile().id;
         const auto pref = fomod::runtimePreferenceForGame(
-            m_profiles->isEmpty() ? QString() : currentProfile().id);
-        if (pref != fomod::SkyrimRuntime::None) {
+            gid, gameRuntimeProbe().game);
+        if (pref != fomod::Runtime::None) {
             bool haveAe = false, haveSe = false;
             int  wantIdx = -1;
             for (int i = 0; i < files.size(); ++i) {
-                const auto v = fomod::classifyRuntimeVariant(files[i].name);
-                haveAe |= (v == fomod::SkyrimRuntime::AE);
-                haveSe |= (v == fomod::SkyrimRuntime::SE);
+                const auto v = fomod::classifyRuntimeVariant(files[i].name, gid);
+                haveAe |= (v == fomod::Runtime::Current);
+                haveSe |= (v == fomod::Runtime::Legacy);
                 if (v == pref && wantIdx < 0) wantIdx = i;
             }
             if (haveAe && haveSe && wantIdx >= 0) {
@@ -1177,7 +1179,8 @@ void MainWindow::onModFileSiblings(QListWidgetItem *item,
 {
     if (!item || m_profiles->isEmpty()) return;
 
-    const auto pref = fomod::runtimePreferenceForGame(currentProfile().id);
+    const auto pref = fomod::runtimePreferenceForGame(currentProfile().id,
+                                                     gameRuntimeProbe().game);
     const QString better =
         fomod::betterRuntimeFile(chosenName, siblingNames, pref);
     if (better.isEmpty()) return;   // matches, or nothing to say

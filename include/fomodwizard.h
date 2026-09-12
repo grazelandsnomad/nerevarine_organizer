@@ -1,5 +1,7 @@
 #pragma once
 
+#include "game_runtime.h"
+
 #include <QDialog>
 #include <QList>
 #include <QSet>
@@ -88,7 +90,8 @@ public:
         QWidget *parent = nullptr,
         const QStringList &installedModNames = {},
         const QString &gameId = {},
-        const QStringList &installedNexusUrls = {});
+        const QStringList &installedNexusUrls = {},
+        const game_runtime::Probe &runtime = {});
 
     // Non-modal: shows as an independent window, calls onDone(fomodPath,
     // choices) on finish/cancel. fomodPath empty on cancel. Self-deletes on close.
@@ -100,7 +103,8 @@ public:
         std::function<void(const QString &fomodPath,
                            const QString &choices)> onDone,
         const QString &gameId = {},
-        const QStringList &installedNexusUrls = {});
+        const QStringList &installedNexusUrls = {},
+        const game_runtime::Probe &runtime = {});
 
     // True when archiveRoot has fomod/ModuleConfig.xml (case-insensitive).
     static bool hasFomod(const QString &archiveRoot);
@@ -177,6 +181,10 @@ private:
     // name; see fomod::citedMods.
     QSet<QString>        m_installedNexusKeys;
     QString              m_gameId;            // active game profile id, for runtime-pair hints
+    // What the installed game says about itself, for the runtime-pair pass.
+    // Fallout 4 ships both runtimes under one id, so the profile cannot
+    // answer and the executable has to.
+    game_runtime::Probe  m_runtime;
     QList<FomodFile>     m_requiredFiles;
     QList<FomodFile>     m_requiredFolders;
     QList<FomodStep>     m_steps;
