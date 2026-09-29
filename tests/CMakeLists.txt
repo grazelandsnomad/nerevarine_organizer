@@ -204,6 +204,19 @@ add_executable(test_nexus
 target_include_directories(test_nexus PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(test_nexus PRIVATE Qt6::Core Qt6::Network)
 
+# The v2 GraphQL queries against the live endpoint - a canary for silent
+# truncation or schema drift, which every caller would otherwise absorb by
+# degrading quietly. Labelled "integration", so CI's -L unit run skips it.
+add_executable(test_nexus_v2_live
+    test_nexus_v2_live.cpp
+    ${CMAKE_SOURCE_DIR}/src/nexusclient.cpp
+    ${CMAKE_SOURCE_DIR}/src/nxmurl.cpp
+    ${CMAKE_SOURCE_DIR}/src/file_pick.cpp
+    ${CMAKE_SOURCE_DIR}/src/game_store.cpp
+)
+target_include_directories(test_nexus_v2_live PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(test_nexus_v2_live PRIVATE Qt6::Core Qt6::Network)
+
 # Plugin/BSA parsing, master satisfaction, plugin + asset collisions.
 add_executable(test_plugins
     test_plugins.cpp
@@ -407,6 +420,10 @@ add_test(NAME test_nxm COMMAND test_nxm)
 set_tests_properties(test_nxm PROPERTIES
     LABELS "unit"
     ENVIRONMENT "NEREVARINE_SKIP_INTEGRATION=1")
+
+add_test(NAME test_nexus_v2_live COMMAND test_nexus_v2_live)
+set_tests_properties(test_nexus_v2_live PROPERTIES LABELS "integration"
+    SKIP_RETURN_CODE 77)
 
 add_test(NAME test_nxm_integration COMMAND test_nxm)
 set_tests_properties(test_nxm_integration PROPERTIES LABELS "integration"

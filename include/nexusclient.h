@@ -49,7 +49,9 @@ public:
     // all, which is why the deps dialog used to miss a mod the author lists
     // as "Hard Requirement" but never links in the description.
     // `gameIdNumeric` comes from ModInfo::gameIdNumeric.
-    QNetworkReply *requestModRequirements(int gameIdNumeric, int modId);
+    // `offset` pages through tables longer than one page - see kV2PageCap.
+    QNetworkReply *requestModRequirements(int gameIdNumeric, int modId,
+                                          int offset = 0);
 
     // GET /v1/games/{game}/mods/{modId}/files/{fileId}/download_link.json
     // key/expires are the signed nxms:// params; empty for premium "Mod
@@ -111,6 +113,31 @@ public:
     // error - they keep their defaults (Nexus omits optional fields).
     static std::expected<ModInfo, NexusError> parseModInfo(const QByteArray &json);
 
+    // The v2 endpoint PAGES its lists, and quietly: ask without `count` and
+    // you get 20; ask for more and you get at most 80. Measured on the live
+    // endpoint, 2026-09-29 - and discovered the hard way, because every
+    // caller degrades gracefully when v2 comes up short, so truncation looked
+    // exactly like success. Vehicle Overhaul Continued's requirements table
+    // has 23 rows and three of them had never been shown; a 158-link deps
+    // dialog was naming 20 rows in its "single" request and fetching the
+    // other 138 one at a time.
+    static constexpr int kV2PageCap = 80;
+
+    // What a paged v2 reply says about the page it came from. `received` is
+    // the number of NODES the server sent - not the number of rows a parser
+    // kept after dropping unusable ones - because that is what the next
+    // page's offset has to advance by. Advancing by kept rows re-requests
+    // nodes already seen whenever a row is dropped.
+    struct PageInfo {
+        int total    = 0;   // totalCount: how many exist in all
+        int received = 0;   // nodes on this page
+    };
+
+    // Split ids into groups a single v2 request can answer whole. Client-side
+    // on purpose: each group then comes back complete in one page, and
+    // nothing depends on how the server orders results across offsets.
+    static QList<QList<int>> chunkForV2(const QList<int> &ids);
+
     // One row of the mod page's own "Requirements" table - the authored
     // list, with the author's note ("Hard Requirement. Necessary for Base
     // Object Swapper"). Served by the v2 GraphQL endpoint, which the v1 API
@@ -121,13 +148,16 @@ public:
         QString notes;
         bool    external = false;   // off-Nexus URL; kept but not resolvable
     };
-    // Display names for many mods in ONE request, from the same v2 endpoint.
+    // Display names for up to kV2PageCap mods in one request, from the same
+    // v2 endpoint. Callers with more ids split them with chunkForV2 first;
+    // anything past the cap here is not sent rather than silently dropped by
+    // the server.
     //
     // The dialog that needs this had been asking v1 for one mod at a time -
     // 158 requests to open a single dialog on a mod with a link-heavy
     // description, against a non-premium allowance of about a hundred an
-    // hour. `legacyMods(ids: [{gameId, modId}, ...])` answers them all at
-    // once.
+    // hour. `legacyMods(ids: [{gameId, modId}, ...], count: n)` answers them
+    // in two.
     QNetworkReply *requestModNames(int gameIdNumeric, const QList<int> &modIds);
     // modId -> name. Empty on a GraphQL error, a null payload or garbage, so
     // the caller falls back to naming rows one at a time.
@@ -136,8 +166,11 @@ public:
     // The nexusRequirements rows out of a v2 reply. GraphQL errors, missing
     // fields or a null mod all come back as an error/empty rather than a
     // crash - the caller degrades to the description-only dialog.
+    //
+    // `page`, when given, receives totalCount and the node count, which is
+    // what tells a caller whether another page exists.
     static std::expected<QList<Requirement>, NexusError>
-    parseModRequirements(const QByteArray &json);
+    parseModRequirements(const QByteArray &json, PageInfo *page = nullptr);
 
     struct ValidatedUser {
         qint64  userId      = 0;

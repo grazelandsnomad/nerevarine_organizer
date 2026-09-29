@@ -73,23 +73,9 @@ void NexusController::scanDependencies(QListWidgetItem *item,
         };
 
         if (info->gameIdNumeric <= 0) { finish({}); return; }
-        QNetworkReply *rq =
-            m_client->requestModRequirements(info->gameIdNumeric, modId);
-        connect(rq, &QNetworkReply::finished, this, [rq, finish]() {
-            rq->deleteLater();
-            QList<deps::TableRequirement> table;
-            if (rq->error() == QNetworkReply::NoError) {
-                const auto rows =
-                    NexusClient::parseModRequirements(rq->readAll());
-                if (rows) {
-                    for (const auto &r : *rows) {
-                        if (r.external || r.modId <= 0) continue;
-                        table.append({r.modId, r.name, r.notes});
-                    }
-                }
-            }
-            finish(table);
-        });
+        fetchRequirementsPage(info->gameIdNumeric, modId, 0,
+                              std::make_shared<QList<deps::TableRequirement>>(),
+                              0, finish);
     });
 }
 
@@ -195,4 +181,42 @@ void NexusController::checkForUpdates(
                 emit checkUpdatesFinished(state->found);
         });
     }
+}
+
+void NexusController::fetchRequirementsPage(
+    int gameIdNumeric, int modId, int offset,
+    std::shared_ptr<QList<deps::TableRequirement>> acc, int pagesSoFar,
+    std::function<void(const QList<deps::TableRequirement> &)> done)
+{
+    QNetworkReply *rq =
+        m_client->requestModRequirements(gameIdNumeric, modId, offset);
+    connect(rq, &QNetworkReply::finished, this,
+            [this, rq, gameIdNumeric, modId, offset, acc, pagesSoFar, done]() {
+        rq->deleteLater();
+        NexusClient::PageInfo page;
+        if (rq->error() == QNetworkReply::NoError) {
+            const auto rows =
+                NexusClient::parseModRequirements(rq->readAll(), &page);
+            if (rows) {
+                for (const auto &r : *rows) {
+                    if (r.external || r.modId <= 0) continue;
+                    acc->append({r.modId, r.name, r.notes});
+                }
+            }
+        }
+        // Advance by what the server SENT, not by what was kept or asked
+        // for: a dropped row must not make the next page overlap this one,
+        // and a server that caps lower than kV2PageCap still pages cleanly.
+        // The page limit is a backstop against a server that keeps
+        // answering - 20 pages is 1,600 rows, far past any real table.
+        const int next = offset + page.received;
+        constexpr int kMaxPages = 20;
+        if (page.received > 0 && next < page.total
+            && pagesSoFar + 1 < kMaxPages) {
+            fetchRequirementsPage(gameIdNumeric, modId, next, acc,
+                                  pagesSoFar + 1, done);
+            return;
+        }
+        done(*acc);
+    });
 }

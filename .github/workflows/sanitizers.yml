@@ -52,3 +52,33 @@ jobs:
         # ASAN_OPTIONS / UBSAN_OPTIONS and the -fno-sanitize-recover=all policy
         # live in the script so a local run reproduces CI exactly.
         run: scripts/sanitize.sh
+
+  nexus-v2-contract:
+    # The v2 GraphQL queries asked of the live endpoint, once a day. Every v2
+    # caller degrades quietly to an older path when an answer comes back
+    # short, so truncation or schema drift is otherwise invisible - both
+    # queries shipped returning 20 rows of longer lists and nothing noticed.
+    # Here rather than in CI: it needs the network, and a push should not go
+    # red because a third-party API had a bad minute.
+    name: Nexus v2 contract (live)
+    runs-on: ubuntu-24.04
+    env:
+      CC: gcc-14
+      CXX: g++-14
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install toolchain and Qt 6
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            g++-14 cmake ninja-build qt6-base-dev
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build the contract test only
+        run: cmake --build build --target test_nexus_v2_live -j"$(nproc)"
+
+      - name: Ask the live endpoint
+        run: ctest --test-dir build -R test_nexus_v2_live --output-on-failure

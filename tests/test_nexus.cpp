@@ -886,6 +886,66 @@ static void testSoftOnlyTableStillClassifies()
                   d.installed && d.cls == DepClass::Optional);
 }
 
+// -- v2 paging --------------------------------------------------------------
+//
+// The v2 endpoint sends 20 of a list unless asked for more, and at most 80
+// when asked. Both queries this app makes shipped without accounting for
+// that, and nothing noticed: Vehicle Overhaul Continued's 23-row requirements
+// table lost its last three rows, and a 158-link deps dialog named 20 rows in
+// its "single" request.
+static void testV2Chunking()
+{
+    std::cout << "testV2Chunking\n";
+    QList<int> ids;
+    for (int i = 1; i <= 158; ++i) ids << i;
+    const auto chunks = NexusClient::chunkForV2(ids);
+    check("158 ids take two requests, not one and not 158", chunks.size() == 2);
+    check("each fits a page",
+          chunks.value(0).size() == NexusClient::kV2PageCap
+          && chunks.value(1).size() == 158 - NexusClient::kV2PageCap);
+    check("and nothing is lost between them",
+          chunks.value(0).size() + chunks.value(1).size() == 158);
+    check("exactly one page is one request",
+          NexusClient::chunkForV2(QList<int>(ids.mid(0, 80))).size() == 1);
+    check("nothing to ask, nothing asked",
+          NexusClient::chunkForV2({}).isEmpty());
+    check("ids that point nowhere are not sent",
+          NexusClient::chunkForV2({0, -5, 7}) == QList<QList<int>>{{7}});
+}
+
+static void testRequirementsPageInfo()
+{
+    std::cout << "testRequirementsPageInfo\n";
+    // A page of 4 nodes out of 23, two of which the parser drops (modId 0
+    // and not external - "Enclave Remnants" and "Captain Cosmos" really do
+    // arrive that way).
+    const QByteArray reply = R"({"data":{"mod":{"modRequirements":{
+      "nexusRequirements":{"totalCount":23,"nodes":[
+        {"modId":"45330","modName":"A Forest","notes":"Patch","externalRequirement":false},
+        {"modId":"0","modName":"Enclave Remnants","notes":"Addon","externalRequirement":false},
+        {"modId":"0","modName":"Captain Cosmos","notes":"Addon","externalRequirement":false},
+        {"modId":"43627","modName":"Baka Framework","notes":"Hard Requirement.","externalRequirement":false}
+    ]}}}}})";
+    NexusClient::PageInfo page;
+    const auto rows = NexusClient::parseModRequirements(reply, &page);
+    check("the usable rows parse", rows && rows->size() == 2);
+    check("the total says there is more to fetch", page.total == 23);
+    // The rule the paging depends on: advance by what the server SENT. Two
+    // rows were dropped here, and advancing by the two that were kept would
+    // make the next page overlap this one.
+    check("the page reports every node it carried, kept or not",
+          page.received == 4);
+
+    // A reply shape without totalCount must not make the caller page forever.
+    NexusClient::PageInfo old;
+    (void)NexusClient::parseModRequirements(
+        R"({"data":{"mod":{"modRequirements":{"nexusRequirements":{"nodes":[
+          {"modId":"1","modName":"X","notes":"","externalRequirement":false}]}}}}})",
+        &old);
+    check("no totalCount means this page is everything",
+          old.total == old.received && old.received == 1);
+}
+
 static void testParseEmptyDescription()
 {
     std::cout << "testParseEmptyDescription\n";
@@ -1461,6 +1521,8 @@ static void run_deps_resolver()
 
     testParseModRequirements();
     testParseModNames();
+    testV2Chunking();
+    testRequirementsPageInfo();
     testSoftOnlyTableStillClassifies();
     testRequirementNotesClassify();
     testMergeTableIntoClassified();

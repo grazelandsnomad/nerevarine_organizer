@@ -657,22 +657,30 @@ void MainWindow::onDependenciesScanned(QListWidgetItem *item,
         };
 
         if (numericGame > 0) {
-            QNetworkReply *rep = m_nexus->requestModNames(numericGame, want);
-            connect(rep, &QNetworkReply::finished, this,
-                    [this, rep, pending, safeBox, fallbackName]() {
-                rep->deleteLater();
-                if (!safeBox) return;          // dialog already dismissed
-                const QHash<int, QString> names =
-                    rep->error() == QNetworkReply::NoError
-                        ? NexusClient::parseModNames(rep->readAll())
-                        : QHash<int, QString>{};
-                for (auto it = pending.cbegin(); it != pending.cend(); ++it) {
-                    if (!it.value()) continue;
-                    const auto hit = names.constFind(it.key());
-                    if (hit != names.constEnd()) it.value()->setText(*hit);
-                    else                         fallbackName(it.key(), it.value());
-                }
-            });
+            // One request per page-sized chunk. The server answers at most 80
+            // ids per page and only 20 unless asked, so a single request for
+            // 158 named 20 rows and left 138 to the per-row fallback - which
+            // was the very burst this exists to avoid. Each reply resolves
+            // only its own chunk, so one failing chunk falls back alone.
+            for (const QList<int> &chunk : NexusClient::chunkForV2(want)) {
+                QNetworkReply *rep = m_nexus->requestModNames(numericGame, chunk);
+                connect(rep, &QNetworkReply::finished, this,
+                        [rep, chunk, pending, safeBox, fallbackName]() {
+                    rep->deleteLater();
+                    if (!safeBox) return;          // dialog already dismissed
+                    const QHash<int, QString> names =
+                        rep->error() == QNetworkReply::NoError
+                            ? NexusClient::parseModNames(rep->readAll())
+                            : QHash<int, QString>{};
+                    for (int id : chunk) {
+                        const QPointer<QLabel> lbl = pending.value(id);
+                        if (!lbl) continue;
+                        const auto hit = names.constFind(id);
+                        if (hit != names.constEnd()) lbl->setText(*hit);
+                        else                         fallbackName(id, lbl);
+                    }
+                });
+            }
         } else {
             // No numeric game id on this row - nothing to batch with, so the
             // old path names every row individually.

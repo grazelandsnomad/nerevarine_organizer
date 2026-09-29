@@ -9,6 +9,9 @@
 #include <QString>
 #include <QStringList>
 
+#include <functional>
+#include <memory>
+
 class QListWidgetItem;
 
 // Orchestration layer between MainWindow and NexusClient.
@@ -106,5 +109,13 @@ signals:
                           const QList<NexusClient::ChangelogEntry> &entries);
 
 private:
+    // One page of a mod's authored requirements table, then the next until
+    // totalCount is reached. A member rather than a self-referencing lambda,
+    // which would keep its own closure alive through a shared_ptr cycle.
+    void fetchRequirementsPage(
+        int gameIdNumeric, int modId, int offset,
+        std::shared_ptr<QList<deps::TableRequirement>> acc, int pagesSoFar,
+        std::function<void(const QList<deps::TableRequirement> &)> done);
+
     NexusClient *m_client;
 };

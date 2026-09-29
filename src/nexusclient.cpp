@@ -53,7 +53,8 @@ QNetworkReply *NexusClient::requestChangelog(const QString &game, int modId)
         QString("/v1/games/%1/mods/%2/changelogs.json").arg(game).arg(modId));
 }
 
-QNetworkReply *NexusClient::requestModRequirements(int gameIdNumeric, int modId)
+QNetworkReply *NexusClient::requestModRequirements(int gameIdNumeric, int modId,
+                                                   int offset)
 {
     // v2 GraphQL, not the v1 REST base: the requirements table lives nowhere
     // else. Unauthenticated on purpose - the data is public and v2 does not
@@ -67,11 +68,15 @@ QNetworkReply *NexusClient::requestModRequirements(int gameIdNumeric, int modId)
     QJsonObject vars;
     vars.insert(QStringLiteral("m"), QString::number(modId));
     vars.insert(QStringLiteral("g"), QString::number(gameIdNumeric));
+    vars.insert(QStringLiteral("o"), qMax(0, offset));
+    // Without `count` the server sends 20 rows and says nothing about the
+    // rest; totalCount is what tells the caller there IS a rest.
+    vars.insert(QStringLiteral("c"), kV2PageCap);
     QJsonObject body;
     body.insert(QStringLiteral("query"), QStringLiteral(
-        "query($m: ID!, $g: ID!) { mod(modId: $m, gameId: $g) {"
-        " modRequirements { nexusRequirements { nodes {"
-        " modId modName notes url externalRequirement } } } } }"));
+        "query($m: ID!, $g: ID!, $o: Int, $c: Int) { mod(modId: $m, gameId: $g) {"
+        " modRequirements { nexusRequirements(offset: $o, count: $c) {"
+        " totalCount nodes { modId modName notes url externalRequirement } } } } }"));
     body.insert(QStringLiteral("variables"), vars);
     return m_nam->post(req, QJsonDocument(body).toJson(QJsonDocument::Compact));
 }
@@ -89,6 +94,7 @@ QNetworkReply *NexusClient::requestModNames(int gameIdNumeric,
     QJsonArray ids;
     for (int id : modIds) {
         if (id <= 0) continue;
+        if (ids.size() >= kV2PageCap) break;   // one page; chunkForV2 splits
         QJsonObject one;
         one.insert(QStringLiteral("gameId"), gameIdNumeric);
         one.insert(QStringLiteral("modId"),  id);
@@ -96,12 +102,28 @@ QNetworkReply *NexusClient::requestModNames(int gameIdNumeric,
     }
     QJsonObject vars;
     vars.insert(QStringLiteral("ids"), ids);
+    // The count is not optional in practice: left out, the server answers
+    // 20 of however many ids were asked for.
+    vars.insert(QStringLiteral("c"), qMax(1, int(ids.size())));
     QJsonObject body;
     body.insert(QStringLiteral("query"), QStringLiteral(
-        "query($ids: [CompositeIdInput!]!) { legacyMods(ids: $ids) {"
-        " nodes { modId name } } }"));
+        "query($ids: [CompositeIdInput!]!, $c: Int) {"
+        " legacyMods(ids: $ids, count: $c) { nodes { modId name } } }"));
     body.insert(QStringLiteral("variables"), vars);
     return m_nam->post(req, QJsonDocument(body).toJson(QJsonDocument::Compact));
+}
+
+QList<QList<int>> NexusClient::chunkForV2(const QList<int> &ids)
+{
+    QList<QList<int>> out;
+    QList<int> cur;
+    for (int id : ids) {
+        if (id <= 0) continue;
+        cur.append(id);
+        if (cur.size() == kV2PageCap) { out.append(cur); cur.clear(); }
+    }
+    if (!cur.isEmpty()) out.append(cur);
+    return out;
 }
 
 QHash<int, QString> NexusClient::parseModNames(const QByteArray &json)
@@ -130,8 +152,9 @@ QHash<int, QString> NexusClient::parseModNames(const QByteArray &json)
 }
 
 std::expected<QList<NexusClient::Requirement>, NexusClient::NexusError>
-NexusClient::parseModRequirements(const QByteArray &json)
+NexusClient::parseModRequirements(const QByteArray &json, PageInfo *page)
 {
+    if (page) *page = PageInfo{};
     QJsonParseError err{};
     const QJsonDocument doc = QJsonDocument::fromJson(json, &err);
     if (err.error != QJsonParseError::NoError || !doc.isObject())
@@ -147,9 +170,17 @@ NexusClient::parseModRequirements(const QByteArray &json)
     if (!mod.isObject())    // unknown mod, adult-gated, or schema drift
         return std::unexpected(NexusError{NexusError::Kind::WrongShape, {}});
 
-    const QJsonArray nodes = mod[QLatin1String("modRequirements")]
-                                [QLatin1String("nexusRequirements")]
-                                [QLatin1String("nodes")].toArray();
+    const QJsonValue reqs = mod[QLatin1String("modRequirements")]
+                               [QLatin1String("nexusRequirements")];
+    const QJsonArray nodes = reqs[QLatin1String("nodes")].toArray();
+    if (page) {
+        page->received = int(nodes.size());
+        // Absent on an old reply shape: treat what arrived as everything, so
+        // a caller never pages forever on a field that is not there.
+        page->total = reqs[QLatin1String("totalCount")].isDouble()
+            ? reqs[QLatin1String("totalCount")].toInt()
+            : int(nodes.size());
+    }
     QList<Requirement> out;
     out.reserve(nodes.size());
     for (const QJsonValue &v : nodes) {
