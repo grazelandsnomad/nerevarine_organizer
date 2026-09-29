@@ -1126,12 +1126,11 @@ void MainWindow::onContextMenu(const QPoint &pos)
                             }
                             statusBar()->showMessage(
                                 T("variant_applied").arg(picked).arg(res.copied), 5000);
-                            // The mod's content changed on disk, so a previous
-                            // deployment is stale. saveModList() bumps the
-                            // modlist mtime, which is what the staleness check
-                            // compares against the manifest.
+                            // The mod's content changed on disk while its row
+                            // did not, so a previous deployment is stale and
+                            // nothing in the list can show it.
                             saveModList();
-                            updateDeployHint();
+                            markDeployStale(modlistPath());
                         });
                     }
                 }

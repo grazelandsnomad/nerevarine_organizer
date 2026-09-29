@@ -125,4 +125,13 @@ UndeployResult undeploy(const QString &dataDir,
 QString  manifestToJson(const Manifest &m);
 Manifest manifestFromJson(const QString &json);
 
+// What a deployment was made FROM, as one short string: the enabled mods in
+// load order (each as whatever identifies its files - the caller passes path
+// and install date) and the plugin load order. Written beside the manifest at
+// deploy time and recomputed from the list afterwards, so "has the list
+// changed since the last deploy?" is answered by what the deploy used rather
+// than by the modlist file's mtime, which every save bumps - including the
+// ones that change nothing, like switching games or quitting.
+QString sourceFingerprint(const QStringList &mods, const QStringList &loadOrder);
+
 } // namespace bethesda_deploy

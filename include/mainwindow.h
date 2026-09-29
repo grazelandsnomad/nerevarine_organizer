@@ -575,7 +575,8 @@ private:
     // m_modList, load order, or openmw.cfg - those belong to the active profile
     // and would corrupt the wrong list. Caller persists via saveModListFor.
     void applyInstalledStateToStrandedPlaceholder(QListWidgetItem *placeholder,
-                                                  const QString &modPath);
+                                                  const QString &modPath,
+                                                  const QString &profileKey);
     // "Merge into existing" follow-through. When `placeholder` carries a pending
     // ModRole::MergeTargetPath (set in handleNxmUrl), overlay every file from
     // `contentPath` onto that folder (last-writer-wins, optional overrides
@@ -625,6 +626,15 @@ private:
     // profile is deploy-capable, has enabled installed mods, and has never
     // been deployed. Clicking it deploys.
     void updateDeployHint();
+    // What the active profile would deploy right now, as the digest the last
+    // deploy recorded beside its manifest (bethesda_deploy::sourceFingerprint):
+    // enabled installed mods in load order, each as path + install date, and
+    // the plugin load order. Different from the recorded one = stale.
+    QString deployFingerprint() const;
+    // A mod's files changed on disk without the list changing - a reinstall
+    // into the same folder, a variant swapped in. The fingerprint cannot see
+    // that, so the deploy recorded for `modlistFile` is marked stale by hand.
+    void markDeployStale(const QString &modlistFile);
 
     void scheduleTranslationScan();
     void runTranslationScan();
@@ -867,6 +877,11 @@ private:
     // panel down with it.
     ScanOverlay *m_deployOverlay       = nullptr;
     QTimer      *m_deployProgressTimer = nullptr;
+    // Coalesces the deploy-hint check. It rides every "list changed" edge,
+    // and a save fires one per row through itemChanged; evaluated once per
+    // turn of the event loop instead, and - which is what matters - after a
+    // game switch has finished rather than halfway through it.
+    QTimer      *m_deployHintTimer     = nullptr;
     // Set when the user turns the toggle on, so that scan ends on a result
     // panel they have to acknowledge. The scan also re-runs after any list
     // edit, and a dialog on every checkbox click would be intolerable - those

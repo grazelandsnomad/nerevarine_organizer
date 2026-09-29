@@ -1382,7 +1382,16 @@ void MainWindow::loadModList(const QString &path,
                              const QString &remapTo)
 {
     QFile f(path.isEmpty() ? modlistPath() : path);
-    if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
+    // A profile that has never been saved has no file yet, and that is an
+    // empty list - one that still has to finish loading as one. Returning
+    // early left the count, the model and the loaded flag describing the list
+    // this one replaced: a new game opened on "150 / 150 mods active" over an
+    // empty view. Only for the profile's own list: an explicit path that is
+    // missing (an import, a remap) is a mistake to leave alone, not a list.
+    // And a file that exists but will not open stays untouched either way -
+    // an empty list shown over it could be saved over it.
+    const bool neverSaved = path.isEmpty() && !f.exists();
+    if (!neverSaved && !f.open(QIODevice::ReadOnly | QIODevice::Text))
         return;
 
     // A freshly loaded list is in saved order; end any temporary view sort.
@@ -1397,7 +1406,7 @@ void MainWindow::loadModList(const QString &path,
     // QListWidgetItem the UI expects, plus the per-row install-status
     // probe and the on-disk "is this dir actually populated?" check
     // that the old loader did inline.
-    const QString contents = QString::fromUtf8(f.readAll());
+    const QString contents = neverSaved ? QString() : QString::fromUtf8(f.readAll());
     f.close();
     const QList<ModEntry> entries = modlist_serializer::parseModlist(contents);
 

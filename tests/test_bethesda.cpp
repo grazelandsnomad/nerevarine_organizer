@@ -198,6 +198,30 @@ static void testManifestRoundTrip()
     check("garbage JSON parses to empty manifest",
           manifestFromJson("not json").files.isEmpty());
 }
+// The record that replaced "modlist newer than manifest" as the staleness
+// test. It has to move with everything a deploy uses, and with nothing else.
+static void testSourceFingerprint()
+{
+    std::cout << "\n[sourceFingerprint: what a deploy was made from]\n";
+    const QStringList mods{"/m/A\t2026-01-01T00:00:00", "/m/B\t2026-01-02T00:00:00"};
+    const QStringList order{"A.esp", "B.esp"};
+    const QString fp = sourceFingerprint(mods, order);
+
+    check("same inputs, same answer - a save that changes nothing changes nothing",
+          fp == sourceFingerprint(mods, order));
+    check("short and fixed-length, fit for a sidecar file", fp.size() == 40, fp);
+    check("reordering the mods changes it (conflict winners move)",
+          fp != sourceFingerprint({mods[1], mods[0]}, order));
+    check("disabling one changes it", fp != sourceFingerprint({mods[0]}, order));
+    check("an update's new install date changes it",
+          fp != sourceFingerprint({mods[0], "/m/B\t2026-02-02T00:00:00"}, order));
+    check("the plugin load order changes it",
+          fp != sourceFingerprint(mods, {"B.esp", "A.esp"}));
+    check("no two lists join into the same bytes",
+          sourceFingerprint({"ab"}, {}) != sourceFingerprint({"a", "b"}, {})
+              && sourceFingerprint({"a"}, {"b"}) != sourceFingerprint({"a", "b"}, {}));
+}
+
 } // namespace deploy_section
 
 static void run_bethesda_deploy()
@@ -209,6 +233,7 @@ static void run_bethesda_deploy()
     deploy_section::testUndeployNoVanilla();
     deploy_section::testNestedAndCopyMethod();
     deploy_section::testManifestRoundTrip();
+    deploy_section::testSourceFingerprint();
 }
 
 namespace loadorder_section {

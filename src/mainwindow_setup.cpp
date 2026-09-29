@@ -1930,8 +1930,13 @@ void MainWindow::switchToGame(int idx)
     restoreStrandedInstalls();
     updateGameButton();
     updateProfileButton();
-    // dismiss() above already took the banner down, so drop the flag before
-    // re-asking the question for the game we just switched TO.
+    // Down again, and the flag with it, before asking the question for the
+    // game we just switched TO. The dismiss() at the top is not enough on its
+    // own: saving the game being left can put that game's banner back up in
+    // between, and resetting the flag under a banner that is still showing
+    // left nothing able to take it down - the old game's "changed since it
+    // was last deployed" sat over the new game's empty list.
+    if (m_notify) m_notify->dismiss();
     m_stickyKind = StickyKind::ViewSort;
     updateDeployHint();
     resetUntranslatedNotices();

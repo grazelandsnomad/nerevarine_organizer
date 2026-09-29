@@ -996,12 +996,15 @@ void MainWindow::prepareItemForInstall(QListWidgetItem *item)
 }
 
 void MainWindow::applyInstalledStateToStrandedPlaceholder(
-    QListWidgetItem *placeholder, const QString &modPath)
+    QListWidgetItem *placeholder, const QString &modPath, const QString &profileKey)
 {
     // The cross-profile completion case is exactly the "mark installed" role
     // transition - no m_modList iteration / load-order / openmw.cfg sync (those
     // belong to the active profile); the caller persists via saveModListFor.
     placeholder_state::markInstalled(placeholder, modPath);
+    // Files landed for a profile that is not on screen, so its deployment is
+    // out of date the same way addModFromPath says for the active one.
+    markDeployStale(modlistPathFor(profileKey));
 }
 
 
@@ -3138,7 +3141,11 @@ void MainWindow::switchToModlistProfile(int idx)
     syncGameConfig();
     updateProfileButton();
     // Deploy state is per modlist profile (the manifest is keyed by the
-    // modlist filename), so the answer changes with the profile.
+    // modlist filename), so the answer changes with the profile. Dismissed
+    // again rather than trusted to be down: saving the old profile above can
+    // put its own banner back up, and resetting the flag under a banner that
+    // is showing leaves nothing able to take it down.
+    if (m_notify) m_notify->dismiss();
     m_stickyKind = StickyKind::ViewSort;
     updateDeployHint();
     refreshScriptExtenderFlags();
@@ -3327,9 +3334,21 @@ void MainWindow::scheduleConflictScan()
     // the two from drifting apart when a new mutation site is added. It
     // no-ops while the toggle is off, and runs on a longer debounce.
     scheduleTranslationScan();
-    // Cheap (one stat + a list walk) and it has to track exactly the same
-    // edges: enabling a mod is what creates something to deploy.
-    updateDeployHint();
+    // It has to track exactly the same edges - enabling a mod is what
+    // creates something to deploy - but not at the same rate: a save calls
+    // setData on every row, each of which lands here through itemChanged.
+    // Once per turn of the event loop is enough, and it keeps a switch from
+    // being judged halfway: the old game's list is saved (and its rows
+    // touched) before the new one is loaded, and an immediate check there
+    // put the OLD game's "changed since it was last deployed" over the new
+    // game's empty list.
+    if (!m_deployHintTimer) {
+        m_deployHintTimer = new QTimer(this);
+        m_deployHintTimer->setSingleShot(true);
+        m_deployHintTimer->setInterval(0);
+        connect(m_deployHintTimer, &QTimer::timeout, this, &MainWindow::updateDeployHint);
+    }
+    m_deployHintTimer->start();
 }
 
 void MainWindow::runConflictScan()

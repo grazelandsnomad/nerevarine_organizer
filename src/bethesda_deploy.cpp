@@ -1,5 +1,6 @@
 #include "bethesda_deploy.h"
 
+#include <QCryptographicHash>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -237,6 +238,16 @@ QString manifestToJson(const Manifest &m)
         root.insert(QStringLiteral("dll_overrides"),
                     QJsonArray::fromStringList(m.dllOverrides));
     return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented));
+}
+
+QString sourceFingerprint(const QStringList &mods, const QStringList &loadOrder)
+{
+    // Unit and record separators: neither can occur in a path or a plugin
+    // name, so no two different inputs join to the same bytes.
+    const QString joined = mods.join(QChar(0x1e)) + QChar(0x1f)
+                         + loadOrder.join(QChar(0x1e));
+    return QString::fromLatin1(
+        QCryptographicHash::hash(joined.toUtf8(), QCryptographicHash::Sha1).toHex());
 }
 
 Manifest manifestFromJson(const QString &json)

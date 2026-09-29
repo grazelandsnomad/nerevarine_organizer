@@ -345,7 +345,7 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
                 if (fkey.isEmpty()) {
                     addModFromPath(effPath, fph);
                 } else {
-                    applyInstalledStateToStrandedPlaceholder(fph, effPath);
+                    applyInstalledStateToStrandedPlaceholder(fph, effPath, fkey);
                     saveModListFor(fkey, fph);
                 }
             }
@@ -480,7 +480,7 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
                 if (fkey.isEmpty()) {
                     addModFromPath(effPath, bph);
                 } else {
-                    applyInstalledStateToStrandedPlaceholder(bph, effPath);
+                    applyInstalledStateToStrandedPlaceholder(bph, effPath, fkey);
                     saveModListFor(fkey, bph);
                 }
             }
@@ -500,7 +500,7 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
         // Stranded: do the placeholder-only updates and persist to the
         // owning profile's modlist file.  m_modList iteration / load-order
         // / openmw.cfg sync are deferred until the user switches back.
-        applyInstalledStateToStrandedPlaceholder(placeholder, effPath);
+        applyInstalledStateToStrandedPlaceholder(placeholder, effPath, profileKey);
         saveModListFor(profileKey, placeholder);
     }
     QFile::remove(archivePath);
@@ -721,6 +721,10 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
     item->setData(ModRole::ModPath,       dirPath);
     item->setData(ModRole::InstallStatus, 1); // installed
     m_scans->invalidateDataFoldersCache(dirPath);      // force re-scan next time
+    // Files were just (re)written. A reinstall into the same folder keeps the
+    // path and the install date, so the deploy fingerprint cannot tell - say
+    // it outright, or Data/ keeps the old files with nothing on screen.
+    markDeployStale(modlistPath());
     item->setData(ModRole::UpdateAvailable, false);
     // A real install invalidates any silent-rebind patch repairEmptyModPaths
     // may have left on the row - the mod is now genuinely installed at

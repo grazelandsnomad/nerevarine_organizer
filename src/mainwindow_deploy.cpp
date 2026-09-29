@@ -149,7 +149,7 @@ using fsutils::sanitizeFolderName;
 
 // Forward-declare the moved file-statics so intra-TU call order is irrelevant.
 static int bethesdaActivate(const QString &id, const GameAdapter *adapter, const QString &dataDir, const bethesda_deploy::Manifest &manifest, const QStringList &loadOrder);
-static QString bethesdaApplyDeploy(const QString &id, const GameAdapter *adapter, const QString &dataDir, const QList<bethesda_deploy::DeploySource> &sources, const QList<bethesda_deploy::DeploySource> &rootSources, const QString &modlistFile, const QStringList &loadOrder, const bethesda_deploy::ProgressFn &progress);
+static QString bethesdaApplyDeploy(const QString &id, const GameAdapter *adapter, const QString &dataDir, const QList<bethesda_deploy::DeploySource> &sources, const QList<bethesda_deploy::DeploySource> &rootSources, const QString &modlistFile, const QStringList &loadOrder, const QString &fingerprint, const bethesda_deploy::ProgressFn &progress);
 static QString bethesdaApplyUndeploy(const QString &id, const GameAdapter *adapter, const QString &dataDir, const QString &modlistFile);
 static QStringList bethesdaConfigureArchives(const QString &id, const GameAdapter *adapter, const QString &dataDir, const bethesda_deploy::Manifest &manifest);
 static QStringList bethesdaPrefixUserDirs(const GameAdapter *adapter, const QString &dataDir);
@@ -157,7 +157,7 @@ static QString bethesdaResolveDataDir(QWidget *parent, const QString &id, const 
 static void bethesdaStatePaths(const QString &modlistFile, QString &manifestPath, QString &backupDir);
 static QString findScriptExtenderLoader(const GameAdapter *adapter, const QString &installDir);
 static bool launchViaProton(QWidget *parent, const QString &appId, const QString &exePath);
-static QList<bethesda_deploy::DeploySource> gatherBethesdaSources(QListWidget *list, const GameAdapter *adapter, const QString &modsDir);
+static QList<bethesda_deploy::DeploySource> gatherBethesdaSources(QListWidget *list, const QList<int> &order, const GameAdapter *adapter, const QString &modsDir);
 static QString heroicGogAppId(const QString &exeOrDirPath);
 static bool launchViaGog(const QString &gogExe);
 static QString resolveBethesdaIniDir(const QString &id, const GameAdapter *adapter, const QString &dataDir);
@@ -601,6 +601,30 @@ static void bethesdaRootStatePaths(const QString &modlistFile,
     backupDir    = resolveUserStatePath("deploy_backup_" + key + "__root");
 }
 
+// What the deployment beside it was made from - bethesda_deploy::
+// sourceFingerprint, or the word "changed" once markDeployStale has said a
+// mod's files moved under it. Absent for deployments made before it existed.
+static QString bethesdaFingerprintPath(const QString &modlistFile)
+{
+    const QString key = QFileInfo(modlistFile).completeBaseName();
+    return resolveUserStatePath("deploy_manifest_" + key + ".fingerprint");
+}
+
+static QString readSmallFile(const QString &path)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) return {};
+    return QString::fromUtf8(f.read(256)).trimmed();
+}
+
+static void writeSmallFile(const QString &path, const QString &text)
+{
+    QSaveFile f(path);
+    if (!f.open(QIODevice::WriteOnly)) return;
+    f.write(text.toUtf8());
+    f.commit();
+}
+
 // Mods that ship a script-extender loader, as sources for the game-root deploy.
 //
 // SKSE (and OBSE/F4SE/…) put skse64_loader.exe plus its runtime DLL beside the
@@ -612,7 +636,8 @@ static void bethesdaRootStatePaths(const QString &modlistFile,
 // SKSE also ships are not the game's business, and a recursive sweep here
 // would additionally re-deploy the mod's own Data/ into the game root.
 static QList<bethesda_deploy::DeploySource> gatherScriptExtenderSources(
-    QListWidget *list, const GameAdapter *adapter, const QString &modsDir)
+    QListWidget *list, const QList<int> &order, const GameAdapter *adapter,
+    const QString &modsDir)
 {
     QList<bethesda_deploy::DeploySource> out;
     if (!adapter) return out;
@@ -621,7 +646,7 @@ static QList<bethesda_deploy::DeploySource> gatherScriptExtenderSources(
     if (loaders.isEmpty() && routes.pakModsSubdir.isEmpty()
         && routes.extenderPluginsSubdir.isEmpty()) return out;
 
-    for (int i = 0; i < list->count(); ++i) {
+    for (int i : order) {
         auto *item = list->item(i);
         if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
         if (item->checkState() != Qt::Checked) continue;
@@ -756,6 +781,7 @@ static QString bethesdaApplyUndeploy(const QString &id, const GameAdapter *adapt
             restoreNerevarineBak(QDir(iniDir).filePath("Oblivion.ini"));
     }
     QFile::remove(manifestPath);
+    QFile::remove(bethesdaFingerprintPath(modlistFile));
     QString summary = T("undeploy_done").arg(u.removed).arg(u.restored).arg(u.errors.size());
     if (!unset.isEmpty())
         summary += QStringLiteral("\n\n")
@@ -776,14 +802,18 @@ static QString bethesdaApplyUndeploy(const QString &id, const GameAdapter *adapt
 // that happens to contain, say, shader/shaders/ would be deployed from the
 // inner folder: everything at the wrong depth, and the wrapper .dll sitting
 // beside it dropped on the floor.
+// `order` is the persisted row order (MainWindow::rowOrderForPersist): a
+// temporary Size/Date view sort reorders the rows on screen, and deploying in
+// that order would hand every conflict to whichever mod happens to sort last.
 static QList<bethesda_deploy::DeploySource> gatherBethesdaSources(QListWidget *list,
+                                                                  const QList<int> &order,
                                                                   const GameAdapter *adapter,
                                                                   const QString &modsDir)
 {
     static const QStringList kExts{".esp", ".esm", ".esl"};
     const bool overlay = adapter && adapter->overlayDeploy();
     QList<bethesda_deploy::DeploySource> sources;
-    for (int i = 0; i < list->count(); ++i) {
+    for (int i : order) {
         auto *item = list->item(i);
         if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
         if (item->checkState() != Qt::Checked) continue;
@@ -1095,6 +1125,7 @@ static QString bethesdaApplyDeploy(const QString &id, const GameAdapter *adapter
                                    const QList<bethesda_deploy::DeploySource> &sources,
                                    const QList<bethesda_deploy::DeploySource> &rootSources,
                                    const QString &modlistFile, const QStringList &loadOrder,
+                                   const QString &fingerprint,
                                    const bethesda_deploy::ProgressFn &progress)
 {
     QString manifestPath, backupDir;
@@ -1155,6 +1186,7 @@ static QString bethesdaApplyDeploy(const QString &id, const GameAdapter *adapter
         outFile.write(bethesda_deploy::manifestToJson(res.manifest).toUtf8());
         outFile.close();
     }
+    writeSmallFile(bethesdaFingerprintPath(modlistFile), fingerprint);
     const int activated = bethesdaActivate(id, adapter, dataDir, res.manifest, loadOrder);
     const QStringList stray =
         bethesdaConfigureArchives(id, adapter, dataDir, res.manifest);
@@ -1185,6 +1217,37 @@ static QString bethesdaApplyDeploy(const QString &id, const GameAdapter *adapter
     // engine will actually load.
     if (!gothicNote.isEmpty()) summary += QStringLiteral("\n\n") + gothicNote;
     return summary;
+}
+
+QString MainWindow::deployFingerprint() const
+{
+    // Same rows, same filter and same order as gatherBethesdaSources - enabled,
+    // installed mods, persisted order - so it describes what a deploy uses.
+    // Path AND install date: an update refreshes the date even when it lands
+    // in the same folder.
+    QStringList mods;
+    for (int i : rowOrderForPersist()) {
+        const auto *it = m_modList->item(i);
+        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (it->checkState() != Qt::Checked) continue;
+        if (it->data(ModRole::InstallStatus).toInt() != 1) continue;
+        const QString path = it->data(ModRole::ModPath).toString();
+        if (path.isEmpty()) continue;
+        mods << path + QLatin1Char('\t')
+                + it->data(ModRole::DateAdded).toDateTime().toString(Qt::ISODate);
+    }
+    return bethesda_deploy::sourceFingerprint(mods, m_loadOrder);
+}
+
+void MainWindow::markDeployStale(const QString &modlistFile)
+{
+    // Only a recorded fingerprint can be contradicted. With none, either
+    // nothing was deployed or it predates the record, and the mtime rule the
+    // save that follows every install already trips covers it.
+    const QString path = bethesdaFingerprintPath(modlistFile);
+    if (!QFileInfo::exists(path)) return;
+    writeSmallFile(path, QStringLiteral("changed"));
+    updateDeployHint();
 }
 
 // A Bethesda modlist that was never deployed does nothing whatsoever.
@@ -1236,17 +1299,30 @@ void MainWindow::updateDeployHint()
     // a redeploy. Deploy-on-launch only re-syncs when the game is started from
     // here, which is not what happens if the user launches from Steam.
     //
-    // Staleness by mtime: every list edit rewrites the modlist file and every
-    // deploy rewrites the manifest, so "modlist newer than manifest" is
-    // exactly "changed since the last deploy". A false positive costs one
-    // redeploy, a false negative costs a broken game with no explanation.
+    // Staleness used to be "modlist file newer than manifest", on the theory
+    // that every edit rewrites the list. So does every save that edits
+    // nothing - switching games, quitting, a background scan touching a row -
+    // so a list deployed and then left alone read as changed after the next
+    // restart. What the deploy was made FROM is recorded beside the manifest
+    // now and compared, and the cases no list shows (a reinstall into the
+    // same folder, a swapped variant) mark the record by hand. The mtime rule
+    // stays only for deployments made before the record existed, until their
+    // next deploy writes one. A false positive still costs one redeploy and a
+    // false negative a broken game, so where this cannot tell, it says stale.
     QString manifestPath, backupDir;
     bethesdaStatePaths(modlistPath(), manifestPath, backupDir);
     const QFileInfo manifest(manifestPath);
-    const QFileInfo modlist(modlistPath());
     const bool deployed = manifest.exists();
-    const bool stale    = deployed && modlist.exists()
-                       && modlist.lastModified() > manifest.lastModified();
+    bool stale = false;
+    if (deployed) {
+        const QString recorded = readSmallFile(bethesdaFingerprintPath(modlistPath()));
+        if (recorded.isEmpty()) {
+            const QFileInfo modlist(modlistPath());
+            stale = modlist.exists() && modlist.lastModified() > manifest.lastModified();
+        } else {
+            stale = recorded != deployFingerprint();
+        }
+    }
     if (deployed && !stale) { clear(); return; }
 
     m_stickyKind = StickyKind::DeployHint;
@@ -1276,7 +1352,15 @@ void MainWindow::onDeployBethesda()
     const QString dataDir = bethesdaResolveDataDir(this, id, adapter, /*allowPrompt=*/true);
     if (dataDir.isEmpty()) return;
 
-    const auto sources = gatherBethesdaSources(m_modList, adapter, m_modsDir);
+    // Deploy the load order the list implies now, as a save would write it.
+    // m_loadOrder is only brought up to date by saveModList, so straight after
+    // a switch or a launch it can still lack plugins the list has - and the
+    // deploy would write Plugins.txt from that, then be stale by its own
+    // record the moment the next save caught up.
+    reconcileLoadOrder();
+    saveLoadOrder();
+    const QList<int> order = rowOrderForPersist();
+    const auto sources = gatherBethesdaSources(m_modList, order, adapter, m_modsDir);
     if (sources.isEmpty()) {
         ui::info(this, T("deploy_title"), T("deploy_none"));
         return;
@@ -1334,12 +1418,17 @@ void MainWindow::onDeployBethesda()
     const QString modlistFile = modlistPath();
     const QStringList loadOrder = m_loadOrder;
     // Gathered on the UI thread with everything else - it reads m_modList.
-    const auto rootSources = gatherScriptExtenderSources(m_modList, adapter, m_modsDir);
+    const auto rootSources = gatherScriptExtenderSources(m_modList, order, adapter, m_modsDir);
+    // Taken with the sources, on the same thread and from the same rows, so it
+    // describes exactly what this deploy is about to place.
+    const QString fingerprint = deployFingerprint();
     async::guarded(this,
-        [id, adapter, dataDir, sources, rootSources, modlistFile, loadOrder, progressCell]
+        [id, adapter, dataDir, sources, rootSources, modlistFile, loadOrder, fingerprint,
+         progressCell]
         (MainWindow *) -> QString {
             return bethesdaApplyDeploy(
                 id, adapter, dataDir, sources, rootSources, modlistFile, loadOrder,
+                fingerprint,
                 [progressCell](int done, int total) {
                     progressCell->store((qint64(done) << 32) | quint32(total),
                                   std::memory_order_relaxed);
@@ -1398,14 +1487,18 @@ void MainWindow::maybeDeployBeforeLaunch(const QString &id)
     if (!QFileInfo::exists(manifestPath)) return;
     const QString dataDir = bethesdaResolveDataDir(this, id, adapter, /*allowPrompt=*/false);
     if (dataDir.isEmpty()) return;
-    const auto sources = gatherBethesdaSources(m_modList, adapter, m_modsDir);
+    reconcileLoadOrder();   // see onDeployBethesda
+    saveLoadOrder();
+    const QList<int> order = rowOrderForPersist();
+    const auto sources = gatherBethesdaSources(m_modList, order, adapter, m_modsDir);
     if (sources.isEmpty()) return;
     // No progress panel here: this is the pre-launch re-sync, it only runs when
     // a deployment already exists, and the user is on their way into the game
     // rather than watching the window.
     bethesdaApplyDeploy(id, adapter, dataDir, sources,
-                        gatherScriptExtenderSources(m_modList, adapter, m_modsDir),
-                        modlistPath(), m_loadOrder, {});
+                        gatherScriptExtenderSources(m_modList, order, adapter, m_modsDir),
+                        modlistPath(), m_loadOrder, deployFingerprint(), {});
+    updateDeployHint();
     if (statusBar()) statusBar()->showMessage(T("deploy_relaunch_synced"), 3000);
     refreshScriptExtenderFlags();
 }
@@ -1481,7 +1574,8 @@ void MainWindow::onInspectDeployment()
             && it->data(ModRole::InstallStatus).toInt() == 1)
             ++f.enabledInstalledMods;
     }
-    f.dataRootCount = int(gatherBethesdaSources(m_modList, adapter, m_modsDir).size());
+    f.dataRootCount = int(gatherBethesdaSources(m_modList, rowOrderForPersist(),
+                                                adapter, m_modsDir).size());
 
     f.prefixCandidates = bethesdaPrefixUserDirs(adapter, dataDir);
     for (const QString &p : f.prefixCandidates)
