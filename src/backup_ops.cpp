@@ -2,9 +2,36 @@
 
 #include "safe_fs.h"
 
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QSet>
+
+#include <algorithm>
 
 namespace backup_ops {
+
+QFileInfoList listSnapshots(const QString &livePath, const QString &mirrorRoot)
+{
+    const QFileInfo live(livePath);
+    const QStringList pattern{live.fileName() + QStringLiteral(".bak.*")};
+    QFileInfoList out = live.dir().entryInfoList(pattern, QDir::Files | QDir::Readable);
+
+    const QString mirror = safefs::backupMirrorDir(livePath, mirrorRoot);
+    if (!mirror.isEmpty()) {
+        QSet<QString> beside;
+        for (const QFileInfo &fi : out) beside.insert(fi.fileName());
+        for (const QFileInfo &fi :
+             QDir(mirror).entryInfoList(pattern, QDir::Files | QDir::Readable))
+            if (!beside.contains(fi.fileName())) out << fi;
+    }
+
+    // The YYYYMMDD-HHMMSS suffix makes name order time order, so no stat().
+    std::sort(out.begin(), out.end(), [](const QFileInfo &a, const QFileInfo &b) {
+        return a.fileName() > b.fileName();
+    });
+    return out;
+}
 
 std::expected<void, QString>
 restoreSnapshot(const QString &livePath, const QString &snapshotPath)

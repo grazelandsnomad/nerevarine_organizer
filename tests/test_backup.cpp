@@ -10,6 +10,7 @@
 
 #include "backup_manager.h"
 #include "backup_ops.h"
+#include "safe_fs.h"
 
 #include <QByteArray>
 #include <QCoreApplication>
@@ -161,6 +162,75 @@ static void testBackupOps()
           !backup_ops::deleteSnapshot(dir.filePath("gone.x")).has_value());
 }
 
+// backup_ops::listSnapshots - what the Restore Backup dialog lists. The mirror
+// root is always passed explicitly: the default is the real AppDataLocation.
+static void testListSnapshotsMergesMirror()
+{
+    std::cout << "testListSnapshotsMergesMirror\n";
+    QTemporaryDir tmp;
+    const QString checkout = tmp.filePath("checkout");
+    const QString live = checkout + "/bin/Release_Linux/modlist_fallout4.txt";
+    const QString root = tmp.filePath("appdata/backups");
+    QDir().mkpath(checkout + "/.git");
+    writeFile(live, "now\n");
+
+    const QString mirror = safefs::backupMirrorDir(live, root);
+    check("a checkout gets a mirror", !mirror.isEmpty());
+
+    // Beside the live file: 02 and 03. In the mirror: 01 (rotated out beside
+    // it, but kept longer here) and 03 again (the other copy of the same save).
+    writeFile(live + ".bak.20260102-000000", "two\n");
+    writeFile(live + ".bak.20260103-000000", "three\n");
+    writeFile(mirror + "/modlist_fallout4.txt.bak.20260101-000000", "one\n");
+    writeFile(mirror + "/modlist_fallout4.txt.bak.20260103-000000", "three\n");
+
+    const QFileInfoList got = backup_ops::listSnapshots(live, root);
+    QStringList names;
+    for (const QFileInfo &fi : got) names << fi.fileName().section(".bak.", 1);
+    check("both places, one entry per snapshot, newest first",
+          names == QStringList{"20260103-000000", "20260102-000000", "20260101-000000"},
+          names.join(", "));
+    check("the copy beside the live file stands for a pair",
+          !got.isEmpty() && got.first().absolutePath() == QFileInfo(live).absolutePath());
+    check("a snapshot only the mirror has is listed from the mirror",
+          got.size() == 3 && got.last().absolutePath() == QDir(mirror).absolutePath());
+}
+
+static void testListSnapshotsAfterDeepClean()
+{
+    std::cout << "testListSnapshotsAfterDeepClean\n";
+    QTemporaryDir tmp;
+    const QString checkout = tmp.filePath("checkout");
+    const QString live = checkout + "/bin/Release_Linux/modlist_morrowind.txt";
+    const QString root = tmp.filePath("appdata/backups");
+    QDir().mkpath(checkout + "/.git");
+    writeFile(live, "the order that took a week\n");
+    const QString bak = safefs::snapshotBackup(live, 20, root).value_or(QString());
+    check("snapshot written", !bak.isEmpty());
+
+    // git clean -xdf, then a rebuild: the state dir comes back empty.
+    QDir(checkout + "/bin").removeRecursively();
+    QDir().mkpath(QFileInfo(live).absolutePath());
+
+    const QFileInfoList got = backup_ops::listSnapshots(live, root);
+    check("the mirror's snapshot is what Restore Backup offers", got.size() == 1);
+    check("and it holds the list", !got.isEmpty()
+          && readFile(got.first().absoluteFilePath()) == "the order that took a week\n");
+}
+
+static void testListSnapshotsOutsideCheckout()
+{
+    std::cout << "testListSnapshotsOutsideCheckout\n";
+    QTemporaryDir tmp;
+    const QString live = tmp.filePath("state/modlist_skyrim.txt");
+    writeFile(live, "x\n");
+    writeFile(live + ".bak.20260101-000000", "old\n");
+    writeFile(tmp.filePath("unrelated.txt.bak.20260101-000000"), "nope\n");
+    const QFileInfoList got = backup_ops::listSnapshots(live, tmp.filePath("appdata/backups"));
+    check("only this file's snapshots, from beside it",
+          got.size() == 1 && got.first().fileName() == "modlist_skyrim.txt.bak.20260101-000000");
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -168,6 +238,9 @@ int main(int argc, char **argv)
     testCreatesAndNoPileUp();
     testContentDedupeAndChange();
     testGuardsMissingDir();
+    testListSnapshotsMergesMirror();
+    testListSnapshotsAfterDeepClean();
+    testListSnapshotsOutsideCheckout();
     testBackupOps();
     std::cout << "\n" << s_passed << " passed, " << s_failed << " failed\n";
     return s_failed == 0 ? 0 : 1;

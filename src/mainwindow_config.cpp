@@ -204,6 +204,23 @@ void MainWindow::maybeShowLootMissingBanner()
                            "https://loot.github.io/", "loot_missing");
 }
 
+void MainWindow::maybeShowBackupMirrorNotice()
+{
+    if (m_profiles->isEmpty()) return;
+    const QString live   = modlistPath();
+    const QString mirror = safefs::backupMirrorDir(live, safefs::defaultBackupMirrorRoot());
+    if (mirror.isEmpty() || Settings::backupMirrorNoticeShownFor() == mirror) return;
+    Settings::setBackupMirrorNoticeShownFor(mirror);
+
+    qInfo().noquote() << "[backups]" << QFileInfo(live).absolutePath()
+                      << "is inside the git work tree" << safefs::gitWorkTreeOf(live)
+                      << "- snapshots are mirrored to" << mirror;
+    // Created now so the link opens a folder even before the first save.
+    QDir().mkpath(mirror);
+    m_notify->showWithLink(T("backup_mirror_notice"), "#1a6fa8",
+                           QUrl::fromLocalFile(mirror).toString());
+}
+
 void MainWindow::loadLoadOrder()
 {
     m_loadOrder.clear();

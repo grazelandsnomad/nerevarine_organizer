@@ -173,6 +173,13 @@ struct Settings {
     static bool    lootBannerDisabled();
     static void    setLootBannerDisabled(bool disabled);
 
+    // -- Backup mirror notice ---
+    // The mirror folder the one-time "your state is in a git checkout" banner
+    // was last shown for. A checkout that moves gets a new mirror, and the
+    // notice again.
+    static QString backupMirrorNoticeShownFor();
+    static void    setBackupMirrorNoticeShownFor(const QString &mirrorDir);
+
     // -- Download queue ---
     static bool    queueVisible(bool defaultVisible);
     static void    setQueueVisible(bool visible);

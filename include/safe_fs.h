@@ -17,6 +17,10 @@
 
 namespace safefs {
 
+// AppDataLocation/backups - the mirror root the app itself uses (see
+// backupMirrorDir below).
+QString defaultBackupMirrorRoot();
+
 // Copy `liveFile` to `<liveFile>.bak.YYYYMMDD-HHMMSS`, pruning to the newest
 // `keep` snapshots in that directory.
 //
@@ -28,8 +32,36 @@ namespace safefs {
 // keep defaults to 20: a burst of saves (a couple of sort/reorder passes plus
 // the launcher/openmw.cfg sync each save) can otherwise rotate a still-wanted
 // order out of reach within one session. 20 spans that comfortably.
+//
+// When the live file sits inside a git work tree, the snapshot is ALSO written
+// to backupMirrorDir(liveFile, mirrorRoot) - unless it is identical to the
+// newest one already there - and that folder is rotated with the same `keep`.
+// Best effort: a failed mirror copy never fails the snapshot.
 std::expected<QString, QString>
-snapshotBackup(const QString &liveFile, int keep = 20);
+snapshotBackup(const QString &liveFile, int keep = 20,
+               const QString &mirrorRoot = defaultBackupMirrorRoot());
+
+// The git work tree `path` is inside - the nearest ancestor holding a .git
+// entry, a directory in a normal clone and a file in a linked worktree - or
+// empty when there is none. Reads only the .git entries, so it answers the
+// same whether or not `path` itself still exists.
+QString gitWorkTreeOf(const QString &path);
+
+// Where snapshots of `liveFile` are also kept, or empty when one home is
+// enough.
+//
+// A build run from a checkout keeps its state next to the binary, and
+// snapshotBackup put every snapshot next to the live file - so the mod lists
+// and all their backups sat in one ignored directory of the work tree, and a
+// single `git clean -xdf` deleted both. The mirror is outside the checkout,
+// and only needed when the live file is inside one: an AppImage or installed
+// copy keeps its state in AppDataLocation already.
+//
+// One folder per live directory, named for its work tree plus a hash of the
+// directory path, so two checkouts never read each other's lists back. The
+// name depends on the path alone, which is what lets a rebuilt checkout find
+// the snapshots its clean deleted.
+QString backupMirrorDir(const QString &liveFile, const QString &mirrorRoot);
 
 // Streaming per-file copy with size verification; fallback when QDir::rename
 // fails (typically EXDEV on cross-filesystem moves).

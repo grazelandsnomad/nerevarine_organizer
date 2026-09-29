@@ -16,11 +16,22 @@
 //
 // Qt Core only (no Widgets), so tests drive them against a QTemporaryDir.
 
+#include "safe_fs.h"
+
+#include <QFileInfoList>
 #include <QString>
 
 #include <expected>
 
 namespace backup_ops {
+
+// Every rotating snapshot of `livePath` (.bak.<stamp>), newest first: the ones
+// beside it plus the ones in its mirror (safefs::backupMirrorDir). One entry
+// per snapshot name - both copies are written together, so the one beside
+// the live file stands for the pair. After a deep clean of a checkout only the
+// mirror is left, and this is how the Restore Backup dialog still finds it.
+QFileInfoList listSnapshots(const QString &livePath,
+                            const QString &mirrorRoot = safefs::defaultBackupMirrorRoot());
 
 // Overwrite `livePath` with the bytes of `snapshotPath` (a .bak.* or .good.*
 // file). Snapshots the current `livePath` FIRST via safefs::snapshotBackup so

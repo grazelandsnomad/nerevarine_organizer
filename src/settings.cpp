@@ -41,6 +41,7 @@ constexpr auto kUiConflictNotices     = "ui/conflict_notices";
 constexpr auto kDownloadsWatch       = "downloads/watch_folder";
 
 constexpr auto kLootBannerDisabled  = "loot/banner_disabled";
+constexpr auto kBackupMirrorNotice  = "backups/mirror_notice_shown_for";
 constexpr auto kQueueVisible        = "queue/visible";
 constexpr auto kSeparatorsHidden    = "separators/hidden_presets";
 constexpr auto kLaunchSkipReboot    = "launch/skip_reboot_check";
@@ -507,6 +508,16 @@ bool Settings::lootBannerDisabled()
 void Settings::setLootBannerDisabled(bool disabled)
 {
     QSettings().setValue(kLootBannerDisabled, disabled);
+}
+
+QString Settings::backupMirrorNoticeShownFor()
+{
+    return QSettings().value(kBackupMirrorNotice).toString();
+}
+
+void Settings::setBackupMirrorNoticeShownFor(const QString &mirrorDir)
+{
+    QSettings().setValue(kBackupMirrorNotice, mirrorDir);
 }
 
 bool Settings::queueVisible(bool defaultVisible)

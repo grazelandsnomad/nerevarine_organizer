@@ -19,6 +19,7 @@
 #include <Qt>
 
 #include "backup_ops.h"
+#include "safe_fs.h"
 #include "translator.h"
 #include "prompts.h"
 
@@ -34,14 +35,11 @@ void BackupManager::showRestoreBackupDialog(QWidget *parent)
 {
     const QString livePath = m_livePath();
     const QFileInfo liveInfo(livePath);
-    const QDir      dir        = liveInfo.dir();
     const QString   liveName   = liveInfo.fileName();
-    const QString   bakPattern = liveName + ".bak.*";
 
-    // Sort by name, newest first: the YYYYMMDD-HHMMSS suffix makes
-    // lexicographic order == time order, so no stat() needed.
-    QFileInfoList snapshots = dir.entryInfoList(
-        {bakPattern}, QDir::Files | QDir::Readable, QDir::Name | QDir::Reversed);
+    // Newest first, from beside the live file and from its mirror outside the
+    // checkout (when it has one).
+    const QFileInfoList snapshots = backup_ops::listSnapshots(livePath);
 
     if (snapshots.isEmpty()) {
         ui::info(parent, T("restore_backup_title"), T("restore_backup_none").arg(liveName));
@@ -54,7 +52,11 @@ void BackupManager::showRestoreBackupDialog(QWidget *parent)
 
     auto *v = new QVBoxLayout(&dlg);
 
-    auto *header = new QLabel(T("restore_backup_body").arg(liveName), &dlg);
+    QString headerText = T("restore_backup_body").arg(liveName);
+    const QString mirror = safefs::backupMirrorDir(livePath, safefs::defaultBackupMirrorRoot());
+    if (!mirror.isEmpty())
+        headerText += QStringLiteral("\n\n") + T("restore_backup_mirror_note").arg(mirror);
+    auto *header = new QLabel(headerText, &dlg);
     header->setWordWrap(true);
     v->addWidget(header);
 

@@ -433,6 +433,9 @@ MainWindow::MainWindow(QWidget *parent)
 
     // One-time reminder if LOOT is missing, else "auto-sort skipped" is silent.
     QTimer::singleShot(800, this, &MainWindow::maybeShowLootMissingBanner);
+    // Once per checkout: a build run from a git work tree keeps its state
+    // there, where a deep clean deletes it - say where the backups went.
+    QTimer::singleShot(1500, this, &MainWindow::maybeShowBackupMirrorNotice);
     // First-run welcome. Deferred so the window paints before the modal grabs focus.
     QTimer::singleShot(300, this, &MainWindow::maybeShowFirstRunWizard);
     // After that window: nag once if the archive extractors are missing (the

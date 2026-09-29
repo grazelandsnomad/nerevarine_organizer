@@ -25,7 +25,10 @@ echo -e "${G}-- Installing to bin/Release_Linux ---${R}"
 # "I edited code but the old binary still runs" trap.
 mkdir -p bin/Release_Linux/translations
 cp -f  build/nerevarine_organizer        bin/Release_Linux/nerevarine_organizer
-cp -f  build/nerevarine_prefs.ini        bin/Release_Linux/nerevarine_prefs.ini
+# The prefs file is the user's to edit ("Edit this file to customise the
+# application"), so it is seeded once and never overwritten by a build.
+[[ -e bin/Release_Linux/nerevarine_prefs.ini ]] \
+    || cp build/nerevarine_prefs.ini     bin/Release_Linux/nerevarine_prefs.ini
 cp -rf build/translations/.              bin/Release_Linux/translations/
 
 echo ""

@@ -33,7 +33,6 @@ set -eu
 
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 BINARY="$ROOT/bin/Release_Linux/nerevarine_organizer"
-APP_LOG="$ROOT/bin/Release_Linux/log.txt"
 
 DURATION=3
 DO_BUILD=1
@@ -67,38 +66,67 @@ if (( DO_BUILD )); then
         echo "error: cmake build failed" >&2
         exit 2
     fi
-    # Mirror to bin/Release_Linux so the headless launch below hits the
-    # same layout the end user will.  Same steps as build.sh.
+    # Mirror to bin/Release_Linux, same steps as build.sh - including leaving
+    # an existing prefs file alone, since it is the user's to edit.
     mkdir -p "$ROOT/bin/Release_Linux/translations"
     cp -f  "$ROOT/build/nerevarine_organizer" "$BINARY"
-    cp -f  "$ROOT/build/nerevarine_prefs.ini" "$ROOT/bin/Release_Linux/nerevarine_prefs.ini"
+    [[ -e "$ROOT/bin/Release_Linux/nerevarine_prefs.ini" ]] \
+        || cp "$ROOT/build/nerevarine_prefs.ini" "$ROOT/bin/Release_Linux/nerevarine_prefs.ini"
     cp -rf "$ROOT/build/translations/."       "$ROOT/bin/Release_Linux/translations/"
 fi
 
 [[ -x "$BINARY" ]] || { echo "error: binary not executable: $BINARY" >&2; exit 3; }
 
-# -- Headless launch ---
+# -- Scratch copy ---
 #
-# Reset the app log so we only scrape THIS run's output - otherwise a
-# prior run's stale FATAL poisons the check forever.
-: > "$APP_LOG"
-
+# The app keeps its state next to the binary (mod lists, logs) and its
+# settings under the XDG dirs, and startup is allowed to write both - so
+# launching bin/Release_Linux/ in place ran this check against a developer's
+# live mod lists and settings. Launch a copy from a scratch dir, under a
+# scratch HOME, with the shipped prefs: a first launch on a clean machine,
+# which is also exactly what CI sees.
+#
+# TMPDIR too: the single-instance socket lives there, and with the real app
+# open the copy would hand off to it and exit 0 - "launch OK" without having
+# launched anything. And no session bus: startup reads the Nexus key from the
+# keychain over D-Bus, which on a desktop is the developer's real keyring (an
+# unlock prompt, then a key the copy would go and validate). The runtime dir
+# goes with it, because libdbus falls back to $XDG_RUNTIME_DIR/bus.
+#
 # Capture stderr (where Qt writes warnings) independently of stdout, which
-# is mostly empty for this app.  `-platform offscreen` keeps us out of
-# the X/Wayland display entirely - no window pops up, no compositor is
-# required, CI can run this.
+# is mostly empty for this app.
+SCRATCH=$(mktemp -d)
 STDOUT_LOG=$(mktemp)
 STDERR_LOG=$(mktemp)
-cleanup_tmp() { rm -f "$STDOUT_LOG" "$STDERR_LOG"; }
+cleanup_tmp() { rm -rf "$STDOUT_LOG" "$STDERR_LOG" "$SCRATCH"; }
 trap cleanup_tmp EXIT
 
+mkdir -p "$SCRATCH/app" "$SCRATCH/home" "$SCRATCH/tmp"
+mkdir -p -m 700 "$SCRATCH/run"
+cp -f  "$BINARY"                               "$SCRATCH/app/"
+cp -f  "$ROOT/nerevarine_prefs.ini"            "$SCRATCH/app/"
+cp -rf "$ROOT/bin/Release_Linux/translations"  "$SCRATCH/app/"
+# Where logging::initialize() puts it for a non-AppImage build.
+APP_LOG="$SCRATCH/app/logs/log.txt"
+
+# -- Headless launch ---
+#
+# `-platform offscreen` keeps us out of the X/Wayland display entirely - no
+# window pops up, no compositor is required, CI can run this.
 echo "-- Launching headless (duration: ${DURATION}s) ---"
 # `timeout -k 2 N` sends SIGTERM after N seconds and SIGKILL 2s later if
 # the app ignored it.  Exit code 124 = SIGTERM fired, which is our normal
 # healthy outcome - we WANT the app to run to the duration and be killed,
 # not to crash on its own.
 set +e
-timeout -k 2 "$DURATION" "$BINARY" -platform offscreen \
+env -u DISPLAY -u WAYLAND_DISPLAY \
+    HOME="$SCRATCH/home" TMPDIR="$SCRATCH/tmp" \
+    XDG_CONFIG_HOME="$SCRATCH/home/.config" \
+    XDG_DATA_HOME="$SCRATCH/home/.local/share" \
+    XDG_CACHE_HOME="$SCRATCH/home/.cache" \
+    XDG_RUNTIME_DIR="$SCRATCH/run" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=$SCRATCH/run/bus" \
+    timeout -k 2 "$DURATION" "$SCRATCH/app/nerevarine_organizer" -platform offscreen \
     >"$STDOUT_LOG" 2>"$STDERR_LOG"
 RC=$?
 set -e

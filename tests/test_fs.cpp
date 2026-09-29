@@ -144,6 +144,144 @@ static void testSnapshotCollisionSameSecond()
           QFileInfo::exists(first) && readFile(first) == "original");
 }
 
+// -- backup mirror --
+//
+// Every mirror test passes its own mirrorRoot: the default is the real
+// AppDataLocation, and a fake checkout under a QTemporaryDir must not leave
+// snapshots there.
+
+// A checkout the way build.sh lays one out: state in bin/Release_Linux/,
+// which is ignored, so `git clean -xdf` deletes it.
+struct FakeCheckout {
+    QTemporaryDir tmp;
+    QString root() const   { return tmp.filePath(QStringLiteral("checkout")); }
+    QString live() const   { return root() + QStringLiteral("/bin/Release_Linux/modlist_morrowind.txt"); }
+    QString mirrorRoot() const { return tmp.filePath(QStringLiteral("appdata/backups")); }
+    explicit FakeCheckout(bool gitIsFile = false)
+    {
+        if (gitIsFile)
+            writeFile(root() + QStringLiteral("/.git"), "gitdir: /elsewhere/.git/worktrees/x\n");
+        else
+            QDir().mkpath(root() + QStringLiteral("/.git"));
+        writeFile(live(), "order-1\n");
+    }
+};
+
+static void testMirrorOnlyForCheckouts()
+{
+    std::cout << "testMirrorOnlyForCheckouts\n";
+    QTemporaryDir dir;
+    const QString live = dir.filePath("bin/modlist.txt");
+    writeFile(live, "order\n");
+    const QString root = dir.filePath("appdata/backups");
+
+    check("no work tree -> no mirror dir", safefs::backupMirrorDir(live, root).isEmpty());
+    check("snapshot still succeeds", safefs::snapshotBackup(live, 20, root).has_value());
+    check("and nothing is written under the mirror root", !QFileInfo::exists(root));
+}
+
+static void testMirrorWritesBothCopies()
+{
+    std::cout << "testMirrorWritesBothCopies\n";
+    FakeCheckout co;
+    check("the work tree is found from the live file",
+          safefs::gitWorkTreeOf(co.live()) == QDir::cleanPath(co.root()));
+
+    const QString mirror = safefs::backupMirrorDir(co.live(), co.mirrorRoot());
+    check("mirror dir is under the mirror root, named for the checkout",
+          mirror.startsWith(co.mirrorRoot() + QStringLiteral("/checkout-")), mirror);
+
+    const auto bak = safefs::snapshotBackup(co.live(), 20, co.mirrorRoot());
+    check("snapshot succeeds", bak.has_value());
+    const QString name = QFileInfo(bak.value_or(QString())).fileName();
+    check("the returned path is still the one beside the live file",
+          bak.value_or(QString()).startsWith(co.live() + QStringLiteral(".bak.")));
+    check("the mirror holds the same snapshot, same name",
+          readFile(QDir(mirror).filePath(name)) == "order-1\n");
+}
+
+static void testMirrorInLinkedWorktree()
+{
+    std::cout << "testMirrorInLinkedWorktree\n";
+    // A linked worktree's .git is a file pointing at the main repo. It is
+    // just as much a checkout, and just as cleanable.
+    FakeCheckout co(/*gitIsFile=*/true);
+    check(".git as a file still marks a work tree",
+          !safefs::backupMirrorDir(co.live(), co.mirrorRoot()).isEmpty());
+}
+
+static void testMirrorSurvivesDeepClean()
+{
+    std::cout << "testMirrorSurvivesDeepClean\n";
+    FakeCheckout co;
+    const QString before = safefs::backupMirrorDir(co.live(), co.mirrorRoot());
+    const QString name =
+        QFileInfo(safefs::snapshotBackup(co.live(), 20, co.mirrorRoot()).value_or(QString()))
+            .fileName();
+
+    // What `git clean -xdf` does to it: the ignored state dir goes, .git stays.
+    QDir(co.root() + QStringLiteral("/bin")).removeRecursively();
+    check("the live file and its neighbours are gone", !QFileInfo::exists(co.live()));
+    check("the mirror dir is found again from the path alone",
+          safefs::backupMirrorDir(co.live(), co.mirrorRoot()) == before);
+    check("and the snapshot is still in it",
+          readFile(QDir(before).filePath(name)) == "order-1\n");
+}
+
+static void testMirrorRotation()
+{
+    std::cout << "testMirrorRotation\n";
+    FakeCheckout co;
+    const QString mirror = safefs::backupMirrorDir(co.live(), co.mirrorRoot());
+    const QString base = QDir(mirror).filePath(QStringLiteral("modlist_morrowind.txt.bak."));
+    writeFile(base + "20000101-000000", "oldest");
+    writeFile(base + "20010101-000000", "old-2");
+    writeFile(base + "20020101-000000", "old-3");
+
+    (void)safefs::snapshotBackup(co.live(), /*keep=*/2, co.mirrorRoot());
+    check("the mirror is rotated to keep, like the live dir",
+          QDir(mirror).entryList({"modlist_morrowind.txt.bak.*"}, QDir::Files).size() == 2);
+    check("the oldest went first", !QFileInfo::exists(base + "20000101-000000"));
+    check("the newest seeded one stayed", QFileInfo::exists(base + "20020101-000000"));
+}
+
+static void testMirrorSkipsUnchangedState()
+{
+    std::cout << "testMirrorSkipsUnchangedState\n";
+    FakeCheckout co;
+    const QString mirror = safefs::backupMirrorDir(co.live(), co.mirrorRoot());
+    const QStringList pattern{"modlist_morrowind.txt.bak.*"};
+    // The mirror already ends on exactly what the live file holds.
+    writeFile(QDir(mirror).filePath("modlist_morrowind.txt.bak.20000101-000000"), "order-1\n");
+
+    (void)safefs::snapshotBackup(co.live(), 20, co.mirrorRoot());
+    check("a save that changed nothing takes no mirror slot",
+          QDir(mirror).entryList(pattern, QDir::Files).size() == 1);
+    check("the copy beside the live file is still written, as before",
+          countBackups(co.live()) == 1);
+
+    writeFile(co.live(), "order-2\n");
+    (void)safefs::snapshotBackup(co.live(), 20, co.mirrorRoot());
+    check("a changed list does",
+          QDir(mirror).entryList(pattern, QDir::Files).size() == 2);
+}
+
+static void testMirrorKeyedByDirectory()
+{
+    std::cout << "testMirrorKeyedByDirectory\n";
+    // Two clones with the same folder name must not read each other's lists.
+    QTemporaryDir tmp;
+    const QString root = tmp.filePath("appdata/backups");
+    const QString a = tmp.filePath("one/checkout/bin/modlist.txt");
+    const QString b = tmp.filePath("two/checkout/bin/modlist.txt");
+    QDir().mkpath(tmp.filePath("one/checkout/.git"));
+    QDir().mkpath(tmp.filePath("two/checkout/.git"));
+    const QString ma = safefs::backupMirrorDir(a, root);
+    const QString mb = safefs::backupMirrorDir(b, root);
+    check("both are mirrored", !ma.isEmpty() && !mb.isEmpty());
+    check("into different folders", ma != mb, ma + QStringLiteral(" / ") + mb);
+}
+
 // -- copyTreeVerified --
 
 static void testCopyHappyPath()
@@ -455,6 +593,14 @@ static void run_safe_fs()
     testSnapshotRotation();
     testSnapshotKeepZero();
     testSnapshotCollisionSameSecond();
+
+    testMirrorOnlyForCheckouts();
+    testMirrorWritesBothCopies();
+    testMirrorInLinkedWorktree();
+    testMirrorSurvivesDeepClean();
+    testMirrorRotation();
+    testMirrorSkipsUnchangedState();
+    testMirrorKeyedByDirectory();
 
     testForceRemoveMissingPath();
     testForceRemovePlainTree();

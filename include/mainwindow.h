@@ -893,6 +893,7 @@ private:
     // current profile supports LOOT sorting and the binary isn't on PATH / in a
     // known install dir. Respects a "don't remind me" flag in QSettings.
     void maybeShowLootMissingBanner();
+    void maybeShowBackupMirrorNotice();
 
     // One-time welcome wizard (game, mods dir, API key, integrations); gated by
     // a QSettings flag.

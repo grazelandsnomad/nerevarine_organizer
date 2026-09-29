@@ -1,15 +1,36 @@
 #include "safe_fs.h"
 
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
+#include <QStandardPaths>
 
 namespace safefs {
 
+namespace {
+
+void pruneSnapshots(const QDir &dir, const QString &liveName, int keep)
+{
+    QStringList olds = dir.entryList({liveName + ".bak.*"}, QDir::Files, QDir::Name);
+    while (olds.size() > keep)
+        QFile::remove(dir.absoluteFilePath(olds.takeFirst()));
+}
+
+bool sameContents(const QString &a, const QString &b)
+{
+    QFile fa(a), fb(b);
+    if (fa.size() != fb.size()) return false;
+    if (!fa.open(QIODevice::ReadOnly) || !fb.open(QIODevice::ReadOnly)) return false;
+    return fa.readAll() == fb.readAll();
+}
+
+} // namespace
+
 std::expected<QString, QString>
-snapshotBackup(const QString &liveFile, int keep)
+snapshotBackup(const QString &liveFile, int keep, const QString &mirrorRoot)
 {
     QFileInfo fi(liveFile);
     if (!fi.exists() || !fi.isFile())
@@ -17,17 +38,59 @@ snapshotBackup(const QString &liveFile, int keep)
     if (keep < 0) keep = 0;
 
     const QString stamp  = QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss");
+    const QString name   = fi.fileName() + ".bak." + stamp;
     const QString backup = liveFile + ".bak." + stamp;
     const bool copied    = QFile::copy(liveFile, backup);
+    pruneSnapshots(QDir(fi.absolutePath()), fi.fileName(), keep);
 
-    QDir dir(fi.absolutePath());
-    QStringList olds = dir.entryList({fi.fileName() + ".bak.*"},
-                                      QDir::Files, QDir::Name);
-    while (olds.size() > keep)
-        QFile::remove(dir.absoluteFilePath(olds.takeFirst()));
+    const QString mirror = backupMirrorDir(liveFile, mirrorRoot);
+    if (!mirror.isEmpty() && QDir().mkpath(mirror)) {
+        // Only a state the mirror does not already end on. The mirror is what
+        // a deep clean leaves, and the session after one starts saving a new,
+        // empty list: if every save took a slot, the ~20 saves one session
+        // can hold would rotate the lost list out of the one place it
+        // survived. This way each slot costs a real change.
+        const QDir md(mirror);
+        const QStringList mirrored =
+            md.entryList({fi.fileName() + ".bak.*"}, QDir::Files, QDir::Name);
+        if (mirrored.isEmpty() || !sameContents(liveFile, md.filePath(mirrored.last())))
+            (void)QFile::copy(liveFile, md.filePath(name));
+        pruneSnapshots(md, fi.fileName(), keep);
+    }
 
     if (!copied) return std::unexpected(QStringLiteral("copy failed"));
     return backup;
+}
+
+QString gitWorkTreeOf(const QString &path)
+{
+    QString dir = QDir::cleanPath(QFileInfo(path).absolutePath());
+    while (!dir.isEmpty()) {
+        if (QFileInfo::exists(dir + QStringLiteral("/.git")))
+            return dir;
+        const QString up = QFileInfo(dir).path();
+        if (up == dir) break;   // reached the root
+        dir = up;
+    }
+    return {};
+}
+
+QString backupMirrorDir(const QString &liveFile, const QString &mirrorRoot)
+{
+    if (mirrorRoot.isEmpty()) return {};
+    const QString tree = gitWorkTreeOf(liveFile);
+    if (tree.isEmpty()) return {};
+    const QString liveDir = QDir::cleanPath(QFileInfo(liveFile).absolutePath());
+    const QByteArray hash = QCryptographicHash::hash(
+        liveDir.toUtf8(), QCryptographicHash::Sha1).toHex().left(8);
+    return QDir(mirrorRoot).filePath(QFileInfo(tree).fileName() + QLatin1Char('-')
+                                     + QString::fromLatin1(hash));
+}
+
+QString defaultBackupMirrorRoot()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+         + QStringLiteral("/backups");
 }
 
 bool forceRemoveRecursively(const QString &path)
