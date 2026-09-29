@@ -2,41 +2,40 @@
 
 A native Linux mod manager for OpenMW.
 
-## 0.71 - in development
+## 0.72 - in development
 
 Changes for the next release are collected in
-[`docs/release-notes/0.71.md`](docs/release-notes/0.71.md) as they land.
+[`docs/release-notes/0.72.md`](docs/release-notes/0.72.md) as they land.
 
 Guides: [mod conflicts and how to fix each kind](docs/conflicts.md).
 
-### Latest release: 0.70
+### Latest release: 0.71
 
 Download: [AppImage or plain Linux
-binary](https://github.com/grazelandsnomad/nerevarine_organizer/releases/tag/v0.70).
+binary](https://github.com/grazelandsnomad/nerevarine_organizer/releases/tag/v0.71).
 The AppImage is portable and runs on most distros, Steam Deck included.
 
-A translation-heavy release. The editor now answers locally whatever it can
-before reaching for the network, and it no longer has to reach for Google at
-all:
+The install wizard started answering its own questions. It reads your mod
+list, your game's executable and the mod page's requirements table, and picks
+what an installer would otherwise leave to you - saying why under each choice:
 
-- **Translate mods into your language**, string by string or with machine
-  help, saved as a separate mod so your download is never modified. Work is
-  resumable across sittings, and a shared translation memory means a name is
-  answered once rather than once per mod.
-- **A local translation server** (any LibreTranslate-compatible one) as an
-  alternative to Google's free endpoint, which rate-limits by IP for hours at
-  a time. No limit, no network needed, nothing leaves your machine.
-- **The base game answers for itself.** Proper nouns, and names a mod merely
-  re-saved from Morrowind without changing, arrive already answered instead of
-  being sent off to be mistranslated.
-- **The mod list stopped crying wolf** - no more "missing masters" about an
-  optional patch the manager already declined to load, and a translation mod
-  is no longer offered as something to translate.
+- **Patches for the mods you have.** A patch named after a mod missing from
+  your list arrives unticked and says which; a variant built on a framework
+  follows whether you have it (Base Object Swapper, Baka Framework); the
+  game's own previs is picked over PRP when PRP is not installed.
+- **Fallout 4's F4SE build is read off the game** - the version in
+  `Fallout4.exe` and the extender beside it - instead of left on a default.
+- **Each option's picture**, in a preview pane beside the steps and full size
+  in its own window on a click.
+- **Requirements from the author's own list**, split into needed, optional and
+  merely linked, with a tick for what you already have.
+- **A translation says which mod it translates**, and cancelling an install
+  no longer throws the download away.
 
-Full notes: [`docs/release-notes/0.70.md`](docs/release-notes/0.70.md)
-(prior: [0.5](docs/release-notes/0.5.md), [0.4](docs/release-notes/0.4.md),
-[0.3.1](docs/release-notes/0.3.1.md), [0.3](docs/release-notes/0.3.md),
-[0.2](docs/release-notes/0.2.md))
+Full notes: [`docs/release-notes/0.71.md`](docs/release-notes/0.71.md)
+(prior: [0.70](docs/release-notes/0.70.md), [0.5](docs/release-notes/0.5.md),
+[0.4](docs/release-notes/0.4.md), [0.3.1](docs/release-notes/0.3.1.md),
+[0.3](docs/release-notes/0.3.md), [0.2](docs/release-notes/0.2.md))
 
 # Tech Stack
 C++26 and Qt6.
