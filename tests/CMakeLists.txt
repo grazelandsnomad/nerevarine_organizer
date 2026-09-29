@@ -57,6 +57,7 @@ add_executable(test_bethesda
     ${CMAKE_SOURCE_DIR}/src/deployment_report.cpp
     ${CMAKE_SOURCE_DIR}/src/bethesda_deploy.cpp
     ${CMAKE_SOURCE_DIR}/src/bethesda_loadorder.cpp
+    ${CMAKE_SOURCE_DIR}/src/root_routes.cpp
     ${CMAKE_SOURCE_DIR}/src/bethesda_archives.cpp
     ${CMAKE_SOURCE_DIR}/src/bethesda_custom_ini.cpp
     ${CMAKE_SOURCE_DIR}/src/proton_paths.cpp

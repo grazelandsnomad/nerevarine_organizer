@@ -1,5 +1,7 @@
 #include "bethesda_loadorder.h"
 
+#include <QSet>
+
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -37,6 +39,25 @@ QString asteriskPluginsTxtContent(const QStringList &activeInOrder)
     for (const QString &p : activeInOrder)
         out += QLatin1Char('*') + p + QLatin1String("\r\n");
     return out;
+}
+
+QString mergedPluginsTxtContent(const QString &original, const QStringList &modsInOrder)
+{
+    QStringList lines;
+    QSet<QString> listed;
+    for (const QString &raw : original.split(QLatin1Char('\n'))) {
+        const QString line = raw.trimmed();
+        if (line.isEmpty() || line.startsWith(QLatin1Char('#'))) continue;
+        if (listed.contains(line.toLower())) continue;
+        lines << line;
+        listed.insert(line.toLower());
+    }
+    for (const QString &p : mastersFirst(modsInOrder)) {
+        if (listed.contains(p.toLower())) continue;
+        lines << p;
+        listed.insert(p.toLower());
+    }
+    return pluginsTxtContent(lines);
 }
 
 StampResult applyTimestampOrder(const QString &dataDir,

@@ -36,6 +36,19 @@ QString pluginsTxtContent(const QStringList &activeInOrder);
 // base-game masters are implicit and omitted.
 QString asteriskPluginsTxtContent(const QStringList &activeInOrder);
 
+// Oblivion Remastered's Plugins.txt: the game's own list with the mods'
+// plugins added after it. The file already names Oblivion.esm, the DLCs and
+// the remaster's AltarESPMain.esp, and the game loads exactly what it lists,
+// in list order - so replacing it with the mods' plugins alone would unload
+// the base game.
+//
+// `original` is the file as the game shipped it (the deploy's one-time
+// backup), so a mod that has since been removed drops out rather than
+// lingering. Its lines are kept verbatim and in order, blank lines and
+// comments aside; a mod plugin it already lists is not repeated. The mods
+// follow, masters first. CRLF, like the file the game writes.
+QString mergedPluginsTxtContent(const QString &original, const QStringList &modsInOrder);
+
 // Encode load order by stamping ascending mtimes onto the plugin files in
 // `dataDir`, in `pluginsInOrder` (index 0 = oldest = loads first). `baseEpochMs`
 // is the first plugin's mtime, each next one `stepMs` later. Files missing from

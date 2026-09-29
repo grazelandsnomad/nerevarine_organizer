@@ -145,6 +145,7 @@ using plugins::readTes3Masters;
 #include <QMimeData>
 using fsutils::sanitizeFolderName;
 #include "mainwindow_internal.h"
+#include "root_routes.h"
 
 // Forward-declare the moved file-statics so intra-TU call order is irrelevant.
 static int bethesdaActivate(const QString &id, const GameAdapter *adapter, const QString &dataDir, const bethesda_deploy::Manifest &manifest, const QStringList &loadOrder);
@@ -453,6 +454,21 @@ static QStringList bethesdaUnregisterDllOverrides(const GameAdapter *adapter,
     return removed;
 }
 
+// The folder the game-root pass deploys into: beside the game .exe for most
+// games (Data/'s parent), Oblivion Remastered's install folder for that one.
+static QString bethesdaGameRoot(const GameAdapter *adapter, const QString &dataDir)
+{
+    if (dataDir.isEmpty()) return {};
+    const QString up = adapter ? adapter->gameRootFromData() : QStringLiteral("..");
+    return QDir::cleanPath(dataDir + QLatin1Char('/') + up);
+}
+
+static root_routes::Routes bethesdaRoutes(const GameAdapter *adapter)
+{
+    if (!adapter) return {};
+    return {adapter->pakModsSubdir(), adapter->extenderPluginsSubdir()};
+}
+
 // Resolve the prefix Plugins.txt path (active set / order).  Manual override
 // wins; else AppData/Local/<localAppDataName>/Plugins.txt under the first prefix
 // that exists; else the best-guess derived path (caller mkpaths the parent).
@@ -462,6 +478,8 @@ static QString resolveBethesdaPluginsTxt(const QString &id,
 {
     const QString override = Settings::pluginsTxtPath(id);
     if (!override.isEmpty()) return override;
+    if (adapter && adapter->pluginsTxtInDataDir())
+        return dataDir.isEmpty() ? QString() : QDir(dataDir).filePath(QStringLiteral("Plugins.txt"));
     const QString name = adapter ? adapter->localAppDataName() : QString();
     if (name.isEmpty()) return {};
 
@@ -519,7 +537,8 @@ static bool writesPluginList(const GameAdapter *adapter)
     const LoadOrderStyle style = adapter ? adapter->loadOrderStyle()
                                          : LoadOrderStyle::Unknown;
     return style == LoadOrderStyle::TimestampPluginsTxt
-        || style == LoadOrderStyle::AsteriskPluginsTxt;
+        || style == LoadOrderStyle::AsteriskPluginsTxt
+        || style == LoadOrderStyle::PlainListPluginsTxt;
 }
 
 static QString deployText(const GameAdapter *adapter, const char *key)
@@ -598,7 +617,9 @@ static QList<bethesda_deploy::DeploySource> gatherScriptExtenderSources(
     QList<bethesda_deploy::DeploySource> out;
     if (!adapter) return out;
     const QStringList loaders = adapter->scriptExtenderLoaders();
-    if (loaders.isEmpty()) return out;
+    const root_routes::Routes routes = bethesdaRoutes(adapter);
+    if (loaders.isEmpty() && routes.pakModsSubdir.isEmpty()
+        && routes.extenderPluginsSubdir.isEmpty()) return out;
 
     for (int i = 0; i < list->count(); ++i) {
         auto *item = list->item(i);
@@ -619,12 +640,26 @@ static QList<bethesda_deploy::DeploySource> gatherScriptExtenderSources(
                 modPath = parent;
         }
 
+        QString label = item->data(ModRole::CustomName).toString();
+        if (label.isEmpty()) label = item->text();
+
+        // Pak mods and a relocated OBSE/ folder, wherever the mod keeps them.
+        out += root_routes::sourcesFor(label, modPath, routes);
+
         const QDir dir(modPath);
         const QStringList rootFiles =
             dir.entryList(QDir::Files | QDir::NoDotAndDotDot, QDir::Name);
+        // Matched by file name: a loader's own path is where it GOES
+        // (Oblivion Remastered's sits in Binaries/Win64), while mods ship it
+        // at their top level.
+        QString loaderDir;
         bool hasLoader = false;
         for (const QString &l : loaders)
-            if (rootFiles.contains(l, Qt::CaseInsensitive)) { hasLoader = true; break; }
+            if (rootFiles.contains(QFileInfo(l).fileName(), Qt::CaseInsensitive)) {
+                hasLoader = true;
+                loaderDir = QFileInfo(l).path();
+                break;
+            }
         if (!hasLoader) continue;
 
         QStringList payload;
@@ -634,9 +669,8 @@ static QList<bethesda_deploy::DeploySource> gatherScriptExtenderSources(
                 payload << f;
         if (payload.isEmpty()) continue;
 
-        QString label = item->data(ModRole::CustomName).toString();
-        if (label.isEmpty()) label = item->text();
-        out.append({label, modPath, payload});
+        out.append({label, modPath, payload,
+                    loaderDir == QLatin1String(".") ? QString() : loaderDir});
     }
     return out;
 }
@@ -695,7 +729,7 @@ static QString bethesdaApplyUndeploy(const QString &id, const GameAdapter *adapt
             const auto rootMan =
                 bethesda_deploy::manifestFromJson(QString::fromUtf8(rf.readAll()));
             rf.close();
-            const auto ru = bethesda_deploy::undeploy(QFileInfo(dataDir).path(),
+            const auto ru = bethesda_deploy::undeploy(bethesdaGameRoot(adapter, dataDir),
                                                       rootBackupDir, rootMan);
             u.removed  += ru.removed;
             u.restored += ru.restored;
@@ -806,7 +840,14 @@ static QList<bethesda_deploy::DeploySource> gatherBethesdaSources(QListWidget *l
         for (const auto &p : plugins::collectDataFolders(effectiveRoot, kExts))
             roots << p.first;
         roots += plugins::collectResourceFolders(effectiveRoot);
-        if (roots.isEmpty()) roots << effectiveRoot;  // fallback: the folder itself
+        if (roots.isEmpty()) {
+            // A pak-only or OBSE-plugin-only mod goes entirely through the
+            // game-root pass; dumping its folder into Data/ as well would only
+            // litter the game's data with files nothing reads there.
+            if (root_routes::onlyRoutedContent(effectiveRoot, bethesdaRoutes(adapter)))
+                continue;
+            roots << effectiveRoot;  // fallback: the folder itself
+        }
         roots.removeDuplicates();
 
         std::sort(roots.begin(), roots.end(),
@@ -834,8 +875,7 @@ static int bethesdaActivate(const QString &id, const GameAdapter *adapter,
                             const QStringList &loadOrder)
 {
     const LoadOrderStyle style = adapter->loadOrderStyle();
-    if (style != LoadOrderStyle::TimestampPluginsTxt
-        && style != LoadOrderStyle::AsteriskPluginsTxt) return 0;
+    if (!writesPluginList(adapter)) return 0;
     QSet<QString> active;
     for (const auto &f : manifest.files) {
         if (f.rel.contains('/')) continue;        // plugins load from Data/ root only
@@ -854,9 +894,26 @@ static int bethesdaActivate(const QString &id, const GameAdapter *adapter,
     ordered = bethesda_loadorder::mastersFirst(ordered);
     if (ordered.isEmpty()) return 0;
 
+    const QString pluginsTxt = resolveBethesdaPluginsTxt(id, adapter, dataDir);
     int activated = 0;
     QString body;
-    if (style == LoadOrderStyle::TimestampPluginsTxt) {
+    if (style == LoadOrderStyle::PlainListPluginsTxt) {
+        // Added to the game's own list, never written over it. The base is
+        // the file as it was before our first deploy, so a mod removed since
+        // drops out; with no backup yet, the file on disk is that original.
+        QString original;
+        const QString pBak = pluginsTxt + QStringLiteral(".nerevarine-bak");
+        QFile of(QFileInfo::exists(pBak) ? pBak : pluginsTxt);
+        if (!pluginsTxt.isEmpty() && of.open(QIODevice::ReadOnly)) {
+            original = QString::fromUtf8(of.readAll());
+            of.close();
+        }
+        // No list to add to means we are not looking at the game's Data/:
+        // writing a fresh one would load the mods and none of the game.
+        if (original.trimmed().isEmpty()) return 0;
+        activated = int(ordered.size());
+        body = bethesda_loadorder::mergedPluginsTxtContent(original, ordered);
+    } else if (style == LoadOrderStyle::TimestampPluginsTxt) {
         // Oblivion/FO3/FNV: load order is file mtime in Data/; Plugins.txt is the
         // plain active list.
         const qint64 step = 2000;
@@ -870,7 +927,6 @@ static int bethesdaActivate(const QString &id, const GameAdapter *adapter,
         body = bethesda_loadorder::asteriskPluginsTxtContent(ordered);
     }
 
-    const QString pluginsTxt = resolveBethesdaPluginsTxt(id, adapter, dataDir);
     if (!pluginsTxt.isEmpty()) {
         QDir().mkpath(QFileInfo(pluginsTxt).absolutePath());
         const QString pBak = pluginsTxt + ".nerevarine-bak";
@@ -1049,7 +1105,7 @@ static QString bethesdaApplyDeploy(const QString &id, const GameAdapter *adapter
     // reason as the Data/ one: take the old set out before placing the new.
     QString rootManifestPath, rootBackupDir;
     bethesdaRootStatePaths(modlistFile, rootManifestPath, rootBackupDir);
-    const QString gameRoot = QFileInfo(dataDir).path();
+    const QString gameRoot = bethesdaGameRoot(adapter, dataDir);
     int rootPlaced = 0;
     {
         QFile prevRoot(rootManifestPath);
@@ -1378,6 +1434,7 @@ void MainWindow::onInspectDeployment()
     switch (adapter->loadOrderStyle()) {
     case LoadOrderStyle::TimestampPluginsTxt: f.loadOrderStyle = "timestamp + Plugins.txt (Oblivion/FO3/FNV)"; break;
     case LoadOrderStyle::AsteriskPluginsTxt:  f.loadOrderStyle = "*-prefixed Plugins.txt (Skyrim SE/FO4)"; break;
+    case LoadOrderStyle::PlainListPluginsTxt: f.loadOrderStyle = "Plugins.txt in Data/, added to the game's list (Oblivion Remastered)"; break;
     case LoadOrderStyle::OpenMW:              f.loadOrderStyle = "OpenMW"; break;
     default:                                  f.loadOrderStyle = "unknown"; break;
     }
@@ -1385,7 +1442,7 @@ void MainWindow::onInspectDeployment()
     const QString dataDir = bethesdaResolveDataDir(this, id, adapter, /*allowPrompt=*/false);
     f.dataFolder = { dataDir, !dataDir.isEmpty() && QDir(dataDir).exists() };
 
-    const QString installDir = dataDir.isEmpty() ? QString() : QFileInfo(dataDir).path();
+    const QString installDir = bethesdaGameRoot(adapter, dataDir);
     f.installDirKnown = !installDir.isEmpty();
     if (f.installDirKnown) {
         const QString se = findScriptExtenderLoader(adapter, installDir);

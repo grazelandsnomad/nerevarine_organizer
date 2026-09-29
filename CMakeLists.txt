@@ -134,6 +134,7 @@ set(SOURCES
     src/dll_overrides.cpp
     src/bethesda_deploy.cpp
     src/bethesda_loadorder.cpp
+    src/root_routes.cpp
     src/bethesda_archives.cpp
     src/bethesda_custom_ini.cpp
     src/extract_errors.cpp

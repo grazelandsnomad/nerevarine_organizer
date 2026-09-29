@@ -6,6 +6,7 @@
 #include "proton_paths.h"
 #include "dll_overrides.h"
 #include "game_adapter.h"
+#include "root_routes.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -282,6 +283,40 @@ static void testTimestampOrder()
     check("missing file reported as an error", r2.errors == QStringList{"Ghost.esp"});
     check("missing file not counted as stamped", r2.stamped == 0);
 }
+// Oblivion Remastered's list, as measured on a Steam install: the base game
+// and the remaster's own plugins, CRLF. Written over with only the mods'
+// plugins, the game loses these.
+static const QString kRemasterPlugins = QStringLiteral(
+    "Oblivion.esm\r\nDLCBattlehornCastle.esp\r\nDLCShiveringIsles.esp\r\n"
+    "Knights.esp\r\nAltarESPMain.esp\r\nAltarDeluxe.esp\r\nAltarESPLocal.esp\r\n");
+
+static void testMergedPluginsTxtKeepsTheGame()
+{
+    std::cout << "\n[mergedPluginsTxtContent: mods added after the game's own list]\n";
+    const QString body = mergedPluginsTxtContent(kRemasterPlugins, {"Mod.esp", "Base.esm"});
+    const QStringList lines = body.split(QStringLiteral("\r\n"), Qt::SkipEmptyParts);
+    check("every line the game shipped is still there, first, in its order",
+          lines.mid(0, 7) == kRemasterPlugins.split(QStringLiteral("\r\n"), Qt::SkipEmptyParts),
+          lines.join(','));
+    check("the mods follow, masters first",
+          lines.mid(7) == QStringList({"Base.esm", "Mod.esp"}), lines.join(','));
+    check("CRLF throughout, like the file the game writes",
+          body.endsWith(QStringLiteral("\r\n")) && !body.contains(QStringLiteral("\r\r")));
+}
+
+static void testMergedPluginsTxtNoDuplicates()
+{
+    std::cout << "\n[mergedPluginsTxtContent: a plugin already listed is not repeated]\n";
+    const QString body = mergedPluginsTxtContent(kRemasterPlugins,
+                                                 {"knights.esp", "New.esp"});
+    check("Knights.esp once, where the game had it",
+          body.count(QStringLiteral("nights.esp"), Qt::CaseInsensitive) == 1);
+    check("the new one appended", body.endsWith(QStringLiteral("New.esp\r\n")));
+    check("LF-only input reads the same",
+          mergedPluginsTxtContent(QStringLiteral("Oblivion.esm\nKnights.esp\n"), {"A.esp"})
+              == QStringLiteral("Oblivion.esm\r\nKnights.esp\r\nA.esp\r\n"));
+}
+
 } // namespace loadorder_section
 
 static void run_bethesda_loadorder()
@@ -291,6 +326,98 @@ static void run_bethesda_loadorder()
     loadorder_section::testPluginsTxt();
     loadorder_section::testAsteriskPluginsTxt();
     loadorder_section::testTimestampOrder();
+    loadorder_section::testMergedPluginsTxtKeepsTheGame();
+    loadorder_section::testMergedPluginsTxtNoDuplicates();
+}
+
+// -- root_routes: what goes outside Data/ ---------------------------------------
+
+namespace routes_section {
+
+static void touch(const QString &p)
+{
+    QDir().mkpath(QFileInfo(p).absolutePath());
+    QFile f(p);
+    if (f.open(QIODevice::WriteOnly)) { f.write("x"); f.close(); }
+}
+
+static const root_routes::Routes kRemaster{
+    QStringLiteral("OblivionRemastered/Content/Paks/~mods"),
+    QStringLiteral("OblivionRemastered/Binaries/Win64/OBSE")};
+
+static void testPaksLandInModsWhereverShipped()
+{
+    std::cout << "\n[root_routes: pak parts go to ~mods from any depth]\n";
+    QTemporaryDir t;
+    const QString mod = t.filePath("mod");
+    touch(mod + "/OblivionRemastered/Content/Paks/~mods/Better_P.pak");
+    touch(mod + "/OblivionRemastered/Content/Paks/~mods/Better_P.ucas");
+    touch(mod + "/OblivionRemastered/Content/Paks/~mods/Better_P.utoc");
+    touch(mod + "/readme.txt");
+    const auto src = root_routes::sourcesFor("Better", mod, kRemaster);
+    check("one source for the folder they sit in", src.size() == 1);
+    check("all three parts, and nothing else",
+          !src.isEmpty() && src[0].onlyFiles
+              == QStringList({"Better_P.pak", "Better_P.ucas", "Better_P.utoc"}),
+          src.isEmpty() ? QString() : src[0].onlyFiles.join(','));
+    check("into ~mods", !src.isEmpty() && src[0].destSubdir == kRemaster.pakModsSubdir);
+    check("a pak-only mod has nothing for Data/",
+          root_routes::onlyRoutedContent(mod, kRemaster));
+
+    QTemporaryDir t2;
+    touch(t2.filePath("mod/Loose_P.pak"));
+    const auto loose = root_routes::sourcesFor("Loose", t2.filePath("mod"), kRemaster);
+    check("a pak at the mod's top level goes to ~mods too",
+          loose.size() == 1 && loose[0].destSubdir == kRemaster.pakModsSubdir);
+}
+
+static void testLogicModsKeepTheirFolder()
+{
+    std::cout << "\n[root_routes: UE4SS blueprint paks go to LogicMods]\n";
+    QTemporaryDir t;
+    touch(t.filePath("mod/LogicMods/Bp.pak"));
+    const auto src = root_routes::sourcesFor("Bp", t.filePath("mod"), kRemaster);
+    check("LogicMods, beside ~mods",
+          src.size() == 1
+              && src[0].destSubdir == QStringLiteral("OblivionRemastered/Content/Paks/LogicMods"),
+          src.isEmpty() ? QString() : src[0].destSubdir);
+}
+
+static void testObsePluginsLeaveData()
+{
+    std::cout << "\n[root_routes: an OBSE/ folder goes to Binaries/Win64/OBSE]\n";
+    QTemporaryDir t;
+    const QString mod = t.filePath("mod");
+    touch(mod + "/OBSE/Plugins/Thing.dll");
+    touch(mod + "/Thing.esp");
+    const auto src = root_routes::sourcesFor("Thing", mod, kRemaster);
+    check("the folder, whole, under the extender's own",
+          src.size() == 1 && src[0].dir == QDir(mod).filePath("OBSE")
+              && src[0].onlyFiles.isEmpty() && src[0].destSubdir == kRemaster.extenderPluginsSubdir);
+    check("a mod with a plugin still has something for Data/",
+          !root_routes::onlyRoutedContent(mod, kRemaster));
+}
+
+static void testOtherGamesRouteNothing()
+{
+    std::cout << "\n[root_routes: games without routes are untouched]\n";
+    QTemporaryDir t;
+    touch(t.filePath("mod/SKSE/Plugins/x.dll"));
+    touch(t.filePath("mod/x.pak"));
+    check("no routes, no sources", root_routes::sourcesFor("x", t.filePath("mod"), {}).isEmpty());
+    check("and the Data/ fallback is not suppressed",
+          !root_routes::onlyRoutedContent(t.filePath("mod"), {}));
+}
+
+} // namespace routes_section
+
+static void run_root_routes()
+{
+    std::cout << "=== root_routes tests ===\n";
+    routes_section::testPaksLandInModsWhereverShipped();
+    routes_section::testLogicModsKeepTheirFolder();
+    routes_section::testObsePluginsLeaveData();
+    routes_section::testOtherGamesRouteNothing();
 }
 
 namespace archives_section {
@@ -1016,6 +1143,43 @@ static void testDarkSouls2Classification()
 }
 } // namespace adapters_section
 
+namespace adapters_section {
+// The layout measured on a Steam install, rebuilt in a temp dir: the paths the
+// adapter states have to meet the files where the game actually keeps them.
+static void testOblivionRemasteredLayout()
+{
+    std::cout << "\n-- adapters: Oblivion Remastered layout --\n";
+    const auto *a = GameAdapterRegistry::find("oblivionremastered");
+    check("registered", a != nullptr);
+    if (!a) return;
+    check("Steam app 2623190", a->steamAppId() == QStringLiteral("2623190"));
+    check("deployable, with a plugin list kept inside Data/",
+          !a->dataSubdir().isEmpty() && a->pluginsTxtInDataDir()
+              && a->loadOrderStyle() == LoadOrderStyle::PlainListPluginsTxt);
+    check("pinned", a->pinned());
+    check("no separate launcher", !a->hasLauncher());
+
+    QTemporaryDir t;
+    const QString install = t.filePath("Oblivion Remastered");
+    const QString exe  = install + "/" + a->steamLayout().exe;
+    const QString data = QDir::cleanPath(QFileInfo(exe).absolutePath() + "/" + a->dataSubdir());
+    check("Data/ resolves to Content/Dev/ObvData/Data",
+          data.endsWith(QStringLiteral("/OblivionRemastered/Content/Dev/ObvData/Data")), data);
+    check("and the game root back to the install folder",
+          QDir::cleanPath(data + "/" + a->gameRootFromData()) == QDir::cleanPath(install));
+    check("OBSE64's loader sits in Binaries/Win64",
+          a->scriptExtenderLoaders().value(0)
+              == QStringLiteral("OblivionRemastered/Binaries/Win64/obse64_loader.exe"));
+    check("pak mods go to Content/Paks/~mods",
+          a->pakModsSubdir() == QStringLiteral("OblivionRemastered/Content/Paks/~mods"));
+
+    const auto *ob = GameAdapterRegistry::find("oblivion");
+    check("the original keeps its old shape",
+          ob && ob->gameRootFromData() == QStringLiteral("..") && !ob->pluginsTxtInDataDir()
+              && ob->pakModsSubdir().isEmpty());
+}
+} // namespace adapters_section
+
 static void run_game_adapters()
 {
     std::cout << "=== GameAdapter registry tests ===\n";
@@ -1034,6 +1198,7 @@ static void run_game_adapters()
     adapters_section::testDarkSouls2Classification();
     adapters_section::testArchiveConfigPerEngineFamily();
     adapters_section::testFallout4IsDiscoverable();
+    adapters_section::testOblivionRemasteredLayout();
 }
 
 // -- deployment_report --------------------------------------------------------
@@ -1256,6 +1421,7 @@ int main(int argc, char **argv)
 
     run_bethesda_deploy();
     run_bethesda_loadorder();
+    run_root_routes();
     run_bethesda_archives();
     run_bethesda_custom_ini();
     run_deployment_report();

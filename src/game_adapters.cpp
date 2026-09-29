@@ -269,11 +269,46 @@ public:
     }
 };
 
+// Oblivion Remastered: the original engine running inside Unreal 5. Measured
+// on a Steam install (app 2623190):
+//
+//   Oblivion Remastered/OblivionRemastered.exe              launcher stub
+//   .../OblivionRemastered/Binaries/Win64/                   real exe, OBSE64
+//   .../OblivionRemastered/Content/Dev/ObvData/Data/         .esm/.esp/.bsa
+//   .../Data/Plugins.txt                                     the load order
+//   .../OblivionRemastered/Content/Paks/~mods/               Unreal .pak mods
+//
+// Plugins.txt is the odd one out: it sits in Data/, it is a plain CRLF list in
+// load order, and it already names Oblivion.esm, the DLCs and the remaster's
+// own AltarESPMain.esp - written over with only the mods' plugins, the game
+// would lose its own. See LoadOrderStyle::PlainListPluginsTxt.
 class OblivionRemasteredAdapter : public GameAdapter {
 public:
     QString id()          const override { return QStringLiteral("oblivionremastered"); }
     QString displayName() const override { return QStringLiteral("Oblivion Remastered"); }
     QString lootSlug()    const override { return QStringLiteral("Oblivion Remastered"); }
+    QString steamAppId()  const override { return QStringLiteral("2623190"); }
+    SteamLayout steamLayout() const override {
+        return {"Oblivion Remastered", "OblivionRemastered.exe", ""};
+    }
+    QStringList lutrisTokens() const override { return {"oblivion", "remastered"}; }
+    bool    pinned()           const override { return true; }
+    LoadOrderStyle loadOrderStyle() const override { return LoadOrderStyle::PlainListPluginsTxt; }
+    QString dataSubdir() const override {
+        return QStringLiteral("OblivionRemastered/Content/Dev/ObvData/Data");
+    }
+    QString gameRootFromData() const override { return QStringLiteral("../../../../.."); }
+    QString pakModsSubdir() const override {
+        return QStringLiteral("OblivionRemastered/Content/Paks/~mods");
+    }
+    QString extenderPluginsSubdir() const override {
+        return QStringLiteral("OblivionRemastered/Binaries/Win64/OBSE");
+    }
+    bool    pluginsTxtInDataDir() const override { return true; }
+    QString myGamesName() const override { return QStringLiteral("Oblivion Remastered"); }
+    QStringList scriptExtenderLoaders() const override {
+        return {QStringLiteral("OblivionRemastered/Binaries/Win64/obse64_loader.exe")};
+    }
 };
 
 class Fallout3Adapter : public GameAdapter {

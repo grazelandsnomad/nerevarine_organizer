@@ -25,6 +25,10 @@ enum class LoadOrderStyle {
     OpenMW,              // openmw.cfg data=/content= lines (Morrowind)
     TimestampPluginsTxt, // Plugins.txt active set + file-mtime order (Oblivion, FO3, FNV)
     AsteriskPluginsTxt,  // Plugins.txt with '*'-prefixed active entries, in order (Skyrim SE, FO4)
+    PlainListPluginsTxt, // Plugins.txt in Data/ itself, a plain list whose order IS
+                         // the load order and which already names the base game's
+                         // own plugins, so mods are added to it, never written
+                         // over it (Oblivion Remastered)
 };
 
 class GameAdapter {
@@ -134,6 +138,27 @@ public:
     // holding the exe, so its dataSubdir cannot be ".".
     virtual bool overlayDeploy() const { return dataSubdir() == QStringLiteral("."); }
 
+    // Where the files that do not belong in Data/ go - script-extender loaders
+    // and the routes below - as a path from the data folder. ".." for every
+    // game whose exe sits right above Data/. Oblivion Remastered keeps its
+    // Bethesda data five folders deep inside an Unreal install, so its root
+    // is the install folder and each route names its own subfolder of it.
+    virtual QString gameRootFromData() const { return QStringLiteral(".."); }
+
+    // Unreal .pak mods (.pak/.ucas/.utoc), relative to the game root. Empty =
+    // the engine has no pak mods. They load only from Content/Paks/~mods,
+    // never from Data/, whatever folders the mod happened to ship them in.
+    virtual QString pakModsSubdir() const { return {}; }
+
+    // Where a mod's OBSE/ folder (script-extender plugins) goes, relative to
+    // the game root, for extenders that do not read Data/<extender>/Plugins
+    // as SKSE and F4SE do. Empty = leave it in Data/ like everything else.
+    virtual QString extenderPluginsSubdir() const { return {}; }
+
+    // Plugins.txt lives in the data folder itself rather than in the prefix's
+    // AppData/Local (Oblivion Remastered).
+    virtual bool pluginsTxtInDataDir() const { return false; }
+
     // Per-user config folders inside the Proton prefix:
     // AppData/Local/<localAppDataName> holds Plugins.txt;
     // Documents/My Games/<myGamesName> holds the engine .ini. Empty if N/A.
@@ -176,7 +201,8 @@ public:
     // second profile on the same engine silently lost the button.
     virtual QString prefsIniName() const { return {}; }
 
-    // Script-extender loaders (OBSE/SKSE/F4SE/...), most-preferred first.
+    // Script-extender loaders (OBSE/SKSE/F4SE/...), most-preferred first,
+    // relative to the game root (gameRootFromData) - usually a bare file name.
     // When launching an exe directly (not via Steam, where the extender's
     // own loader auto-loads), we run one of these instead of the game exe
     // so extender mods work. Empty = no known extender.
