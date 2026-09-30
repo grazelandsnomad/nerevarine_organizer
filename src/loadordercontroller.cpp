@@ -358,14 +358,17 @@ LoadOrderController::LoadOrderController(QObject *parent)
 
 LoadOrderController::~LoadOrderController()
 {
-    // Workers are parented to us, so ~QObject() deletes them. But if one is
-    // still running at shutdown, block briefly first or run() dereferences a
-    // half-destroyed worker - and, for the translation scan, a freed cache.
+    // Workers are parented to us, so ~QObject() deletes them - and deleting a
+    // QThread that is still running is a qFatal. So stop and WAIT, with no
+    // time limit: the old wait(2000) ignored its own timeout and let ~QObject
+    // delete a worker that was still scanning, the same crash as a mid-run
+    // deleteLater(). Both run()s check for interruption per mod and per file,
+    // so this returns as soon as the current file is done.
     for (QThread *w : {static_cast<QThread *>(m_activeScanner),
                        static_cast<QThread *>(m_activeTranslationScanner)}) {
         if (w && w->isRunning()) {
             w->requestInterruption();
-            w->wait(2000);
+            w->wait();
         }
     }
     delete m_mastersCacheMu;
@@ -386,7 +389,10 @@ void LoadOrderController::scanTranslations(
     // translation you are testing) is often the LAST thing they do. Dropping it
     // there leaves the previous scan's verdict painted, which reads as the
     // feature being broken. So keep the newest request and re-fire once.
-    if (m_activeTranslationScanner && m_activeTranslationScanner->isRunning()) {
+    //
+    // "In flight" is a worker that exists, not one whose run() has not
+    // returned: see scanConflicts for the crash that distinction was.
+    if (m_activeTranslationScanner) {
         m_pendingTranslationMods          = modsInLoadOrder;
         m_pendingTranslationLanguage      = targetLanguage;
         m_pendingTranslationVanillaFolder = vanillaDataFolder;
@@ -395,10 +401,10 @@ void LoadOrderController::scanTranslations(
         return;
     }
 
-    delete m_activeTranslationScanner;
-    m_activeTranslationScanner = new TranslationScanWorker(
+    auto *worker = new TranslationScanWorker(
         modsInLoadOrder, targetLanguage, vanillaDataFolder, rulesPath,
         &m_stringsCache, m_stringsCacheMu, this);
+    m_activeTranslationScanner = worker;
 
     // Poll the worker's counter onto the UI rather than have it signal per
     // plugin. 100ms is well under the eye's "is this thing alive" threshold and
@@ -414,52 +420,76 @@ void LoadOrderController::scanTranslations(
     emit translationScanProgress(0);
     m_translationProgressTimer->start();
 
-    connect(m_activeTranslationScanner, &QThread::finished, this, [this] {
+    // This worker's handler, reading THIS worker - see scanConflicts.
+    connect(worker, &QThread::finished, this, [this, worker] {
         m_translationProgressTimer->stop();
-        const QHash<QString, TranslationCoverage> results =
-            m_activeTranslationScanner->results();
+        const QHash<QString, TranslationCoverage> results = worker->results();
         // Read before the worker is destroyed - it is what lets the summary
         // say what it did not examine.
-        const int noPlugin = m_activeTranslationScanner->modsWithoutPlugins();
-        const auto pairs   = m_activeTranslationScanner->pairs();
-        m_activeTranslationScanner->deleteLater();
+        const int noPlugin = worker->modsWithoutPlugins();
+        const auto pairs   = worker->pairs();
+        worker->deleteLater();
         m_activeTranslationScanner = nullptr;
         emit translationsScanned(results, noPlugin, pairs);
         // Serve whatever came in while this one was running, so the last edit
         // the user made is always the one reflected on screen.
         if (m_translationScanPending) {
             m_translationScanPending = false;
-            scanTranslations(m_pendingTranslationMods,
-                             m_pendingTranslationLanguage,
-                             m_pendingTranslationVanillaFolder,
-                             m_pendingTranslationRulesPath);
+            scanTranslations(std::exchange(m_pendingTranslationMods, {}),
+                             std::exchange(m_pendingTranslationLanguage, {}),
+                             std::exchange(m_pendingTranslationVanillaFolder, {}),
+                             std::exchange(m_pendingTranslationRulesPath, {}));
         }
     });
-    m_activeTranslationScanner->start(QThread::LowPriority);
+    worker->start(QThread::LowPriority);
 }
 
 void LoadOrderController::scanConflicts(
     const QList<conflict_direction::Mod> &modsInLoadOrder)
 {
-    // Drop the call if a scan is already running; the caller is a debounced
-    // timer, so the next edit retriggers.
-    if (m_activeScanner && m_activeScanner->isRunning())
+    // One worker at a time, and "in flight" means it EXISTS - from creation
+    // until its own finished handler has run - not that its run() has not
+    // returned yet.
+    //
+    // That distinction was the app's most frequent crash, "QThread: Destroyed
+    // while thread is still running". isRunning() goes false the moment run()
+    // returns, while the finished handler is still queued on this thread. A
+    // scan requested in that gap deleted the old worker and started a new
+    // one; the old handler, which read whichever worker m_activeScanner held,
+    // then took the NEW worker's half-written results, deleteLater()'d it
+    // mid-scan (the qFatal), and nulled the pointer its own handler then
+    // dereferenced. Check Updates opened the gap reliably: it touches every
+    // row, and each touch reschedules this scan while the UI thread is busy.
+    //
+    // A request that arrives in flight is kept, newest wins, and run when the
+    // current one lands - dropping it left the last edit's arrows unpainted.
+    if (m_activeScanner) {
+        m_pendingConflictMods = modsInLoadOrder;
+        m_conflictScanPending = true;
         return;
+    }
 
-    delete m_activeScanner;
-    m_activeScanner = new ConflictScanWorker(modsInLoadOrder, this);
-    connect(m_activeScanner, &QThread::finished, this, [this] {
+    auto *worker = new ConflictScanWorker(modsInLoadOrder, this);
+    m_activeScanner = worker;
+    connect(worker, &QThread::finished, this, [this, worker] {
         // Copy results before deleting the worker so a Direct signal still
-        // has a valid reference.
+        // has a valid reference. From `worker`, captured - never from the
+        // member, which is what let one scan's handler act on another.
         const QHash<QString, conflict_direction::Directions> results =
-            m_activeScanner->results();
+            worker->results();
         const QHash<QString, QList<plugin_records::RecordClash>> clashes =
-            m_activeScanner->recordClashes();
-        m_activeScanner->deleteLater();
+            worker->recordClashes();
+        // Safe from finished(): the thread is past run(), and ~QThread waits
+        // for one that is still finishing.
+        worker->deleteLater();
         m_activeScanner = nullptr;
         emit conflictsScanned(results, clashes);
+        if (m_conflictScanPending) {
+            m_conflictScanPending = false;
+            scanConflicts(std::exchange(m_pendingConflictMods, {}));
+        }
     });
-    m_activeScanner->start(QThread::LowPriority);
+    worker->start(QThread::LowPriority);
 }
 
 void LoadOrderController::scanMissingMasters(

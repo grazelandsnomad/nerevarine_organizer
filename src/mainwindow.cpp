@@ -1568,8 +1568,14 @@ collectUpdateTargets(QListWidget *modList, const QStringList &only)
         const auto ref = parseNexusModUrl(nexusUrl);
         if (!ref) continue;
 
-        // Clear any stale flag from a previous check
-        item->setData(ModRole::UpdateAvailable, false);
+        // Clear a stale flag from a previous check - only where there is one.
+        // Writing false onto every row created the role on the ~400 that never
+        // had it, and each write is an itemChanged: a count refresh, a section
+        // recount and a rescheduled conflict scan per row, all at once on the
+        // UI thread. That burst is what kept restarting the conflict scan
+        // while the UI thread was busy, the conditions for its worst crash.
+        if (item->data(ModRole::UpdateAvailable).toBool())
+            item->setData(ModRole::UpdateAvailable, false);
         toCheck.append({item, ref->game, ref->modId});
     }
     return toCheck;

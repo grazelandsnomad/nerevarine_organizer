@@ -111,6 +111,33 @@ add_executable(test_translation_coverage
 target_include_directories(test_translation_coverage PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(test_translation_coverage PRIVATE Qt6::Core)
 
+# The scan workers' lifecycle: the conflict and translation scans run on
+# QThread workers, and the gap between a worker's run() returning and its
+# finished handler running was the app's most frequent crash (a worker deleted
+# while still scanning). Q_OBJECT header listed for AUTOMOC.
+add_executable(test_loadorder_controller
+    test_loadorder_controller.cpp
+    ${CMAKE_SOURCE_DIR}/src/loadordercontroller.cpp
+    ${CMAKE_SOURCE_DIR}/src/conflict_direction.cpp
+    ${CMAKE_SOURCE_DIR}/src/plugin_records.cpp
+    ${CMAKE_SOURCE_DIR}/src/pluginparser.cpp
+    ${CMAKE_SOURCE_DIR}/src/translation_coverage.cpp
+    ${CMAKE_SOURCE_DIR}/src/translation_rules.cpp
+    ${CMAKE_SOURCE_DIR}/src/term_protect.cpp
+    ${CMAKE_SOURCE_DIR}/src/vanilla_text.cpp
+    ${CMAKE_SOURCE_DIR}/src/plugin_strings.cpp
+    ${CMAKE_SOURCE_DIR}/src/plugin_text.cpp
+    ${CMAKE_SOURCE_DIR}/src/language_guess.cpp
+    ${CMAKE_SOURCE_DIR}/src/target_language.cpp
+    ${CMAKE_SOURCE_DIR}/include/loadordercontroller.h
+)
+set_target_properties(test_loadorder_controller PROPERTIES AUTOMOC ON)
+target_include_directories(test_loadorder_controller PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/generated
+)
+target_link_libraries(test_loadorder_controller PRIVATE Qt6::Core Qt6::Concurrent)
+
 # The launch-blocking rules: what stands between "play" and the game starting.
 # launch_warnings.cpp was already free functions with a header - the largest
 # zero-refactor coverage gap in the 2026-09 census - and needed only a target.
@@ -407,6 +434,7 @@ set(UNIT_TESTS
     test_settings
     test_mods
     test_extract
+    test_loadorder_controller
 )
 
 foreach(t ${UNIT_TESTS})

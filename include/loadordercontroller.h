@@ -157,8 +157,14 @@ signals:
     void translationScanProgress(int percent);
 
 private:
-    // Conflict-scan QThread lifecycle.
+    // Conflict-scan QThread lifecycle. Non-null from the moment a worker is
+    // created until ITS finished handler has run - not merely until run()
+    // returns; see scanConflicts. At most one worker exists at a time.
     ConflictScanWorker *m_activeScanner = nullptr;
+    // Newest request that arrived while a scan was in flight, run once when
+    // it lands, so the last edit is the one on screen.
+    QList<conflict_direction::Mod> m_pendingConflictMods;
+    bool                           m_conflictScanPending = false;
 
     // Translation-scan QThread lifecycle, plus the extracted-string cache it
     // reads and fills, keyed by absolute plugin path. Mutex-guarded for the
@@ -167,8 +173,7 @@ private:
     QHash<QString, CachedPluginStrings> m_stringsCache;
     QMutex                             *m_stringsCacheMu = nullptr;
     // Newest request that arrived mid-scan, re-fired exactly once when the
-    // in-flight one lands. See scanTranslations for why this buffers where the
-    // conflict scan drops.
+    // in-flight one lands. See scanTranslations.
     QList<conflict_direction::Mod>      m_pendingTranslationMods;
     QString                             m_pendingTranslationLanguage;
     QString                             m_pendingTranslationVanillaFolder;
