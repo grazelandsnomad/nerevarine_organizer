@@ -96,6 +96,7 @@ set(SOURCES
     src/fomodwizard.cpp
     src/fomod_copy.cpp
     src/fomod_hint.cpp
+    src/fomod_choices.cpp
     src/file_pick.cpp
     src/game_store.cpp
     src/markup_protect.cpp

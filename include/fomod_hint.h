@@ -357,6 +357,32 @@ Runtime runtimePreferenceForGame(const QString &gameId,
 QString betterRuntimeFile(const QString &chosen, const QStringList &candidates,
                           Runtime pref);
 
+// -- Which engine an option is for -------------------------------------------
+//
+// Morrowind installers ask which engine you run, and not always with radio
+// buttons: OAAB_Data's "Game Engine" is a SelectAtLeastOne group of two
+// checkboxes, "OpenMW" and "MGE XE", both off by default. Two things went
+// wrong there. The OpenMW-over-MGE rule only knew radio groups, so nothing
+// unticked MGE XE; and the modlist pass took the word "OpenMW" for a mod and
+// found "OpenMW Quest Menu", announcing that "the mod is present".
+//
+// An engine is never a mod in the modlist (the BAIN picker has always held
+// this - bain_hint.cpp's stop list). This says whether an option NAME is
+// nothing but an engine: every word, filler and version numbers aside, must
+// be an engine word, so "OpenMW Lua helper patch" - a real mod's patch - is
+// None and keeps going through the modlist pass.
+//
+//   OpenMW    openmw                          "OpenMW", "OpenMW version"
+//   Original  mge, xe, mgexe, mwse, mcp        "MGE XE", "MGE XE and MWSE"
+//   Mixed     both families, or only "lua"     "OpenMW and MGE XE", "Lua"
+//
+// Original means the original Morrowind.exe, which those extend. "lua" names
+// no side - OpenMW and MWSE both have one - so "OpenMW Lua" is OpenMW and
+// "MWSE Lua" Original. TES3MP is left out: its options are multiplayer
+// server files, not a stand-in for the engine question.
+enum class EngineOption { None, OpenMW, Original, Mixed };
+EngineOption engineOption(const QString &optionName);
+
 } // namespace fomod
 
 #endif // FOMOD_HINT_H

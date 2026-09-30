@@ -1,4 +1,5 @@
 #include "fomodwizard.h"
+#include "fomod_choices.h"
 #include "fomod_copy.h"
 #include "fomod_hint.h"
 #include "mod_aliases.h"
@@ -805,12 +806,19 @@ void FomodWizard::buildUi()
     //            Annotation always shown; selection only changes with no stored
     //            prior.
 
+    // What was picked last time, found in THIS installer - by name, so an
+    // update that moved its options still gets the same picks (see
+    // fomod_choices.h). The passes' "has a prior" test and the replay at the
+    // end both read this one set.
+    const QSet<quint64> priorKeys = fomod_choices::decode(m_steps, m_priorChoices);
+
     QSet<quint64> openMwOverriddenGroups;
     // Checkbox plugins Pass C auto-recommends because the named mod is present.
     // Key: (si<<32)|(gi<<16)|pi. Prior-choices block ORs this in so a Recommended
     // checkbox isn't unticked just because an earlier install left it off.
     QSet<quint64> recommendedInstalledPlugins;
     // Ticks settled by what is in the modlist right now (Pass E and Pass F),
+    // and by the engine this manager runs (the checkbox shape of Pass A),
     // same key, value = the tick that was forced. Whether a mod is installed
     // is a fact about this profile, not a preference, so a choice stored from
     // an earlier install of this same FOMOD must not put the old tick back:
@@ -821,20 +829,16 @@ void FomodWizard::buildUi()
         // (si,gi) pairs with a stored selection. Pass B annotates but doesn't
         // change these.
         QSet<quint64> priorGroups;
-        for (const QString &rec : m_priorChoices.split(u';', Qt::SkipEmptyParts)) {
-            const QStringList f = rec.split(u':');
-            if (f.size() == 3) {
-                bool ok1, ok2, ok3;
-                int si2 = f[0].toInt(&ok1), gi2 = f[1].toInt(&ok2); f[2].toInt(&ok3);
-                if (ok1 && ok2 && ok3)
-                    priorGroups.insert((quint64(si2) << 16) | quint64(gi2));
-            }
-        }
+        for (quint64 k : priorKeys) priorGroups.insert(k >> 16);
 
         // Search needles for the spellings a modlist actually uses. Shared
         // with the BAIN picker, which asks the same question of a folder
         // name - see mod_match.h.
         const auto needlesFor = &mod_match::needlesFor;
+
+        // One wording for both shapes of engine question, radio and checkbox.
+        const QString kOpenMwRecommended = QStringLiteral(
+            " \u2705 Recommended \u2014 Nerevarine runs Morrowind through OpenMW.");
 
         const auto addNoteUnder = [](QAbstractButton *btn, const QString &text) {
             if (!btn || !btn->parentWidget()) return;
@@ -902,8 +906,7 @@ void FomodWizard::buildUi()
                             QAbstractButton *btn = m_buttons[si][gi].value(openMwIdx);
                             if (btn && btn->isEnabled()) {
                                 btn->setChecked(true);
-                                btn->setText(btn->text() +
-                                    QStringLiteral(" \u2705 Recommended \u2014 Nerevarine is an OpenMW-only manager."));
+                                btn->setText(btn->text() + kOpenMwRecommended);
                             }
                             openMwOverriddenGroups.insert(groupKey);
                             continue;  // skip Pass B for this group
@@ -1077,6 +1080,59 @@ void FomodWizard::buildUi()
                     // FOMOD's default alone and say nothing.
 
                 } else {
+                    // Pass A, checkbox shape. OAAB_Data asks its engine
+                    // question as a SelectAtLeastOne pair of checkboxes -
+                    // "OpenMW" and "MGE XE", both off - which the radio rule
+                    // above never saw. Ticking both installs both: the OpenMW
+                    // scripts and MWSE's Lua, which OpenMW never runs.
+                    //
+                    // Same answer as the radio case, settled per OPTION
+                    // (modlistSettledPlugins) rather than per group, so a pick
+                    // stored for another engine cannot come back while the
+                    // user's other picks in a mixed group still do. Only names
+                    // that are NOTHING but an engine take part
+                    // (fomod::engineOption): a patch group offering "OpenMW
+                    // Lua Helper Patch" beside "MWSE Magic Patch" is not an
+                    // engine question.
+                    QSet<int> engineOpts;   // Pass C must not look these up
+                    {
+                        QList<int> openMwIdx, originalIdx;
+                        for (int pi = 0; pi < group.plugins.size(); ++pi) {
+                            const auto e = fomod::engineOption(group.plugins[pi].name);
+                            if (e == fomod::EngineOption::None) continue;
+                            engineOpts.insert(pi);
+                            if (e == fomod::EngineOption::OpenMW)        openMwIdx << pi;
+                            else if (e == fomod::EngineOption::Original) originalIdx << pi;
+                        }
+                        for (int pi : std::as_const(openMwIdx)) {
+                            QAbstractButton *b = m_buttons[si][gi].value(pi);
+                            if (!b || !b->isEnabled()) continue;
+                            b->setChecked(true);
+                            b->setText(b->text() + kOpenMwRecommended);
+                            modlistSettledPlugins.insert(fomod_choices::key(si, gi, pi), true);
+                        }
+                        // SelectAtLeastOne has to keep one ticked: an option
+                        // is only unticked while something else stays on.
+                        const bool keepOne = group.type == QLatin1String("SelectAtLeastOne");
+                        for (int pi : std::as_const(originalIdx)) {
+                            QAbstractButton *b = m_buttons[si][gi].value(pi);
+                            if (!b || !b->isEnabled()) continue;
+                            bool otherOn = false;
+                            for (int o = 0; o < m_buttons[si][gi].size(); ++o)
+                                if (o != pi && m_buttons[si][gi][o]->isChecked()
+                                    && !originalIdx.contains(o))
+                                    otherOn = true;
+                            if (keepOne && !otherOn) continue;
+                            b->setChecked(false);
+                            modlistSettledPlugins.insert(fomod_choices::key(si, gi, pi), false);
+                            addNoteUnder(b, QStringLiteral(
+                                "For the original Morrowind.exe (MGE XE, MWSE, "
+                                "Morrowind Code Patch). OpenMW runs none of them, "
+                                "so this is unticked \u2014 tick it back only if "
+                                "you also play without OpenMW."));
+                        }
+                    }
+
                     // Pass C: checkbox groups - match each plugin name against
                     // the modlist; auto-check + annotate on a hit.
                     //
@@ -1096,6 +1152,11 @@ void FomodWizard::buildUi()
                     for (int pi = 0; pi < group.plugins.size(); ++pi) {
                         QAbstractButton *btn = m_buttons[si][gi].value(pi);
                         if (!btn || !btn->isEnabled()) continue;
+
+                        // An engine is never a mod in the modlist: "OpenMW"
+                        // as a needle finds "OpenMW Quest Menu" and would
+                        // announce that the mod is present.
+                        if (engineOpts.contains(pi)) continue;
 
                         const QString pluginName = group.plugins[pi].name.trimmed();
                         if (pluginName.length() < 4) continue;
@@ -1663,26 +1724,13 @@ void FomodWizard::buildUi()
         }
     }
 
-    // Apply prior choices over the defaults above. Format "si:gi:pi;..."
-    // (step/group/plugin indices). Radio: check the stored plugin, QButtonGroup
+    // Apply prior choices over the defaults above: the picks fomod_choices
+    // found in this installer. Radio: check the stored plugin, QButtonGroup
     // clears the rest. Checkbox with any prior entry: uncheck all enabled, check
     // the stored ones. Groups with no prior entry keep the FOMOD defaults.
-    if (!m_priorChoices.isEmpty()) {
-        QSet<quint64> priorSet;
-        auto encode = [](int si, int gi, int pi) -> quint64 {
-            return (static_cast<quint64>(si) << 32)
-                 | (static_cast<quint64>(gi) << 16)
-                 | static_cast<quint64>(pi);
-        };
-        for (const QString &rec : m_priorChoices.split(';', Qt::SkipEmptyParts)) {
-            const QStringList f = rec.split(':');
-            if (f.size() == 3) {
-                bool ok1, ok2, ok3;
-                int si = f[0].toInt(&ok1), gi = f[1].toInt(&ok2), pi = f[2].toInt(&ok3);
-                if (ok1 && ok2 && ok3)
-                    priorSet.insert(encode(si, gi, pi));
-            }
-        }
+    if (!priorKeys.isEmpty()) {
+        const QSet<quint64> &priorSet = priorKeys;
+        const auto encode = &fomod_choices::key;
         for (int si = 0; si < m_steps.size() && si < m_buttons.size(); ++si) {
             const FomodStep &step = m_steps[si];
             for (int gi = 0; gi < step.groups.size() && gi < m_buttons[si].size(); ++gi) {
@@ -1886,16 +1934,18 @@ QString FomodWizard::applySelections()
 // Serialize button state for the modlist.
 QString FomodWizard::collectChoices() const
 {
-    QStringList entries;
+    // Named, not bare positions: see fomod_choices.h for what positions alone
+    // did to OAAB_Data's picks when its installer was reordered.
+    QSet<quint64> checked;
     for (int si = 0; si < m_steps.size() && si < m_buttons.size(); ++si) {
         const FomodStep &step = m_steps[si];
         for (int gi = 0; gi < step.groups.size() && gi < m_buttons[si].size(); ++gi) {
             const FomodGroup &group = step.groups[gi];
             for (int pi = 0; pi < group.plugins.size() && pi < m_buttons[si][gi].size(); ++pi) {
                 if (m_buttons[si][gi][pi]->isChecked())
-                    entries << QString("%1:%2:%3").arg(si).arg(gi).arg(pi);
+                    checked.insert(fomod_choices::key(si, gi, pi));
             }
         }
     }
-    return entries.join(';');
+    return fomod_choices::encode(m_steps, checked);
 }

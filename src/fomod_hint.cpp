@@ -742,4 +742,44 @@ chooseFrameworkVariant(const QStringList &optionNames,
     return out;
 }
 
+EngineOption engineOption(const QString &optionName)
+{
+    // Words that dress an engine name up without naming anything else:
+    // "OpenMW version", "For MGE XE users", "OpenMW (Recommended)".
+    static const QSet<QString> kFiller = {
+        QStringLiteral("for"),       QStringLiteral("version"),
+        QStringLiteral("versions"),  QStringLiteral("users"),
+        QStringLiteral("user"),      QStringLiteral("only"),
+        QStringLiteral("support"),   QStringLiteral("supported"),
+        QStringLiteral("edition"),   QStringLiteral("and"),
+        QStringLiteral("with"),      QStringLiteral("the"),
+        QStringLiteral("recommended"), QStringLiteral("default"),
+        QStringLiteral("compatible"),  QStringLiteral("compatibility"),
+        QStringLiteral("use"),       QStringLiteral("using"),
+    };
+    static const QSet<QString> kOpenMw   = { QStringLiteral("openmw") };
+    static const QSet<QString> kOriginal = { QStringLiteral("mge"),
+                                             QStringLiteral("xe"),
+                                             QStringLiteral("mgexe"),
+                                             QStringLiteral("mwse"),
+                                             QStringLiteral("mcp") };
+    static const QRegularExpression kSplit(QStringLiteral("[^a-z0-9]+"));
+
+    bool openMw = false, original = false, engine = false;
+    for (const QString &w : optionName.toLower().split(kSplit, Qt::SkipEmptyParts)) {
+        if (kFiller.contains(w)) continue;
+        bool numeric = false;
+        (void)w.toInt(&numeric);
+        if (numeric) continue;                        // "OpenMW 0.49"
+        if (kOpenMw.contains(w))   { openMw = true;   engine = true; continue; }
+        if (kOriginal.contains(w)) { original = true; engine = true; continue; }
+        if (w == QLatin1String("lua")) { engine = true; continue; }
+        return EngineOption::None;                    // names something else
+    }
+    if (!engine) return EngineOption::None;
+    if (openMw && !original) return EngineOption::OpenMW;
+    if (original && !openMw) return EngineOption::Original;
+    return EngineOption::Mixed;
+}
+
 } // namespace fomod

@@ -4,6 +4,7 @@
 #include "fomod_path.h"
 #include "fomod_copy.h"
 #include "fomod_hint.h"
+#include "fomod_choices.h"
 #include "game_runtime.h"
 #include "mod_match.h"
 #include "mod_aliases.h"
@@ -2770,6 +2771,235 @@ static void run_fomod_image_preview()
     }
 }
 
+// -- engine options ---------------------------------------------------------
+
+static void run_fomod_engine_option()
+{
+    std::cout << "=== fomod::engineOption ===\n";
+    using E = fomod::EngineOption;
+    struct Case { const char *name; E want; };
+    static const Case kCases[] = {
+        {"OpenMW",                          E::OpenMW},
+        {"OpenMW version",                  E::OpenMW},
+        {"For OpenMW users",                E::OpenMW},
+        {"OpenMW 0.49",                     E::OpenMW},
+        {"OpenMW Lua",                      E::OpenMW},
+        {"MGE XE",                          E::Original},
+        {"MGEXE",                           E::Original},
+        {"MGE XE and MWSE",                 E::Original},
+        {"MWSE Lua",                        E::Original},
+        {"MCP",                             E::Original},
+        {"OpenMW and MGE XE",               E::Mixed},
+        {"Lua",                             E::Mixed},
+        // Names of things, not engines: these keep going through the
+        // modlist pass, which is how a real mod's patch still finds its mod.
+        {"OpenMW Lua helper patch",         E::None},
+        {"Graphic Herbalism MWSE - OpenMW", E::None},
+        {"OpenMW Quest Menu",               E::None},
+        {"Epic Plants",                     E::None},
+        {"TES3MP",                          E::None},
+        {"",                                E::None},
+    };
+    for (const Case &c : kCases)
+        check(qPrintable(QStringLiteral("\"%1\"").arg(QLatin1String(c.name))),
+              fomod::engineOption(QString::fromUtf8(c.name)) == c.want);
+}
+
+// -- stored choices, by name ------------------------------------------------
+
+static FomodPlugin choices_plugin(const QString &name)
+{
+    FomodPlugin p;
+    p.name = name;
+    p.type = QStringLiteral("Optional");
+    return p;
+}
+
+static FomodGroup choices_group(const QString &name, const QString &type,
+                                const QStringList &options)
+{
+    FomodGroup g;
+    g.name = name;
+    g.type = type;
+    for (const QString &o : options) g.plugins << choices_plugin(o);
+    return g;
+}
+
+// OAAB_Data 2.7.1's installer, as measured: one step, engine group first.
+static QList<FomodStep> choices_oaab271()
+{
+    FomodStep st;
+    st.name = QStringLiteral("Install Options");
+    st.groups << choices_group("Game Engine", "SelectAtLeastOne", {"OpenMW", "MGE XE"})
+              << choices_group("Mod Compatibility Patches", "SelectAny",
+                               {"Breton Knife-Ears", "Epic Plants", "Glass Glowset",
+                                "SM_Bitter Coast Trees", "Animated Containers",
+                                "Improved Kwama Eggs", "Glow in the Dahrk"})
+              << choices_group("Telvanni Crystal Replacer", "SelectAtMostOne",
+                               {"Better Telvanni Crystals", "RR - Better Crystals"});
+    return {st};
+}
+
+// An older layout with the same options, the patches first - the shape of
+// change that turned "OpenMW" into "Breton Knife-Ears" by position.
+static QList<FomodStep> choices_oaabOlder(const QString &stepName = QStringLiteral("Install Options"))
+{
+    FomodStep st;
+    st.name = stepName;
+    st.groups << choices_group("Mod Compatibility Patches", "SelectAny",
+                               {"Breton Knife-Ears", "Epic Plants", "Glass Glowset",
+                                "SM_Bitter Coast Trees", "Animated Containers",
+                                "Improved Kwama Eggs", "Glow in the Dahrk"})
+              << choices_group("Game Engine", "SelectAtLeastOne", {"OpenMW", "MGE XE"});
+    return {st};
+}
+
+static void run_fomod_choices()
+{
+    std::cout << "=== fomod_choices ===\n";
+    using fomod_choices::key;
+    const QList<FomodStep> now = choices_oaab271();
+
+    const QSet<quint64> picks{key(0, 0, 0), key(0, 1, 1), key(0, 1, 6)};
+    check("an unchanged installer gets back exactly what was picked",
+          fomod_choices::decode(now, fomod_choices::encode(now, picks)) == picks);
+
+    // Picked on the older layout: Epic Plants, Glow in the Dahrk, OpenMW.
+    const QString older = fomod_choices::encode(
+        choices_oaabOlder(), {key(0, 0, 1), key(0, 0, 6), key(0, 1, 0)});
+    check("a reordered installer gets the same options, wherever they moved",
+          fomod_choices::decode(now, older) == picks, older);
+
+    const QString renamed = fomod_choices::encode(
+        choices_oaabOlder(QStringLiteral("Options")), {key(0, 0, 1), key(0, 1, 0)});
+    check("a renamed step still resolves through group and option",
+          fomod_choices::decode(now, renamed) == QSet<quint64>{key(0, 1, 1), key(0, 0, 0)});
+
+    QList<FomodStep> fewer = now;
+    fewer[0].groups[1].plugins.removeAt(2);   // Glass Glowset is gone
+    const QString withGlass = fomod_choices::encode(now, {key(0, 1, 1), key(0, 1, 2)});
+    check("an option the update removed is dropped, the rest kept",
+          fomod_choices::decode(fewer, withGlass) == QSet<quint64>{key(0, 1, 1)});
+
+    QList<FomodStep> odd = now;
+    odd[0].groups[1].plugins[0].name = QStringLiteral("A:B;C/D%E");
+    odd[0].groups[1].plugins[1].name = QStringLiteral("Ünïcødé ✓");
+    const QSet<quint64> oddPicks{key(0, 1, 0), key(0, 1, 1)};
+    check("names with separators and non-ASCII survive",
+          fomod_choices::decode(odd, fomod_choices::encode(odd, oddPicks)) == oddPicks);
+
+    check("the stored 2.6.2 record replayed onto 2.7.1 picks nothing",
+          fomod_choices::decode(now, QStringLiteral("0:0:1;0:0:6;0:1:0")).isEmpty());
+    check("a position-only record that fits is used as before",
+          fomod_choices::decode(now, QStringLiteral("0:0:1;0:1:6"))
+              == QSet<quint64>{key(0, 0, 1), key(0, 1, 6)});
+
+    // Never by option name alone.
+    FomodStep a; a.name = "Compatibility";
+    a.groups << choices_group("Use Ashfall?", "SelectExactlyOne", {"Yes", "No"});
+    FomodStep b; b.name = "Compatibility";
+    b.groups << choices_group("Use Frostfall?", "SelectExactlyOne", {"Yes", "No"});
+    check("\"Yes\" in another group is not the same pick",
+          fomod_choices::decode({b}, fomod_choices::encode({a}, {key(0, 0, 0)})).isEmpty());
+}
+
+// -- the engine question as checkboxes (OAAB_Data) ---------------------------
+
+static bool wizardui_notesContain(FomodWizard *w, int si, int gi, const QString &needle)
+{
+    for (const QString &n : wizardui_notesOf(w, si, gi))
+        if (n.contains(needle)) return true;
+    return false;
+}
+
+static void run_fomod_wizard_engine()
+{
+    std::cout << "=== wizard: engine question as checkboxes ===\n";
+    using H = FomodWizardTestHook;
+    const QStringList quests{QStringLiteral("OpenMW Quest Menu")};
+
+    for (const char *type : {"SelectAtLeastOne", "SelectAny"}) {
+        std::cout << "\n[" << type << " {OpenMW, MGE XE}]\n";
+        auto *w = H::build(wizardui_oneGroup(wizardui_mkGroup(
+                      type, {wizardui_mkPlugin("OpenMW"), wizardui_mkPlugin("MGE XE")})),
+                  {}, quests);
+        check("OpenMW is ticked", H::btn(w, 0, 0, 0)->isChecked());
+        check("and says why: the engine, not a mod in the list",
+              H::btn(w, 0, 0, 0)->text().contains("runs Morrowind through OpenMW")
+                  && !H::btn(w, 0, 0, 0)->text().contains("present in the modlist"),
+              H::btn(w, 0, 0, 0)->text());
+        check("MGE XE is unticked", !H::btn(w, 0, 0, 1)->isChecked());
+        check("with a note saying what it is for",
+              wizardui_notesContain(w, 0, 0, "original Morrowind.exe"));
+        delete w;
+    }
+
+    {
+        std::cout << "\n[a stored pick of MGE XE does not come back]\n";
+        auto *w = H::build(wizardui_oneGroup(wizardui_mkGroup(
+                      "SelectAtLeastOne", {wizardui_mkPlugin("OpenMW"), wizardui_mkPlugin("MGE XE")})),
+                  QStringLiteral("0:0:1"), quests);
+        check("MGE XE stays unticked", !H::btn(w, 0, 0, 1)->isChecked());
+        check("OpenMW stays ticked", H::btn(w, 0, 0, 0)->isChecked());
+        delete w;
+    }
+
+    {
+        std::cout << "\n[SelectAtLeastOne keeps one]\n";
+        auto *w = H::build(wizardui_oneGroup(wizardui_mkGroup(
+                      "SelectAtLeastOne", {wizardui_mkPlugin("OpenMW", "NotUsable"),
+                                           wizardui_mkPlugin("MGE XE", "Recommended")})));
+        check("with OpenMW unusable, MGE XE is left ticked", H::btn(w, 0, 0, 1)->isChecked());
+        delete w;
+    }
+
+    {
+        std::cout << "\n[a lone OpenMW option among others]\n";
+        auto *w = H::build(wizardui_oneGroup(wizardui_mkGroup(
+                      "SelectAny", {wizardui_mkPlugin("OpenMW"), wizardui_mkPlugin("Better Bodies")})),
+                  {}, quests);
+        check("is ticked as the engine, not as a mod",
+              H::btn(w, 0, 0, 0)->isChecked()
+                  && H::btn(w, 0, 0, 0)->text().contains("runs Morrowind through OpenMW")
+                  && !H::btn(w, 0, 0, 0)->text().contains("present in the modlist"),
+              H::btn(w, 0, 0, 0)->text());
+        delete w;
+    }
+
+    {
+        std::cout << "\n[patches named after engines are not an engine question]\n";
+        auto *w = H::build(wizardui_oneGroup(wizardui_mkGroup(
+                      "SelectAny", {wizardui_mkPlugin("OpenMW Lua Helper Patch"),
+                                    wizardui_mkPlugin("MWSE Magic Patch")})));
+        check("no engine label",
+              !H::btn(w, 0, 0, 0)->text().contains("runs Morrowind through OpenMW")
+                  && !H::btn(w, 0, 0, 1)->text().contains("runs Morrowind through OpenMW"));
+        check("no engine note", !wizardui_notesContain(w, 0, 0, "original Morrowind.exe"));
+        delete w;
+    }
+
+    {
+        std::cout << "\n[OAAB_Data 2.7.1 with its stale 2.6.2 record]\n";
+        const QList<FomodStep> oaab = choices_oaab271();
+        auto *w = H::build(oaab, QStringLiteral("0:0:1;0:0:6;0:1:0"),
+                           {QStringLiteral("OpenMW Quest Menu"),
+                            QStringLiteral("Epic Plants"),
+                            QStringLiteral("Glow in the Dahrk")});
+        check("OpenMW ✓",            H::btn(w, 0, 0, 0)->isChecked());
+        check("MGE XE ✗",            !H::btn(w, 0, 0, 1)->isChecked());
+        check("Breton Knife-Ears ✗", !H::btn(w, 0, 1, 0)->isChecked());
+        check("Epic Plants ✓",       H::btn(w, 0, 1, 1)->isChecked());
+        check("Glow in the Dahrk ✓", H::btn(w, 0, 1, 6)->isChecked());
+        const QString stored = H::collect(w);
+        using fomod_choices::key;
+        check("what it stores names the picks and reads back the same",
+              fomod_choices::decode(oaab, stored)
+                  == QSet<quint64>{key(0, 0, 0), key(0, 1, 1), key(0, 1, 6)},
+              stored);
+        delete w;
+    }
+}
+
 static void run_fomod_wizard_ui()
 {
     std::cout << "=== fomod_wizard_ui (buildUi) tests ===\n";
@@ -3109,8 +3339,8 @@ static void run_fomod_wizard_ui()
         check("precondition: None starts on", none && none->isChecked());
         FomodWizardTestHook::btn(w, 0, 0, 0)->setChecked(true); // pick Alpha
         check("picking a plugin clears None", none && !none->isChecked());
-        check("the picked plugin becomes the serialized choice",
-              FomodWizardTestHook::collect(w) == QLatin1String("0:0:0"),
+        check("the picked plugin becomes the serialized choice, by position and name",
+              FomodWizardTestHook::collect(w) == QLatin1String("0:0:0:Step/Group/Alpha"),
               FomodWizardTestHook::collect(w));
         delete w;
     }
@@ -3474,7 +3704,10 @@ int main(int argc, char **argv)
     run_game_runtime_probe();
     run_fomod_image_preview();
     run_fomod_preview_fit();
+    run_fomod_engine_option();
+    run_fomod_choices();
     run_fomod_wizard_ui();
+    run_fomod_wizard_engine();
     run_bain_wizard_ui();
 
     std::cout << s_passed << " passed, " << s_failed << " failed\n";
