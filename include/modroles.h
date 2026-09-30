@@ -100,7 +100,7 @@ namespace ModRole {
     // existing mod folder the new files overlay onto (last-writer-wins) rather
     // than replacing it or landing separately - the MO2-style merge for
     // optionals that override a main download (e.g. OAAB Data). Consumed by
-    // applyPendingMerge() after extract; transient, never persisted.
+    // prepareMerge() after extract; transient, never persisted.
     constexpr int MergeTargetPath       = Qt::UserRole + 39; // QString
     // ";"-joined BAIN package names ticked at install (like FomodChoices).
     // Lets a re-install pre-tick the same packages instead of all, and copies

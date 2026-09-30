@@ -84,8 +84,8 @@ PackageVerdict judgeOne(const QString      &packageName,
 //
 // Applies the whole-archive guard: if the result would leave NOTHING ticked,
 // every Missing is downgraded to Unknown and the pass says nothing at all.
-// bain::stage() returns "" for an empty selection and the caller reads that as
-// a cancel, so an over-eager pass would silently abort the install.
+// An empty selection reaches the caller as a cancel, so an over-eager pass
+// would silently abort the install.
 QList<PackageVerdict> judgePackages(const QList<Package> &packages,
                                     const QStringList    &installedModNames,
                                     const QSet<QString>  &availablePluginsLower,

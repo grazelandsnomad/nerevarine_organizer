@@ -96,7 +96,8 @@ struct ModEntry {
     // the stale folder once the new install lands. Transient, not persisted.
     QString prevModPath;
     // Set on "Merge into existing"; the existing mod folder the new files are
-    // overlaid onto. Consumed by applyPendingMerge, transient, not persisted.
+    // overlaid onto. Consumed by MainWindow::prepareMerge; transient, not
+    // persisted.
     QString mergeTargetPath;
 
     [[nodiscard]] static ModEntry fromItem(const QListWidgetItem *item);

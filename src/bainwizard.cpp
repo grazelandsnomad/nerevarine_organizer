@@ -11,13 +11,14 @@
 #include <QWidget>
 
 #include <algorithm>
+#include <functional>
 
 void BainWizard::showAsync(
     const QString &modPath,
     const QString &priorChoices,
     QWidget *parent,
     const QStringList &installedModNames,
-    std::function<void(const QString &, const QString &)> onDone,
+    std::function<void(const QStringList &, const QString &)> onDone,
     const QString &ownModName,
     const QSet<QString> &availablePluginsLower)
 {
@@ -44,8 +45,7 @@ void BainWizard::showAsync(
 
     QObject::connect(dlg, &QDialog::accepted, dlg, [dlg, onDone]() {
         const QStringList chosen = dlg->chosenNames();
-        const QString staged = bain::stage(dlg->m_modPath, chosen);
-        onDone(staged, chosen.join(QLatin1Char(';')));
+        onDone(chosen, chosen.join(QLatin1Char(';')));
     });
     QObject::connect(dlg, &QDialog::rejected, dlg,
                      [onDone]() { onDone({}, {}); });
@@ -232,8 +232,8 @@ void BainWizard::addInstallButton()
     auto *ok = m_btns->addButton(T("bain_install"), QDialogButtonBox::AcceptRole);
     connect(ok, &QPushButton::clicked, this, &QDialog::accept);
 
-    // Nothing ticked means stage() hands the caller "", which it reads as a
-    // cancel and acts on by deleting the archive. Better to not offer it.
+    // Nothing ticked reaches the caller as an empty pick, which it reads as a
+    // cancel. Better to not offer it.
     auto sync = [this, ok]() {
         ok->setEnabled(std::any_of(m_boxes.cbegin(), m_boxes.cend(),
                                    [](QCheckBox *b) { return b->isChecked(); }));

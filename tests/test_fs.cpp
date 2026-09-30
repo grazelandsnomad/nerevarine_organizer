@@ -452,6 +452,45 @@ static void testForceRemovePlainTree()
     check("path no longer exists", !QFileInfo::exists(tree));
 }
 
+// A slow delete set aside for later: the real path free at once, under a name
+// no scan mistakes for a mod folder, never clobbering one already set aside.
+static void testSetAside()
+{
+    std::cout << "testSetAside\n";
+    QTemporaryDir dir;
+    const QString unpack = dir.filePath("8674709d_2");
+    writeFile(unpack + "/00 Core/Mod.esm", "x");
+
+    const QString first = safefs::setAside(unpack);
+    check("renamed beside itself", first == unpack + ".__deleting__", first);
+    check("the real path is free at once", !QFileInfo::exists(unpack));
+    check("its contents came along", QFileInfo::exists(first + "/00 Core/Mod.esm"));
+
+    writeFile(unpack + "/again.txt", "y");
+    const QString second = safefs::setAside(unpack);
+    check("a second one takes the next name", second == unpack + ".__deleting__1", second);
+    check("the first is untouched", QFileInfo::exists(first + "/00 Core/Mod.esm"));
+
+    check("nothing to set aside answers empty",
+          safefs::setAside(dir.filePath("never-existed")).isEmpty()
+              && safefs::setAside(QString()).isEmpty());
+}
+
+// One flush per install, where copying used to sync every file. It must be
+// harmless on anything a job can hand it.
+static void testFlushFileSystemOf()
+{
+    std::cout << "testFlushFileSystemOf\n";
+    QTemporaryDir dir;
+    writeFile(dir.filePath("mod/a.esp"), "x");
+    safefs::flushFileSystemOf(dir.filePath("mod"));
+    safefs::flushFileSystemOf(dir.filePath("mod/a.esp"));
+    safefs::flushFileSystemOf(dir.filePath("never-existed"));
+    safefs::flushFileSystemOf(QString());
+    check("a folder, a file, nothing at all: no harm done",
+          QFileInfo::exists(dir.filePath("mod/a.esp")));
+}
+
 static void testForceRemoveReadOnlyDirs()
 {
     std::cout << "testForceRemoveReadOnlyDirs\n";
@@ -605,6 +644,8 @@ static void run_safe_fs()
     testForceRemoveMissingPath();
     testForceRemovePlainTree();
     testForceRemoveReadOnlyDirs();
+    testSetAside();
+    testFlushFileSystemOf();
 
     testCopyHappyPath();
     testCopyEmptyTree();

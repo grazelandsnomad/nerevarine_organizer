@@ -23,6 +23,8 @@
 // segment is missing entirely (the caller should report / count this, not
 // swallow it).
 
+#include <QHash>
+#include <QSet>
 #include <QString>
 #include <utility>   // std::move (ResolvedPath inline ctor)
 
@@ -51,6 +53,7 @@ private:
     explicit ResolvedPath(QString p) : m_path(std::move(p)) {}
     QString m_path;
     friend ResolvedPath resolveDest(const QString &, const QString &);
+    friend class DestIndex;
 };
 
 QString resolvePath(const QString &root, const QString &relative);
@@ -65,6 +68,24 @@ QString resolvePath(const QString &root, const QString &relative);
 // ResolvedPath return type is what makes that routing unbypassable: a copy
 // destination must be one, and only resolveDest can mint one.
 ResolvedPath resolveDest(const QString &root, const QString &relative);
+
+// One destination folder, listed once, answering what resolveDest(dir, name)
+// answers for a single name. resolveDest lists the folder on every call, and
+// copying a folder's contents called it once per entry: a folder of 5,000
+// textures copied into one was listed 5,000 times, each listing longer than the
+// last. The caller reports each entry it creates (add) so a later name
+// differing only in case lands on it, as a fresh listing would have found.
+class DestIndex {
+public:
+    explicit DestIndex(const QString &dir);
+    ResolvedPath child(const QString &name) const;
+    void add(const QString &name);
+
+private:
+    QString                 m_dir;
+    QSet<QString>           m_names;
+    QHash<QString, QString> m_firstByLower;   // case-folded -> first in listing order
+};
 
 } // namespace fomod
 

@@ -21,12 +21,15 @@
 // has already declined.
 //
 // Pure (no Qt widgets) so detection + merge are unit-testable against a
-// QTemporaryDir. Staging reuses fomod_copy / fomod::resolveDest for the
-// case-insensitive, traversal-guarded, last-writer-wins merge.
+// QTemporaryDir. Staging matches names the way fomod::resolveDest does
+// (case-insensitive, last writer wins), falling back to fomod_copy where a
+// rename cannot move something.
 
 #include <QString>
 #include <QStringList>
 #include <QList>
+
+struct FsProgress;
 
 namespace bain {
 
@@ -62,10 +65,16 @@ QList<Package> packages(const QString &modPath);
 QStringList foreignMasters(const QList<Package> &packages, int index);
 
 // Merge the chosen packages (by folder name) into a fresh staging dir
-// `<modPath>/../bain_install` and return its path. Packages are applied in the
+// `<modPath>/.bain_stage` and return its path. Packages are applied in the
 // order packages() reports (numeric), so a higher-numbered choice overwrites a
-// lower one. Non-destructive to the source packages (re-runnable to change the
-// selection). Returns "" if nothing was chosen or staging produced no files.
-QString stage(const QString &modPath, const QStringList &chosenNames);
+// lower one. Returns "" if nothing was chosen or staging produced no files.
+//
+// MOVES the chosen packages' contents: the unpacked archive is thrown away
+// once the result is promoted, so there is nothing to keep them for. Copying
+// them was the long freeze of a 2.75 GB install - tens of thousands of files
+// copied one at a time - where a move is a handful of renames. With
+// `progress`, counts packages staged.
+QString stage(const QString &modPath, const QStringList &chosenNames,
+              FsProgress *progress = nullptr);
 
 } // namespace bain

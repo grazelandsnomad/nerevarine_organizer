@@ -1,11 +1,15 @@
 #include "bain.h"
 #include "fomod_copy.h"
+#include "fomod_path.h"
+#include "fs_progress.h"
 #include "pluginparser.h"
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <QSet>
+#include <QtLogging>
 
 namespace bain {
 namespace {
@@ -84,22 +88,89 @@ QList<Package> packages(const QString &modPath)
     return out;
 }
 
-QString stage(const QString &modPath, const QStringList &chosenNames)
+namespace {
+
+// Move everything inside `src` into `dst`, merging with what is there.
+//
+// A name `dst` does not have moves over whole: one rename, however much is
+// inside it, so a package landing in an empty staging folder costs a handful
+// of renames. A folder both have merges one level down. A file both have is
+// replaced - the later package wins, as it did when this copied. Names match
+// case-insensitively, as fomod::resolveDest matches them. Anything a rename
+// cannot move (another filesystem, or a symlink, whose target a copy
+// materializes) is copied instead. An entry whose kind clashes with what is
+// there - a file where a folder is - is left out, as the copy left it out.
+void moveContents(const QString &src, const QString &dst)
+{
+    const auto entries =
+        QDir(src).entryInfoList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot);
+    if (entries.isEmpty()) return;
+    QDir().mkpath(dst);
+    fomod::DestIndex index(dst);
+    for (const QFileInfo &fi : entries) {
+        const fomod::ResolvedPath to = index.child(fi.fileName());
+        const QString from   = fi.absoluteFilePath();
+        const QString toPath = to.str();
+        const QFileInfo there(toPath);
+        if (fi.isDir()) {
+            if (there.isDir()) {
+                moveContents(from, toPath);
+                continue;
+            }
+            // An empty folder is skipped, as copying skipped it: an empty
+            // scripts/ reads as a failed install (see fomod_copy.h).
+            if (there.exists() || QDir(from).isEmpty()) {
+                if (there.exists())
+                    qWarning("bain: '%s' is a file; not putting a folder there",
+                             qUtf8Printable(toPath));
+                continue;
+            }
+            if (fi.isSymLink() || !QDir().rename(from, toPath))
+                fomod_copy::copyDir(from, to);
+        } else {
+            if (there.isDir()) {
+                qWarning("bain: '%s' is a folder; not putting a file there",
+                         qUtf8Printable(toPath));
+                continue;
+            }
+            if (there.exists()) QFile::remove(toPath);   // last writer wins
+            if (fi.isSymLink() || !QFile::rename(from, toPath))
+                fomod_copy::copyFile(from, to);
+        }
+        index.add(there.fileName());
+    }
+}
+
+} // namespace
+
+QString stage(const QString &modPath, const QStringList &chosenNames,
+              FsProgress *progress)
 {
     if (chosenNames.isEmpty()) return {};
 
-    const QString stageDir =
-        QFileInfo(modPath).absolutePath() + QStringLiteral("/bain_install");
+    // Listed before the staging folder exists, which sits among them.
+    const QList<Package> all = packages(modPath);
+
+    // Inside the unpacked archive, so it is on the same filesystem as the
+    // packages (a move is a rename) and two installs can never share it - the
+    // old <mods>/bain_install was one fixed name for every install at once.
+    // Hidden, and promote() carries it out before deleting the archive.
+    const QString stageDir = QDir(modPath).filePath(QStringLiteral(".bain_stage"));
     if (QDir(stageDir).exists())
         QDir(stageDir).removeRecursively();
     QDir().mkpath(stageDir);
 
     const QSet<QString> chosen(chosenNames.begin(), chosenNames.end());
+    int picked = 0;
+    for (const Package &p : all) picked += chosen.contains(p.name) ? 1 : 0;
+    if (progress) progress->begin(FsProgress::Phase::Staging, picked);
+
     // packages() is numeric order, so a higher-numbered package overwrites a
-    // lower one (last writer wins, in fomod_copy::copyContents).
-    for (const Package &p : packages(modPath)) {
-        if (chosen.contains(p.name))
-            fomod_copy::copyContents(p.path, stageDir);
+    // lower one (last writer wins).
+    for (const Package &p : all) {
+        if (!chosen.contains(p.name)) continue;
+        moveContents(p.path, stageDir);
+        if (progress) progress->add(1);
     }
 
     // Every chosen package was empty -> nothing staged.

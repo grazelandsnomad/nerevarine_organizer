@@ -8,6 +8,11 @@
 #include <QFileInfo>
 #include <QStandardPaths>
 
+#ifdef Q_OS_LINUX
+#include <fcntl.h>    // open
+#include <unistd.h>   // syncfs, close
+#endif
+
 namespace safefs {
 
 namespace {
@@ -91,6 +96,28 @@ QString defaultBackupMirrorRoot()
 {
     return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
          + QStringLiteral("/backups");
+}
+
+void flushFileSystemOf(const QString &path)
+{
+#ifdef Q_OS_LINUX
+    const int fd = ::open(QFile::encodeName(path).constData(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return;
+    (void)::syncfs(fd);
+    ::close(fd);
+#else
+    Q_UNUSED(path);
+#endif
+}
+
+QString setAside(const QString &dir)
+{
+    if (dir.isEmpty() || !QFileInfo::exists(dir)) return {};
+    const QString base = dir + QStringLiteral(".__deleting__");
+    QString tomb = base;
+    for (int n = 1; QFileInfo::exists(tomb); ++n)
+        tomb = base + QString::number(n);
+    return QDir().rename(dir, tomb) ? tomb : QString();
 }
 
 bool forceRemoveRecursively(const QString &path)

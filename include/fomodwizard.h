@@ -1,5 +1,6 @@
 #pragma once
 
+#include "fomod_install.h"
 #include "fomod_types.h"
 #include "game_runtime.h"
 
@@ -45,15 +46,32 @@ public:
         const QStringList &installedNexusUrls = {},
         const game_runtime::Probe &runtime = {});
 
-    // Non-modal: shows as an independent window, calls onDone(fomodPath,
-    // choices) on finish/cancel. fomodPath empty on cancel. Self-deletes on close.
+    // What the user decided. Nothing is copied yet: copying a big installer's
+    // picks takes minutes, so the caller carries the plan out on a worker
+    // (fomod_install::execute) with a progress bar, instead of the wizard
+    // copying on the UI thread with the window frozen.
+    struct Decision {
+        enum class Kind {
+            Cancelled,
+            InstallRaw,    // install the archive as it is: its installer
+                           // could not be read and the user said go ahead
+            InstallPlan,   // carry out `plan`
+        };
+        Kind                kind = Kind::Cancelled;
+        fomod_install::Plan plan;
+        QString             choices;   // the picks, for the modlist; empty
+                                       // when the installer asked nothing
+    };
+
+    // Non-modal: shows as an independent window, calls onDone once on
+    // finish/cancel. An installer with no pages decides without showing
+    // anything. Self-deletes on close.
     static void showAsync(
         const QString &archiveRoot,
         const QString &priorChoices,
         QWidget *parent,
         const QStringList &installedModNames,
-        std::function<void(const QString &fomodPath,
-                           const QString &choices)> onDone,
+        std::function<void(const Decision &)> onDone,
         const QString &gameId = {},
         const QStringList &installedNexusUrls = {},
         const game_runtime::Probe &runtime = {});
@@ -86,6 +104,10 @@ private:
     bool    parse();
     void    buildUi();
     void    updateButtons();
+    // What the buttons say to install, in order: required files, picked
+    // options, satisfied conditional patterns. Reads widgets; UI thread.
+    fomod_install::Plan plannedInstall() const;
+    // plannedInstall() carried out right here, for the modal run().
     QString applySelections();
     // Serializes button state as "si:gi:pi;..." (step/group/plugin index per
     // checked plugin).

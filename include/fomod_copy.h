@@ -15,6 +15,8 @@
 
 #include "fomod_path.h"   // fomod::ResolvedPath (copyFile's gated destination)
 
+struct FsProgress;
+
 namespace fomod_copy {
 
 // Copy one file to a resolved destination: creates the parent, then last-writer-
@@ -25,11 +27,18 @@ namespace fomod_copy {
 bool copyFile(const QString &src, const fomod::ResolvedPath &dst);
 
 // Copy every entry inside srcDir into dstDir (children, not the dir itself).
-// No-op when srcDir does not exist or is empty.
-void copyContents(const QString &srcDir, const QString &dstDir);
+// No-op when srcDir does not exist or is empty. With `progress`, each file
+// copied adds its size to it.
+void copyContents(const QString &srcDir, const QString &dstDir,
+                  FsProgress *progress = nullptr);
 
 // Copy srcDir as a named subdirectory of dstDir's parent (i.e. dstDir IS the
 // new directory's full path).  No-op when srcDir does not exist or is empty.
-void copyDir(const QString &srcDir, const QString &dstDir);
+void copyDir(const QString &srcDir, const QString &dstDir,
+             FsProgress *progress = nullptr);
+
+// Bytes the copies above would copy from `path`: a file's size, or every file
+// under a folder - the same entries they visit. 0 when it does not exist.
+qint64 sizeOf(const QString &path);
 
 } // namespace fomod_copy

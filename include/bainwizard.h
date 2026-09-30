@@ -21,8 +21,8 @@
 // "Install everything" vs "Choose packages..." chooser; the checkbox list only
 // appears for users who want to prune. Re-install/update: a remembered selection
 // (ModRole::BainChoices) skips the chooser and opens the list pre-ticked to last
-// time. On accept the chosen contents merge into a staging dir via bain::stage,
-// which the caller promotes like a FOMOD result.
+// time. On accept the caller stages the chosen packages (bain::stage) on a
+// worker and promotes the result like a FOMOD result.
 
 class QCheckBox;
 class QScrollArea;
@@ -32,9 +32,10 @@ class BainWizard : public QDialog {
     Q_OBJECT
 public:
     // Non-modal, like FomodWizard::showAsync: shows the picker as an independent
-    // window and calls onDone(stagedPath, choices) when finished.
-    //   stagedPath    empty -> user cancelled (caller resets the install)
-    //                 else  -> bain::stage output dir, ready to promote()
+    // window and calls onDone(chosen, choices) when finished. Stages nothing:
+    // that is file work for the caller's worker (bain::stage).
+    //   chosen        empty -> user cancelled (caller resets the install)
+    //                 else  -> the package folder names to stage
     //   choices       ";"-joined chosen package names; caller persists them
     //                 (ModRole::BainChoices) so a re-install pre-ticks them.
     //   priorChoices  ";"-joined names from a previous install;
@@ -53,7 +54,7 @@ public:
         const QString &priorChoices,
         QWidget *parent,
         const QStringList &installedModNames,
-        std::function<void(const QString &stagedPath,
+        std::function<void(const QStringList &chosen,
                            const QString &choices)> onDone,
         const QString &ownModName = {},
         const QSet<QString> &availablePluginsLower = {});
@@ -65,8 +66,7 @@ private:
     void buildUi();
     void revealPicker();        // swap the compact chooser for the checkbox list
     // Adds Install beside Cancel and keeps it disabled while nothing is
-    // ticked: an empty selection makes bain::stage() return "", which the
-    // caller reads as a cancel and acts on by deleting the archive.
+    // ticked: an empty selection reaches the caller as a cancel.
     void addInstallButton();
     QStringList chosenNames() const;
 

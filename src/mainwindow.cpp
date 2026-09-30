@@ -3763,6 +3763,21 @@ void MainWindow::moveModAdjacentTo(QListWidgetItem *mod, const QString &targetPa
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
+    // An install's file work is running on a worker (install_job). Closing
+    // under it would leave half a mod on disk and a row that never learns
+    // where it went, so the window stays until the last install lands and
+    // then closes itself (startInstallJob). Quit reaches here too: Qt 6 turns
+    // quit() into close events, and an ignored one cancels the quit.
+    if (!m_runningInstalls.isEmpty()) {
+        m_closeWhenInstallsFinish = true;
+        const QString msg =
+            T("status_close_after_install").arg(m_runningInstalls.first().name);
+        if (m_notify) m_notify->show(msg, QStringLiteral("#1a6fa8"));
+        statusBar()->showMessage(msg, 5000);
+        event->ignore();
+        return;
+    }
+
     QElapsedTimer closeTimer;
     closeTimer.start();
 

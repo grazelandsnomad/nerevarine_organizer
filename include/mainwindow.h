@@ -15,6 +15,7 @@
 
 #include <expected>
 #include <functional>
+#include <memory>
 
 #include "conflict_direction.h"  // Directions complete type: by-value slot arg below
 #include "plugin_records.h"      // RecordClash likewise
@@ -28,7 +29,9 @@
 #include "modentry.h"
 #include "deps_resolver.h"            // ModEntry complete type: QList<ModEntry> by value below
 #include "game_runtime.h"             // game_runtime::Probe, cached per profile
+#include "install_job.h"              // install_job::Work/Result by value below
 
+struct FsProgress;
 class QAction;
 class QCloseEvent;
 class QLabel;
@@ -579,21 +582,40 @@ private:
     void applyInstalledStateToStrandedPlaceholder(QListWidgetItem *placeholder,
                                                   const QString &modPath,
                                                   const QString &profileKey);
-    // "Merge into existing" follow-through. When `placeholder` carries a pending
-    // ModRole::MergeTargetPath (set in handleNxmUrl), overlay every file from
-    // `contentPath` onto that folder (last-writer-wins, optional overrides
-    // main), delete the redundant `discardDir`, and return the merge target as
-    // the row's path. No pending merge (or vanished target) -> returns
-    // `contentPath` unchanged, leaves `discardDir`. Consumes the role.
-    QString applyPendingMerge(QListWidgetItem *placeholder,
-                              const QString &contentPath,
-                              const QString &discardDir);
-    // Copy-on-write fork for a folder shared with another profile: verified-copy
-    // `sharedPath` into a fresh folder under m_modsDir, return its path (empty
-    // on failure, after warning). Used before an in-place mutation (merge
-    // overlay) so the other profile's files stay put. Download-based mutations
-    // (reinstall/update) extract fresh and just repoint the row - skip this.
-    QString forkSharedModFolder(const QString &sharedPath);
+    // The file work of an install - staging an installer's picks, moving the
+    // result into place, a Merge's overlay - runs on a worker (install_job),
+    // with a bar on the row and a line in the status bar; it froze the window
+    // for minutes on a big archive. What the UI thread still does afterwards:
+    struct InstallFollowUp {
+        QUuid   token;
+        QString archivePath;
+        QString archiveFileName;   // for the "installer produced nothing" warning
+        int     choicesRole = 0;   // ModRole::FomodChoices / BainChoices; 0: none
+        QString choices;
+        QString mergeTarget;       // filled by startInstallJob, for its messages
+    };
+    void startInstallJob(install_job::Work work, InstallFollowUp follow);
+    void finishInstallJob(const InstallFollowUp &follow,
+                          const install_job::Result &result);
+    // "Merge into existing": when `placeholder` carries a pending
+    // ModRole::MergeTargetPath (set in handleNxmUrl), hand it to the job,
+    // consuming the role. A target shared with another profile gets a fork
+    // destination under m_modsDir too: the job copies it and merges into the
+    // copy, so the other profile's files stay put. Download-based mutations
+    // (reinstall/update) extract fresh and just repoint the row - no fork.
+    void prepareMerge(QListWidgetItem *placeholder, install_job::Work &work);
+    void updateInstallProgress();
+    struct RunningInstall {
+        QUuid                       token;
+        QString                     name;
+        std::shared_ptr<FsProgress> progress;
+    };
+    QList<RunningInstall> m_runningInstalls;
+    QTimer *m_installProgressTimer = nullptr;
+    // Asked to close mid-install: the window stays until the last install
+    // lands, then closes itself - closing under a worker would leave half a
+    // mod on disk and a row that never learns where it went.
+    bool m_closeWhenInstallsFinish = false;
     // When a new install shares a Nexus mod page with an existing entry, point
     // their DependsOn lists at each other so missing-dep warnings fire when the
     // patch is enabled but the base isn't.

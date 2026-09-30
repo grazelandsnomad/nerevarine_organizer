@@ -10,6 +10,8 @@
 #include "mod_aliases.h"
 #include "fomod_scripts.h"
 #include "fomod_install.h"
+#include "fs_progress.h"
+#include "install_job.h"
 #include "bain.h"
 #include "bain_hint.h"
 #include "bainwizard.h"
@@ -47,6 +49,12 @@ static void writeFile(const QString &path, const QByteArray &bytes = {})
     if (!f.open(QIODevice::WriteOnly)) return;
     f.write(bytes);
     f.close();
+}
+
+static QByteArray readFile(const QString &path)
+{
+    QFile f(path);
+    return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
 }
 
 // OAAB-shaped archive tree.
@@ -347,9 +355,91 @@ static void fomodcopy_testCopyFileLastWriterWinsAndReports()
     check("copyFile returns false when the source is missing", !ok3);
 }
 
+// copyContents asked resolveDest about every entry, and resolveDest listed the
+// destination folder each time: quadratic in a big texture folder. DestIndex
+// lists it once; it must answer exactly as resolveDest does, case variants
+// and all.
+static void fomodcopy_testDestIndexAnswersAsResolveDest()
+{
+    std::cout << "\n[DestIndex answers as resolveDest does]\n";
+    QTemporaryDir tmp;
+    const QString dir = tmp.path();
+    QDir().mkpath(dir + "/Meshes");
+    QDir().mkpath(dir + "/textures");
+    QDir().mkpath(dir + "/Textures");        // a case-variant pair, as Linux allows
+    writeFile(dir + "/Plugin.ESP");
+
+    const fomod::DestIndex index(dir);
+    bool same = true;
+    QString diff;
+    for (const QString &name : {QStringLiteral("meshes"), QStringLiteral("MESHES"),
+                                QStringLiteral("Meshes"), QStringLiteral("textures"),
+                                QStringLiteral("Textures"), QStringLiteral("TEXTURES"),
+                                QStringLiteral("plugin.esp"), QStringLiteral("new"),
+                                QStringLiteral(".."), QStringLiteral(".")}) {
+        const QString a = index.child(name).str();
+        const QString b = fomod::resolveDest(dir, name).str();
+        if (a != b) { same = false; diff += name + ": " + a + " vs " + b + "; "; }
+    }
+    check("every name lands where resolveDest puts it", same, diff);
+
+    // An entry created after the listing: a later case variant joins it.
+    fomod::DestIndex grown(dir);
+    QDir().mkpath(dir + "/Sound");
+    grown.add("Sound");
+    check("a name added later is found by a case variant",
+          grown.child("sound").str() == fomod::resolveDest(dir, "sound").str(),
+          grown.child("sound").str());
+
+    // An empty folder name is resolveDest's refusal, never "the working
+    // directory", which is what QDir makes of it.
+    check("an empty index resolves nothing",
+          fomod::DestIndex(QString()).child("x").isEmpty());
+}
+
+static void fomodcopy_testProgressCountsBytes()
+{
+    std::cout << "\n[copyContents counts the bytes it copies]\n";
+    QTemporaryDir tmp;
+    writeFile(tmp.filePath("src/a.dds"), QByteArray(1000, 'a'));
+    writeFile(tmp.filePath("src/sub/b.nif"), QByteArray(250, 'b'));
+    writeFile(tmp.filePath("src/sub/deeper/c.esp"), QByteArray(4, 'c'));
+
+    check("sizeOf adds up the tree", fomod_copy::sizeOf(tmp.filePath("src")) == 1254,
+          QString::number(fomod_copy::sizeOf(tmp.filePath("src"))));
+    check("sizeOf of a file is its size", fomod_copy::sizeOf(tmp.filePath("src/a.dds")) == 1000);
+    check("sizeOf of nothing is 0", fomod_copy::sizeOf(tmp.filePath("missing")) == 0);
+
+    FsProgress progress;
+    progress.begin(FsProgress::Phase::Staging, fomod_copy::sizeOf(tmp.filePath("src")));
+    fomod_copy::copyContents(tmp.filePath("src"), tmp.filePath("dst"), &progress);
+    check("done reaches the total", progress.done == 1254, QString::number(progress.done));
+    check("which reads as 100%", progress.percent() == 100, QString::number(progress.percent()));
+    check("and everything is there", QFileInfo::exists(tmp.filePath("dst/sub/deeper/c.esp")));
+}
+
+// A FOMOD folder whose destination climbs out ("../x") resolves to "", and
+// copyContents took "" for the working directory: the folder's files were
+// written wherever the app was started from.
+static void fomodcopy_testEmptyDestinationWritesNowhere()
+{
+    std::cout << "\n[an empty destination is refused, not the working directory]\n";
+    QTemporaryDir tmp, cwd;
+    writeFile(tmp.filePath("src/evil.esp"), "x");
+    const QString before = QDir::currentPath();
+    QDir::setCurrent(cwd.path());
+    fomod_copy::copyContents(tmp.filePath("src"), QString());
+    QDir::setCurrent(before);
+    check("nothing lands in the working directory",
+          QDir(cwd.path()).entryList(QDir::AllEntries | QDir::NoDotAndDotDot).isEmpty());
+}
+
 static void run_fomod_copy()
 {
     std::cout << "=== fomod_copy ===\n";
+    fomodcopy_testDestIndexAnswersAsResolveDest();
+    fomodcopy_testProgressCountsBytes();
+    fomodcopy_testEmptyDestinationWritesNowhere();
     fomodcopy_testEmptySourceProducesNoDest();
     fomodcopy_testNonexistentSourceIsNoop();
     fomodcopy_testPopulatedSourceCopiesEverything();
@@ -715,9 +805,68 @@ static void fomodinstall_testPromoteScrubsSiblingVariants()
           !QFileInfo::exists(r.finalModPath + "/03 Rocky WG Aggressively Compatible/agg.esp"));
 }
 
+// What the wizard decided, carried out: the plan's copies in order, last
+// writer wins, folder names folding case, the unfindable reported - and a
+// destination that climbs out of the install dir refused, with nothing
+// written where the app happens to be running.
+static void fomodinstall_testExecuteCarriesOutThePlan()
+{
+    std::cout << "\n[execute: the plan, in order]\n";
+    QTemporaryDir tmp, cwd;
+    const QString root = tmp.filePath("archive");
+    writeFile(root + "/00 Core/Mod.esp", "core");
+    writeFile(root + "/00 Core/Meshes/a.nif", "a");
+    writeFile(root + "/01 HD/textures/t.dds", QByteArray(100, 'h'));
+    writeFile(root + "/02 Patch/Mod.esp", "patched");
+    writeFile(root + "/03 Evil/escape.esp", "x");
+
+    fomod_install::Plan plan;
+    plan.archiveRoot = root;
+    plan.installDir  = root + "/fomod_install";
+    plan.copies = {
+        {"00 core\\Mod.esp", "", false},          // Windows spelling, wrong case
+        {"00 Core/Meshes", "meshes", true},
+        {"01 HD", "", true},
+        {"02 Patch/Mod.esp", "Mod.esp", false},    // overwrites the core's
+        {"99 Missing/x.esp", "", false},
+        {"03 Evil", "../outside", true},
+    };
+
+    const QString before = QDir::currentPath();
+    QDir::setCurrent(cwd.path());
+    FsProgress progress;
+    const QStringList failed = fomod_install::execute(plan, &progress);
+    QDir::setCurrent(before);
+
+    const QString out = plan.installDir;
+    check("a file lands by its own name", QFileInfo::exists(out + "/Mod.esp"));
+    check("the later copy wins", readFile(out + "/Mod.esp") == "patched",
+          QString::fromUtf8(readFile(out + "/Mod.esp")));
+    check("a folder lands at its destination", QFileInfo::exists(out + "/meshes/a.nif"));
+    check("a folder with no destination fills the root",
+          QFileInfo::exists(out + "/textures/t.dds"));
+    check("the missing source and the escape are reported",
+          failed == QStringList({"99 Missing/x.esp", "03 Evil"}), failed.join(", "));
+    check("nothing escaped the install dir",
+          !QFileInfo::exists(tmp.filePath("outside"))
+              && !QFileInfo::exists(root + "/outside"));
+    check("nor landed in the working directory",
+          QDir(cwd.path()).entryList(QDir::AllEntries | QDir::NoDotAndDotDot).isEmpty());
+    check("progress counted every byte it copied, and only those",
+          progress.done == progress.total && progress.total == 4 + 1 + 100 + 7,
+          QString::number(progress.done) + "/" + QString::number(progress.total));
+
+    // Started afresh: a second run leaves no trace of the first.
+    writeFile(out + "/stale.txt", "old");
+    plan.copies = { {"00 Core/Mod.esp", "", false} };
+    fomod_install::execute(plan);
+    check("a rerun starts from an empty install dir", !QFileInfo::exists(out + "/stale.txt"));
+}
+
 static void run_fomod_install()
 {
     std::cout << "=== fomod_install::promote ===\n";
+    fomodinstall_testExecuteCarriesOutThePlan();
     fomodinstall_testEmptyFomodOutputFallsBack();
     fomodinstall_testPromoteWithoutTitleReusesExtractDirName();
     fomodinstall_testPromoteWithTitleRenamesAndCleansWrapper();
@@ -822,7 +971,7 @@ static void bain_testStageMerge()
     bain_touch(d.filePath("01 Patch/meshes/y.nif"), "new");
     bain_touch(d.filePath("02 Unwanted/meshes/z.nif"), "nope");
 
-    const QString modPath = d.filePath("mod");  // subdir so bain_install lands as a sibling
+    const QString modPath = d.filePath("mod");   // the unpack, inside a temp dir
     QDir().mkpath(modPath);
     QDir(d.path()).rename("00 Core", "mod/00 Core");
     QDir(d.path()).rename("01 Patch", "mod/01 Patch");
@@ -844,12 +993,236 @@ static void bain_testStageMerge()
           bain::stage(modPath, {}).isEmpty());
 }
 
+// Staging used to copy every picked file, one at a time, on the UI thread:
+// Tamriel Data (HD)'s ~54,000 files froze the window for minutes. It moves
+// them now - a package landing in an empty staging folder is a few renames -
+// with the copy's results: last writer wins, folder names fold case, empty
+// folders stay out, unpicked packages stay put.
+static void bain_testStageMoves()
+{
+    std::cout << "\n[stage() moves the picked packages, with the copy's results]\n";
+    QTemporaryDir d;
+    const QString modPath = d.filePath("extract");
+    bain_touch(modPath + "/00 Data Files/Tamriel_Data.esm", "esm");
+    bain_touch(modPath + "/00 Data Files/Textures/tr/a.dds", "diffuse");
+    bain_touch(modPath + "/00 Data Files/meshes/m.nif", "mesh");
+    bain_touch(modPath + "/01 Normal Maps/textures/TR/a_n.dds", "normal");
+    bain_touch(modPath + "/01 Normal Maps/Textures/tr/a.dds", "better diffuse");
+    bain_touch(modPath + "/01 Normal Maps/Meshes", "a file where a folder is");
+    QDir().mkpath(modPath + "/01 Normal Maps/scripts");       // empty
+    bain_touch(modPath + "/02 Unpicked/textures/u.dds", "u");
+
+    FsProgress progress;
+    const QString staged = bain::stage(modPath, {"00 Data Files", "01 Normal Maps"}, &progress);
+
+    check("staged inside the unpack, where no other install can share it",
+          staged == modPath + "/.bain_stage", staged);
+    check("the plugin is there", readFile(staged + "/Tamriel_Data.esm") == "esm");
+    const QStringList top = QDir(staged).entryList(QDir::AllEntries | QDir::NoDotAndDotDot);
+    check("Textures and textures became one folder",
+          top.contains("Textures") && !top.contains("textures"), top.join(", "));
+    check("nested case variants merged too (TR into tr)",
+          QFileInfo::exists(staged + "/Textures/tr/a_n.dds"));
+    check("the later package won", readFile(staged + "/Textures/tr/a.dds") == "better diffuse",
+          QString::fromUtf8(readFile(staged + "/Textures/tr/a.dds")));
+    check("a file did not replace a folder", QFileInfo(staged + "/meshes").isDir()
+          && QFileInfo::exists(staged + "/meshes/m.nif"));
+    check("the empty folder stayed out", !QFileInfo::exists(staged + "/scripts"));
+    check("the picked files were moved, not copied",
+          !QFileInfo::exists(modPath + "/00 Data Files/Tamriel_Data.esm")
+              && !QFileInfo::exists(modPath + "/01 Normal Maps/textures/TR/a_n.dds"));
+    check("the unpicked package is untouched",
+          QFileInfo::exists(modPath + "/02 Unpicked/textures/u.dds"));
+    check("progress counted both packages",
+          progress.done == 2 && progress.total == 2 && progress.percent() == 100);
+}
+
 static void run_bain()
 {
     std::cout << "=== bain tests ===\n";
     bain_testDetection();
     bain_testOrdering();
     bain_testStageMerge();
+    bain_testStageMoves();
+    std::cout << "\n";
+}
+
+// ===== install_job: the file work of an install, on a worker =====
+
+// A mods dir holding one unpacked archive: <mods>/<token>/... as the
+// extractor leaves it.
+struct JobFixture {
+    QTemporaryDir tmp;
+    QString mods, extract;
+    JobFixture()
+    {
+        mods = tmp.filePath("mods");
+        extract = mods + "/8674709d_2";
+        QDir().mkpath(extract);
+    }
+};
+
+static void installjob_testBain()
+{
+    std::cout << "\n[install_job: BAIN staged, promoted under its title]\n";
+    JobFixture f;
+    bain_touch(f.extract + "/00 Core/Mod.esm", "core");
+    bain_touch(f.extract + "/01 Extra/textures/x.dds", "x");
+    bain_touch(f.extract + "/02 Skip/textures/y.dds", "y");
+
+    install_job::Work w;
+    w.stage = install_job::Work::Stage::Bain;
+    w.bainChosen = {"00 Core", "01 Extra"};
+    w.extractDir = f.extract;
+    w.modPath    = f.extract;
+    w.modsDir    = f.mods;
+    w.title      = "Tamriel Data (HD)";
+    FsProgress progress;
+    const auto r = install_job::run(w, &progress);
+
+    check("installed", r.outcome == install_job::Result::Outcome::Installed);
+    check("under its title", r.finalPath == f.mods + "/Tamriel Data (HD)", r.finalPath);
+    check("with the picks", QFileInfo::exists(r.finalPath + "/Mod.esm")
+                            && QFileInfo::exists(r.finalPath + "/textures/x.dds"));
+    check("and not the rest", !QFileInfo::exists(r.finalPath + "/textures/y.dds"));
+    check("the unpack has left its place", !QFileInfo::exists(f.extract));
+    // Set aside, not deleted: a big unpack takes half a minute to delete on
+    // NTFS, and the mod does not wait for it. The caller deletes it.
+    check("it is handed back to delete in the background",
+          r.leftovers == QStringList{f.extract + ".__deleting__"}
+              && QFileInfo::exists(f.extract + ".__deleting__"),
+          r.leftovers.join(", "));
+    for (const QString &l : r.leftovers) QDir(l).removeRecursively();
+    check("nothing else is left behind - no staging folder",
+          QDir(f.mods).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden)
+              == QStringList{"Tamriel Data (HD)"},
+          QDir(f.mods).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden).join(", "));
+    check("progress ended on the finishing phase",
+          progress.currentPhase() == FsProgress::Phase::Finishing);
+}
+
+static void installjob_testNothingStaged()
+{
+    std::cout << "\n[install_job: picks that hold nothing install nothing]\n";
+    JobFixture f;
+    QDir().mkpath(f.extract + "/00 Empty");
+    QDir().mkpath(f.extract + "/01 Also Empty");
+    install_job::Work w;
+    w.stage = install_job::Work::Stage::Bain;
+    w.bainChosen = {"00 Empty"};
+    w.extractDir = f.extract;
+    w.modPath    = f.extract;
+    w.modsDir    = f.mods;
+    const auto r = install_job::run(w);
+    check("reported as nothing staged",
+          r.outcome == install_job::Result::Outcome::NothingStaged);
+    check("the unpack is set aside to delete",
+          !QFileInfo::exists(f.extract) && r.leftovers.size() == 1,
+          r.leftovers.join(", "));
+}
+
+static void installjob_testFomodPlan()
+{
+    std::cout << "\n[install_job: a FOMOD plan, carried out and promoted]\n";
+    JobFixture f;
+    bain_touch(f.extract + "/Main/Mod.esp", "main");
+    bain_touch(f.extract + "/Options/HD/textures/t.dds", "hd");
+    bain_touch(f.extract + "/Options/SD/textures/t.dds", "sd");
+
+    install_job::Work w;
+    w.stage = install_job::Work::Stage::Fomod;
+    w.fomodPlan.archiveRoot = f.extract;
+    w.fomodPlan.installDir  = f.extract + "/fomod_install";
+    w.fomodPlan.copies = { {"Main/Mod.esp", "", false}, {"Options/HD", "", true} };
+    w.extractDir = f.extract;
+    w.modPath    = f.extract;
+    w.modsDir    = f.mods;
+    w.title      = "Some Mod";
+    const auto r = install_job::run(w);
+    check("promoted under its title", r.finalPath == f.mods + "/Some Mod", r.finalPath);
+    check("with the picked option", readFile(r.finalPath + "/textures/t.dds") == "hd");
+    check("the unpicked option did not leak", !QFileInfo::exists(f.extract));
+
+    // An installer that produced nothing: the raw unpack is what gets installed.
+    JobFixture g;
+    bain_touch(g.extract + "/Main/Mod.esp", "main");
+    install_job::Work e = w;
+    e.fomodPlan.archiveRoot = g.extract;
+    e.fomodPlan.installDir  = g.extract + "/fomod_install";
+    e.fomodPlan.copies = { {"Missing/x.esp", "", false} };
+    e.extractDir = g.extract;
+    e.modPath    = g.extract;
+    e.modsDir    = g.mods;
+    const auto empty = install_job::run(e);
+    check("an empty result falls back to the raw unpack",
+          empty.outcome == install_job::Result::Outcome::EmptyFallback
+              && empty.finalPath == g.extract
+              && QFileInfo::exists(g.extract + "/Main/Mod.esp"),
+          empty.finalPath);
+}
+
+static void installjob_testMerge()
+{
+    std::cout << "\n[install_job: a Merge overlays the result on the existing mod]\n";
+    JobFixture f;
+    const QString target = f.mods + "/Existing Mod";
+    bain_touch(target + "/Mod.esp", "old");
+    bain_touch(target + "/textures/keep.dds", "keep");
+    bain_touch(f.extract + "/Mod.esp", "new");
+    bain_touch(f.extract + "/Textures/add.dds", "add");
+
+    install_job::Work w;   // Stage::None: a plain archive
+    w.extractDir  = f.extract;
+    w.modPath     = f.extract;
+    w.modsDir     = f.mods;
+    w.mergeTarget = target;
+    const auto r = install_job::run(w);
+    check("registered at the target", r.merged && r.finalPath == target, r.finalPath);
+    check("the new files win", readFile(target + "/Mod.esp") == "new");
+    check("into the existing folder, whatever its case",
+          QFileInfo::exists(target + "/textures/add.dds")
+              && QFileInfo::exists(target + "/textures/keep.dds"));
+    check("the merged unpack is set aside to delete",
+          !QFileInfo::exists(f.extract)
+              && r.leftovers == QStringList{f.extract + ".__deleting__"},
+          r.leftovers.join(", "));
+
+    // Shared with another profile: merged into a private copy instead.
+    JobFixture g;
+    const QString shared = g.mods + "/Shared Mod";
+    bain_touch(shared + "/Mod.esp", "theirs");
+    bain_touch(g.extract + "/Mod.esp", "mine");
+    install_job::Work s;
+    s.extractDir  = g.extract;
+    s.modPath     = g.extract;
+    s.modsDir     = g.mods;
+    s.mergeTarget = shared;
+    s.forkTo      = g.mods + "/Shared Mod_1";
+    const auto fr = install_job::run(s);
+    check("merged into the fork", fr.forked && fr.finalPath == s.forkTo
+                                  && readFile(s.forkTo + "/Mod.esp") == "mine", fr.finalPath);
+    check("the other profile's folder untouched", readFile(shared + "/Mod.esp") == "theirs");
+
+    // The target vanished before the download finished: install as it is.
+    JobFixture h;
+    bain_touch(h.extract + "/Mod.esp", "new");
+    install_job::Work v;
+    v.extractDir  = h.extract;
+    v.modPath     = h.extract;
+    v.modsDir     = h.mods;
+    v.mergeTarget = h.mods + "/Deleted Meanwhile";
+    const auto vr = install_job::run(v);
+    check("a vanished target means no merge", !vr.merged && vr.finalPath == h.extract,
+          vr.finalPath);
+}
+
+static void run_install_job()
+{
+    std::cout << "=== install_job ===\n";
+    installjob_testBain();
+    installjob_testNothingStaged();
+    installjob_testFomodPlan();
+    installjob_testMerge();
     std::cout << "\n";
 }
 
@@ -2028,6 +2401,12 @@ struct FomodWizardTestHook {
     static QLabel *previewImage(FomodWizard *w)   { return w->m_previewImage; }
     static QLabel *previewCaption(FomodWizard *w) { return w->m_previewCaption; }
     static QWidget *previewPane(FomodWizard *w)   { return w->m_previewPane; }
+    static fomod_install::Plan plan(FomodWizard *w) { return w->plannedInstall(); }
+    static void setRequired(FomodWizard *w, const QList<FomodFile> &files,
+                            const QList<FomodFile> &folders)
+    { w->m_requiredFiles = files; w->m_requiredFolders = folders; }
+    static void setPatterns(FomodWizard *w, const QList<FomodPattern> &p)
+    { w->m_conditionalInstalls = p; }
 };
 
 static FomodPlugin wizardui_mkPlugin(const QString &name, const QString &type = "Optional")
@@ -3000,9 +3379,53 @@ static void run_fomod_wizard_engine()
     }
 }
 
+// The wizard decides on the UI thread and copies nothing: what it hands over
+// is a plan, which a worker carries out. The plan must be what applySelections
+// used to copy, in the same order - required files first, then the picked
+// options, then the conditional patterns the picks' flags satisfy.
+static void wizardui_testPlanFollowsTheButtons()
+{
+    std::cout << "\n[plannedInstall: required, picked, then flagged patterns]\n";
+    FomodPlugin sd = wizardui_mkPlugin("SD textures");
+    sd.folders = { {"Options/SD", "textures", 0} };
+    FomodPlugin hd = wizardui_mkPlugin("HD textures");
+    hd.folders = { {"Options/HD", "textures", 0} };
+    hd.conditionFlags = { {"hd", "On"} };
+    auto *w = FomodWizardTestHook::build(
+        wizardui_oneGroup(wizardui_mkGroup("SelectExactlyOne", {sd, hd})),
+        {}, {}, {}, QStringLiteral("/tmp/nrv_plan_test"));
+    FomodWizardTestHook::setRequired(w, { {"Core/Mod.esp", "", 0} },
+                                        { {"Core/meshes", "meshes", 0} });
+    FomodPattern needsHd;
+    needsHd.flagDeps = { {"hd", "On"} };
+    needsHd.files = { {"Extras/hd_normals.esp", "", 0} };
+    FomodPattern needsSd;
+    needsSd.flagDeps = { {"sd", "On"} };
+    needsSd.files = { {"Extras/sd_only.esp", "", 0} };
+    FomodWizardTestHook::setPatterns(w, {needsHd, needsSd});
+
+    FomodWizardTestHook::btn(w, 0, 0, 1)->setChecked(true);   // HD
+    const fomod_install::Plan plan = FomodWizardTestHook::plan(w);
+
+    QStringList got;
+    for (const auto &c : plan.copies)
+        got << (c.isFolder ? "dir:" : "file:") + c.source + "->" + c.destination;
+    const QStringList want = {
+        "file:Core/Mod.esp->",
+        "dir:Core/meshes->meshes",
+        "dir:Options/HD->textures",
+        "file:Extras/hd_normals.esp->",
+    };
+    check("the copies, in order", got == want, got.join("\n"), want.join("\n"));
+    check("rooted at the archive", plan.archiveRoot == "/tmp/nrv_plan_test");
+    check("into its fomod_install", plan.installDir == "/tmp/nrv_plan_test/fomod_install");
+    delete w;
+}
+
 static void run_fomod_wizard_ui()
 {
     std::cout << "=== fomod_wizard_ui (buildUi) tests ===\n";
+    wizardui_testPlanFollowsTheButtons();
 
     // The real F4SE group from Necessity - Nexus Essentials Merged, on the
     // install that reported it: Fallout4.exe 1.11.240 with f4se_1_11_240.dll
@@ -3695,6 +4118,7 @@ int main(int argc, char **argv)
     run_fomod_scripts();
     run_fomod_install();
     run_bain();
+    run_install_job();
     run_bain_hint();
     run_fomod_hint();
     run_fomod_patch_targets();

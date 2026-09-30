@@ -1,11 +1,10 @@
 #include "fomodwizard.h"
 #include "fomod_choices.h"
-#include "fomod_copy.h"
 #include "fomod_hint.h"
+#include "fomod_install.h"
 #include "mod_aliases.h"
 #include "mod_match.h"
 #include "fomod_path.h"
-#include "fomod_scripts.h"
 #include "translator.h"
 
 #include <QAbstractButton>
@@ -32,6 +31,8 @@
 #include <QScreen>
 #include <QMouseEvent>
 #include <QXmlStreamReader>
+
+#include <functional>
 
 QString FomodWizard::findModuleConfig(const QString &archiveRoot)
 {
@@ -143,7 +144,7 @@ void FomodWizard::showAsync(
     const QString &priorChoices,
     QWidget *parent,
     const QStringList &installedModNames,
-    std::function<void(const QString &, const QString &)> onDone,
+    std::function<void(const Decision &)> onDone,
     const QString &gameId,
     const QStringList &installedNexusUrls,
     const game_runtime::Probe &runtime)
@@ -164,14 +165,18 @@ void FomodWizard::showAsync(
             QMessageBox::Ok | QMessageBox::Cancel,
             QMessageBox::Ok);
         delete dlg;
-        onDone(ans == QMessageBox::Ok ? archiveRoot : QString(), {});
+        Decision d;
+        if (ans == QMessageBox::Ok) d.kind = Decision::Kind::InstallRaw;
+        onDone(d);
         return;
     }
 
     if (dlg->m_steps.isEmpty()) {
-        const QString result = dlg->applySelections();
+        Decision d;
+        d.kind = Decision::Kind::InstallPlan;
+        d.plan = dlg->plannedInstall();
         delete dlg;
-        onDone(result.isEmpty() ? archiveRoot : result, {});
+        onDone(d);
         return;
     }
 
@@ -182,12 +187,14 @@ void FomodWizard::showAsync(
 
     QObject::connect(dlg, &QDialog::accepted, dlg,
                      [dlg, onDone]() {
-        const QString choices = dlg->collectChoices();
-        const QString path    = dlg->applySelections();
-        onDone(path, choices);
+        Decision d;
+        d.kind    = Decision::Kind::InstallPlan;
+        d.choices = dlg->collectChoices();
+        d.plan    = dlg->plannedInstall();
+        onDone(d);
     });
     QObject::connect(dlg, &QDialog::rejected, dlg,
-                     [onDone]() { onDone({}, {}); });
+                     [onDone]() { onDone(Decision{}); });
 
     dlg->show();
     dlg->raise();
@@ -1830,59 +1837,24 @@ void FomodWizard::updateButtons()
     }
 }
 
-// Apply selections and stage the install dir.
-QString FomodWizard::applySelections()
+// What the buttons say to install, as a plan for fomod_install::execute.
+fomod_install::Plan FomodWizard::plannedInstall() const
 {
-    QString installDir = m_archiveRoot + "/fomod_install";
+    fomod_install::Plan plan;
+    plan.archiveRoot = m_archiveRoot;
+    plan.installDir  = m_archiveRoot + "/fomod_install";
 
-    // Start fresh
-    if (QDir(installDir).exists())
-        QDir(installDir).removeRecursively();
-    QDir().mkpath(installDir);
-
-    QStringList failed;   // sources we couldn't find or copy
-
-    // Install one FomodFile entry (file or folder).
-    auto installFile = [&](const FomodFile &f, bool isFolder) {
-        QString normalizedDest = f.destination;
-        normalizedDest.replace('\\', '/');
-
-        QString src = fomod::resolvePath(m_archiveRoot, f.source);
-        if (src.isEmpty() || !QFileInfo::exists(src)) {
-            failed << f.source;
-            return;
-        }
-        if (isFolder) {
-            QString dst = normalizedDest.isEmpty()
-                ? installDir
-                : fomod::resolveDest(installDir, normalizedDest);
-            fomod_copy::copyContents(src, dst);
-        } else {
-            const QString rel = normalizedDest.isEmpty()
-                ? QFileInfo(src).fileName()
-                : normalizedDest;
-            const fomod::ResolvedPath dst = fomod::resolveDest(installDir, rel);
-            if (!fomod_copy::copyFile(src, dst)) failed << f.source;
-
-            // Patch-hub rescue: an .omwscripts manifest declares lua bodies the
-            // FOMOD often doesn't list as separate <file>/<folder> entries
-            // (Completionist Patch Hub, Nexus 58523: ships manifest +
-            // scripts/.../*.lua but lists only the manifest). Pull the lua from
-            // the manifest's parent dir so the install matches what OpenMW loads.
-            if (src.endsWith(QLatin1String(".omwscripts"),
-                             Qt::CaseInsensitive)) {
-                fomod_scripts::installDeclaredScripts(
-                    src, m_archiveRoot, installDir);
-            }
-        }
+    auto add = [&plan](const QList<FomodFile> &files, bool isFolder) {
+        for (const FomodFile &f : files)
+            plan.copies.append({f.source, f.destination, isFolder});
     };
 
     // Flags raised by picked plugins; drives the conditionalFileInstalls below.
     QHash<QString, QString> activeFlags;
 
     // 1. Required files (always)
-    for (const FomodFile &f : m_requiredFiles)   installFile(f, false);
-    for (const FomodFile &f : m_requiredFolders) installFile(f, true);
+    add(m_requiredFiles,   false);
+    add(m_requiredFolders, true);
 
     // 2. Selected plugin files + their conditionFlags
     for (int si = 0; si < m_steps.size() && si < m_buttons.size(); ++si) {
@@ -1892,8 +1864,8 @@ QString FomodWizard::applySelections()
             for (int pi = 0; pi < group.plugins.size() && pi < m_buttons[si][gi].size(); ++pi) {
                 if (!m_buttons[si][gi][pi]->isChecked()) continue;
                 const FomodPlugin &plugin = group.plugins[pi];
-                for (const FomodFile &f : plugin.files)   installFile(f, false);
-                for (const FomodFile &f : plugin.folders) installFile(f, true);
+                add(plugin.files,   false);
+                add(plugin.folders, true);
                 for (const FomodFlagValue &fv : plugin.conditionFlags)
                     activeFlags.insert(fv.name, fv.value);
             }
@@ -1924,11 +1896,19 @@ QString FomodWizard::applySelections()
             }
         }
         if (!satisfied) continue;
-        for (const FomodFile &f : pat.files)   installFile(f, false);
-        for (const FomodFile &f : pat.folders) installFile(f, true);
+        add(pat.files,   false);
+        add(pat.folders, true);
     }
 
-    return installDir;
+    return plan;
+}
+
+// Apply selections and stage the install dir, here and now.
+QString FomodWizard::applySelections()
+{
+    const fomod_install::Plan plan = plannedInstall();
+    fomod_install::execute(plan);
+    return plan.installDir;
 }
 
 // Serialize button state for the modlist.

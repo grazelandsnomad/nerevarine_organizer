@@ -90,6 +90,22 @@ copyTreeVerified(const QString &src, const QString &dst,
 // Returns true iff `path` is gone when the call returns.
 bool forceRemoveRecursively(const QString &path);
 
+// Rename `dir` to a sibling nothing looks at - <dir>.__deleting__, or
+// .__deleting__N when that is taken - so a slow delete can run later, off
+// whatever is waiting on it. The real path is free at once, and the new name
+// matches no mod folder, so the sibling-dedup and openmw.cfg scans pass it by.
+// Deleting an unpack of 54,000 files took half a minute on an NTFS drive.
+// Returns the new path, or "" when `dir` does not exist or cannot be renamed
+// (the caller deletes it where it is).
+QString setAside(const QString &dir);
+
+// Flush what has been written to the filesystem holding `path`, in one go.
+// fomod_copy copies without syncing each file (see copyFile); an install
+// calls this once it is in place, so the old folder a Replace deletes next
+// cannot outlive the new files' bytes. Linux (syncfs); a no-op elsewhere,
+// where copies go through the platform's own copy.
+void flushFileSystemOf(const QString &path);
+
 // Pick a path inside `dir` that a download can actually be opened for writing.
 //
 // Returns `dir/filename` when that path is free or already a regular file (an

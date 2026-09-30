@@ -6,8 +6,9 @@
 #include "separatordialog.h"
 #include "modroles.h"
 #include "translator.h"
-#include "fomod_install.h"
-#include "fomod_copy.h"
+#include "async_guarded.h"
+#include "fs_progress.h"
+#include "install_job.h"
 #include "placeholder_state.h"
 #include "fomodwizard.h"
 #include "bain.h"
@@ -121,6 +122,9 @@
 #include "safe_fs.h"
 #include <QFutureWatcher>
 #include <QtConcurrentRun>
+
+#include <memory>
+#include <utility>
 using plugins::collectDataFolders;
 using plugins::readTes3Masters;
 #include <QDropEvent>
@@ -302,14 +306,13 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
         FomodWizard::showAsync(modPath, priorChoices, this, installedModNames,
             [this, archivePath, extractDir, modPath,
              installToken, archiveFileName, sanitizedTitle]
-            (const QString &fomodPath, const QString &fomodChoices) {
+            (const FomodWizard::Decision &d) {
 
-            QString fkey;
-            QListWidgetItem *fph = findPlaceholderByToken(installToken, &fkey);
-            if (fomodPath.isEmpty()) {
-                QDir(extractDir).removeRecursively();
+            if (d.kind == FomodWizard::Decision::Kind::Cancelled) {
+                removeModFoldersAsync({extractDir});
                 // Archive kept - see onExtractionCancelled.
-                if (fph) {
+                QString fkey;
+                if (QListWidgetItem *fph = findPlaceholderByToken(installToken, &fkey)) {
                     fph->setData(ModRole::PendingArchive, archivePath);
                     if (fkey.isEmpty()) {
                         resetPlaceholderAfterInstallCancel(fph, archivePath);
@@ -325,31 +328,23 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
                 return;
             }
 
-            const auto promote = fomod_install::promote(
-                extractDir, modPath, fomodPath, sanitizedTitle, m_modsDir);
+            install_job::Work work;
+            work.stage = d.kind == FomodWizard::Decision::Kind::InstallPlan
+                ? install_job::Work::Stage::Fomod
+                : install_job::Work::Stage::FomodRaw;
+            work.fomodPlan  = d.plan;
+            work.extractDir = extractDir;
+            work.modPath    = modPath;
+            work.modsDir    = m_modsDir;
+            work.title      = sanitizedTitle;
 
-            QString finalPath = modPath;
-            if (promote.outcome == fomod_install::PromoteOutcome::EmptyFallback) {
-                ui::warn(this, T("fomod_empty_title"), T("fomod_empty_body").arg(archiveFileName));
-            } else {
-                finalPath = promote.finalModPath;
-                if (fph && !fomodChoices.isEmpty())
-                    fph->setData(ModRole::FomodChoices, fomodChoices);
-            }
-
-            if (fph) {
-                // Merge follow-through (FOMOD optionals that override the main
-                // download).  promote() already removed extractDir, so finalPath
-                // is the only throwaway folder to drop once merged.
-                const QString effPath = applyPendingMerge(fph, finalPath, finalPath);
-                if (fkey.isEmpty()) {
-                    addModFromPath(effPath, fph);
-                } else {
-                    applyInstalledStateToStrandedPlaceholder(fph, effPath, fkey);
-                    saveModListFor(fkey, fph);
-                }
-            }
-            QFile::remove(archivePath);
+            InstallFollowUp follow;
+            follow.token           = installToken;
+            follow.archivePath     = archivePath;
+            follow.archiveFileName = archiveFileName;
+            follow.choicesRole     = ModRole::FomodChoices;
+            follow.choices         = d.choices;
+            startInstallJob(std::move(work), std::move(follow));
         },
         // Game id, so runtime-pair DLL groups ("SSE v1.6.629+" vs "v1.5.97")
         // pre-select the side matching this profile.
@@ -434,14 +429,13 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
         BainWizard::showAsync(modPath, priorChoices, this, installedModNames,
             [this, archivePath, extractDir, modPath,
              installToken, archiveFileName, sanitizedTitle]
-            (const QString &stagedPath, const QString &bainChoices) {
+            (const QStringList &chosen, const QString &bainChoices) {
 
-            QString fkey;
-            QListWidgetItem *bph = findPlaceholderByToken(installToken, &fkey);
-            if (stagedPath.isEmpty()) {
-                QDir(extractDir).removeRecursively();
+            if (chosen.isEmpty()) {
+                removeModFoldersAsync({extractDir});
                 // Archive kept - see onExtractionCancelled.
-                if (bph) {
+                QString fkey;
+                if (QListWidgetItem *bph = findPlaceholderByToken(installToken, &fkey)) {
                     bph->setData(ModRole::PendingArchive, archivePath);
                     if (fkey.isEmpty()) {
                         resetPlaceholderAfterInstallCancel(bph, archivePath);
@@ -455,52 +449,52 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
                 return;
             }
 
-            // Reuse the FOMOD promote: move the staged merge out of extractDir
-            // (dropping the unselected packages), rename to the title.
-            const auto promote = fomod_install::promote(
-                extractDir, modPath, stagedPath, sanitizedTitle, m_modsDir);
+            // Stage the picks (by moving them - the unpack is thrown away
+            // after), then promote like a FOMOD result: out of extractDir,
+            // dropping the unselected packages, renamed to the title.
+            install_job::Work work;
+            work.stage      = install_job::Work::Stage::Bain;
+            work.bainChosen = chosen;
+            work.extractDir = extractDir;
+            work.modPath    = modPath;
+            work.modsDir    = m_modsDir;
+            work.title      = sanitizedTitle;
 
-            QString finalPath = modPath;
-            if (promote.outcome == fomod_install::PromoteOutcome::EmptyFallback) {
-                ui::warn(this, T("fomod_empty_title"),
-                         T("fomod_empty_body").arg(archiveFileName));
-            } else {
-                finalPath = promote.finalModPath;
-                // Remember the package selection so a later reinstall/update
-                // pre-ticks the same packages (like FOMOD).
-                if (bph && !bainChoices.isEmpty())
-                    bph->setData(ModRole::BainChoices, bainChoices);
-            }
-
-            if (bph) {
-                // Merge follow-through (BAIN package overriding the main
-                // download).  promote() already removed extractDir, so finalPath
-                // is the only throwaway folder to drop once merged.
-                const QString effPath = applyPendingMerge(bph, finalPath, finalPath);
-                if (fkey.isEmpty()) {
-                    addModFromPath(effPath, bph);
-                } else {
-                    applyInstalledStateToStrandedPlaceholder(bph, effPath, fkey);
-                    saveModListFor(fkey, bph);
-                }
-            }
-            QFile::remove(archivePath);
+            InstallFollowUp follow;
+            follow.token           = installToken;
+            follow.archivePath     = archivePath;
+            follow.archiveFileName = archiveFileName;
+            // Remembered so a later reinstall/update pre-ticks the same
+            // packages (like FOMOD).
+            follow.choicesRole     = ModRole::BainChoices;
+            follow.choices         = bainChoices;
+            startInstallJob(std::move(work), std::move(follow));
         }, title, availablePlugins);
         return; // picker shown; callback drives the rest
     }
 
-    // Merge follow-through: when the user picked "Merge into existing", overlay
-    // the freshly extracted files onto the existing folder and register the row
-    // there; otherwise effPath == modPath and this is a no-op.  extractDir is
-    // the throwaway wrapper to drop once a merge has consumed its contents.
-    const QString effPath = applyPendingMerge(placeholder, modPath, extractDir);
+    // Merge follow-through: when the user picked "Merge into existing", the
+    // freshly extracted files are overlaid onto the existing folder - a copy,
+    // so on a worker - and the row is registered there. extractDir is the
+    // throwaway wrapper dropped once the merge has consumed its contents.
+    if (!placeholder->data(ModRole::MergeTargetPath).toString().isEmpty()) {
+        install_job::Work work;
+        work.extractDir = extractDir;
+        work.modPath    = modPath;
+        work.modsDir    = m_modsDir;
+        InstallFollowUp follow;
+        follow.token       = installToken;
+        follow.archivePath = archivePath;
+        startInstallJob(std::move(work), std::move(follow));
+        return;
+    }
     if (profileKey.isEmpty()) {
-        addModFromPath(effPath, placeholder);
+        addModFromPath(modPath, placeholder);
     } else {
         // Stranded: do the placeholder-only updates and persist to the
         // owning profile's modlist file.  m_modList iteration / load-order
         // / openmw.cfg sync are deferred until the user switches back.
-        applyInstalledStateToStrandedPlaceholder(placeholder, effPath, profileKey);
+        applyInstalledStateToStrandedPlaceholder(placeholder, modPath, profileKey);
         saveModListFor(profileKey, placeholder);
     }
     QFile::remove(archivePath);
@@ -522,91 +516,189 @@ void removeModFoldersAsync(QStringList paths)
     QStringList staged;
     for (const QString &p : paths) {
         if (!QFileInfo::exists(p)) continue;
-        // Rename to a sibling that no longer matches the real path (so exists()
+        // Renamed to a sibling that no longer matches the real path (so exists()
         // is immediately false there) nor any mod-folder shape (so it's inert to
         // the sibling-dedup / cfg scans until the async delete removes it).
-        QString tmp = p + QStringLiteral(".__deleting__");
-        for (int n = 1; QFileInfo::exists(tmp); ++n)
-            tmp = p + QStringLiteral(".__deleting__") + QString::number(n);
-        if (QDir().rename(p, tmp)) staged << tmp;
+        const QString tomb = safefs::setAside(p);
+        if (!tomb.isEmpty()) staged << tomb;
         else QDir(p).removeRecursively();  // rename failed - fall back to sync
     }
-    if (staged.isEmpty()) return;
-    (void)QtConcurrent::run([staged]() {
-        for (const QString &p : staged) QDir(p).removeRecursively();
+    deleteSetAsideAsync(staged);
+}
+
+void deleteSetAsideAsync(const QStringList &setAside)
+{
+    if (setAside.isEmpty()) return;
+    (void)QtConcurrent::run([setAside]() {
+        for (const QString &p : setAside) QDir(p).removeRecursively();
     });
 }
 
-QString MainWindow::applyPendingMerge(QListWidgetItem *placeholder,
-                                      const QString &contentPath,
-                                      const QString &discardDir)
+void MainWindow::prepareMerge(QListWidgetItem *placeholder, install_job::Work &work)
 {
-    if (!placeholder) return contentPath;
-    QString target = placeholder->data(ModRole::MergeTargetPath).toString();
-    if (target.isEmpty()) return contentPath;          // no merge pending
-    placeholder->setData(ModRole::MergeTargetPath, QVariant());  // consume
-
-    const QString cleanTarget  = QDir::cleanPath(target);
-    const QString cleanContent = QDir::cleanPath(contentPath);
-    // Target vanished out-of-band (user deleted the folder between picking
-    // Merge and the download finishing), or it already IS the content folder
-    // -> nothing to overlay; fall back to registering the content as-is.
-    if (cleanTarget == cleanContent || !QDir(target).exists())
-        return contentPath;
+    if (!placeholder) return;
+    const QString target = placeholder->data(ModRole::MergeTargetPath).toString();
+    if (target.isEmpty()) return;
+    placeholder->setData(ModRole::MergeTargetPath, QVariant());   // consume
+    work.mergeTarget = target;
 
     // Copy-on-write: a merge overlays files IN PLACE, so if the target folder is
     // shared with another profile, overlay onto a private copy instead and leave
-    // the other profile's mod untouched.  Fall back to in-place if the copy
-    // fails (a successful merge beats a lost optional).
-    if (modPathReferencedByOtherProfile(cleanTarget)) {
-        const QString forked = forkSharedModFolder(target);
-        if (!forked.isEmpty()) {
-            target = forked;
-            statusBar()->showMessage(
-                T("share_fork_on_merge").arg(QFileInfo(target).fileName()), 6000);
-        }
-    }
-
-    // Overlay the freshly downloaded files on top of the existing mod folder.
-    // fomod_copy::copyContents is last-writer-wins (it removes each colliding
-    // destination before copying) and case-folds directory names, so the
-    // optional download's files override the main download's - MO2's "merge".
-    m_scans->invalidateDataFoldersCache(target);
-    fomod_copy::copyContents(contentPath, target);
-
-    // The freshly extracted/promoted folder is now redundant.  Drop it so it
-    // doesn't linger as an orphan under the mods dir.  Guard against ever
-    // recursing into the merge target itself.  Deleted off the GUI thread.
-    if (!discardDir.isEmpty()
-        && QDir::cleanPath(discardDir) != cleanTarget
-        && QDir(discardDir).exists())
-        removeModFoldersAsync({discardDir});
-
-    statusBar()->showMessage(
-        T("merge_done_status").arg(QFileInfo(target).fileName()), 5000);
-    return target;
-}
-
-QString MainWindow::forkSharedModFolder(const QString &sharedPath)
-{
-    if (sharedPath.isEmpty() || m_modsDir.isEmpty()) return {};
-
-    // Fresh, collision-safe destination under the active profile's mods dir.
-    const QString folderName = QFileInfo(sharedPath).fileName();
+    // the other profile's mod untouched. The job makes the copy, and merges in
+    // place if it cannot (a successful merge beats a lost optional).
+    if (m_modsDir.isEmpty() || !QDir(target).exists()
+        || !modPathReferencedByOtherProfile(QDir::cleanPath(target)))
+        return;
+    const QString folderName = QFileInfo(target).fileName();
     QString dest = QDir(m_modsDir).filePath(folderName);
     if (QFileInfo::exists(dest))
         dest += QStringLiteral("_") + QString::number(QDateTime::currentSecsSinceEpoch());
+    work.forkTo = dest;
+}
 
-    // Verified recursive copy (cleans up its own partial dest on failure;
-    // never touches the source).
-    const auto r = safefs::copyTreeVerified(sharedPath, dest);
-    if (!r) {
-        ui::warn(this, T("share_fork_failed_title"),
-                 T("share_fork_failed_body").arg(folderName));
-        return {};
+void MainWindow::startInstallJob(install_job::Work work, InstallFollowUp follow)
+{
+    QListWidgetItem *ph = findPlaceholderByToken(follow.token);
+    prepareMerge(ph, work);
+    follow.mergeTarget = work.mergeTarget;
+
+    // The name the status line uses: the mod page's, else the row's own, else
+    // the archive's.
+    QString name = ph ? ph->data(ModRole::NexusTitle).toString().trimmed() : QString();
+    if (name.isEmpty() && ph) name = ph->data(ModRole::CustomName).toString();
+    if (name.isEmpty()) name = QFileInfo(follow.archivePath).completeBaseName();
+
+    auto progress = std::make_shared<FsProgress>();
+    m_runningInstalls.append({follow.token, name, progress});
+    if (!m_installProgressTimer) {
+        m_installProgressTimer = new QTimer(this);
+        m_installProgressTimer->setInterval(150);
+        connect(m_installProgressTimer, &QTimer::timeout,
+                this, &MainWindow::updateInstallProgress);
     }
-    m_scans->invalidateDataFoldersCache(dest);
-    return dest;
+    m_installProgressTimer->start();
+    updateInstallProgress();
+
+    // The worker gets paths and the plan by value, never the row: it may be
+    // gone, or parked in another profile, by the time the work is done - the
+    // token finds it again. `progress` outlives whichever side finishes first.
+    async::guarded(this,
+        [work = std::move(work), progress](MainWindow *) {
+            return install_job::run(work, progress.get());
+        },
+        [follow = std::move(follow), progress](MainWindow *self,
+                                                install_job::Result result) {
+            self->m_runningInstalls.removeIf(
+                [&](const RunningInstall &j) { return j.progress == progress; });
+            if (self->m_runningInstalls.isEmpty())
+                self->m_installProgressTimer->stop();
+            self->finishInstallJob(follow, result);
+            if (self->m_closeWhenInstallsFinish && self->m_runningInstalls.isEmpty())
+                QTimer::singleShot(0, self, &QWidget::close);
+        });
+}
+
+void MainWindow::finishInstallJob(const InstallFollowUp &follow,
+                                  const install_job::Result &r)
+{
+    using Outcome = install_job::Result::Outcome;
+    QString key;
+    QListWidgetItem *ph = findPlaceholderByToken(follow.token, &key);
+
+    // What the job set aside - the rest of the unpack, a copy already merged
+    // - is deleted in the background: nothing waits on it.
+    deleteSetAsideAsync(r.leftovers);
+
+    // The row was removed while the files were being put in place - the
+    // window stays usable now, so it can be. Nothing references the result:
+    // wipe it rather than leak it, as onExtractionSucceeded does with an
+    // unpack whose row is gone. Never a merge target, which is a mod the
+    // user still has.
+    if (!ph) {
+        if (r.outcome != Outcome::NothingStaged && !r.merged)
+            removeModFoldersAsync({r.finalPath});
+        QFile::remove(follow.archivePath);
+        return;
+    }
+
+    if (r.outcome == Outcome::NothingStaged) {
+        // Every picked package was empty: nothing to install, as a cancel.
+        // The job has already removed the unpack; the archive is kept - see
+        // onExtractionCancelled.
+        ph->setData(ModRole::PendingArchive, follow.archivePath);
+        if (key.isEmpty()) {
+            resetPlaceholderAfterInstallCancel(ph, follow.archivePath);
+        } else {
+            placeholder_state::resetToNotInstalled(
+                ph, QFileInfo(follow.archivePath).completeBaseName());
+            saveModListFor(key, ph);
+        }
+        statusBar()->showMessage(T("bain_cancelled"), 3000);
+        return;
+    }
+
+    if (r.outcome == Outcome::EmptyFallback) {
+        ui::warn(this, T("fomod_empty_title"),
+                 T("fomod_empty_body").arg(follow.archiveFileName));
+    } else if (follow.choicesRole != 0 && !follow.choices.isEmpty()) {
+        ph->setData(follow.choicesRole, follow.choices);
+    }
+
+    if (r.forkFailed)
+        ui::warn(this, T("share_fork_failed_title"),
+                 T("share_fork_failed_body").arg(QFileInfo(follow.mergeTarget).fileName()));
+    if (r.merged) {
+        m_scans->invalidateDataFoldersCache(r.finalPath);
+        if (r.forked)
+            statusBar()->showMessage(
+                T("share_fork_on_merge").arg(QFileInfo(r.finalPath).fileName()), 6000);
+        statusBar()->showMessage(
+            T("merge_done_status").arg(QFileInfo(r.finalPath).fileName()), 5000);
+    }
+
+    if (key.isEmpty()) {
+        addModFromPath(r.finalPath, ph);
+    } else {
+        applyInstalledStateToStrandedPlaceholder(ph, r.finalPath, key);
+        saveModListFor(key, ph);
+    }
+    QFile::remove(follow.archivePath);
+}
+
+void MainWindow::updateInstallProgress()
+{
+    if (m_runningInstalls.isEmpty()) return;
+
+    // The row's bar: DownloadProgress 0-100, or -1 for the moving stripe the
+    // delegate draws when a phase has no count.
+    for (const RunningInstall &job : std::as_const(m_runningInstalls)) {
+        QListWidgetItem *ph = findPlaceholderByToken(job.token);
+        if (!ph) continue;
+        const int pct = job.progress->percent();
+        const QVariant now = ph->data(ModRole::DownloadProgress);
+        if (!now.isValid() || now.toInt() != pct)
+            ph->setData(ModRole::DownloadProgress, pct);
+    }
+
+    const RunningInstall &job = m_runningInstalls.first();
+    const int pct = job.progress->percent();
+    QString text;
+    switch (job.progress->currentPhase()) {
+    case FsProgress::Phase::Staging:
+        text = pct < 0 ? T("status_install_starting").arg(job.name)
+                       : T("status_install_progress").arg(job.name).arg(pct);
+        break;
+    case FsProgress::Phase::Merging:
+        text = pct < 0 ? T("status_install_merging_start").arg(job.name)
+                       : T("status_install_merging").arg(job.name).arg(pct);
+        break;
+    case FsProgress::Phase::Finishing:
+        text = T("status_install_finishing").arg(job.name);
+        break;
+    }
+    if (m_closeWhenInstallsFinish)
+        text = T("status_close_after_install").arg(job.name) + QStringLiteral("  ") + text;
+    statusBar()->showMessage(text, 2000);
 }
 
 void MainWindow::onInstallFromNexus(QListWidgetItem *item)

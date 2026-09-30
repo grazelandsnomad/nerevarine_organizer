@@ -335,7 +335,8 @@ void MainWindow::handleNxmUrl(const QString &url)
             const QString currentPath = placeholder->data(ModRole::ModPath).toString();
             if (forceMerge) {
                 // Merge: keep the folder, overlay new files (last-writer-wins).
-                // applyPendingMerge consumes this once the archive extracts.
+                // prepareMerge hands this to the install job once the
+                // archive extracts.
                 if (!currentPath.isEmpty())
                     placeholder->setData(ModRole::MergeTargetPath, currentPath);
             } else if (!currentPath.isEmpty()

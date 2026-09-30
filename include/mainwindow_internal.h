@@ -45,6 +45,8 @@ QString nexusDomainFor(const QString &profileId);
 // Callers MUST have dropped every modlist reference to these paths first.
 // Defined in mainwindow_install.cpp; used there and by the cleanup sweep.
 void removeModFoldersAsync(QStringList paths);
+// Delete folders already renamed aside (safefs::setAside), off the GUI thread.
+void deleteSetAsideAsync(const QStringList &setAside);
 
 // Resolve the two paths an OpenGothic profile needs, asking only for what is
 // missing: the Gothic II game folder (what -g points at, and what mods deploy

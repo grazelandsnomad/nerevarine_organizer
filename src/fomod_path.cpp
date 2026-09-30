@@ -78,4 +78,33 @@ ResolvedPath resolveDest(const QString &root, const QString &relativeIn)
     return ResolvedPath(current);
 }
 
+DestIndex::DestIndex(const QString &dir) : m_dir(dir)
+{
+    // The listing resolveDest makes, in its order: its "first case-insensitive
+    // match" is the first in this order. Never the working directory, which is
+    // what QDir makes of an empty path.
+    if (dir.isEmpty()) return;
+    const QDir d(dir);
+    if (!d.exists()) return;
+    for (const QString &e : d.entryList(QDir::AllEntries | QDir::NoDotAndDotDot))
+        add(e);
+}
+
+ResolvedPath DestIndex::child(const QString &name) const
+{
+    if (m_dir.isEmpty() || name == QLatin1String("..")) return ResolvedPath(QString());
+    if (name.isEmpty() || name == QLatin1String(".")) return ResolvedPath(m_dir);
+    if (m_names.contains(name)) return ResolvedPath(QDir(m_dir).filePath(name));
+    // Case-folded, as QString::compare(..., Qt::CaseInsensitive) compares.
+    const QString match = m_firstByLower.value(name.toCaseFolded());
+    return ResolvedPath(QDir(m_dir).filePath(match.isEmpty() ? name : match));
+}
+
+void DestIndex::add(const QString &name)
+{
+    m_names.insert(name);
+    const QString folded = name.toCaseFolded();
+    if (!m_firstByLower.contains(folded)) m_firstByLower.insert(folded, name);
+}
+
 } // namespace fomod
