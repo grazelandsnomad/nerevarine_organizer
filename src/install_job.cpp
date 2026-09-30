@@ -8,7 +8,7 @@
 
 #include <QDir>
 #include <QString>
-#include <QtTypes>
+#include <QtGlobal>
 
 namespace install_job {
 

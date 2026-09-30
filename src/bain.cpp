@@ -9,7 +9,7 @@
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <QSet>
-#include <QtLogging>
+#include <QtGlobal>
 
 namespace bain {
 namespace {

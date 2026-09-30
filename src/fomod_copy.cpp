@@ -7,7 +7,6 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QtGlobal>
-#include <QtTypes>
 
 #ifdef Q_OS_LINUX
 #include <linux/fs.h>     // FICLONE

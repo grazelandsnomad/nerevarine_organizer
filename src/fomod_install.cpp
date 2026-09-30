@@ -9,12 +9,10 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
-#include <QLatin1String>
 #include <QList>
 #include <QString>
 #include <QStringList>
-#include <QtLogging>
-#include <QtTypes>
+#include <QtGlobal>
 
 namespace fomod_install {
 
