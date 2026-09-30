@@ -310,6 +310,81 @@ static void testValidateUser()
     }
 }
 
+// -- v2 modFiles and file_status: is the installed file still current? -------
+
+// Tamriel_Data's page (mod 44537) as Nexus listed it on 2026-09-30, trimmed:
+// the HD file installed in August is ARCHIVED, and the page's only MAIN file
+// is now the SD one - HD moved to a page of its own.
+static const char *kTamrielDataFiles = R"JSON({"data":{"modFiles":[
+  {"fileId":1000007032,"name":"Tamriel_Data (vanilla)","version":"02","category":"OLD_VERSION"},
+  {"fileId":1000052258,"name":"Tamriel Data (HD)","version":"25.05","category":"ARCHIVED"},
+  {"fileId":1000052301,"name":"Tamriel Data (SD)","version":"25.05","category":"OLD_VERSION"},
+  {"fileId":"1000068848","name":"Tamriel Data (SD)","version":"26.08","category":"MAIN"},
+  {"fileId":1000008562,"name":"Tamriel_Data Filepatcher Sourcecode","version":"fp01","category":"OPTIONAL"},
+  {"fileId":1000060000,"name":"Tamriel Data (HD)","version":"25.08","category":"REMOVED"}
+]}})JSON";
+
+static void testParseModFilesV2()
+{
+    std::cout << "\n[v2 modFiles parser]\n";
+    const auto files = NexusClient::parseModFilesV2(kTamrielDataFiles);
+    check("parses", files.has_value(), files ? QString() : files.error().toString());
+    if (!files) return;
+    check("every file, ids as numbers or strings", files->size() == 6,
+          QString::number(files->size()));
+    check("fields come through",
+          files->at(1).fileId == 1000052258 && files->at(1).name == "Tamriel Data (HD)"
+              && files->at(1).version == "25.05" && files->at(1).category == "ARCHIVED");
+    check("a string id is read as a number", files->at(3).fileId == 1000068848);
+
+    check("a GraphQL error is an error, not an empty page",
+          !NexusClient::parseModFilesV2(R"({"errors":[{"message":"nope"}]})").has_value());
+    check("so is a null list",
+          !NexusClient::parseModFilesV2(R"({"data":{"modFiles":null}})").has_value());
+    check("and garbage", !NexusClient::parseModFilesV2("<html>").has_value());
+}
+
+static void testFileStatusJudge()
+{
+    std::cout << "\n[file_status::judge]\n";
+    using S = file_status::Verdict::State;
+    const auto files = *NexusClient::parseModFilesV2(kTamrielDataFiles);
+
+    const auto hd = file_status::judge(1000052258, files);
+    check("the installed HD 25.05 is superseded", hd.state == S::Superseded);
+    check("because the page archived it", hd.installedCategory == "ARCHIVED"
+              && hd.installedName == "Tamriel Data (HD)" && hd.installedVersion == "25.05");
+    check("the page now offers SD 26.08",
+          hd.current.size() == 1 && hd.current[0].name == "Tamriel Data (SD)"
+              && hd.current[0].version == "26.08");
+    check("and no file of that name - HD left this page", hd.replacement.fileId == 0);
+
+    const auto sd = file_status::judge(1000052301, files);
+    check("SD 25.05 is superseded by SD 26.08, named as its replacement",
+          sd.state == S::Superseded && sd.replacement.fileId == 1000068848);
+
+    check("the current MAIN file is current",
+          file_status::judge(1000068848, files).state == S::Current);
+    check("an optional file nobody retired is current",
+          file_status::judge(1000008562, files).state == S::Current);
+    check("a removed file is superseded",
+          file_status::judge(1000060000, files).state == S::Superseded);
+
+    const auto gone = file_status::judge(999, files);
+    check("a file the page no longer lists is superseded, as UNLISTED",
+          gone.state == S::Superseded && gone.installedCategory == "UNLISTED");
+    check("an empty reply says nothing", file_status::judge(1000052258, {}).state == S::Current);
+    check("nor does an unknown installed file", file_status::judge(0, files).state == S::Current);
+
+    // Names are retyped between uploads without meaning another file.
+    QList<file_status::PageFile> moved = {
+        {1, "Tamriel Data (HD)", "25.05", "ARCHIVED"},
+        {2, "Tamriel_Data  (hd)", "26.08", "MAIN"},
+    };
+    check("underscores, spacing and case do not hide the replacement",
+          file_status::judge(1, moved).replacement.fileId == 2);
+}
+
 static void run_nexus_client()
 {
     std::cout << "=== nexus_client tests ===\n";
@@ -318,6 +393,8 @@ static void run_nexus_client()
     testFilesList();
     testDownloadUri();
     testValidateUser();
+    testParseModFilesV2();
+    testFileStatusJudge();
 }
 
 using deps::ModEntry;

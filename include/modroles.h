@@ -47,6 +47,21 @@ namespace ModRole {
     // whether THIS row is the translation (rather than the source).
     constexpr int TranslationPartner   = Qt::UserRole + 56; // QString
     constexpr int IsTranslationOfOther = Qt::UserRole + 57; // bool
+    // The Nexus FILE this row was installed from (not the mod: that is in
+    // NexusUrl). Persisted. The page URL and a date cannot tell an archived
+    // file from a current one - Tamriel Data (HD) 25.05 stayed "up to date"
+    // for a month after its page archived it - so Check Updates asks Nexus
+    // about this id. 0 = unknown: installed before it was recorded, from a
+    // local archive, or merged from several files.
+    constexpr int NexusFileId          = Qt::UserRole + 58; // qint64
+    // Check Updates' verdict on that file, for painting; not persisted.
+    // Non-empty = the file is superseded, and the text says by what.
+    constexpr int FileSuperseded       = Qt::UserRole + 59; // QString
+    // The file an install in flight is fetching. Moved to NexusFileId only
+    // when the install lands, so a cancelled or failed one leaves the row's
+    // record alone; cleared with the other install transients. A Merge never
+    // sets it: the row still holds the file it was installed from.
+    constexpr int PendingFileId        = Qt::UserRole + 60; // qint64
     constexpr int DependsOn         = Qt::UserRole + 25; // QStringList of Nexus URLs this mod depends on
     constexpr int HighlightRole     = Qt::UserRole + 26; // int: 0=none, 1=dependency of selected, 2=uses selected
     constexpr int HasMissingDependency  = Qt::UserRole + 27; // bool: ≥1 DependsOn URL is missing/disabled/uninstalled

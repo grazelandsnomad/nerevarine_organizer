@@ -860,6 +860,11 @@ void MainWindow::setupCentralWidget()
         if (!url.isEmpty())
             QDesktopServices::openUrl(QUrl(url));
     });
+    connect(m_delegate, &ModListDelegate::supersededMarkClicked, this,
+            [](const QString &url){
+        if (!url.isEmpty())
+            QDesktopServices::openUrl(QUrl(url));
+    });
 
     // Enable hover-state delivery so the star shows up on mouse-over
     m_modList->viewport()->setAttribute(Qt::WA_Hover, true);

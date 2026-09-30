@@ -113,6 +113,56 @@ QNetworkReply *NexusClient::requestModNames(int gameIdNumeric,
     return m_nam->post(req, QJsonDocument(body).toJson(QJsonDocument::Compact));
 }
 
+QNetworkReply *NexusClient::requestModFilesV2(int gameIdNumeric, int modId)
+{
+    QNetworkRequest req{QUrl(QStringLiteral("https://api.nexusmods.com/v2/graphql"))};
+    req.setHeader(QNetworkRequest::ContentTypeHeader,
+                  QStringLiteral("application/json"));
+    req.setRawHeader("Accept", "application/json");
+    // Both arguments are ID!, so strings - as requestModRequirements sends.
+    QJsonObject vars;
+    vars.insert(QStringLiteral("m"), QString::number(modId));
+    vars.insert(QStringLiteral("g"), QString::number(gameIdNumeric));
+    QJsonObject body;
+    body.insert(QStringLiteral("query"), QStringLiteral(
+        "query($m: ID!, $g: ID!) {"
+        " modFiles(modId: $m, gameId: $g) { fileId name version category } }"));
+    body.insert(QStringLiteral("variables"), vars);
+    return m_nam->post(req, QJsonDocument(body).toJson(QJsonDocument::Compact));
+}
+
+std::expected<QList<file_status::PageFile>, NexusClient::NexusError>
+NexusClient::parseModFilesV2(const QByteArray &json)
+{
+    QJsonParseError err{};
+    const QJsonDocument doc = QJsonDocument::fromJson(json, &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject())
+        return std::unexpected(NexusError{NexusError::Kind::InvalidJson,
+                                          err.errorString()});
+    const QJsonObject root = doc.object();
+    if (root.contains(QLatin1String("errors")))
+        return std::unexpected(NexusError{NexusError::Kind::WrongShape,
+                                          QStringLiteral("GraphQL errors")});
+    const QJsonValue files = root[QLatin1String("data")][QLatin1String("modFiles")];
+    if (!files.isArray())
+        return std::unexpected(NexusError{NexusError::Kind::WrongShape,
+                                          QStringLiteral("no modFiles list")});
+
+    QList<file_status::PageFile> out;
+    for (const QJsonValue &v : files.toArray()) {
+        const QJsonObject o = v.toObject();
+        file_status::PageFile f;
+        // A number in practice; accept a string, as the other v2 ids vary.
+        const QJsonValue id = o[QLatin1String("fileId")];
+        f.fileId   = id.isString() ? id.toString().toLongLong() : qint64(id.toDouble());
+        f.name     = o[QLatin1String("name")].toString().trimmed();
+        f.version  = o[QLatin1String("version")].toString().trimmed();
+        f.category = o[QLatin1String("category")].toString().trimmed().toUpper();
+        if (f.fileId > 0) out << f;
+    }
+    return out;
+}
+
 QList<QList<int>> NexusClient::chunkForV2(const QList<int> &ids)
 {
     QList<QList<int>> out;

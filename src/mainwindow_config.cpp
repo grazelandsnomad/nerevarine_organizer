@@ -1459,6 +1459,8 @@ void MainWindow::loadModList(const QString &path,
         item->setData(ModRole::Annotation,    e.annotation);
         item->setData(ModRole::NexusUrl,      e.nexusUrl);
         item->setData(ModRole::DateAdded,     e.dateAdded);
+        if (e.nexusFileId > 0)
+            item->setData(ModRole::NexusFileId, QVariant::fromValue(e.nexusFileId));
         if (!e.dependsOn.isEmpty())
             item->setData(ModRole::DependsOn, e.dependsOn);
         if (e.updateAvailable)

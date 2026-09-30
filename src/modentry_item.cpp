@@ -26,6 +26,7 @@ ModEntry ModEntry::fromItem(const QListWidgetItem *item)
     e.nexusId    = item->data(ModRole::NexusId).toInt();
     e.nexusUrl   = item->data(ModRole::NexusUrl).toString();
     e.nexusTitle = item->data(ModRole::NexusTitle).toString();
+    e.nexusFileId = item->data(ModRole::NexusFileId).toLongLong();
 
     e.modPath         = item->data(ModRole::ModPath).toString();
     e.intendedModPath = item->data(ModRole::IntendedModPath).toString();
@@ -98,6 +99,9 @@ void ModEntry::applyToItem(QListWidgetItem *item) const
     item->setData(ModRole::NexusId,    nexusId);
     item->setData(ModRole::NexusUrl,   nexusUrl);
     item->setData(ModRole::NexusTitle, nexusTitle);
+    // Only when known, so a row that never had one gains no role - the same
+    // reason Check Updates clears UpdateAvailable only where it is set.
+    if (nexusFileId > 0) item->setData(ModRole::NexusFileId, QVariant::fromValue(nexusFileId));
 
     item->setData(ModRole::ModPath,         modPath);
     item->setData(ModRole::IntendedModPath, intendedModPath);
@@ -110,6 +114,9 @@ void ModEntry::applyToItem(QListWidgetItem *item) const
     item->setData(ModRole::IsFavorite,   isFavorite);
     item->setData(ModRole::IsGeneratedTranslation, isGeneratedTranslation);
     item->setData(ModRole::FomodChoices, fomodChoices);
+    // fromItem reads it; without the write-back an undo dropped a manual
+    // "translation of" link.
+    item->setData(ModRole::TranslationOf, translationOf);
     item->setData(ModRole::BainChoices,  bainChoices);
 
     item->setData(ModRole::InstallStatus,    installStatus);

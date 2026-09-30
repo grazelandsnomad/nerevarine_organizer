@@ -33,6 +33,7 @@ struct ModEntry {
     int     nexusId = 0;               // 0 == unknown / not from Nexus
     QString nexusUrl;
     QString nexusTitle;
+    qint64  nexusFileId = 0;           // the installed FILE; 0 == unknown (ModRole::NexusFileId)
 
     // Filesystem.
     QString modPath;

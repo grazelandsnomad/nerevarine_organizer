@@ -36,6 +36,8 @@ signals:
     void updateArrowClicked(const QModelIndex &index);
     void favoriteToggleClicked(const QModelIndex &index);
     void videoReviewClicked(const QString &url);
+    // The amber superseded-file mark: opens the row's Nexus page.
+    void supersededMarkClicked(const QString &nexusUrl);
 
 protected:
     bool editorEvent(QEvent *event, QAbstractItemModel *model,

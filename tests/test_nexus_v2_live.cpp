@@ -117,6 +117,28 @@ void testNamesArriveWhole(NexusClient &client)
           QString::number(named.size()));
 }
 
+// Tamriel_Data's page: the file list Check Updates asks for, through the app's
+// own client. The HD 25.05 file installed in August must read as superseded -
+// ARCHIVED on the page today, and should it be removed or unlisted instead,
+// that is still superseded - while the page keeps a MAIN file to point at.
+void testModFilesTellsArchivedFromCurrent(NexusClient &client)
+{
+    std::cout << "\n[v2 modFiles: an archived file reads as superseded]\n";
+    constexpr int kMorrowind = 100;
+    bool ok = false;
+    const QByteArray body = await(client.requestModFilesV2(kMorrowind, 44537), &ok);
+    check("the request succeeds", ok);
+    const auto files = NexusClient::parseModFilesV2(body);
+    check("and parses", files.has_value());
+    if (!files) return;
+    bool haveMain = false;
+    for (const auto &f : *files) haveMain |= (f.category == QLatin1String("MAIN"));
+    check("the page offers a MAIN file", haveMain);
+    const auto v = file_status::judge(1000052258, *files);   // Tamriel Data (HD) 25.05
+    check("the old HD file is superseded",
+          v.state == file_status::Verdict::State::Superseded, v.installedCategory);
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -138,6 +160,7 @@ int main(int argc, char **argv)
 
     testRequirementsArriveWhole(client);
     testNamesArriveWhole(client);
+    testModFilesTellsArchivedFromCurrent(client);
 
     std::cout << "\n" << s_passed << " passed, " << s_failed << " failed\n";
     return s_failed == 0 ? 0 : 1;

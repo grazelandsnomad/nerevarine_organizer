@@ -322,10 +322,13 @@ static void testMakeSharedRowCopyConfig()
     src.prevModPath  = "/old";
     src.mergeTargetPath = "/merge";
     src.hasConflict  = true;
+    src.nexusFileId  = 1000068816;
 
     const ModEntry e = mod_sharing::makeSharedRow(src, /*copyConfig=*/true);
     check("modPath kept (shared folder)", e.modPath == src.modPath);
     check("nexusUrl kept",      e.nexusUrl == src.nexusUrl);
+    check("installed file id kept - the folder holds the same file",
+          e.nexusFileId == src.nexusFileId);
     check("customName kept",    e.customName == "OAAB Data");
     check("enabled copied",     e.checked);
     check("fomod choices copied", e.fomodChoices == "0:1:2;");

@@ -225,6 +225,7 @@ target_link_libraries(test_profiles PRIVATE Qt6::Core Qt6::Gui Qt6::Test)
 add_executable(test_nexus
     test_nexus.cpp
     ${CMAKE_SOURCE_DIR}/src/nexusclient.cpp
+    ${CMAKE_SOURCE_DIR}/src/file_status.cpp
     ${CMAKE_SOURCE_DIR}/src/deps_resolver.cpp
     ${CMAKE_SOURCE_DIR}/src/nxmurl.cpp
     ${CMAKE_SOURCE_DIR}/src/file_pick.cpp
@@ -239,6 +240,7 @@ target_link_libraries(test_nexus PRIVATE Qt6::Core Qt6::Network)
 add_executable(test_nexus_v2_live
     test_nexus_v2_live.cpp
     ${CMAKE_SOURCE_DIR}/src/nexusclient.cpp
+    ${CMAKE_SOURCE_DIR}/src/file_status.cpp
     ${CMAKE_SOURCE_DIR}/src/nxmurl.cpp
     ${CMAKE_SOURCE_DIR}/src/file_pick.cpp
     ${CMAKE_SOURCE_DIR}/src/game_store.cpp

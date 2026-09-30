@@ -91,7 +91,7 @@ private slots:
     // rows were actually checked, which is not always how many were asked
     // for: a label with no matching row is skipped rather than counted.
     int  checkUpdatesForMods(const QStringList &labels);
-    void onCheckUpdatesFinished(int foundCount);
+    void onCheckUpdatesFinished(int foundCount, int supersededCount);
     void onTitleFetched(QListWidgetItem *item, const QString &name);
     // A download is under way for a file whose name says it is built for the
     // other Skyrim runtime. Warns and names the file that fits this profile.
@@ -574,6 +574,8 @@ private:
     // m_strandedInstalls after a profile switch mid-extract) WITHOUT touching
     // m_modList, load order, or openmw.cfg - those belong to the active profile
     // and would corrupt the wrong list. Caller persists via saveModListFor.
+    // Move ModRole::PendingFileId to NexusFileId once an install has landed.
+    void commitInstalledFileId(QListWidgetItem *item);
     void applyInstalledStateToStrandedPlaceholder(QListWidgetItem *placeholder,
                                                   const QString &modPath,
                                                   const QString &profileKey);

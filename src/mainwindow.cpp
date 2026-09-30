@@ -157,6 +157,8 @@ static QList<firstrun::GameChoice> builtinGameChoices();
 // debounce timer, the snapshot slot feeding it, and onConflictsScanned (writes
 // roles back).
 
+static QString supersededText(const file_status::Verdict &v);   // below
+
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
@@ -214,6 +216,12 @@ MainWindow::MainWindow(QWidget *parent)
         // Tint the parent separator grey to nudge update-or-delete; clears once
         // every mod in the section is resolved.
         updateSectionCounts();
+    });
+    connect(m_nexusCtl, &NexusController::fileSupersededForItem,
+            this, [this](QListWidgetItem *item, const file_status::Verdict &v) {
+        if (!m_modList->indexFromItem(item).isValid()) return;   // row gone mid-check
+        item->setData(ModRole::FileSuperseded, supersededText(v));
+        m_modList->update(m_modList->indexFromItem(item));
     });
     connect(m_nexusCtl, &NexusController::checkUpdatesFinished,
             this, &MainWindow::onCheckUpdatesFinished);
@@ -980,6 +988,17 @@ void MainWindow::resetPlaceholderAfterInstallCancel(QListWidgetItem *placeholder
     saveModList();
 }
 
+void MainWindow::commitInstalledFileId(QListWidgetItem *item)
+{
+    if (!item) return;
+    // The install landed: the file it fetched is now the row's file, and
+    // whatever Check Updates said about the previous one no longer applies.
+    if (const qint64 f = item->data(ModRole::PendingFileId).toLongLong(); f > 0)
+        item->setData(ModRole::NexusFileId, QVariant::fromValue(f));
+    item->setData(ModRole::PendingFileId,  QVariant());
+    item->setData(ModRole::FileSuperseded, QVariant());
+}
+
 void MainWindow::prepareItemForInstall(QListWidgetItem *item)
 {
     QString name = item->data(ModRole::CustomName).toString();
@@ -1001,6 +1020,8 @@ void MainWindow::applyInstalledStateToStrandedPlaceholder(
     // The cross-profile completion case is exactly the "mark installed" role
     // transition - no m_modList iteration / load-order / openmw.cfg sync (those
     // belong to the active profile); the caller persists via saveModListFor.
+    // Before markInstalled, whose clearInstallTransients drops the pending id.
+    commitInstalledFileId(placeholder);
     placeholder_state::markInstalled(placeholder, modPath);
     // Files landed for a profile that is not on screen, so its deployment is
     // out of date the same way addModFromPath says for the active one.
@@ -1548,6 +1569,33 @@ void MainWindow::onMoveDown()
 // File-local rather than a member: NexusController is only forward-declared
 // in mainwindow.h, and pulling its header into that one for a return type is
 // a poor trade.
+// The tooltip sentence for a superseded file. file_status decides; the words
+// live in english.ini like every other message.
+static QString supersededText(const file_status::Verdict &v)
+{
+    const auto stateWord = [](const QString &category) {
+        if (category == QLatin1String("OLD_VERSION")) return T("file_state_old_version");
+        if (category == QLatin1String("ARCHIVED"))    return T("file_state_archived");
+        if (category == QLatin1String("REMOVED"))     return T("file_state_removed");
+        return T("file_state_unlisted");
+    };
+    const auto label = [](const QString &name, const QString &version) {
+        return (name + QLatin1Char(' ') + version).trimmed();
+    };
+    QStringList offered;
+    for (const file_status::PageFile &f : v.current) offered << label(f.name, f.version);
+    const QString now = offered.isEmpty() ? T("file_superseded_nothing")
+                                          : offered.join(QStringLiteral(", "));
+    if (v.installedCategory == QLatin1String("UNLISTED"))
+        return T("file_superseded_unlisted").arg(now);
+    const QString mine = label(v.installedName, v.installedVersion);
+    if (v.replacement.fileId > 0)
+        return T("file_superseded_replaced").arg(
+            mine, stateWord(v.installedCategory),
+            label(v.replacement.name, v.replacement.version));
+    return T("file_superseded_moved").arg(mine, stateWord(v.installedCategory), now);
+}
+
 static QList<NexusController::CheckTarget>
 collectUpdateTargets(QListWidget *modList, const QStringList &only)
 {
@@ -1576,7 +1624,10 @@ collectUpdateTargets(QListWidget *modList, const QStringList &only)
         // while the UI thread was busy, the conditions for its worst crash.
         if (item->data(ModRole::UpdateAvailable).toBool())
             item->setData(ModRole::UpdateAvailable, false);
-        toCheck.append({item, ref->game, ref->modId});
+        if (!item->data(ModRole::FileSuperseded).toString().isEmpty())
+            item->setData(ModRole::FileSuperseded, QVariant());
+        toCheck.append({item, ref->game, ref->modId,
+                        item->data(ModRole::NexusFileId).toLongLong()});
     }
     return toCheck;
 }
@@ -1627,7 +1678,7 @@ int MainWindow::checkUpdatesForMods(const QStringList &labels)
     return toCheck.size();
 }
 
-void MainWindow::onCheckUpdatesFinished(int foundCount)
+void MainWindow::onCheckUpdatesFinished(int foundCount, int supersededCount)
 {
     // Final sweep once the batch of per-mod checks has drained: covers the
     // edge case where onCheckUpdates cleared every stale UpdateAvailable flag
@@ -1636,7 +1687,7 @@ void MainWindow::onCheckUpdatesFinished(int foundCount)
     // before the check stays grey even after all pending updates are gone.
     updateSectionCounts();
 
-    if (foundCount == 0) {
+    if (foundCount == 0 && supersededCount == 0) {
         statusBar()->showMessage(T("check_updates_none"), 4000);
         m_notify->show(T("check_updates_none"), "#1a6fa8");
         subprocess::startDetached("notify-send",
@@ -1645,7 +1696,10 @@ void MainWindow::onCheckUpdatesFinished(int foundCount)
              T("window_title"),
              T("check_updates_none")});
     } else {
-        const QString msg = T("check_updates_found").arg(foundCount);
+        QStringList parts;
+        if (foundCount > 0)      parts << T("check_updates_found").arg(foundCount);
+        if (supersededCount > 0) parts << T("check_updates_superseded").arg(supersededCount);
+        const QString msg = parts.join(QLatin1Char(' '));
         statusBar()->showMessage(msg, 5000);
         subprocess::startDetached("notify-send",
             {"-i", "software-update-available",

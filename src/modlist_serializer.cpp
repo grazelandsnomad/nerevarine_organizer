@@ -78,6 +78,10 @@ QJsonObject modToJson(const ModEntry &e)
         if (!e.installToken.isNull())
             o.insert(QStringLiteral("token"),
                      e.installToken.toString(QUuid::WithoutBraces));
+        // Known from the moment the download starts, so a relaunch mid-install
+        // does not lose which file it was.
+        if (e.nexusFileId > 0)
+            o.insert(QStringLiteral("file"), double(e.nexusFileId));
         return o;
     }
 
@@ -91,6 +95,9 @@ QJsonObject modToJson(const ModEntry &e)
     if (!e.customName.isEmpty())     o.insert(QStringLiteral("name"),   e.customName);
     if (!e.annotation.isEmpty())     o.insert(QStringLiteral("annot"),  e.annotation);
     if (!e.nexusUrl.isEmpty())       o.insert(QStringLiteral("url"),    e.nexusUrl);
+    // A JSON number: Nexus file ids are integers well inside a double's exact
+    // range. No v1 counterpart - the tab format is read-only.
+    if (e.nexusFileId > 0)           o.insert(QStringLiteral("file"),   double(e.nexusFileId));
     if (e.dateAdded.isValid())       o.insert(QStringLiteral("date"),
                                                e.dateAdded.toString(Qt::ISODate));
     if (!e.dependsOn.isEmpty()) {
@@ -167,6 +174,7 @@ ModEntry modFromJson(const QJsonObject &o)
                               o.value(QStringLiteral("date")).toString(), Qt::ISODate);
         const QString tok = o.value(QStringLiteral("token")).toString();
         if (!tok.isEmpty()) e.installToken = QUuid(tok);
+        e.nexusFileId = qint64(o.value(QStringLiteral("file")).toDouble(0));
         return e;
     }
 
@@ -174,6 +182,7 @@ ModEntry modFromJson(const QJsonObject &o)
     e.customName = o.value(QStringLiteral("name")).toString();
     e.annotation = o.value(QStringLiteral("annot")).toString();
     e.nexusUrl   = o.value(QStringLiteral("url")).toString();
+    e.nexusFileId = qint64(o.value(QStringLiteral("file")).toDouble(0));
     e.dateAdded  = QDateTime::fromString(
                        o.value(QStringLiteral("date")).toString(), Qt::ISODate);
 

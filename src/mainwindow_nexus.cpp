@@ -360,6 +360,11 @@ void MainWindow::handleNxmUrl(const QString &url)
         placeholder_state::setBusyFlags(placeholder);
         m_modList->addItem(placeholder);
     }
+    // Which file this is, committed to the row once the install lands
+    // (ModRole::PendingFileId). Not for a Merge: that row still holds the file
+    // it was installed from, and an add-on overlaid on it does not replace it.
+    placeholder->setData(ModRole::PendingFileId,
+                         forceMerge ? QVariant() : QVariant::fromValue(qint64(fileId)));
     m_modList->scrollToItem(placeholder);
     saveModList(); // persist URL immediately so it survives a crash or cancel
 
@@ -940,6 +945,7 @@ void MainWindow::onFileListFetched(QListWidgetItem *item,
     if (files.size() == 1 || autoPickMain) {
         const auto &f = files.at(bestIdx);
         prepareItemForInstall(item);
+        item->setData(ModRole::PendingFileId, QVariant::fromValue(qint64(f.fileId)));
         stashChecksum(item, f);
         autoLinkSameModpage(item, f.category);
         m_downloadQueue->fetchDownloadLink(game, modId, f.fileId, "", "", item);
@@ -1041,6 +1047,7 @@ void MainWindow::onFileListFetched(QListWidgetItem *item,
     const qint64  sz     = sel->data(Qt::UserRole + 2).toLongLong();
     const QString cat    = sel->data(Qt::UserRole + 3).toString();
     prepareItemForInstall(item);
+    item->setData(ModRole::PendingFileId, QVariant::fromValue(qint64(fileId)));
     if (!md5.isEmpty()) item->setData(ModRole::ExpectedMd5,  md5);
     if (sz > 0)         item->setData(ModRole::ExpectedSize, sz);
     autoLinkSameModpage(item, cat);

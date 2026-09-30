@@ -1,6 +1,7 @@
 #ifndef NEXUSCLIENT_H
 #define NEXUSCLIENT_H
 
+#include "file_status.h"
 #include <QByteArray>
 #include <QList>
 #include <QObject>
@@ -159,9 +160,20 @@ public:
     // hour. `legacyMods(ids: [{gameId, modId}, ...], count: n)` answers them
     // in two.
     QNetworkReply *requestModNames(int gameIdNumeric, const QList<int> &modIds);
+
+    // Every file on one mod page with its category (v2 `modFiles`,
+    // unauthenticated, no API quota). Asked by Check Updates only for rows
+    // that recorded which file they were installed from.
+    QNetworkReply *requestModFilesV2(int gameIdNumeric, int modId);
+    // The page's files. A GraphQL error, a null list or garbage is an error,
+    // never an empty list: an empty list would read as "the page offers
+    // nothing", and file_status must not judge a file on a reply that said
+    // nothing.
     // modId -> name. Empty on a GraphQL error, a null payload or garbage, so
     // the caller falls back to naming rows one at a time.
     static QHash<int, QString> parseModNames(const QByteArray &json);
+    static std::expected<QList<file_status::PageFile>, NexusError>
+    parseModFilesV2(const QByteArray &json);
 
     // The nexusRequirements rows out of a v2 reply. GraphQL errors, missing
     // fields or a null mod all come back as an error/empty rather than a

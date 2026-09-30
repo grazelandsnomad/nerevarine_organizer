@@ -720,6 +720,7 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
     item->setData(ModRole::ItemType,      ItemType::Mod);
     item->setData(ModRole::ModPath,       dirPath);
     item->setData(ModRole::InstallStatus, 1); // installed
+    commitInstalledFileId(item);
     m_scans->invalidateDataFoldersCache(dirPath);      // force re-scan next time
     // Files were just (re)written. A reinstall into the same folder keeps the
     // path and the install date, so the deploy fingerprint cannot tell - say

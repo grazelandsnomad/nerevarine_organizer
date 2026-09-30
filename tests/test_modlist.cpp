@@ -807,6 +807,48 @@ static void testGeneratedTranslationFlagRoundTrips()
           !back.isEmpty() && !back[0].isGeneratedTranslation);
 }
 
+// Which Nexus FILE a row came from. Check Updates asks Nexus about it; the
+// page URL and a date alone could not tell an archived file from a current one.
+static void testNexusFileIdRoundTrips()
+{
+    std::cout << "\n-- installed Nexus file id --\n";
+    ModEntry m;
+    m.itemType      = QStringLiteral("mod");
+    m.displayName   = QStringLiteral("Tamriel Data (HD)");
+    m.modPath       = QStringLiteral("/mods/Tamriel_Data");
+    m.nexusUrl      = QStringLiteral("https://www.nexusmods.com/morrowind/mods/59927");
+    m.installStatus = 1;
+    m.nexusFileId   = 1000068816;   // Tamriel Data (HD) 26.08, as Nexus lists it
+
+    const QString text = modlist_serializer::serializeModlist({m});
+    check("the file id is written", text.contains(QStringLiteral("\"file\":1000068816")), text);
+    const QList<ModEntry> got = modlist_serializer::parseModlist(text);
+    check("and reads back exactly",
+          !got.isEmpty() && got[0].nexusFileId == 1000068816);
+
+    // Ids past 32 bits must survive too - Nexus's are climbing towards it.
+    m.nexusFileId = 5000000123LL;
+    const QList<ModEntry> big =
+        modlist_serializer::parseModlist(modlist_serializer::serializeModlist({m}));
+    check("a 64-bit id survives", !big.isEmpty() && big[0].nexusFileId == 5000000123LL);
+
+    ModEntry plain = m;
+    plain.nexusFileId = 0;
+    const QString plainText = modlist_serializer::serializeModlist({plain});
+    check("an unknown file writes nothing", !plainText.contains(QStringLiteral("\"file\"")));
+    const QList<ModEntry> back = modlist_serializer::parseModlist(plainText);
+    check("and reads back 0", !back.isEmpty() && back[0].nexusFileId == 0);
+
+    // Known from the moment a download starts, so a save mid-install keeps it.
+    ModEntry busy = m;
+    busy.installStatus = 2;
+    busy.nexusFileId   = 1000068816;
+    const QList<ModEntry> mid =
+        modlist_serializer::parseModlist(modlist_serializer::serializeModlist({busy}));
+    check("an installing row keeps it too",
+          !mid.isEmpty() && mid[0].installStatus == 2 && mid[0].nexusFileId == 1000068816);
+}
+
 static void run_modlist_serialization()
 {
     using namespace serialization_section;
@@ -839,6 +881,7 @@ static void run_modlist_serialization()
     testLoadOrderV2RoundTrip();
     testLoadOrderV1StillLoads();
     testGeneratedTranslationFlagRoundTrips();
+    testNexusFileIdRoundTrips();
 }
 
 // === ModEntry ===

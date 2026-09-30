@@ -34,6 +34,9 @@ public:
         QListWidgetItem *item;   // opaque token, echoed back in signals
         QString          game;
         int              modId;
+        // The file the row was installed from (ModRole::NexusFileId), or 0.
+        // Non-zero also asks the page's file list whether it is superseded.
+        qint64           fileId = 0;
     };
 
     // One requestModInfo per target, in parallel. Fires updateFoundForItem
@@ -78,7 +81,12 @@ public:
 
 signals:
     void updateFoundForItem(QListWidgetItem *item);
-    void checkUpdatesFinished(int foundCount);
+    // The row's installed file is archived, an old version or gone from its
+    // page (file_status). Separate from updateFoundForItem: the newer file may
+    // be on another page, so this is information, not a one-click update.
+    void fileSupersededForItem(QListWidgetItem *item,
+                               const file_status::Verdict &verdict);
+    void checkUpdatesFinished(int foundCount, int supersededCount);
     void titleFetched(QListWidgetItem *item, const QString &name);
     // Every file on the same mod page as the one being downloaded. Emitted
     // from the checksum fetch, which already parses the whole list, so the

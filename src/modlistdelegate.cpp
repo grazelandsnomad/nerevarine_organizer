@@ -317,7 +317,8 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
     // re-eliding the name under the cursor would just twitch.
     int iconLeft = statusX;
     auto claimSlot = [&](const QRect &r) { iconLeft = qMin(iconLeft, r.left()); };
-    if (index.data(ModRole::UpdateAvailable).toBool())
+    if (index.data(ModRole::UpdateAvailable).toBool()
+        || !index.data(ModRole::FileSuperseded).toString().isEmpty())
         claimSlot(updateIconRect(option, statusX));
     if (m_conflictNotices && index.data(ModRole::HasConflict).toBool())
         claimSlot(conflictIconRect(option, statusX));   // no icon, no reservation
@@ -518,6 +519,24 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
             << QPoint(iconRect.right(), iconRect.top())
             << QPoint(cx,               iconRect.bottom());
         painter->drawPolygon(tri);
+        painter->restore();
+    } else if (!index.data(ModRole::FileSuperseded).toString().isEmpty()) {
+        // The installed file is archived or replaced on its Nexus page
+        // (file_status): an amber "!" in the same slot. Not the green arrow -
+        // the newer file may be on another page, so this informs rather than
+        // offers a one-click update. Click opens the page.
+        QRect iconRect = updateIconRect(option, statusX);
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(QColor(0xE0, 0x9A, 0x1F));
+        painter->drawEllipse(iconRect);
+        QFont f = painter->font();
+        f.setBold(true);
+        f.setPixelSize(qMax(8, iconRect.height() - 3));
+        painter->setFont(f);
+        painter->setPen(Qt::white);
+        painter->drawText(iconRect, Qt::AlignCenter, QStringLiteral("!"));
         painter->restore();
     }
 
@@ -971,10 +990,21 @@ bool ModListDelegate::helpEvent(QHelpEvent *event, QAbstractItemView *view,
         const int statusW  = m_colVis.status  ? m_colVis.wStatus  : 0;
         const int statusX  = option.rect.right() - videoW - sizeW - annotW - relTimeW - dateW - statusW;
 
+        const QString superseded = index.data(ModRole::FileSuperseded).toString();
         if (index.data(ModRole::UpdateAvailable).toBool()) {
             QRect iconRect = updateIconRect(option, statusX);
             if (iconRect.contains(event->pos())) {
-                QToolTip::showText(event->globalPos(), tr("Download update"), view);
+                QToolTip::showText(event->globalPos(),
+                    superseded.isEmpty() ? tr("Download update")
+                                         : tr("Download update") + QStringLiteral("\n\n") + superseded,
+                    view);
+                return true;
+            }
+        } else if (!superseded.isEmpty()) {
+            QRect iconRect = updateIconRect(option, statusX);
+            if (iconRect.contains(event->pos())) {
+                QToolTip::showText(event->globalPos(),
+                    superseded + QStringLiteral("\n\n") + T("file_superseded_click"), view);
                 return true;
             }
         }
@@ -1175,6 +1205,28 @@ bool ModListDelegate::editorEvent(QEvent *event, QAbstractItemModel *model,
             const int statusX   = option.rect.right() - videoW - sizeW - annotW - relTimeW - dateW - statusW;
             if (updateIconRect(option, statusX).contains(me->pos())) {
                 emit updateArrowClicked(index);
+                return true;
+            }
+        }
+    }
+    // Superseded-file mark (no update arrow in the slot): open the mod page,
+    // where the user can see what replaced the file.
+    if (event->type() == QEvent::MouseButtonRelease &&
+        index.data(ModRole::ItemType).toString() == ItemType::Mod &&
+        !index.data(ModRole::UpdateAvailable).toBool() &&
+        !index.data(ModRole::FileSuperseded).toString().isEmpty())
+    {
+        auto *me = static_cast<QMouseEvent *>(event);
+        if (me->button() == Qt::LeftButton) {
+            const int videoW    = m_colVis.videoReview ? m_colVis.wVideoReview : 0;
+            const int sizeW     = m_colVis.size    ? m_colVis.wSize    : 0;
+            const int annotW    = m_colVis.annot   ? m_colVis.wAnnot   : 0;
+            const int relTimeW  = m_colVis.relTime ? m_colVis.wRelTime : 0;
+            const int dateW     = m_colVis.date    ? m_colVis.wDate    : 0;
+            const int statusW   = m_colVis.status  ? m_colVis.wStatus  : 0;
+            const int statusX   = option.rect.right() - videoW - sizeW - annotW - relTimeW - dateW - statusW;
+            if (updateIconRect(option, statusX).contains(me->pos())) {
+                emit supersededMarkClicked(index.data(ModRole::NexusUrl).toString());
                 return true;
             }
         }

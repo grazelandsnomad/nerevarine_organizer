@@ -21,6 +21,7 @@ ModEntry makeSharedRow(const ModEntry &source, bool copyConfig)
     e.nexusUrl    = source.nexusUrl;
     e.nexusId     = source.nexusId;
     e.nexusTitle  = source.nexusTitle;
+    e.nexusFileId = source.nexusFileId;   // the same folder holds the same file
     e.customName  = source.customName;
     e.displayName = source.displayName;
     e.dateAdded   = source.dateAdded;

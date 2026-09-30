@@ -149,21 +149,22 @@ void NexusController::checkForUpdates(
     std::function<QDateTime(QListWidgetItem *)> dateAddedFor)
 {
     if (targets.isEmpty()) {
-        emit checkUpdatesFinished(0);
+        emit checkUpdatesFinished(0, 0);
         return;
     }
 
     // Per-run state in a shared_ptr so each lambda owns a copy: handles
     // overlapping runs and survives `this` dying mid-flight (replies are
     // parented to `this` so they'd cancel, but the counter still drains).
-    struct RunState { int pending; int found; };
+    struct RunState { int pending; int found; int superseded; };
     auto state = std::make_shared<RunState>(
-        RunState{static_cast<int>(targets.size()), 0});
+        RunState{static_cast<int>(targets.size()), 0, 0});
 
     for (const auto &t : targets) {
         QNetworkReply *reply = m_client->requestModInfo(t.game, t.modId);
         connect(reply, &QNetworkReply::finished, this,
-                [this, reply, item = t.item, state, dateAddedFor]() {
+                [this, reply, item = t.item, modId = t.modId, fileId = t.fileId,
+                 state, dateAddedFor]() {
             reply->deleteLater();
             if (reply->error() == QNetworkReply::NoError) {
                 const auto info = NexusClient::parseModInfo(reply->readAll());
@@ -176,9 +177,35 @@ void NexusController::checkForUpdates(
                         ++state->found;
                     }
                 }
+                // The timestamp cannot see a file retired on a page that has
+                // not changed since - so for a row that knows its file, ask
+                // the page's file list too. The numeric game id it needs is in
+                // this reply. Counted in before this reply is counted out, so
+                // the run cannot finish in between.
+                if (info && fileId > 0 && info->gameIdNumeric > 0) {
+                    ++state->pending;
+                    QNetworkReply *files =
+                        m_client->requestModFilesV2(info->gameIdNumeric, modId);
+                    connect(files, &QNetworkReply::finished, this,
+                            [this, files, item, fileId, state]() {
+                        files->deleteLater();
+                        if (files->error() == QNetworkReply::NoError) {
+                            const auto list = NexusClient::parseModFilesV2(files->readAll());
+                            if (list) {
+                                const auto v = file_status::judge(fileId, *list);
+                                if (v.state == file_status::Verdict::State::Superseded) {
+                                    emit fileSupersededForItem(item, v);
+                                    ++state->superseded;
+                                }
+                            }
+                        }
+                        if (--state->pending == 0)
+                            emit checkUpdatesFinished(state->found, state->superseded);
+                    });
+                }
             }
             if (--state->pending == 0)
-                emit checkUpdatesFinished(state->found);
+                emit checkUpdatesFinished(state->found, state->superseded);
         });
     }
 }

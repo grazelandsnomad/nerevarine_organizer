@@ -163,6 +163,7 @@ set(SOURCES
     src/modlist_io.cpp
     src/loadordercontroller.cpp
     src/nexusclient.cpp
+    src/file_status.cpp
     src/nexuscontroller.cpp
     src/nxmurl.cpp
     src/downloadqueue.cpp
