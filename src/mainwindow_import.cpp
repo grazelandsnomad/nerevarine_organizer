@@ -137,9 +137,11 @@ void MainWindow::exportModList()
     // while sorted by size/date is still the real load order.
     QList<ModEntry> entries = snapshotEntriesForPersist();
     // In-flight install placeholders are transient, machine-local state - not
-    // something a recipient (or a later restore) should inherit.
+    // something a recipient (or a later restore) should inherit. A mod being
+    // reinstalled is not one: it is still installed, and exports as such.
     for (int i = entries.size() - 1; i >= 0; --i)
-        if (entries[i].isMod() && entries[i].installStatus == 2)
+        if (entries[i].isMod() && entries[i].installStatus == 2
+            && entries[i].modPath.isEmpty())
             entries.removeAt(i);
 
     const QByteArray content =

@@ -661,9 +661,13 @@ private:
     //                          so it tracks installed mods (enabled or not)
     //   autoSortLoadOrder()  - topo sort masters above dependents, stable
     //                          tiebreaks; after every install
-    //   saveLoadOrder()      - persist
+    //   saveLoadOrder()      - persist (snapshotted, skipped when unchanged)
     //   onEditLoadOrder()    - manual view / drag-reorder dialog
+    // A plugin held back for a missing master keeps its place here but is not
+    // written as content=; m_suppressedPlugins, from the last openmw.cfg sync,
+    // says which ones those are.
     QStringList m_loadOrder;
+    QSet<QString> m_suppressedPlugins;
     QString     loadOrderPath() const;
     void        loadLoadOrder();
     void        saveLoadOrder();

@@ -44,11 +44,17 @@ QSet<QString> findUnsatisfiedMasters(
 }
 
 QList<PluginRef> carriedBy(const QList<PluginRef> &plugins,
-                           const QStringList      &loadOrder)
+                           const QStringList      &loadOrder,
+                           const QSet<QString>    &suppressed)
 {
+    QSet<QString> held;
+    held.reserve(suppressed.size());
+    for (const QString &cf : suppressed) held.insert(cf.toLower());
+
     QSet<QString> carried;
     carried.reserve(loadOrder.size());
-    for (const QString &cf : loadOrder) carried.insert(cf.toLower());
+    for (const QString &cf : loadOrder)
+        if (!held.contains(cf.toLower())) carried.insert(cf.toLower());
 
     QList<PluginRef> out;
     out.reserve(plugins.size());

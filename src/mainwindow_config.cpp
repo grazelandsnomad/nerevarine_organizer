@@ -235,11 +235,10 @@ void MainWindow::loadLoadOrder()
 
 void MainWindow::saveLoadOrder()
 {
-    QFile f(loadOrderPath());
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate))
-        return;
-    QTextStream out(&f);
-    out << modlist_serializer::serializeLoadOrder(m_loadOrder);
+    const QString path = loadOrderPath();
+    if (const auto err = modlist_io::writeLoadOrderFile(
+            path, modlist_serializer::serializeLoadOrder(m_loadOrder)))
+        onAsyncWriteFailed(path, *err);
 }
 
 // Reads the `content=` list from openmw.cfg in their current order.
@@ -327,7 +326,8 @@ void MainWindow::absorbExternalLoadOrder()
 }
 
 // Ensure m_loadOrder contains exactly the plugin filenames that are currently
-// installed (any mod with InstallStatus=1), preserving existing positions for
+// installed (placeholder_state::folderInstalled: an installed mod, or one mid-
+// reinstall whose folder is still there), preserving existing positions for
 // plugins already present. New plugins are appended to the end; a topological
 // pass at the end enforces "masters above dependents" using the MAST entries
 // declared inside each plugin so OpenMW never sees a parent loaded after its
@@ -348,7 +348,7 @@ void MainWindow::reconcileLoadOrder()
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *item = m_modList->item(i);
         if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
-        if (item->data(ModRole::InstallStatus).toInt() != 1) continue;
+        if (!placeholder_state::folderInstalled(item)) continue;
         QString modPath = item->data(ModRole::ModPath).toString();
         for (const auto &p : m_scans->cachedDataFolders(modPath, contentExts))
             for (const QString &cf : p.second)
@@ -371,7 +371,7 @@ void MainWindow::reconcileLoadOrder()
     for (int oi = 0; oi < loOrder.size(); ++oi) {
         auto *item = m_modList->item(loOrder[oi]);
         if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
-        if (item->data(ModRole::InstallStatus).toInt() != 1) continue;
+        if (!placeholder_state::folderInstalled(item)) continue;
         QString modPath = item->data(ModRole::ModPath).toString();
         for (const auto &p : m_scans->cachedDataFolders(modPath, contentExts)) {
             // .esm first within a mod folder, then .esp - a best-effort
@@ -641,14 +641,17 @@ void MainWindow::saveModList()
     QList<ModEntry> entries = snapshotEntriesForPersist();
     for (int i = entries.size() - 1; i >= 0; --i) {
         const ModEntry &e = entries[i];
-        if (e.isMod() && e.installStatus == 2 && e.nexusUrl.isEmpty()) {
+        // A row being reinstalled keeps its folder and is saved as the mod it
+        // still is (modlist_serializer) - never dropped, whatever its URL.
+        if (!e.isMod() || e.installStatus != 2 || !e.modPath.isEmpty())
+            continue;
+        if (e.nexusUrl.isEmpty()) {
             entries.removeAt(i);
             continue;
         }
         // Strip the spinner prefix from a placeholder's display name
         // ("⠋ Installing (...)") - the JSONL form stores the raw name.
-        if (e.isMod() && e.installStatus == 2
-            && e.customName.isEmpty()
+        if (e.customName.isEmpty()
             && e.displayName.startsWith(QStringLiteral("⠋ "))) {
             entries[i].displayName = e.displayName.mid(2);
         }
@@ -993,10 +996,12 @@ void MainWindow::runMissingMastersScan()
         }
         // But only a plugin the load order carries can FAIL to find one. The
         // rest are not in the game: an optional compatibility patch for a mod
-        // the user does not have is dropped by findUnsatisfiedMasters long
-        // before this, and flagging it afterwards is warning about a file
-        // OpenMW is never told to open. See master_satisfaction.h.
-        for (const auto &pr : openmw::carriedBy(shipped, m_loadOrder))
+        // the user does not have is held back by findUnsatisfiedMasters long
+        // before this (m_suppressedPlugins), and flagging it afterwards is
+        // warning about a file OpenMW is never told to open. See
+        // master_satisfaction.h.
+        for (const auto &pr : openmw::carriedBy(shipped, m_loadOrder,
+                                                m_suppressedPlugins))
             e.plugins.append({pr.fullPath, pr.filename});
         if (e.plugins.isEmpty()) continue;
 
@@ -1136,7 +1141,9 @@ void MainWindow::syncOpenMWConfig()
 
         openmw::ConfigMod cm;
         cm.enabled   = (item->checkState() == Qt::Checked);
-        cm.installed = (item->data(ModRole::InstallStatus).toInt() == 1);
+        // A row mid-reinstall still has its folder in the game until the new
+        // one lands (placeholder_state::folderInstalled).
+        cm.installed = placeholder_state::folderInstalled(item);
 
         if (cm.installed) {
             const QString modPath = item->data(ModRole::ModPath).toString();
@@ -1265,8 +1272,11 @@ void MainWindow::syncOpenMWConfig()
     mods = std::move(prepared.mods);
     const qint64 ms_masters = syncPhase.restart();
 
-    if (prepared.effectiveLoadOrder != m_loadOrder) {
-        m_loadOrder = prepared.effectiveLoadOrder;
+    // Plugins held back for a missing master keep their places in the order
+    // kept (persistLoadOrder), so they return to them when the master does.
+    m_suppressedPlugins = prepared.suppressedPlugins;
+    if (prepared.persistLoadOrder != m_loadOrder) {
+        m_loadOrder = prepared.persistLoadOrder;
         saveLoadOrder();
     }
 
@@ -1276,8 +1286,8 @@ void MainWindow::syncOpenMWConfig()
             6000);
     }
 
-    const QString rendered =
-        openmw::renderOpenMWConfig(mods, m_loadOrder, prepared.scrubbedExisting);
+    const QString rendered = openmw::renderOpenMWConfig(
+        mods, prepared.effectiveLoadOrder, prepared.scrubbedExisting);
 
     // -- launcher.cfg inputs (UI-thread, cheap) ---
     //

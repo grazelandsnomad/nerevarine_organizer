@@ -520,6 +520,18 @@ static void ms_testCarriedByAsksTheLoadOrder()
                                   {"olob - dialogue.esp"});
     check("matching is case-insensitive", shouty.size() == 1);
 
+    // A plugin held back for a missing master keeps its place in the load
+    // order (so it returns there with its master) - and is still not in the
+    // game, so still not asked about. Case-insensitive like the rest.
+    const auto held = carriedBy(shipped,
+                                {"Odai - Lifeblood of Balmora.esp",
+                                 "OLOB - Patch for Purists.esp"},
+                                {"olob - patch for purists.esp"});
+    check("a held-back plugin in the load order is not carried",
+          held.size() == 1
+              && held[0].filename == QStringLiteral("Odai - Lifeblood of Balmora.esp"),
+          QString::number(held.size()));
+
     // Nothing loaded means nothing can fail - the honest answer for a profile
     // that has not synced yet, not a reason to flag everything.
     check("an empty load order carries nothing",

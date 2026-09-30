@@ -119,12 +119,22 @@ struct SyncPrepareInputs {
 };
 
 // Output of prepareForSync, fed into renderOpenMWConfig + the async writers.
-// Caller sets m_loadOrder = effectiveLoadOrder when changed, posts a status
+// Caller sets m_loadOrder = persistLoadOrder when changed, posts a status
 // message when droppedOrphans > 0.
 struct SyncPrepareResult {
     QString          scrubbedExisting;     // input to renderOpenMWConfig
     QList<ConfigMod> mods;                 // mutated copy (suppressedPlugins set)
-    QStringList      effectiveLoadOrder;   // groundcover + suppressed dropped
+    // What OpenMW is told to load: unprovided, groundcover and suppressed
+    // plugins dropped.
+    QStringList      effectiveLoadOrder;
+    // The order to keep: effectiveLoadOrder with the suppressed plugins still
+    // in their places. A master that goes missing for a while - uninstalled,
+    // or mid-reinstall - suppresses every plugin that needs it, and keeping
+    // only the effective order sent them all to the bottom when it came back.
+    // The renderer skips suppressed plugins wherever they sit.
+    QStringList      persistLoadOrder;
+    // Every plugin a missing master holds back, all mods together.
+    QSet<QString>    suppressedPlugins;
     int              droppedOrphans = 0;   // count for status bar
 };
 

@@ -23,6 +23,16 @@ void restoreInteractiveFlags(QListWidgetItem *item);
 // (no drag/check until the row settles).
 void setBusyFlags(QListWidgetItem *item);
 
+// Whether a row's folder is installed right now: an installed row (status 1),
+// or one being reinstalled (status 2) - an update, a Replace, a Merge - whose
+// folder is still on disk. That folder stays in the game until the new files
+// land. Counted as gone, every save during a reinstall took its plugins out of
+// the load order, with every plugin that needs them, and the install put them
+// all back at the bottom: reinstalling Tamriel Data moved 337 of 413 plugins.
+// A fresh install has no folder until it lands.
+bool folderInstalled(int installStatus, const QString &modPath);
+bool folderInstalled(const QListWidgetItem *item);
+
 // Clear the mid-install hint roles once an install settles: IntendedModPath,
 // PrevModPath, MergeTargetPath, InstallToken.
 void clearInstallTransients(QListWidgetItem *item);

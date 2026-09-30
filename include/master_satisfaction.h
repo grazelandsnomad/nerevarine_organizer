@@ -42,7 +42,8 @@ QSet<QString> findUnsatisfiedMasters(
     const QList<PluginRef> &plugins,
     QSet<QString>           availableLower);
 
-// Of `plugins`, the ones `loadOrder` actually carries.
+// Of `plugins`, the ones `loadOrder` actually carries - leaving out the ones
+// the sync holds back for a missing master (`suppressed`, from prepareForSync).
 //
 // A plugin the load order does not carry is not in the game - OpenMW never
 // opens it - so it cannot fail to find a master, and saying otherwise is how a
@@ -51,14 +52,17 @@ QSet<QString> findUnsatisfiedMasters(
 // plugin; on a list without Patch for Purists it was never loaded, never could
 // be, and wore a red "missing masters" diamond regardless.
 //
-// Beside findUnsatisfiedMasters on purpose: that function is usually the very
-// reason a plugin is absent from the load order, and this answer only means
-// anything in the light of it.
+// Beside findUnsatisfiedMasters on purpose: that function is the reason a
+// plugin is held back, and this answer only means anything in the light of
+// it. A held-back plugin keeps its place in the load order, so that it goes
+// back there when its master returns - which is why the load order alone can
+// no longer answer, and `suppressed` has to be asked as well.
 //
 // Case-insensitive, like every other plugin-name comparison here: what the
 // folder spells "OLOB - Dialogue.ESP" an external launcher may write back in
 // any case it likes.
 QList<PluginRef> carriedBy(const QList<PluginRef> &plugins,
-                           const QStringList      &loadOrder);
+                           const QStringList      &loadOrder,
+                           const QSet<QString>    &suppressed = {});
 
 } // namespace openmw

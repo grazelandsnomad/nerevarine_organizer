@@ -243,14 +243,21 @@ SyncPrepareResult prepareForSync(const SyncPrepareInputs &in)
     out.scrubbedExisting = scrubbedLines.join('\n');
 
     // Effective load order: drop unprovided plugins, groundcover (loaded
-    // separately) and suppressed (missing masters). Any left in resurrect on
-    // the next absorb cycle and the crash recurs.
+    // separately) and suppressed (missing masters). The order kept keeps the
+    // suppressed ones where they were: renderOpenMWConfig only emits plugins it
+    // finds available, and a suppressed plugin never is, so keeping its place
+    // cannot put it back in the game - it only lets it return to that place
+    // once its master does.
     out.effectiveLoadOrder.reserve(in.loadOrder.size());
-    for (const QString &cf : in.loadOrder)
-        if (providedPlugins.contains(cf)
-         && !groundcoverPlugins.contains(cf)
-         && !suppressedFromLoadOrder.contains(cf))
+    out.persistLoadOrder.reserve(in.loadOrder.size());
+    for (const QString &cf : in.loadOrder) {
+        if (!providedPlugins.contains(cf) || groundcoverPlugins.contains(cf))
+            continue;
+        out.persistLoadOrder << cf;
+        if (!suppressedFromLoadOrder.contains(cf))
             out.effectiveLoadOrder << cf;
+    }
+    out.suppressedPlugins = suppressedFromLoadOrder;
 
     return out;
 }

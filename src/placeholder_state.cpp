@@ -23,6 +23,19 @@ void setBusyFlags(QListWidgetItem *item)
     item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
 }
 
+bool folderInstalled(int installStatus, const QString &modPath)
+{
+    if (installStatus == 1) return true;
+    return installStatus == 2 && !modPath.isEmpty() && QFileInfo(modPath).isDir();
+}
+
+bool folderInstalled(const QListWidgetItem *item)
+{
+    return item
+        && folderInstalled(item->data(ModRole::InstallStatus).toInt(),
+                           item->data(ModRole::ModPath).toString());
+}
+
 void clearInstallTransients(QListWidgetItem *item)
 {
     if (!item) return;

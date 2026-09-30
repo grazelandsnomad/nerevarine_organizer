@@ -16,6 +16,7 @@ add_executable(test_openmw_config
     ${CMAKE_SOURCE_DIR}/src/openmwconfigwriter.cpp
     ${CMAKE_SOURCE_DIR}/src/master_satisfaction.cpp
     ${CMAKE_SOURCE_DIR}/src/pluginparser.cpp
+    ${CMAKE_SOURCE_DIR}/src/load_order_merge.cpp
 )
 target_include_directories(test_openmw_config PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(test_openmw_config PRIVATE Qt6::Core)
@@ -358,9 +359,10 @@ add_executable(test_mods
     ${CMAKE_SOURCE_DIR}/src/variant_picker.cpp
     ${CMAKE_SOURCE_DIR}/src/fomod_copy.cpp
     ${CMAKE_SOURCE_DIR}/src/fomod_path.cpp
+    ${CMAKE_SOURCE_DIR}/src/placeholder_state.cpp
 )
 target_include_directories(test_mods PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(test_mods PRIVATE Qt6::Core Qt6::Gui)
+target_link_libraries(test_mods PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
 
 # Archive magic sniffing + extractor error-message routing (both pure, moc-free).
 add_executable(test_extract

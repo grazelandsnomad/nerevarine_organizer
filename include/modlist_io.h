@@ -27,4 +27,15 @@ namespace modlist_io {
 std::optional<QString> writeModlistFile(const QString &path,
                                           const QString &content);
 
+// The plugin load order's own file. A write that would change nothing is
+// skipped; any other snapshots the current file first (safefs::snapshotBackup)
+// and goes through QSaveFile, so a crash mid-write leaves the old order whole.
+// Returns nullopt on success or skip, else the error.
+//
+// It had neither: a truncating write and no backups. When reinstalling Tamriel
+// Data moved 337 of 413 plugins, the order they had before survived only in an
+// openmw.cfg snapshot, a couple of dozen saves from rotating out of existence.
+std::optional<QString> writeLoadOrderFile(const QString &path,
+                                          const QString &content);
+
 } // namespace modlist_io

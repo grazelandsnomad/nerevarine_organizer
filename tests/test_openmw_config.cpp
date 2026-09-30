@@ -1,9 +1,13 @@
 #include "openmwconfigwriter.h"
+#include "load_order_merge.h"
+#include "master_satisfaction.h"
+#include "pluginparser.h"
 
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QTemporaryDir>
 
 #include <iostream>
@@ -1313,9 +1317,9 @@ void testUnsatisfiedMasterSuppressesPlugin()
 {
     // Two things lean on this. The obvious one: OpenMW aborts at launch if a
     // patch is enabled without its parent. The quieter one: the mod row's
-    // missing-master diamond is now only drawn for plugins the load order
-    // carries, so loosening this suppression would put the plugin back into
-    // the load order AND make the icon start firing again.
+    // missing-master diamond is only drawn for plugins the game is given
+    // (openmw::carriedBy asks suppressedPlugins), so loosening this would put
+    // the plugin back into content= AND make the icon start firing again.
     std::cout << "\n[plugin whose master isn't on disk → moved to suppressedPlugins]\n";
     QTemporaryDir tmp;
     QVERIFY_EXIT(tmp.isValid(), 1);
@@ -1337,6 +1341,95 @@ void testUnsatisfiedMasterSuppressesPlugin()
           out.mods[0].suppressedPlugins.contains("Patch.esp"));
     check("Patch.esp is dropped from effective load order",
           !out.effectiveLoadOrder.contains("Patch.esp"));
+    check("but keeps its place in the order kept",
+          out.persistLoadOrder == QStringList{"Patch.esp"});
+    check("and is named among the held back",
+          out.suppressedPlugins == QSet<QString>{"Patch.esp"});
+}
+
+// A master gone for a while - uninstalled, or caught mid-reinstall - holds back
+// every plugin that needs it, transitively. Dropped from the order kept, they
+// all came back appended at the bottom when it returned: reinstalling Tamriel
+// Data moved 337 of 413 plugins. Kept in place, they come back where they were,
+// and the master lands just above the first of them.
+void testHeldBackPluginsKeepTheirPlaces()
+{
+    std::cout << "\n[master gone for a while → its dependents keep their places]\n";
+    QTemporaryDir tmp;
+    QVERIFY_EXIT(tmp.isValid(), 1);
+    const QString modsRoot = tmp.path() + "/mods";
+    const QString td = modsRoot + "/Tamriel Data";
+    const QString tr = modsRoot + "/Tamriel Rebuilt";
+    const QString a  = modsRoot + "/Other";
+    writePlugin(td, "Tamriel_Data.esm");
+    writePlugin(tr, "TR_Mainland.esm", {"Tamriel_Data.esm"});
+    writePlugin(tr, "TR_Patch.esp",    {"TR_Mainland.esm"});   // needs it through TR
+    writePlugin(a,  "A.esp");
+    writePlugin(a,  "B.esp");
+
+    const QStringList curated = {
+        "A.esp", "Tamriel_Data.esm", "TR_Mainland.esm", "B.esp", "TR_Patch.esp"};
+
+    // Tamriel Data not installed.
+    openmw::SyncPrepareInputs in;
+    in.modsRoot        = modsRoot;
+    in.managedModPaths = { QDir::cleanPath(tr), QDir::cleanPath(a) };
+    in.mods            = { modWith(tr, {"TR_Mainland.esm", "TR_Patch.esp"}),
+                           modWith(a,  {"A.esp", "B.esp"}) };
+    in.loadOrder       = curated;
+    const auto gone = openmw::prepareForSync(in);
+
+    check("OpenMW is given neither dependent",
+          gone.effectiveLoadOrder == QStringList({"A.esp", "B.esp"}),
+          gone.effectiveLoadOrder.join(", "));
+    check("but the order kept has both, where they were",
+          gone.persistLoadOrder
+              == QStringList({"A.esp", "TR_Mainland.esm", "B.esp", "TR_Patch.esp"}),
+          gone.persistLoadOrder.join(", "));
+    check("both are named among the held back",
+          gone.suppressedPlugins
+              == QSet<QString>({"TR_Mainland.esm", "TR_Patch.esp"}));
+
+    // MainWindow renders from the effective order, but the renderer must not
+    // put a held-back plugin back in the game whichever order it is handed.
+    const QString cfg = openmw::renderOpenMWConfig(
+        gone.mods, gone.persistLoadOrder, gone.scrubbedExisting);
+    check("handed the kept order, the renderer still leaves them out",
+          !cfg.contains("content=TR_Mainland.esm")
+              && !cfg.contains("content=TR_Patch.esp"), cfg);
+    check("and loads the rest", cfg.contains("content=A.esp")
+                                    && cfg.contains("content=B.esp"), cfg);
+
+    // Nor does the missing-master diamond come back for them: a plugin the
+    // game is not given cannot fail to find a master.
+    const QList<openmw::PluginRef> shipped{
+        {"TR_Mainland.esm", tr + "/TR_Mainland.esm"},
+        {"TR_Patch.esp",    tr + "/TR_Patch.esp"}};
+    check("no missing-master warning for them",
+          openmw::carriedBy(shipped, gone.persistLoadOrder,
+                            gone.suppressedPlugins).isEmpty());
+
+    // Tamriel Data back: reconcileLoadOrder appends what is new, then lifts
+    // masters above their dependents.
+    QStringList back = gone.persistLoadOrder;
+    back << "Tamriel_Data.esm";
+    const QHash<QString, QString> pathOf{
+        {"Tamriel_Data.esm", td + "/Tamriel_Data.esm"},
+        {"TR_Mainland.esm",  tr + "/TR_Mainland.esm"},
+        {"TR_Patch.esp",     tr + "/TR_Patch.esp"},
+        {"A.esp",            a + "/A.esp"},
+        {"B.esp",            a + "/B.esp"}};
+    back = loadorder::topologicallySortByMasters(back, [&](const QString &n) {
+        return plugins::readTes3Masters(pathOf.value(n));
+    });
+
+    in.managedModPaths << QDir::cleanPath(td);
+    in.mods << modWith(td, {"Tamriel_Data.esm"});
+    in.loadOrder = back;
+    const auto again = openmw::prepareForSync(in);
+    check("nothing is held back any more", again.suppressedPlugins.isEmpty());
+    check("and the order is the one the user had",
+          again.effectiveLoadOrder == curated, again.effectiveLoadOrder.join(", "));
 }
 
 void testSatisfiedMasterPreserved()
@@ -1411,6 +1504,7 @@ static void run_sync_prep()
     testLauncherOnlyExternalsAugmented();
     testLauncherSyntheticUnderModsRootNotRecreated();
     testUnsatisfiedMasterSuppressesPlugin();
+    testHeldBackPluginsKeepTheirPlaces();
     testSatisfiedMasterPreserved();
     testGroundcoverDroppedFromLoadOrder();
     testEmptyInputs();

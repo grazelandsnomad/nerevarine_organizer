@@ -149,6 +149,74 @@ static void testWriteModlistFile_largeContentRoundtrip()
     check("roundtrip is byte-identical (1 MB)", readFile(path) == big);
 }
 
+static QStringList loadOrderSnapshots(const QString &dir)
+{
+    return QDir(dir).entryList({"loadorder.txt.bak.*"}, QDir::Files);
+}
+
+// The load order had no backups and a truncating write. When reinstalling
+// Tamriel Data moved 337 of 413 plugins, the order they had survived only in an
+// openmw.cfg snapshot.
+static void testWriteLoadOrderFile_snapshotsBeforeAChange()
+{
+    std::cout << "\n[writeLoadOrderFile: a change keeps the order it replaces]\n";
+    QTemporaryDir tmp;
+    if (!tmp.isValid()) { std::cerr << "tmp setup failed\n"; std::exit(1); }
+    const QString path = tmp.path() + "/loadorder.txt";
+
+    auto err = modlist_io::writeLoadOrderFile(path, "Tamriel_Data.esm\nTR_Mainland.esm\n");
+    check("the first write lands", !err.has_value() && QFile::exists(path),
+          err.value_or("(success)"));
+    check("with nothing before it to keep", loadOrderSnapshots(tmp.path()).isEmpty());
+
+    err = modlist_io::writeLoadOrderFile(path, "TR_Mainland.esm\nTamriel_Data.esm\n");
+    check("a changed order is written", !err.has_value()
+          && readFile(path) == "TR_Mainland.esm\nTamriel_Data.esm\n");
+    const QStringList baks = loadOrderSnapshots(tmp.path());
+    check("and the one it replaced is kept", baks.size() == 1,
+          QString::number(baks.size()));
+    check("whole", !baks.isEmpty()
+          && readFile(tmp.path() + "/" + baks.first())
+                 == "Tamriel_Data.esm\nTR_Mainland.esm\n");
+}
+
+static void testWriteLoadOrderFile_unchangedIsSkipped()
+{
+    std::cout << "\n[writeLoadOrderFile: saving the same order touches nothing]\n";
+    QTemporaryDir tmp;
+    if (!tmp.isValid()) { std::cerr << "tmp setup failed\n"; std::exit(1); }
+    const QString path = tmp.path() + "/loadorder.txt";
+    (void)modlist_io::writeLoadOrderFile(path, "A.esm\nB.esp\n");
+
+    // Every save calls it; a snapshot for each would rotate a wanted order out
+    // of reach in a single session.
+    const QDateTime yesterday = QDateTime::currentDateTime().addDays(-1);
+    {
+        QFile f(path);
+        if (!f.open(QIODevice::ReadWrite)
+            || !f.setFileTime(yesterday, QFileDevice::FileModificationTime)) {
+            std::cerr << "couldn't age " << path.toStdString() << "\n";
+            std::exit(2);
+        }
+    }
+    const auto err = modlist_io::writeLoadOrderFile(path, "A.esm\nB.esp\n");
+    check("no error", !err.has_value(), err.value_or("(success)"));
+    check("the file is not rewritten",
+          QFileInfo(path).lastModified().toSecsSinceEpoch()
+              == yesterday.toSecsSinceEpoch());
+    check("and no snapshot", loadOrderSnapshots(tmp.path()).isEmpty());
+}
+
+static void testWriteLoadOrderFile_failureIsReported()
+{
+    std::cout << "\n[writeLoadOrderFile: a write that cannot happen reports it]\n";
+    QTemporaryDir tmp;
+    if (!tmp.isValid()) { std::cerr << "tmp setup failed\n"; std::exit(1); }
+    const auto err = modlist_io::writeLoadOrderFile(
+        tmp.path() + "/no_such_dir/loadorder.txt", "A.esm\n");
+    check("the error comes back", err.has_value() && !err->isEmpty());
+}
+
 } // namespace io_section
 
 static void run_modlist_io()
@@ -162,6 +230,9 @@ static void run_modlist_io()
     io_section::testWriteModlistFile_emptyContentSucceeds();
     io_section::testWriteModlistFile_serialOverwriteIsAtomicEnough();
     io_section::testWriteModlistFile_largeContentRoundtrip();
+    io_section::testWriteLoadOrderFile_snapshotsBeforeAChange();
+    io_section::testWriteLoadOrderFile_unchangedIsSkipped();
+    io_section::testWriteLoadOrderFile_failureIsReported();
 }
 
 // --- modlist serialization ---
@@ -731,6 +802,49 @@ static void testV2InstallTokenRoundTrip()
     check("nexusUrl preserved",            got.first().nexusUrl     == m.nexusUrl);
 }
 
+// A row being reinstalled - an update, a Replace, a Merge - still has the folder
+// it was installed in, and that folder is still installed until the new files
+// land. Saved as a placeholder, a kill mid-install brought it back "not
+// installed" with its folder orphaned on disk and its notes and choices gone:
+// what happened to Tamriel Data when a 2.75 GB install froze the window and it
+// was closed twice.
+static void testV2ReinstallingRowSavesAsInstalled()
+{
+    std::cout << "\n-- v2: a row mid-reinstall is saved as the mod it still is --\n";
+    ModEntry m;
+    m.itemType      = QStringLiteral("mod");
+    m.checked       = true;
+    m.installStatus = 2;
+    m.displayName   = QStringLiteral("⠋ Installing (mod 59927)");
+    m.modPath       = QStringLiteral("/mods/Tamriel_Data");
+    m.annotation    = QStringLiteral("before TR");
+    m.nexusUrl      = QStringLiteral("https://www.nexusmods.com/morrowind/mods/59927");
+    m.nexusFileId   = 1000045000;   // the file it holds until the new one lands
+    m.bainChoices   = QStringLiteral("00 Data Files;01 Data Files - Normal Maps");
+    m.isFavorite    = true;
+    m.installToken  = QUuid::createUuid();
+
+    const QString text = modlist_serializer::serializeModlist({m});
+    check("not written as an install in progress",
+          !text.contains(QStringLiteral("\"installing\"")), text);
+    check("nor under the spinner's name",
+          !text.contains(QStringLiteral("Installing (mod")), text);
+    check("nor with a token no relaunch can use",
+          !text.contains(QStringLiteral("\"token\"")), text);
+
+    const QList<ModEntry> got = modlist_serializer::parseModlist(text);
+    check("one row", got.size() == 1);
+    if (got.isEmpty()) return;
+    check("at its folder",            got[0].modPath == m.modPath);
+    check("still enabled",            got[0].checked);
+    check("its note kept",            got[0].annotation == m.annotation);
+    check("its BAIN choices kept",    got[0].bainChoices == m.bainChoices);
+    check("still a favourite",        got[0].isFavorite);
+    check("the file it was installed from",
+          got[0].nexusFileId == 1000045000);
+    check("its page",                 got[0].nexusUrl == m.nexusUrl);
+}
+
 // Installed (status==1) rows don't need a token; serializer omits the
 // field instead of writing a null UUID.
 static void testV2InstalledRowSkipsToken()
@@ -842,6 +956,7 @@ static void testNexusFileIdRoundTrips()
     // Known from the moment a download starts, so a save mid-install keeps it.
     ModEntry busy = m;
     busy.installStatus = 2;
+    busy.modPath.clear();   // a fresh install: no folder until it lands
     busy.nexusFileId   = 1000068816;
     const QList<ModEntry> mid =
         modlist_serializer::parseModlist(modlist_serializer::serializeModlist({busy}));
@@ -874,6 +989,7 @@ static void run_modlist_serialization()
     testV2InstallingPlaceholderRoundTrip();
     testV2InstallTokenRoundTrip();
     testV2InstalledRowSkipsToken();
+    testV2ReinstallingRowSavesAsInstalled();
     testV1LegacyFileStillLoads();
     testV1ToV2MigrationOnReSave();
     testV2ParserIgnoresUnknownFields();

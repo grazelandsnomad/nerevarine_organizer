@@ -63,7 +63,14 @@ QJsonObject modToJson(const ModEntry &e)
     // Mid-install placeholder: same shape as a normal mod plus an
     // `installing` flag so the loader can tell a saved-mid-install row from a
     // fully-populated one. No path yet, so it's omitted.
-    if (e.installStatus == 2) {
+    //
+    // A row being REinstalled - an update, a Replace, a Merge - is not one. It
+    // still has the folder it was installed in, and that folder is still
+    // installed until the new files land, so it is saved as the mod it still
+    // is. Saved as a placeholder, a crash or a kill mid-install brought it back
+    // "not installed" with its folder orphaned on disk, and its notes, FOMOD
+    // and BAIN choices, and its plugins' places in the load order gone.
+    if (e.installStatus == 2 && e.modPath.isEmpty()) {
         o.insert(QStringLiteral("installing"), true);
         if (!e.customName.isEmpty())
             o.insert(QStringLiteral("name"), e.customName);

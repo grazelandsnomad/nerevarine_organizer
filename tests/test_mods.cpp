@@ -7,8 +7,11 @@
 #include "install_layout.h"
 #include "post_install.h"
 #include "variant_picker.h"
+#include "placeholder_state.h"
+#include "modroles.h"
 
 #include <QCoreApplication>
+#include <QListWidgetItem>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -1034,6 +1037,46 @@ static void run_variant_picker()
     testVariantChooserStrictness();
 }
 
+// === placeholder_state ===
+
+// A row mid-reinstall still has its folder in the game. Counted as gone, every
+// save during the install took its plugins - and every plugin needing them -
+// out of the load order, and the install put them all back at the bottom.
+static void testFolderInstalled()
+{
+    std::cout << "\n[folderInstalled: a reinstall keeps its folder, a fresh install has none]\n";
+    QTemporaryDir tmp;
+    const QString old = tmp.filePath("Tamriel_Data");
+    QDir().mkpath(old);
+
+    using placeholder_state::folderInstalled;
+    check("an installed row", folderInstalled(1, old));
+    check("an installed row, even with its folder gone (as it always was)",
+          folderInstalled(1, tmp.filePath("gone")));
+    check("a row being reinstalled, its folder still there", folderInstalled(2, old));
+    check("not a fresh install: no folder yet", !folderInstalled(2, QString()));
+    check("nor a reinstall whose folder has gone", !folderInstalled(2, tmp.filePath("gone")));
+    check("nor a row waiting to download", !folderInstalled(0, old));
+
+    QListWidgetItem row;
+    row.setData(ModRole::ItemType,      ItemType::Mod);
+    row.setData(ModRole::InstallStatus, 2);
+    row.setData(ModRole::ModPath,       old);
+    row.setData(ModRole::PrevModPath,   old);   // a Replace
+    check("the row form reads the same roles", folderInstalled(&row));
+    row.setData(ModRole::PrevModPath, QVariant());   // an update sets none
+    check("an update, which stashes nothing, too", folderInstalled(&row));
+    row.setData(ModRole::ModPath, QVariant());
+    check("the row form of a fresh install", !folderInstalled(&row));
+    check("and no row at all", !folderInstalled(static_cast<const QListWidgetItem *>(nullptr)));
+}
+
+static void run_placeholder_state()
+{
+    std::cout << "\n=== placeholder_state ===\n";
+    testFolderInstalled();
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -1045,6 +1088,7 @@ int main(int argc, char **argv)
     run_install_layout();
     run_post_install();
     run_modlist_summary();
+    run_placeholder_state();
 
     std::cout << "\n"
               << s_passed << " passed, "
