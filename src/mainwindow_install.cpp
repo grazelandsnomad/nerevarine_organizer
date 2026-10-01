@@ -143,9 +143,7 @@ static int modIdFromArchiveName(const QString &archiveFileName);
 static void settleArchive(const QString &archivePath,
                           archive_policy::Outcome outcome, QListWidgetItem *row)
 {
-    if (!row && outcome != archive_policy::Outcome::Installed)
-        outcome = archive_policy::Outcome::RowGone;
-    if (archive_policy::onOutcome(outcome) == archive_policy::Action::Keep)
+    if (row && archive_policy::onOutcome(outcome) == archive_policy::Action::Keep)
         row->setData(ModRole::PendingArchive, archivePath);
     else
         QFile::remove(archivePath);
