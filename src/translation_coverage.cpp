@@ -252,4 +252,21 @@ QList<Verdict> judge(const QList<Entry> &entries,
     return out;
 }
 
+QHash<int, int> directedPairs(const QList<Verdict> &verdicts, int modCount)
+{
+    QHash<int, bool> inTarget;
+    for (const Verdict &v : verdicts)
+        if (v.readsAsTarget) inTarget.insert(v.modIdx, true);
+
+    QHash<int, int> pairs;
+    for (const Verdict &v : verdicts) {
+        if (v.partnerModIdx < 0 || v.partnerModIdx >= modCount) continue;
+        if (v.modIdx < 0 || v.modIdx >= modCount)                continue;
+        if (!inTarget.value(v.modIdx) || inTarget.value(v.partnerModIdx))
+            continue;
+        pairs.insert(v.modIdx, v.partnerModIdx);
+    }
+    return pairs;
+}
+
 } // namespace translation_coverage

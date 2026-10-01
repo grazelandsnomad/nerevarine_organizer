@@ -513,6 +513,40 @@ void testTes3AndSecondaryNeverGoPartial()
 
 } // namespace
 
+// The directed pairing, out of TranslationScanWorker::run: which mod is the
+// translation and which the source.
+static void testDirectedPairs()
+{
+    std::cout << "\n[directedPairs: translation -> source]\n";
+    using translation_coverage::Verdict;
+    auto v = [](int mod, int partner, bool target) {
+        Verdict x;
+        x.modIdx = mod;
+        x.partnerModIdx = partner;
+        x.readsAsTarget = target;
+        return x;
+    };
+    using translation_coverage::directedPairs;
+
+    // 0 is the Spanish translation of 1, which is English.
+    QHash<int, int> p = directedPairs({v(0, 1, true), v(1, 0, false)}, 2);
+    check("the translation points at its source, not back",
+          p.size() == 1 && p.value(0, -1) == 1);
+
+    check("two English mods that share keys name no direction",
+          directedPairs({v(0, 1, false), v(1, 0, false)}, 2).isEmpty());
+    check("nor do two already in the target language",
+          directedPairs({v(0, 1, true), v(1, 0, true)}, 2).isEmpty());
+    check("an index outside the list is ignored",
+          directedPairs({v(0, 7, true), v(-1, 0, true)}, 2).isEmpty());
+
+    // A mod votes once per plugin: one Spanish plugin speaks for it, and its
+    // other plugin's pairing is the one it records (the last verdict wins).
+    p = directedPairs({v(0, 1, true), v(0, 2, false), v(1, 0, false), v(2, 0, false)}, 3);
+    check("any plugin in the target language speaks for its mod",
+          p.size() == 1 && p.value(0, -1) == 2);
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -526,6 +560,7 @@ int main(int argc, char **argv)
     testTheLocalizedStringsRule();
     testAModThatIsItselfTheTranslation();
     testTes3AndSecondaryNeverGoPartial();
+    testDirectedPairs();
 
     std::cout << "\n";
     if (s_failed == 0)

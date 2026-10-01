@@ -229,27 +229,12 @@ protected:
             noteCoverage(v.modIdx, v.pluginName, v.translatable, v.state,
                          v.partnerMod, v.samples, v.common, v.identical);
 
-        // The pairing, DIRECTED: translation -> source. Recorded separately
-        // from the coverage map, which throws away everything it has nothing
-        // to complain about - and a successful pairing is precisely that.
-        //
-        // A mod with several plugins votes once per plugin, so collect the
-        // language verdict first and let any plugin reading as the target
-        // language speak for the mod.
-        QHash<int, bool> inTarget;
-        for (const auto &v : verdicts)
-            if (v.readsAsTarget) inTarget.insert(v.modIdx, true);
-        for (const auto &v : verdicts) {
-            if (v.partnerModIdx < 0 || v.partnerModIdx >= m_mods.size()) continue;
-            if (v.modIdx < 0 || v.modIdx >= m_mods.size())                continue;
-            // One side in the target language and the other not. Two English
-            // mods that merely share keys - a compatibility patch and the mod
-            // it patches - name no direction, and get no claim made about
-            // them.
-            if (!inTarget.value(v.modIdx) || inTarget.value(v.partnerModIdx))
-                continue;
-            m_pairs.insert(m_mods[v.modIdx].path, m_mods[v.partnerModIdx].path);
-        }
+        // The pairing, DIRECTED: translation -> source. Decided by
+        // translation_coverage::directedPairs; here only indices become paths.
+        const QHash<int, int> pairs =
+            translation_coverage::directedPairs(verdicts, int(m_mods.size()));
+        for (auto it = pairs.cbegin(); it != pairs.cend(); ++it)
+            m_pairs.insert(m_mods[it.key()].path, m_mods[it.value()].path);
         setPercent(100);
 
         // Mods that turned out to have nothing to say are dropped here rather

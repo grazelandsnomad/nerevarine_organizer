@@ -26,6 +26,7 @@
 #include "loadordercontroller.h"   // TranslationCoverage::State
 #include "plugin_strings.h"
 
+#include <QHash>
 #include <QList>
 #include <QSet>
 #include <QString>
@@ -106,6 +107,18 @@ QList<Verdict> judge(const QList<Entry> &entries,
                      const QSet<QString> &stringFiles,
                      const QStringList &modNames,
                      const QString &targetLanguage);
+
+// The pairing, DIRECTED: translation -> source, as mod indices. A mod with
+// several plugins votes once per plugin, so any plugin reading as the target
+// language speaks for its mod; a pair counts only when one side is in the
+// target language and the other is not. Two English mods that merely share
+// keys - a compatibility patch and the mod it patches - name no direction, and
+// get no claim made about them. Indices outside [0, modCount) are ignored;
+// when a mod pairs more than once, the last verdict wins.
+//
+// Recorded apart from the coverage verdicts, which throw away everything they
+// have nothing to complain about - and a successful pairing is precisely that.
+QHash<int, int> directedPairs(const QList<Verdict> &verdicts, int modCount);
 
 } // namespace translation_coverage
 
