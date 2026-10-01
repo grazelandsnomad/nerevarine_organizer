@@ -55,6 +55,21 @@ private:
     int        m_index;
 };
 
+// What an option's own words say about other mods, worked out once for every
+// pass that asks. Three passes used to re-derive the "(No BOS)" reading each
+// on its own - one from the trimmed name, two from the raw one - where nothing
+// kept them from drifting apart.
+struct OptionFacts {
+    // The mod a "(No X)" / "without X" option is WITHOUT, or "". Such an
+    // option is about a variant pair (Pass H), never an option FOR X.
+    QString           negatedMod;
+    // The mods a patch option patches (Pass C) - none for a negated name:
+    // "Foo - No BOS Patch" is a patch for Foo, for people without BOS.
+    QStringList       patchTargets;
+    QList<NexusModRef> cited;      // mod pages its description links (Pass E)
+    QStringList       required;    // mods its description says it requires (Pass F)
+};
+
 } // namespace
 
 Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
@@ -119,9 +134,29 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
             }
     }
 
+    QList<QList<QList<OptionFacts>>> facts;
+    facts.resize(steps.size());
+    for (int si = 0; si < steps.size(); ++si) {
+        facts[si].resize(steps[si].groups.size());
+        for (int gi = 0; gi < steps[si].groups.size(); ++gi) {
+            const FomodGroup &group = steps[si].groups[gi];
+            for (const FomodPlugin &plugin : group.plugins) {
+                OptionFacts f;
+                const QString name = plugin.name.trimmed();
+                f.negatedMod   = fomod::negatedModIn(name);
+                f.patchTargets = f.negatedMod.isEmpty()
+                    ? fomod::patchTargetsOf(name, group.name) : QStringList();
+                f.cited        = fomod::citedMods(plugin.description);
+                f.required     = fomod::requiredMods(plugin.description, plugin.name,
+                                                     group.name);
+                facts[si][gi].append(f);
+            }
+        }
+    }
+
     // Smart defaults per exclusive group:
     //   Pass A - OpenMW vs MGE XE: always pick OpenMW; prior choices do NOT
-    //            override. Recorded in openMwOverriddenGroups so the prior-choices
+    //            override. Recorded in settledGroups so the prior-choices
     //            block skips them.
     //   Pass B - Yes/No groups that are about ANOTHER mod -> pick Yes (it is in
     //            the modlist) / No (it is not). Names expand to variants
@@ -139,7 +174,12 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
     // end both read this one set.
     const QSet<quint64> priorKeys = fomod_choices::decode(steps, ctx.priorChoices);
 
-    QSet<quint64> openMwOverriddenGroups;
+    // Exclusive groups whose pick is a fact, not a preference, so a choice
+    // stored from an earlier install must not put the old pick back: the
+    // engine this manager runs (Pass A), the language it reads (A2), the
+    // game's own runtime (A3), and what the modlist holds (G, H). Key:
+    // (si<<16)|gi. Named for the first of them, OpenMW, until there were five.
+    QSet<quint64> settledGroups;
     // Checkbox plugins Pass C auto-recommends because the named mod is present.
     // Key: (si<<32)|(gi<<16)|pi. Prior-choices block ORs this in so a Recommended
     // checkbox isn't unticked just because an earlier install left it off.
@@ -228,7 +268,7 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
                                 btn->setChecked(true);
                                 btn->setText(btn->text() + kOpenMwRecommended);
                             }
-                            openMwOverriddenGroups.insert(groupKey);
+                            settledGroups.insert(groupKey);
                             continue;  // skip Pass B for this group
                         }
                     }
@@ -268,7 +308,7 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
                                 btn->setText(btn->text() +
                                     QStringLiteral(" (Recommended - English)"));
                             }
-                            openMwOverriddenGroups.insert(groupKey);
+                            settledGroups.insert(groupKey);
                             continue;  // skip Pass B for this group
                         }
                     }
@@ -324,7 +364,7 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
                                             "game folder, so a plugin built for "
                                             "it would never load."));
                                 }
-                                openMwOverriddenGroups.insert(groupKey);
+                                settledGroups.insert(groupKey);
                                 continue;
                             }
                             if (prefIdx != -1 && haveExt) {
@@ -344,7 +384,7 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
                                             "a matching script extender is "
                                             "installed beside it.").arg(ver));
                                 }
-                                openMwOverriddenGroups.insert(groupKey);
+                                settledGroups.insert(groupKey);
                                 continue;  // settled; skip Pass B
                             }
                         }
@@ -489,10 +529,7 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
                         // people WITHOUT BOS - not a patch for a mod called
                         // "Foo - No BOS". A negated name is Pass H territory
                         // in exclusive groups and silence everywhere else.
-                        const QStringList patchTargets =
-                            fomod::negatedModIn(pluginName).isEmpty()
-                                ? fomod::patchTargetsOf(pluginName, group.name)
-                                : QStringList();
+                        const QStringList &patchTargets = facts[si][gi][pi].patchTargets;
 
                         bool    pluginInstalled = false;
                         QString matchedMod;
@@ -627,8 +664,9 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
                 QHash<QString, QStringList> citers;
                 QList<QList<NexusModRef>>   perPlugin;
                 perPlugin.reserve(group.plugins.size());
-                for (const FomodPlugin &plugin : group.plugins) {
-                    const auto cited = fomod::citedMods(plugin.description);
+                for (int pi = 0; pi < group.plugins.size(); ++pi) {
+                    const FomodPlugin &plugin = group.plugins[pi];
+                    const QList<NexusModRef> &cited = facts[si][gi][pi].cited;
                     perPlugin.append(cited);
                     for (const NexusModRef &ref : cited) {
                         const QString key = ref.game.toLower() + u'/'
@@ -649,7 +687,7 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
                     // the one option made for that list. Not this pass's
                     // group either way: Pass H owns variant pairs, and a
                     // negated name elsewhere is safest left alone.
-                    if (!fomod::negatedModIn(group.plugins[pi].name).isEmpty())
+                    if (!facts[si][gi][pi].negatedMod.isEmpty())
                         continue;
 
                     Option *btn = buttons[si][gi][pi];
@@ -854,7 +892,7 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
                     }
                     // Settled by what is installed, not by preference, so the
                     // prior-choices block must not undo it.
-                    openMwOverriddenGroups.insert((quint64(si) << 16) | quint64(gi));
+                    settledGroups.insert((quint64(si) << 16) | quint64(gi));
                 }
             }
         }
@@ -952,7 +990,7 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
                 // Settled by what is installed, not by preference - the same
                 // doctrine as Pass F - so the prior-choices block must not
                 // undo it.
-                openMwOverriddenGroups.insert((quint64(si) << 16) | quint64(gi));
+                settledGroups.insert((quint64(si) << 16) | quint64(gi));
             }
         }
 
@@ -983,12 +1021,10 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
                                  pi < buttons[si][gi].size(); ++pi) {
                     // Same negation guard as Pass E: a "(No X)" option that
                     // mentions X in its prose is not an option FOR X.
-                    if (!fomod::negatedModIn(group.plugins[pi].name).isEmpty())
+                    if (!facts[si][gi][pi].negatedMod.isEmpty())
                         continue;
 
-                    const QStringList needed =
-                        fomod::requiredMods(group.plugins[pi].description,
-                                            group.plugins[pi].name, group.name);
+                    const QStringList &needed = facts[si][gi][pi].required;
                     if (needed.isEmpty()) continue;
 
                     // Widen by the scene's acronyms, so "SMIM" finds a mod
@@ -1062,8 +1098,8 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
                     if (priorSet.contains(encode(si, gi, pi))) { hasPrior = true; break; }
                 }
                 if (!hasPrior) continue;
-                // OpenMW rule wins over stored choices.
-                if (openMwOverriddenGroups.contains((quint64(si) << 16) | quint64(gi))) continue;
+                // A group settled by a fact keeps its pick over a stored one.
+                if (settledGroups.contains((quint64(si) << 16) | quint64(gi))) continue;
 
                 bool exclusive = (group.type == "SelectExactlyOne" ||
                                   group.type == "SelectAtMostOne");
