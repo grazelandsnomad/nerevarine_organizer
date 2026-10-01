@@ -4,6 +4,7 @@
 #include "async_guarded.h"
 #include "download_integrity.h"
 #include "modroles.h"
+#include "placeholder_state.h"
 #include "nexusclient.h"
 #include "settings.h"
 #include "translator.h"
@@ -134,6 +135,11 @@ void DownloadQueue::fetchDownloadLink(const QString &game, int modId, int fileId
         // and the bad-key (401) paths below.
         auto resetPlaceholder = [&]() {
             if (!placeholder) return;
+            // An update that could not fetch its link is still installed.
+            if (placeholder_state::restoreInstalled(placeholder)) {
+                emit saveRequested();
+                return;
+            }
             placeholder->setData(ModRole::InstallStatus, 0);
             placeholder->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
                                   Qt::ItemIsDragEnabled |
@@ -369,10 +375,14 @@ void DownloadQueue::cancelQueued(QListWidgetItem *placeholder)
         return;
     }
 
-    // queued-only: drop row + entry, reset placeholder to not-installed
+    // queued-only: drop row + entry, reset placeholder to not-installed - or,
+    // an update's, back to installed where it was.
     removeQueueRow(placeholder);
     m_dlAttempts.remove(placeholder);
-    if (m_modList->indexFromItem(placeholder).isValid()) {
+    if (m_modList->indexFromItem(placeholder).isValid()
+        && placeholder_state::restoreInstalled(placeholder)) {
+        emit saveRequested();
+    } else if (m_modList->indexFromItem(placeholder).isValid()) {
         placeholder->setData(ModRole::InstallStatus, 0);
         placeholder->setData(ModRole::DownloadProgress, QVariant());
         placeholder->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
@@ -476,6 +486,11 @@ void DownloadQueue::resetPlaceholderToIdle(QListWidgetItem *placeholder)
 {
     if (!placeholder) return;
     if (!m_modList->indexFromItem(placeholder).isValid()) return;
+    // An update whose download failed is still installed where it was.
+    if (placeholder_state::restoreInstalled(placeholder)) {
+        emit saveRequested();
+        return;
+    }
     placeholder->setData(ModRole::InstallStatus,    0);
     placeholder->setData(ModRole::DownloadProgress, QVariant());
     placeholder->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |

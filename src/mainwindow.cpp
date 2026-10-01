@@ -971,20 +971,13 @@ void MainWindow::resetPlaceholderAfterInstallCancel(QListWidgetItem *placeholder
     if (!placeholder || !m_modList->indexFromItem(placeholder).isValid())
         return;
 
-    // Merge-in-progress cancel (FOMOD/BAIN wizard dismissed): this row is an
-    // existing installed mod we were about to overlay onto, and its folder was
-    // never touched.  Restore it to "installed" at the merge target instead of
-    // wiping it back to "not installed", which would orphan the live folder.
-    const QString mergeTarget = placeholder->data(ModRole::MergeTargetPath).toString();
-    placeholder->setData(ModRole::MergeTargetPath, QVariant());   // consume either way
-    if (!mergeTarget.isEmpty() && QDir(mergeTarget).exists()) {
-        placeholder_state::markInstalled(placeholder, mergeTarget);
-        saveModList();
-        return;
-    }
-
-    placeholder_state::resetToNotInstalled(
-        placeholder, QFileInfo(archivePath).completeBaseName());
+    // An update, Replace or Merge that did not land: this row is an installed
+    // mod whose folder was never touched. Back to installed there, rather
+    // than "not installed", which orphaned the live folder (the Merge case
+    // alone was handled; an update's or a Replace's cancel lost the mod).
+    if (!placeholder_state::restoreInstalled(placeholder))
+        placeholder_state::resetToNotInstalled(
+            placeholder, QFileInfo(archivePath).completeBaseName());
     saveModList();
 }
 

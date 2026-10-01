@@ -3,6 +3,7 @@
 #include "modroles.h"
 
 #include <QDateTime>
+#include <QDir>
 #include <QFileInfo>
 #include <QListWidgetItem>
 #include <QString>
@@ -44,6 +45,35 @@ void clearInstallTransients(QListWidgetItem *item)
     item->setData(ModRole::MergeTargetPath, QVariant());
     item->setData(ModRole::InstallToken,    QVariant());
     item->setData(ModRole::PendingFileId,   QVariant());
+}
+
+bool restoreInstalled(QListWidgetItem *item)
+{
+    if (!item) return false;
+    // A Merge's target, else the row's own folder: an update keeps it in
+    // ModPath, a Replace too (with PrevModPath stashed).
+    // An empty folder is not an install, as loadModList reads it.
+    auto installedAt = [](const QString &f) {
+        return !f.isEmpty() && QFileInfo(f).isDir() && !QDir(f).isEmpty();
+    };
+    QString folder = item->data(ModRole::MergeTargetPath).toString();
+    if (!installedAt(folder))
+        folder = item->data(ModRole::ModPath).toString();
+    if (!installedAt(folder)) return false;
+
+    item->setData(ModRole::ItemType,         ItemType::Mod);
+    item->setData(ModRole::ModPath,          folder);
+    item->setData(ModRole::InstallStatus,    1);
+    item->setData(ModRole::DownloadProgress, QVariant());
+    item->setData(ModRole::PrevModPath,      QVariant());
+    item->setData(ModRole::MergeTargetPath,  QVariant());
+    item->setData(ModRole::InstallToken,     QVariant());
+    item->setData(ModRole::PendingFileId,    QVariant());
+    restoreInteractiveFlags(item);
+    const QString cn = item->data(ModRole::CustomName).toString();
+    item->setText(cn.isEmpty() ? QFileInfo(folder).fileName() : cn);
+    item->setToolTip(folder);
+    return true;
 }
 
 void resetToNotInstalled(QListWidgetItem *item, const QString &fallbackName)

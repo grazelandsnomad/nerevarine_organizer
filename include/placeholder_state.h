@@ -37,6 +37,17 @@ bool folderInstalled(const QListWidgetItem *item);
 // PrevModPath, MergeTargetPath, InstallToken.
 void clearInstallTransients(QListWidgetItem *item);
 
+// A row whose install did not land - cancelled, failed, abandoned - back to
+// installed at the folder it still has, when it has one. An update, a Replace
+// or a Merge leaves the old folder untouched until the new one lands, so
+// cancelling one is no reason to call the mod "not installed": that cleared
+// its path, orphaned the folder, and took its plugins out of the load order
+// (cancel the package picker of a Tamriel Data update, and Tamriel Data was
+// gone). The update mark, the install date and the installed file stay as
+// they were - nothing new was installed. True when restored; false for a
+// fresh install, with no folder to go back to, left for the caller to reset.
+bool restoreInstalled(QListWidgetItem *item);
+
 // Roll a row back to "not installed": status 0, drop the in-flight path +
 // progress + install token, restore flags, recover a display name into
 // CustomName (so reload keeps it, falling back to `fallbackName`). Does NOT

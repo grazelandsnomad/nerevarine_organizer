@@ -150,20 +150,24 @@ void MainWindow::onArchiveVerificationFailed(const QString &archivePath,
     // Reset the row to "not installed" so the user can retry. Skip if it was
     // removed mid-verify.
     if (placeholder) {
-        placeholder->setData(ModRole::InstallStatus,    0);
-        placeholder->setData(ModRole::DownloadProgress, QVariant());
         placeholder->setData(ModRole::ExpectedMd5,      QVariant());
         placeholder->setData(ModRole::ExpectedSize,     QVariant());
         placeholder->setData(ModRole::NexusFileName,    QVariant());
-        placeholder->setData(ModRole::InstallToken,     QVariant());
-        placeholder_state::restoreInteractiveFlags(placeholder);
-        // Restore the display name, stripping the "⠋ installing…" prefix.
-        QString name = placeholder->data(ModRole::CustomName).toString();
-        if (name.isEmpty()) {
-            name = QFileInfo(placeholder->data(ModRole::ModPath).toString()).fileName();
-            if (name.isEmpty()) name = QFileInfo(archivePath).completeBaseName();
+        // An update whose new archive failed verification: the installed
+        // folder is untouched, so the mod stays installed there.
+        if (!placeholder_state::restoreInstalled(placeholder)) {
+            placeholder->setData(ModRole::InstallStatus,    0);
+            placeholder->setData(ModRole::DownloadProgress, QVariant());
+            placeholder->setData(ModRole::InstallToken,     QVariant());
+            placeholder_state::restoreInteractiveFlags(placeholder);
+            // Restore the display name, stripping the "⠋ installing…" prefix.
+            QString name = placeholder->data(ModRole::CustomName).toString();
+            if (name.isEmpty()) {
+                name = QFileInfo(placeholder->data(ModRole::ModPath).toString()).fileName();
+                if (name.isEmpty()) name = QFileInfo(archivePath).completeBaseName();
+            }
+            if (!name.isEmpty()) placeholder->setText(name);
         }
-        if (!name.isEmpty()) placeholder->setText(name);
         if (profileKey.isEmpty()) {
             saveModList();
         } else {
@@ -194,8 +198,9 @@ void MainWindow::onExtractionFailed(const QString &archivePath,
         if (profileKey.isEmpty()) {
             resetPlaceholderAfterInstallCancel(ph, archivePath);
         } else {
-            placeholder_state::resetToNotInstalled(
-                ph, QFileInfo(archivePath).completeBaseName());
+            if (!placeholder_state::restoreInstalled(ph))
+                placeholder_state::resetToNotInstalled(
+                    ph, QFileInfo(archivePath).completeBaseName());
             saveModListFor(profileKey, ph);
         }
     }
@@ -248,8 +253,9 @@ void MainWindow::onExtractionCancelled(const QString &archivePath,
         if (profileKey.isEmpty()) {
             resetPlaceholderAfterInstallCancel(ph, archivePath);
         } else {
-            placeholder_state::resetToNotInstalled(
-                ph, QFileInfo(archivePath).completeBaseName());
+            if (!placeholder_state::restoreInstalled(ph))
+                placeholder_state::resetToNotInstalled(
+                    ph, QFileInfo(archivePath).completeBaseName());
             saveModListFor(profileKey, ph);
         }
     }
@@ -319,8 +325,9 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
                     } else {
                         // Stranded: roll the placeholder back and persist into
                         // the owning profile's modlist file.
-                        placeholder_state::resetToNotInstalled(
-                            fph, QFileInfo(archivePath).completeBaseName());
+                        if (!placeholder_state::restoreInstalled(fph))
+                            placeholder_state::resetToNotInstalled(
+                                fph, QFileInfo(archivePath).completeBaseName());
                         saveModListFor(fkey, fph);
                     }
                 }
@@ -440,8 +447,9 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
                     if (fkey.isEmpty()) {
                         resetPlaceholderAfterInstallCancel(bph, archivePath);
                     } else {
-                        placeholder_state::resetToNotInstalled(
-                            bph, QFileInfo(archivePath).completeBaseName());
+                        if (!placeholder_state::restoreInstalled(bph))
+                            placeholder_state::resetToNotInstalled(
+                                bph, QFileInfo(archivePath).completeBaseName());
                         saveModListFor(fkey, bph);
                     }
                 }
@@ -629,8 +637,9 @@ void MainWindow::finishInstallJob(const InstallFollowUp &follow,
         if (key.isEmpty()) {
             resetPlaceholderAfterInstallCancel(ph, follow.archivePath);
         } else {
-            placeholder_state::resetToNotInstalled(
-                ph, QFileInfo(follow.archivePath).completeBaseName());
+            if (!placeholder_state::restoreInstalled(ph))
+                placeholder_state::resetToNotInstalled(
+                    ph, QFileInfo(follow.archivePath).completeBaseName());
             saveModListFor(key, ph);
         }
         statusBar()->showMessage(T("bain_cancelled"), 3000);

@@ -1146,7 +1146,12 @@ void MainWindow::onContextMenu(const QPoint &pos)
                         if (!ui::confirm(this, T("ctx_reinstall"),
                                 T("reinstall_confirm").arg(name))) return;
 
-                        item->setData(ModRole::InstallStatus, 0);
+                        // Still installed until the new copy lands: called
+                        // "not installed" here, the save below took its
+                        // plugins out of the load order, and a cancel in the
+                        // file picker left it that way. The already-installed
+                        // prompt skips this very row (confirmReinstallIfInstalled
+                        // gets it as `except`), so nothing needs the pretence.
                         item->setData(ModRole::ModSize, QVariant());
                         item->setData(ModRole::HasMissingMaster, false);
                         item->setData(ModRole::MissingMasters, QStringList());

@@ -12,6 +12,8 @@
 
 #include <QCoreApplication>
 #include <QListWidgetItem>
+#include <QUuid>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -1071,10 +1073,84 @@ static void testFolderInstalled()
     check("and no row at all", !folderInstalled(static_cast<const QListWidgetItem *>(nullptr)));
 }
 
+// Cancelling the package picker of a Tamriel Data update called the mod "not
+// installed" and cleared its path: its folder orphaned, its plugins out of the
+// load order, the mod gone after a relaunch. Only a Merge was restored. An
+// update or a Replace never touches the old folder before the new one lands.
+static void testRestoreInstalled()
+{
+    std::cout << "\n[restoreInstalled: an update that did not land is still installed]\n";
+    QTemporaryDir tmp;
+    const QString folder = tmp.filePath("Tamriel_Data (HD)");
+    QDir().mkpath(folder);
+    QFile esm(folder + "/Tamriel_Data.esm");
+    if (esm.open(QIODevice::WriteOnly)) esm.write("TES3");
+    esm.close();
+    const QDateTime installed = QDateTime::fromString("2026-08-27T10:31:02", Qt::ISODate);
+
+    QListWidgetItem row;
+    row.setData(ModRole::ItemType,        ItemType::Mod);
+    row.setData(ModRole::InstallStatus,   2);
+    row.setData(ModRole::ModPath,         folder);
+    row.setData(ModRole::CustomName,      "Tamriel Data (HD)");
+    row.setData(ModRole::UpdateAvailable, true);
+    row.setData(ModRole::DateAdded,       installed);
+    row.setData(ModRole::NexusFileId,     QVariant::fromValue(qint64(1000045000)));
+    row.setData(ModRole::PendingFileId,   QVariant::fromValue(qint64(1000068816)));
+    row.setData(ModRole::InstallToken,    QUuid::createUuid());
+    row.setData(ModRole::DownloadProgress, 40);
+    row.setCheckState(Qt::Checked);
+    row.setText("⠋ Installing (mod 59927)");
+    row.setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);   // busy
+
+    check("restored", placeholder_state::restoreInstalled(&row));
+    check("installed again", row.data(ModRole::InstallStatus).toInt() == 1);
+    check("at the folder it had", row.data(ModRole::ModPath).toString() == folder);
+    check("still marked as having an update - none was installed",
+          row.data(ModRole::UpdateAvailable).toBool());
+    check("installed when it was", row.data(ModRole::DateAdded).toDateTime() == installed);
+    check("from the file it was",
+          row.data(ModRole::NexusFileId).toLongLong() == 1000045000
+              && !row.data(ModRole::PendingFileId).isValid());
+    check("no install left in flight",
+          row.data(ModRole::InstallToken).toUuid().isNull()
+              && !row.data(ModRole::DownloadProgress).isValid());
+    check("named as before", row.text() == "Tamriel Data (HD)", row.text());
+    check("still enabled", row.checkState() == Qt::Checked);
+    check("checkable and draggable again",
+          (row.flags() & Qt::ItemIsUserCheckable) && (row.flags() & Qt::ItemIsDragEnabled));
+
+    // A Replace stashes the same folder in PrevModPath; a Merge names it.
+    QListWidgetItem replace;
+    replace.setData(ModRole::InstallStatus, 2);
+    replace.setData(ModRole::ModPath,       folder);
+    replace.setData(ModRole::PrevModPath,   folder);
+    check("a Replace too", placeholder_state::restoreInstalled(&replace)
+          && !replace.data(ModRole::PrevModPath).isValid());
+    QListWidgetItem merge;
+    merge.setData(ModRole::InstallStatus,   2);
+    merge.setData(ModRole::MergeTargetPath, folder);
+    check("a Merge, at its target", placeholder_state::restoreInstalled(&merge)
+          && merge.data(ModRole::ModPath).toString() == folder);
+
+    // Nothing to go back to: the caller resets it as before.
+    QListWidgetItem fresh;
+    fresh.setData(ModRole::InstallStatus, 2);
+    check("a fresh install is not restored", !placeholder_state::restoreInstalled(&fresh)
+          && fresh.data(ModRole::InstallStatus).toInt() == 2);
+    QDir().mkpath(tmp.filePath("empty"));
+    QListWidgetItem hollow;
+    hollow.setData(ModRole::InstallStatus, 2);
+    hollow.setData(ModRole::ModPath,       tmp.filePath("empty"));
+    check("nor one whose folder is empty, as loadModList reads it",
+          !placeholder_state::restoreInstalled(&hollow));
+}
+
 static void run_placeholder_state()
 {
     std::cout << "\n=== placeholder_state ===\n";
     testFolderInstalled();
+    testRestoreInstalled();
 }
 
 int main(int argc, char **argv)
