@@ -2403,6 +2403,8 @@ struct FomodWizardTestHook {
     static QLabel *previewCaption(FomodWizard *w) { return w->m_previewCaption; }
     static QWidget *previewPane(FomodWizard *w)   { return w->m_previewPane; }
     static fomod_install::Plan plan(FomodWizard *w) { return w->plannedInstall(); }
+    static void keep(const QString &path, const QString &name)
+    { FomodWizard::keepForCorpus(path, name); }
     static void setRequired(FomodWizard *w, const QList<FomodFile> &files,
                             const QList<FomodFile> &folders)
     { w->m_requiredFiles = files; w->m_requiredFolders = folders; }
@@ -3485,12 +3487,37 @@ static void plan_testRequirementWithoutWidgets()
     check("ticked with it", q[0][0].options[0].checked);
 }
 
+// NRV_FOMOD_CORPUS: the wizard keeps what it opens, once, and only when asked.
+static void wizardui_testCorpusCapture()
+{
+    std::cout << "\n[keepForCorpus: kept once, and only when asked]\n";
+    QTemporaryDir tmp;
+    const QString xml = tmp.filePath("archive/fomod/ModuleConfig.xml");
+    writeFile(xml, "<config><moduleName>Grand Solitude</moduleName></config>");
+    const QString corpus = tmp.filePath("corpus");
+
+    qunsetenv("NRV_FOMOD_CORPUS");
+    FomodWizardTestHook::keep(xml, "Grand Solitude");
+    check("nothing written without the variable", !QFileInfo::exists(corpus));
+
+    qputenv("NRV_FOMOD_CORPUS", corpus.toUtf8());
+    FomodWizardTestHook::keep(xml, "Grand Solitude");
+    FomodWizardTestHook::keep(xml, "Grand Solitude");   // opened again
+    const QStringList kept = QDir(corpus).entryList({"*.xml"}, QDir::Files);
+    check("kept once, under the mod's name",
+          kept.size() == 1 && kept.first().startsWith("Grand-Solitude__"), kept.join(", "));
+    check("byte for byte",
+          !kept.isEmpty() && readFile(QDir(corpus).filePath(kept.first())) == readFile(xml));
+    qunsetenv("NRV_FOMOD_CORPUS");
+}
+
 static void run_fomod_wizard_ui()
 {
     std::cout << "=== fomod_wizard_ui (buildUi) tests ===\n";
     wizardui_testPlanFollowsTheButtons();
     plan_testRadioRulesWithoutWidgets();
     plan_testRequirementWithoutWidgets();
+    wizardui_testCorpusCapture();
 
     // The real F4SE group from Necessity - Nexus Essentials Merged, on the
     // install that reported it: Fallout4.exe 1.11.240 with f4se_1_11_240.dll

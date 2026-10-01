@@ -12,6 +12,7 @@
 #include <QBoxLayout>
 #include <QButtonGroup>
 #include <QCheckBox>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -158,7 +159,10 @@ void FomodWizard::showAsync(
     dlg->m_runtime           = runtime;
     dlg->m_installedNexusKeys = nexusKeys(installedNexusUrls);
 
-    if (!dlg->parse()) {
+    const bool parsed = dlg->parse();
+    // Unparsable ones too: an installer this wizard cannot read is a bug.
+    keepForCorpus(findModuleConfig(dlg->m_archiveRoot), dlg->m_modName);
+    if (!parsed) {
         auto ans = QMessageBox::warning(
             parent,
             T("fomod_parse_error_title"),
@@ -478,6 +482,29 @@ void FomodWizard::defaultPreviewForStep(int si)
                 fallback = btn;
         }
     if (fallback) showPreviewFor(fallback);
+}
+
+void FomodWizard::keepForCorpus(const QString &configPath, const QString &modName)
+{
+    const QString dir = qEnvironmentVariable("NRV_FOMOD_CORPUS");
+    if (dir.isEmpty() || configPath.isEmpty()) return;
+    QFile in(configPath);
+    if (!in.open(QIODevice::ReadOnly)) return;
+    const QByteArray bytes = in.readAll();
+
+    QString name = modName.trimmed().isEmpty()
+        ? QFileInfo(QFileInfo(configPath).absolutePath()).dir().dirName()
+        : modName.trimmed();
+    static const QRegularExpression kUnsafe(QStringLiteral("[^A-Za-z0-9._-]+"));
+    name.replace(kUnsafe, QStringLiteral("-"));
+    const QString hash = QString::fromLatin1(
+        QCryptographicHash::hash(bytes, QCryptographicHash::Sha1).toHex().left(6));
+    const QString out = QDir(dir).filePath(name.left(80) + QStringLiteral("__") + hash
+                                           + QStringLiteral(".xml"));
+    if (QFileInfo::exists(out)) return;
+    QDir().mkpath(dir);
+    QFile f(out);
+    if (f.open(QIODevice::WriteOnly)) f.write(bytes);
 }
 
 bool FomodWizard::parse()

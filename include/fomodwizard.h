@@ -116,6 +116,14 @@ private:
     // Returns path to ModuleConfig.xml, or empty string if not found.
     static QString findModuleConfig(const QString &archiveRoot);
 
+    // NRV_FOMOD_CORPUS=<dir>: keep a copy of every installer the wizard opens,
+    // for tests/test_fomod_corpus.cpp to replay. Every FOMOD bug this year was
+    // reproduced from screenshots, the XML having gone with its staging
+    // folder. Off unless the variable is set, so an end user never writes
+    // anything. Named for the mod plus a hash of the file, so the same
+    // installer opened again adds nothing.
+    static void keepForCorpus(const QString &configPath, const QString &modName);
+
     // Shallowest dir at/under archiveRoot that directly holds
     // fomod/ModuleConfig.xml (handles Nexus wrapper folders the post-extraction
     // dive heuristic doesn't unwrap), or "" if no FOMOD anywhere in the tree.
