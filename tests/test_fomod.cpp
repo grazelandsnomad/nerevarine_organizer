@@ -10,6 +10,7 @@
 #include "mod_aliases.h"
 #include "fomod_scripts.h"
 #include "fomod_install.h"
+#include "fomod_plan.h"
 #include "fs_progress.h"
 #include "install_job.h"
 #include "bain.h"
@@ -3422,10 +3423,74 @@ static void wizardui_testPlanFollowsTheButtons()
     delete w;
 }
 
+// The decisions without the dialog: fomod::planSelections answers on data,
+// and its model of the buttons has to behave as the buttons did.
+static void plan_testRadioRulesWithoutWidgets()
+{
+    std::cout << "\n[planSelections: radio groups behave as Qt's do]\n";
+    auto mk = [](const QString &name, const QString &type) {
+        FomodPlugin p; p.name = name; p.type = type; return p;
+    };
+    FomodStep st;
+    st.name = "Step";
+    FomodGroup two;   // two Recommended radios: the last one set stays on, as in Qt
+    two.name = "Pick"; two.type = "SelectExactlyOne";
+    two.plugins = {mk("First", "Recommended"), mk("Second", "Recommended"), mk("Third", "Optional")};
+    FomodGroup maybe; // nothing on by default: the "None" radio is
+    maybe.name = "Maybe"; maybe.type = "SelectAtMostOne";
+    maybe.plugins = {mk("A", "Optional"), mk("B", "Optional")};
+    FomodGroup fixed; // Required: on, and not the user's to change
+    fixed.name = "Core"; fixed.type = "SelectAny";
+    fixed.plugins = {mk("Core files", "Required"), mk("Extra", "Optional")};
+    st.groups = {two, maybe, fixed};
+
+    const fomod::Plan plan = fomod::planSelections({st}, {});
+    const auto &g0 = plan[0][0], &g1 = plan[0][1], &g2 = plan[0][2];
+    check("one radio on, the last default set",
+          !g0.options[0].checked && g0.options[1].checked && !g0.options[2].checked);
+    check("an empty SelectAtMostOne rests on None",
+          g1.hasNone && g1.noneChecked && !g1.options[0].checked && !g1.options[1].checked);
+    check("a Required option is on and settled",
+          g2.options[0].checked && !g2.options[0].enabled);
+    check("labels start as the option names", g2.options[1].text == "Extra");
+}
+
+// A modlist fact decided on data: Pass F's "requires" reading unticks an option
+// whose required mod is absent, says so, and a stored pick cannot undo it.
+static void plan_testRequirementWithoutWidgets()
+{
+    std::cout << "\n[planSelections: a missing requirement, decided on data]\n";
+    FomodPlugin rotor;
+    rotor.name = "SMIM Rotor";
+    rotor.type = "Recommended";
+    rotor.description = "Required Static Mesh Improvement Mod - SMIM by Brumbek";
+    FomodPlugin other;
+    other.name = "Plain Rotor";
+    other.type = "Optional";
+    FomodGroup g;
+    g.name = "Rotors"; g.type = "SelectAny"; g.plugins = {rotor, other};
+    FomodStep st; st.name = "Options"; st.groups = {g};
+
+    fomod::PlanContext without;
+    without.priorChoices = fomod_choices::encode({st}, {fomod_choices::key(0, 0, 0)});
+    const fomod::Plan p = fomod::planSelections({st}, without);
+    check("unticked without SMIM, whatever was picked last time",
+          !p[0][0].options[0].checked);
+    check("and the label says what it needs",
+          p[0][0].options[0].text.contains("needs"), p[0][0].options[0].text);
+
+    fomod::PlanContext with;
+    with.installedModNames = {"Static Mesh Improvement Mod - SMIM"};
+    const fomod::Plan q = fomod::planSelections({st}, with);
+    check("ticked with it", q[0][0].options[0].checked);
+}
+
 static void run_fomod_wizard_ui()
 {
     std::cout << "=== fomod_wizard_ui (buildUi) tests ===\n";
     wizardui_testPlanFollowsTheButtons();
+    plan_testRadioRulesWithoutWidgets();
+    plan_testRequirementWithoutWidgets();
 
     // The real F4SE group from Necessity - Nexus Essentials Merged, on the
     // install that reported it: Fallout4.exe 1.11.240 with f4se_1_11_240.dll

@@ -37,6 +37,7 @@ add_executable(test_fomod
     ${CMAKE_SOURCE_DIR}/src/nxmurl.cpp
     ${CMAKE_SOURCE_DIR}/src/fomod_scripts.cpp
     ${CMAKE_SOURCE_DIR}/src/fomod_install.cpp
+    ${CMAKE_SOURCE_DIR}/src/fomod_plan.cpp
     ${CMAKE_SOURCE_DIR}/src/install_job.cpp
     ${CMAKE_SOURCE_DIR}/src/safe_fs.cpp
     ${CMAKE_SOURCE_DIR}/src/bain.cpp
@@ -71,6 +72,7 @@ add_executable(test_fomod_corpus
     ${CMAKE_SOURCE_DIR}/src/nxmurl.cpp
     ${CMAKE_SOURCE_DIR}/src/fomod_scripts.cpp
     ${CMAKE_SOURCE_DIR}/src/fomod_install.cpp
+    ${CMAKE_SOURCE_DIR}/src/fomod_plan.cpp
     ${CMAKE_SOURCE_DIR}/src/install_job.cpp
     ${CMAKE_SOURCE_DIR}/src/safe_fs.cpp
     ${CMAKE_SOURCE_DIR}/src/bain.cpp

@@ -111,6 +111,7 @@ set(SOURCES
     src/mod_match.cpp
     src/bain_hint.cpp
     src/fomod_install.cpp
+    src/fomod_plan.cpp
     src/install_job.cpp
     src/fomod_path.cpp
     src/fomod_scripts.cpp
@@ -276,6 +277,7 @@ set(SOURCES
     include/row_caption.h
     include/fomodwizard.h
     include/fomod_install.h
+    include/fomod_plan.h
     include/install_job.h
     include/fs_progress.h
     include/fomod_path.h
