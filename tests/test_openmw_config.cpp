@@ -224,6 +224,51 @@ static void testNoPhantomBlankLine()
           out.startsWith("# preamble\n# --- Nerevarine Organizer BEGIN ---\n"));
 }
 
+// OpenMW matches plugin names without regard to case, so two files whose
+// names differ only in case - Logs on Fire ships "logs on Fire.esp" in 00 Core
+// and "Logs on Fire.esp" in its Apel's patch folder, the second meant to
+// replace the first - are one content file to it. Both reached content=, and
+// OpenMW's log showed "Loading content file Logs on Fire.esp" twice.
+static void testCaseVariantPluginsLoadOnce()
+{
+    std::cout << "testCaseVariantPluginsLoadOnce\n";
+
+    auto count = [](const QString &cfg, const QString &key, const QString &name) {
+        int n = 0;
+        for (const QString &line : cfg.split('\n'))
+            if (line.compare(key + name, Qt::CaseInsensitive) == 0) ++n;
+        return n;
+    };
+
+    ConfigMod m;
+    m.enabled = m.installed = true;
+    m.pluginDirs = {
+        {"/mods/Logs on Fire/00 Core",                     {"logs on Fire.esp"}},
+        {"/mods/Logs on Fire/02 Apel's Fire Retexture Patch", {"Logs on Fire.esp"}},
+    };
+    const QString out = renderOpenMWConfig({m}, {"logs on Fire.esp"}, {});
+    check("the plugin loads once", count(out, "content=", "logs on fire.esp") == 1, out);
+    check("under the load order's spelling", out.contains("content=logs on Fire.esp\n"));
+    check("both folders stay data= (the later one's file wins in OpenMW)",
+          out.contains("data=\"/mods/Logs on Fire/00 Core\"")
+              && out.contains("data=\"/mods/Logs on Fire/02 Apel's Fire Retexture Patch\""));
+
+    // A launcher that wrote it back in another case is not a second plugin.
+    const QString relaunched = renderOpenMWConfig(
+        {m}, {"logs on Fire.esp"}, "content=LOGS ON FIRE.ESP\n");
+    check("a launcher-cased entry is the same plugin",
+          count(relaunched, "content=", "logs on fire.esp") == 1, relaunched);
+
+    // groundcover= the same way.
+    ConfigMod g;
+    g.enabled = g.installed = true;
+    g.pluginDirs = {{"/mods/Grass/a", {"Rem_AC.esp"}}, {"/mods/Grass/b", {"rem_ac.esp"}}};
+    g.groundcoverFiles = {"Rem_AC.esp", "rem_ac.esp"};
+    const QString grass = renderOpenMWConfig({g}, {}, {});
+    check("a groundcover plugin loads once",
+          count(grass, "groundcover=", "rem_ac.esp") == 1, grass);
+}
+
 static void testMultiplePluginDirs()
 {
     std::cout << "testMultiplePluginDirs\n";
@@ -734,6 +779,7 @@ static void run_config_writer()
     testCrlfInputTolerated();
     testNoPhantomBlankLine();
     testMultiplePluginDirs();
+    testCaseVariantPluginsLoadOnce();
     testMultipleResourceRoots();
     testLoadOrderReferencesUnknownPlugin();
     testIdempotentReRun();
@@ -1180,6 +1226,28 @@ void testOrphanContentScrubbed()
           out.effectiveLoadOrder == QStringList{"MyMod.esp"});
 }
 
+void testRecasedContentIsNotAnOrphan()
+{
+    std::cout << "\n[content= in another case is the provided plugin, not an orphan]\n";
+    QTemporaryDir tmp;
+    QVERIFY_EXIT(tmp.isValid(), 1);
+    const QString modsRoot = tmp.path() + "/mods";
+    const QString modPath  = modsRoot + "/Logs on Fire/00 Core";
+    writePlugin(modPath, "logs on Fire.esp");
+
+    openmw::SyncPrepareInputs in;
+    in.modsRoot        = modsRoot;
+    in.managedModPaths = { QDir::cleanPath(modsRoot + "/Logs on Fire") };
+    in.mods            = { modWith(modPath, {"logs on Fire.esp"}) };
+    in.loadOrder       = { "logs on Fire.esp" };
+    in.existingCfg     = "content=LOGS ON FIRE.ESP\n";
+    const auto out = openmw::prepareForSync(in);
+    check("not counted as an orphan", out.droppedOrphans == 0,
+          QString::number(out.droppedOrphans));
+    check("and kept for the renderer to place",
+          out.scrubbedExisting.contains("content=LOGS ON FIRE.ESP"));
+}
+
 void testOrphanDataPathScrubbed()
 {
     std::cout << "\n[data= under modsRoot with no managed claim → scrubbed]\n";
@@ -1500,6 +1568,7 @@ static void run_sync_prep()
     std::cout << "=== openmw::prepareForSync ===\n";
     testOrphanContentScrubbed();
     testOrphanDataPathScrubbed();
+    testRecasedContentIsNotAnOrphan();
     testOrphanRescuePreservesPluginsOnDisk();
     testLauncherOnlyExternalsAugmented();
     testLauncherSyntheticUnderModsRootNotRecreated();

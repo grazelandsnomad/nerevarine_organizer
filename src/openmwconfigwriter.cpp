@@ -8,6 +8,7 @@
 #include <QStringView>
 
 #include <algorithm>
+#include <utility>
 
 namespace openmw {
 
@@ -217,6 +218,13 @@ SyncPrepareResult prepareForSync(const SyncPrepareInputs &in)
             suppressedFromLoadOrder.insert(sp);
     }
 
+    // A content= line names a provided plugin in any case: a launcher may
+    // write a name back in its own. Matched case-sensitively, a recased line
+    // was counted as an orphan and the status bar said so.
+    QSet<QString> providedFolded;
+    for (const QString &cf : std::as_const(providedPlugins))
+        providedFolded.insert(cf.toLower());
+
     QStringList scrubbedLines;
     for (QString line : existing.split('\n')) {
         QString probe = line;
@@ -228,15 +236,13 @@ SyncPrepareResult prepareForSync(const SyncPrepareInputs &in)
             if (isOrphanedManagedPath(path)) continue;
         }
         if (probe.startsWith(QStringLiteral("content="))) {
-            QString cf = probe.mid(8);
-            if (!providedPlugins.contains(cf)) {
+            if (!providedFolded.contains(probe.mid(8).toLower())) {
                 ++out.droppedOrphans;
                 continue;
             }
         }
         if (probe.startsWith(QStringLiteral("groundcover="))) {
-            QString cf = probe.mid(12);
-            if (!providedPlugins.contains(cf)) continue;
+            if (!providedFolded.contains(probe.mid(12).toLower())) continue;
         }
         scrubbedLines << line;
     }
@@ -295,6 +301,13 @@ QString renderOpenMWConfig(const QList<ConfigMod> &mods,
     //   allManagedContent        every content file in ANY installed mod (enabled
     //                            or not); Pass 3 uses it to tell ours from
     //                            base-game/external.
+    //
+    // Every set below holds names folded to lower case: OpenMW matches content
+    // files without regard to case, so "logs on Fire.esp" and "Logs on
+    // Fire.esp" in two data dirs are one plugin to it, the later dir's copy -
+    // and listed twice, it loads twice (Logs on Fire's Apel's patch folder
+    // ships exactly that pair). Output keeps the first spelling met: the load
+    // order's, else the folder's.
     QStringList   dataLines;
     QStringList   availableContentOrdered;
     QSet<QString> availableSeen;
@@ -303,6 +316,7 @@ QString renderOpenMWConfig(const QList<ConfigMod> &mods,
     QSet<QString> groundcoverSeen;
     QSet<QString> allManagedGroundcover;
     QSet<QString> allSuppressed;
+    auto folded = [](const QString &name) { return name.toLower(); };
     // Mod BSAs in modlist order, deduped. Emitted in the managed section as
     // fallback-archive=<basename> so OpenMW resolves meshes/textures the mod's
     // plugins reference. allManagedArchives = every BSA we'll emit, so Pass 2 can
@@ -317,13 +331,13 @@ QString renderOpenMWConfig(const QList<ConfigMod> &mods,
         for (const auto &p : m.pluginDirs)
             for (const QString &cf : p.second) {
                 if (m.suppressedPlugins.contains(cf)) {
-                    allSuppressed.insert(cf);
+                    allSuppressed.insert(folded(cf));
                     continue;
                 }
                 if (m.groundcoverFiles.contains(cf))
-                    allManagedGroundcover.insert(cf);
+                    allManagedGroundcover.insert(folded(cf));
                 else
-                    allManagedContent.insert(cf);
+                    allManagedContent.insert(folded(cf));
             }
 
         if (!m.enabled) continue;
@@ -335,13 +349,13 @@ QString renderOpenMWConfig(const QList<ConfigMod> &mods,
                     if (m.suppressedPlugins.contains(cf))
                         continue;    // excluded from everything
                     if (m.groundcoverFiles.contains(cf)) {
-                        if (!groundcoverSeen.contains(cf)) {
-                            groundcoverSeen.insert(cf);
+                        if (!groundcoverSeen.contains(folded(cf))) {
+                            groundcoverSeen.insert(folded(cf));
                             groundcoverOrdered << cf;
                         }
                     } else {
-                        if (!availableSeen.contains(cf)) {
-                            availableSeen.insert(cf);
+                        if (!availableSeen.contains(folded(cf))) {
+                            availableSeen.insert(folded(cf));
                             availableContentOrdered << cf;
                         }
                     }
@@ -394,9 +408,9 @@ QString renderOpenMWConfig(const QList<ConfigMod> &mods,
 
             if (line.startsWith(QStringLiteral("content="))) {
                 QString fname = line.mid(8);
-                if (!prevContentSeen.contains(fname)) {
+                if (!prevContentSeen.contains(folded(fname))) {
                     allPrevContent << fname;
-                    prevContentSeen.insert(fname);
+                    prevContentSeen.insert(folded(fname));
                 }
             } else if (line.startsWith(QStringLiteral("groundcover="))) {
                 // Managed groundcover= is rebuilt; keep external ones in the
@@ -405,7 +419,7 @@ QString renderOpenMWConfig(const QList<ConfigMod> &mods,
                 // emitting twice loads the plugin twice and shifts content-file
                 // indices under the savegame (grass renders as marker_error).
                 if (!inManaged) {
-                    const QString cf = line.mid(12);
+                    const QString cf = folded(line.mid(12));
                     if (!allManagedGroundcover.contains(cf)
                      && !allManagedContent.contains(cf))
                         preamble << line;
@@ -440,29 +454,29 @@ QString renderOpenMWConfig(const QList<ConfigMod> &mods,
 
     // Phase A: external plugins in prior encounter order.
     for (const QString &cf : allPrevContent) {
-        if (allManagedContent.contains(cf))      continue;
-        if (allManagedGroundcover.contains(cf))   continue;
-        if (allSuppressed.contains(cf))           continue;
-        if (seen.contains(cf))                    continue;
+        const QString key = folded(cf);
+        if (allManagedContent.contains(key))     continue;
+        if (allManagedGroundcover.contains(key))  continue;
+        if (allSuppressed.contains(key))          continue;
+        if (seen.contains(key))                   continue;
         contentOrder << cf;
-        seen.insert(cf);
+        seen.insert(key);
     }
 
     // Phase B: managed plugins in loadOrder order.
-    QSet<QString> availableSet(availableContentOrdered.begin(),
-                                availableContentOrdered.end());
     for (const QString &cf : loadOrder) {
-        if (!availableSet.contains(cf)) continue;
-        if (seen.contains(cf))           continue;
+        if (!availableSeen.contains(folded(cf))) continue;
+        if (seen.contains(folded(cf)))            continue;
         contentOrder << cf;
-        seen.insert(cf);
+        seen.insert(folded(cf));
     }
     // Phase B fallback: anything loadOrder missed (shouldn't happen once
-    // reconcileLoadOrder ran) in modlist order.
+    // reconcileLoadOrder ran) in modlist order. A case variant of a plugin
+    // already listed is that plugin, not one loadOrder missed.
     for (const QString &cf : availableContentOrdered) {
-        if (seen.contains(cf)) continue;
+        if (seen.contains(folded(cf))) continue;
         contentOrder << cf;
-        seen.insert(cf);
+        seen.insert(folded(cf));
     }
 
     // Pass 4: assemble output.
