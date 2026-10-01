@@ -1,11 +1,11 @@
 // Download-queue dock panel, scheduling, crash recovery. API in the header.
 
 #include "downloadqueue.h"
-#include "archive_magic.h"
+#include "async_guarded.h"
+#include "download_integrity.h"
 #include "modroles.h"
 #include "nexusclient.h"
 #include "settings.h"
-#include "subprocess.h"
 #include "translator.h"
 #include "prompts.h"
 #include "safe_fs.h"
@@ -343,6 +343,18 @@ void DownloadQueue::processDownloadQueue()
 // Abort the active reply, or drop a still-queued entry.
 void DownloadQueue::cancelQueued(QListWidgetItem *placeholder)
 {
+    // Downloaded, and its archive being tested on a worker
+    // (testArchiveThenContinue): forget it, so the result finds nothing to
+    // land on. Removing the file under a running `7z t` is fine on POSIX.
+    if (const auto t = m_testing.constFind(placeholder); t != m_testing.constEnd()) {
+        QFile::remove(t.value());
+        m_testing.erase(t);
+        m_dlAttempts.remove(placeholder);
+        resetPlaceholderToIdle(placeholder);
+        emit statusMessage(T("status_queue_item_cancelled"), 3000);
+        return;
+    }
+
     int idx = -1;
     for (int i = 0; i < m_queue.size(); ++i)
         if (m_queue[i].placeholder == placeholder) { idx = i; break; }
@@ -382,6 +394,7 @@ bool DownloadQueue::isDownloadActive(QListWidgetItem *placeholder) const
 
 bool DownloadQueue::isQueued(QListWidgetItem *placeholder) const
 {
+    if (m_testing.contains(placeholder)) return true;
     for (const QueuedDownload &q : m_queue)
         if (q.placeholder == placeholder) return true;
     return false;
@@ -522,65 +535,6 @@ void DownloadQueue::writeDiag(const QString &line) const
     } else {
         qWarning().noquote() << "[download]" << line;
     }
-}
-
-// Integrity gate before extraction. A byte-complete download (no reply error,
-// Content-Length satisfied) can still be junk: some CDNs return an HTML/JSON
-// error page with a 200, and some files arrive with valid archive magic but
-// corrupt contents (Fair Care). Catch both here, before the confusing
-// 7z-fatal downstream.
-QString DownloadQueue::archiveProblem(const QString &savePath,
-                                      const QString &ctype,
-                                      QListWidgetItem *placeholder) const
-{
-    QByteArray header;
-    qint64     size = 0;
-    {
-        QFile f(savePath);
-        if (!f.open(QIODevice::ReadOnly))
-            return QStringLiteral("unreadable");
-        size   = f.size();
-        header = f.read(16);
-    }
-
-    // error page served as a 200. Real downloads are octet-stream or a
-    // specific archive type, never a rendered page, so an HTML/JSON/XML
-    // content-type or body start means the CDN gave us an error not the file.
-    const QString ct = ctype.toLower();
-    const bool errorBody =
-        ct.contains(QStringLiteral("text/html")) ||
-        ct.contains(QStringLiteral("application/json")) ||
-        ct.contains(QStringLiteral("application/xml")) ||
-        ct.contains(QStringLiteral("text/xml")) ||
-        header.startsWith("<!") || header.startsWith("<htm") ||
-        header.startsWith("<HTM") || header.startsWith("<?xml") ||
-        header.startsWith("{\"") || header.startsWith("[{");
-    if (errorBody)
-        return QStringLiteral("error-body type=%1").arg(ctype);
-    if (size < 64)
-        return QStringLiteral("too-small bytes=%1").arg(size);
-
-    // Files with no md5/size skip InstallController::verifyArchive entirely -
-    // the gap Fair Care corruption slipped through. Test those ourselves, but
-    // only when the body claims to be an archive: a loose plugin
-    // (.esp/.omwaddon, no magic) is a legit non-archive, so `7z t` on it would
-    // false-positive.
-    const QString expectedMd5 = placeholder
-        ? placeholder->data(ModRole::ExpectedMd5).toString().trimmed()
-        : QString();
-    const qint64 expectedSize = placeholder
-        ? placeholder->data(ModRole::ExpectedSize).toLongLong() : 0;
-    const bool unverified = expectedMd5.isEmpty() && expectedSize <= 0;
-    if (unverified && archive_magic::looksLikeArchive(header)) {
-        const int code = subprocess::execute(QStringLiteral("7z"),
-                                             {QStringLiteral("t"), savePath});
-        // only a positive exit means 7z opened it and it's broken. -1 is
-        // "couldn't launch / timed out" (7z may not be installed; .zip uses
-        // unzip). Don't condemn a download we just can't verify.
-        if (code > 0)
-            return QStringLiteral("7z-test-failed exit=%1").arg(code);
-    }
-    return QString();  // usable
 }
 
 // Issue the GET, wire up progress + completion.
@@ -749,63 +703,125 @@ void DownloadQueue::downloadFile(const QUrl    &downloadUrl,
             return;
         }
 
-        // Integrity gate. A byte-complete download can still be unusable (200
-        // error page, or the Fair Care case: valid magic but corrupt). Retry
-        // the same URL once for a transient bad transfer; if it persists, keep
-        // the bad copy + log it instead of feeding the extractor a 7z-fatal.
-        if (const QString problem = archiveProblem(savePath, ctype, placeholder);
-            !problem.isEmpty()) {
-            int &attempts = m_dlAttempts[placeholder];
-            if (attempts < 1) {
-                ++attempts;
-                writeDiag(QStringLiteral("retry %1 attempt=%2 reason=%3")
-                              .arg(filename).arg(attempts).arg(problem));
-                QFile::remove(savePath);
-                emit statusMessage(T("status_download_retrying").arg(filename), 4000);
-                // Re-queue, don't call downloadFile() directly: removeQueueRow()
-                // above already dropped this m_queue entry, so a bare
-                // downloadFile() would run uncounted against kMaxConcurrent (a
-                // second download could start alongside it) with no progress
-                // row and no cancel. enqueueDownload() rebuilds entry+row and
-                // lets processDownloadQueue() honour the slot.
-                enqueueDownload(placeholder, downloadUrl, filename);
-                return;
-            }
-            m_dlAttempts.remove(placeholder);
-
-            // retries exhausted: keep the artifact + record magic so the cause
-            // is inspectable, then point the user at the manual-drag workaround
-            QByteArray magic;
-            if (QFile f(savePath); f.open(QIODevice::ReadOnly)) magic = f.read(8);
-            const QString keptPath = savePath + QStringLiteral(".corrupt");
-            QFile::remove(keptPath);
-            const bool kept = QFile::rename(savePath, keptPath);
-            if (!kept) QFile::remove(savePath);
-            writeDiag(QStringLiteral("CORRUPT %1 reason=%2 magic=%3 kept=%4")
-                          .arg(filename, problem,
-                               QString::fromLatin1(magic.toHex()),
-                               kept ? keptPath : QStringLiteral("(rename failed)")));
-            resetPlaceholderToIdle(placeholder);
-            ui::warn(m_parentWidget, T("download_corrupt_title"),
-                     T("download_corrupt_body").arg(filename, problem,
-                         kept ? keptPath : QStringLiteral("-")));
-            emit statusMessage(T("status_download_failed"), 4000);
-            processDownloadQueue();
+        // Integrity gate (download_integrity): an error page served as a 200,
+        // a body too small to be anything - and, when nothing downstream will
+        // verify the archive, its structure.
+        QByteArray header;
+        qint64     size = -1;
+        if (QFile f(savePath); f.open(QIODevice::ReadOnly)) {
+            size   = f.size();
+            header = f.read(16);
+        }
+        const QString quick = size < 0
+            ? QStringLiteral("unreadable")
+            : download_integrity::quickProblem(ctype, header, size);
+        const QString expectedMd5 = placeholder
+            ? placeholder->data(ModRole::ExpectedMd5).toString() : QString();
+        const qint64 expectedSize = placeholder
+            ? placeholder->data(ModRole::ExpectedSize).toLongLong() : 0;
+        if (quick.isEmpty()
+            && download_integrity::needsStructuralTest(expectedMd5, expectedSize,
+                                                       header)) {
+            testArchiveThenContinue(placeholder, downloadUrl, filename, savePath);
             return;
         }
-        m_dlAttempts.remove(placeholder);  // clean transfer, reset counter
-
-        // extracting phase - indeterminate progress
-        if (m_modList->indexFromItem(placeholder).isValid())
-            placeholder->setData(ModRole::DownloadProgress, -1);
-
-        emit statusMessage(T("status_downloaded_extracting").arg(filename));
-        emit extractionRequested(savePath, placeholder);
-        processDownloadQueue();
-
-        // notify: download complete
-        QProcess::startDetached("notify-send",
-            {"-a", T("window_title"), "-i", "nerevarine_organizer",
-             T("notif_done_title"), T("notif_done_body").arg(filename)});
+        afterIntegrityGate(placeholder, downloadUrl, filename, savePath, quick);
     });
+}
+
+void DownloadQueue::testArchiveThenContinue(QListWidgetItem *placeholder,
+                                            const QUrl &downloadUrl,
+                                            const QString &filename,
+                                            const QString &savePath)
+{
+    // `7z t` decompresses the whole archive to check it: seconds for a small
+    // one, its full 30 s timeout for a big one - and it ran in the completion
+    // handler, on the UI thread, with the window frozen just before the
+    // install. A worker runs it now, the row showing the moving stripe.
+    //
+    // m_testing keeps the row known to the queue meanwhile (isQueued,
+    // cancelQueued), so removing it mid-test cancels like any queued download
+    // instead of leaving the result to land on a deleted row.
+    m_testing.insert(placeholder, savePath);
+    if (m_modList->indexFromItem(placeholder).isValid())
+        placeholder->setData(ModRole::DownloadProgress, -1);
+    emit statusMessage(T("status_download_testing").arg(filename));
+    processDownloadQueue();   // the network slot is already free
+
+    async::guarded(this,
+        [savePath](DownloadQueue *) {
+            return download_integrity::structuralProblem(savePath);
+        },
+        [placeholder, downloadUrl, filename, savePath](DownloadQueue *self,
+                                                       QString problem) {
+            // Cancelled meanwhile: cancelQueued reset the row and removed the
+            // file, and the row may be gone - `placeholder` is only a key
+            // until it is found still being tested.
+            if (self->m_testing.remove(placeholder) == 0) return;
+            self->afterIntegrityGate(placeholder, downloadUrl, filename,
+                                     savePath, problem);
+        });
+}
+
+void DownloadQueue::afterIntegrityGate(QListWidgetItem *placeholder,
+                                       const QUrl &downloadUrl,
+                                       const QString &filename,
+                                       const QString &savePath,
+                                       const QString &problem)
+{
+    // Retry the same URL once for a transient bad transfer; if it persists,
+    // keep the bad copy + log it instead of feeding the extractor a 7z-fatal.
+    if (!problem.isEmpty()) {
+        int &attempts = m_dlAttempts[placeholder];
+        if (attempts < 1) {
+            ++attempts;
+            writeDiag(QStringLiteral("retry %1 attempt=%2 reason=%3")
+                          .arg(filename).arg(attempts).arg(problem));
+            QFile::remove(savePath);
+            emit statusMessage(T("status_download_retrying").arg(filename), 4000);
+            // Re-queue, don't call downloadFile() directly: removeQueueRow()
+            // already dropped this m_queue entry, so a bare downloadFile()
+            // would run uncounted against kMaxConcurrent (a second download
+            // could start alongside it) with no progress row and no cancel.
+            // enqueueDownload() rebuilds entry+row and lets
+            // processDownloadQueue() honour the slot.
+            enqueueDownload(placeholder, downloadUrl, filename);
+            return;
+        }
+        m_dlAttempts.remove(placeholder);
+
+        // retries exhausted: keep the artifact + record magic so the cause
+        // is inspectable, then point the user at the manual-drag workaround
+        QByteArray magic;
+        if (QFile f(savePath); f.open(QIODevice::ReadOnly)) magic = f.read(8);
+        const QString keptPath = savePath + QStringLiteral(".corrupt");
+        QFile::remove(keptPath);
+        const bool kept = QFile::rename(savePath, keptPath);
+        if (!kept) QFile::remove(savePath);
+        writeDiag(QStringLiteral("CORRUPT %1 reason=%2 magic=%3 kept=%4")
+                      .arg(filename, problem,
+                           QString::fromLatin1(magic.toHex()),
+                           kept ? keptPath : QStringLiteral("(rename failed)")));
+        resetPlaceholderToIdle(placeholder);
+        ui::warn(m_parentWidget, T("download_corrupt_title"),
+                 T("download_corrupt_body").arg(filename, problem,
+                     kept ? keptPath : QStringLiteral("-")));
+        emit statusMessage(T("status_download_failed"), 4000);
+        processDownloadQueue();
+        return;
+    }
+    m_dlAttempts.remove(placeholder);  // clean transfer, reset counter
+
+    // extracting phase - indeterminate progress
+    if (m_modList->indexFromItem(placeholder).isValid())
+        placeholder->setData(ModRole::DownloadProgress, -1);
+
+    emit statusMessage(T("status_downloaded_extracting").arg(filename));
+    emit extractionRequested(savePath, placeholder);
+    processDownloadQueue();
+
+    // notify: download complete
+    QProcess::startDetached("notify-send",
+        {"-a", T("window_title"), "-i", "nerevarine_organizer",
+         T("notif_done_title"), T("notif_done_body").arg(filename)});
 }

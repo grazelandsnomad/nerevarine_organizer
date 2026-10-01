@@ -144,10 +144,6 @@ private:
     void downloadFile(const QUrl &url, const QString &filename,
                       QListWidgetItem *placeholder);
 
-    // Integrity gate. Empty string if `savePath` is usable, else a short reason:
-    // an error page served as 200, a tiny body, or (when Nexus gave no md5/size)
-    // an archive whose magic is present but that fails a structural `7z t`.
-    // `ctype` is the response Content-Type.
     // Is a file already sitting where this download would land, and is it
     // worth handing to the installer instead of transferring it again?
     //
@@ -157,8 +153,19 @@ private:
     // the next attempt downloads fresh. The worst case is today's behaviour.
     bool haveUsableArchive(const QString &path, QListWidgetItem *placeholder) const;
 
-    QString archiveProblem(const QString &savePath, const QString &ctype,
-                           QListWidgetItem *placeholder) const;
+    // The integrity gate's slow half, on a worker: a structural `7z t`
+    // (download_integrity), then afterIntegrityGate on the UI thread.
+    void testArchiveThenContinue(QListWidgetItem *placeholder, const QUrl &url,
+                                 const QString &filename, const QString &savePath);
+    // After the gate: `problem` empty -> hand the archive to extraction; else
+    // retry the download once, then keep the bad copy and say so.
+    void afterIntegrityGate(QListWidgetItem *placeholder, const QUrl &url,
+                            const QString &filename, const QString &savePath,
+                            const QString &problem);
+    // Rows whose download is done and whose archive a worker is testing,
+    // with the file being tested. Part of the queue as far as isQueued and
+    // cancelQueued are concerned.
+    QHash<QListWidgetItem *, QString> m_testing;
 
     // Append one line to m_diagLogPath (or qWarning if unset).
     void writeDiag(const QString &line) const;

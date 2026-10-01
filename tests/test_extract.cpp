@@ -1,4 +1,5 @@
 #include "archive_magic.h"
+#include "download_integrity.h"
 #include "extract_errors.h"
 #include "installcontroller.h"
 
@@ -7,6 +8,8 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QProcess>
+#include <QStandardPaths>
 #include <QString>
 #include <QTemporaryDir>
 #include <QUuid>
@@ -275,6 +278,75 @@ static void testCancelDuringVerifyBeatsTheHash()
     check("not cancelled", probe2.cancelled == 0);
 }
 
+// === download_integrity ===
+
+static void testQuickProblem()
+{
+    std::cout << "\n[quickProblem: an error page served as a 200, a body too small]\n";
+    using download_integrity::quickProblem;
+    const QByteArray sevenZ = hdr({0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C});
+    check("an archive of a sane size passes",
+          quickProblem("application/octet-stream", sevenZ, 4096).isEmpty());
+    check("an HTML content type is an error page",
+          quickProblem("text/html; charset=utf-8", sevenZ, 4096).startsWith("error-body"));
+    check("so is a JSON one",
+          quickProblem("application/json", sevenZ, 4096).startsWith("error-body"));
+    check("and a body that starts like a page, whatever the header says",
+          quickProblem("application/octet-stream", "<!DOCTYPE html>", 4096)
+              .startsWith("error-body"));
+    check("or like a JSON error",
+          quickProblem("", "{\"error\":\"x\"}", 4096).startsWith("error-body"));
+    check("63 bytes is too small to be a mod",
+          quickProblem("application/octet-stream", sevenZ, 63) == "too-small bytes=63");
+}
+
+static void testNeedsStructuralTest()
+{
+    std::cout << "\n[needsStructuralTest: only an archive nothing else will verify]\n";
+    using download_integrity::needsStructuralTest;
+    const QByteArray sevenZ = hdr({0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C});
+    check("an unverified archive is tested", needsStructuralTest("", 0, sevenZ));
+    check("one with an md5 is left to InstallController",
+          !needsStructuralTest("d41d8cd98f00b204e9800998ecf8427e", 0, sevenZ));
+    check("one with a size likewise", !needsStructuralTest("", 2746921791LL, sevenZ));
+    check("a blank md5 counts as none", needsStructuralTest("   ", 0, sevenZ));
+    check("a loose plugin is not an archive to test",
+          !needsStructuralTest("", 0, QByteArray("TES3\x00\x00\x00\x00", 8)));
+}
+
+// The real 7z, when the machine has one: the check moved to a worker, and the
+// worker's answer is what decides retry-or-extract.
+static void testStructuralProblem()
+{
+    std::cout << "\n[structuralProblem: 7z t on a good and a broken archive]\n";
+    if (QStandardPaths::findExecutable(QStringLiteral("7z")).isEmpty()) {
+        std::cout << "  (7z not installed - skipped)\n";
+        return;
+    }
+    QTemporaryDir tmp;
+    QFile src(tmp.filePath("Mod.esp"));
+    if (src.open(QIODevice::WriteOnly)) src.write(QByteArray(200000, 'x'));
+    src.close();
+    const QString good = tmp.filePath("good.7z");
+    QProcess::execute(QStringLiteral("7z"), {"a", "-bso0", "-bsp0", good, src.fileName()});
+    check("a sound archive passes", download_integrity::structuralProblem(good).isEmpty(),
+          download_integrity::structuralProblem(good));
+
+    // Fair Care: the magic is intact, the payload is not.
+    QFile f(good);
+    QByteArray bytes;
+    if (f.open(QIODevice::ReadOnly)) bytes = f.readAll();
+    f.close();
+    for (int i = 40; i < bytes.size() - 40; ++i) bytes[i] = char(bytes[i] ^ 0x5A);
+    const QString broken = tmp.filePath("broken.7z");
+    QFile b(broken);
+    if (b.open(QIODevice::WriteOnly)) b.write(bytes);
+    b.close();
+    check("a corrupt one is condemned",
+          download_integrity::structuralProblem(broken).startsWith("7z-test-failed"),
+          download_integrity::structuralProblem(broken));
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -285,6 +357,11 @@ int main(int argc, char **argv)
     testBareUuidRarRegression();
     testExtensionFor();
     testArchiveFileName();
+
+    std::cout << "\n=== download_integrity ===\n";
+    testQuickProblem();
+    testNeedsStructuralTest();
+    testStructuralProblem();
 
     std::cout << "\n=== extract_errors ===\n";
     testFailureKey();

@@ -370,6 +370,8 @@ target_link_libraries(test_mods PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
 add_executable(test_extract
     test_extract.cpp
     ${CMAKE_SOURCE_DIR}/src/archive_magic.cpp
+    ${CMAKE_SOURCE_DIR}/src/download_integrity.cpp
+    ${CMAKE_SOURCE_DIR}/src/subprocess.cpp
     ${CMAKE_SOURCE_DIR}/src/extract_errors.cpp
     ${CMAKE_SOURCE_DIR}/src/installcontroller.cpp
     ${CMAKE_SOURCE_DIR}/src/install_layout.cpp

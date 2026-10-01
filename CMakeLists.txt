@@ -168,6 +168,7 @@ set(SOURCES
     src/nexuscontroller.cpp
     src/nxmurl.cpp
     src/downloadqueue.cpp
+    src/download_integrity.cpp
     src/undo_stack.cpp
     src/zoom_controller.cpp
     src/filter_bar.cpp
@@ -257,6 +258,7 @@ set(SOURCES
     include/send_to_dialog.h
     include/logging.h
     include/downloadqueue.h
+    include/download_integrity.h
     include/installcontroller.h
     include/install_layout.h
     include/loadordercontroller.h
