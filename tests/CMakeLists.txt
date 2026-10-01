@@ -55,6 +55,40 @@ target_include_directories(test_fomod PRIVATE
 )
 target_link_libraries(test_fomod PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
 
+# Real FOMOD installers replayed against a recorded baseline. Local only: the
+# corpus is other people's installers, kept outside the repo and named by
+# NRV_FOMOD_CORPUS; unset, the binary skips (77). See test_fomod_corpus.cpp.
+add_executable(test_fomod_corpus
+    test_fomod_corpus.cpp
+    ${CMAKE_SOURCE_DIR}/src/fomod_path.cpp
+    ${CMAKE_SOURCE_DIR}/src/fomod_copy.cpp
+    ${CMAKE_SOURCE_DIR}/src/fomod_hint.cpp
+    ${CMAKE_SOURCE_DIR}/src/fomod_choices.cpp
+    ${CMAKE_SOURCE_DIR}/src/mod_aliases.cpp
+    ${CMAKE_SOURCE_DIR}/src/mod_match.cpp
+    ${CMAKE_SOURCE_DIR}/src/bain_hint.cpp
+    ${CMAKE_SOURCE_DIR}/src/pluginparser.cpp
+    ${CMAKE_SOURCE_DIR}/src/nxmurl.cpp
+    ${CMAKE_SOURCE_DIR}/src/fomod_scripts.cpp
+    ${CMAKE_SOURCE_DIR}/src/fomod_install.cpp
+    ${CMAKE_SOURCE_DIR}/src/install_job.cpp
+    ${CMAKE_SOURCE_DIR}/src/safe_fs.cpp
+    ${CMAKE_SOURCE_DIR}/src/bain.cpp
+    ${CMAKE_SOURCE_DIR}/src/bainwizard.cpp
+    ${CMAKE_SOURCE_DIR}/src/fomodwizard.cpp
+    ${CMAKE_SOURCE_DIR}/src/game_runtime.cpp
+    ${CMAKE_SOURCE_DIR}/src/pe_info.cpp
+    ${CMAKE_SOURCE_DIR}/src/translator.cpp
+    ${CMAKE_SOURCE_DIR}/include/fomodwizard.h
+    ${CMAKE_SOURCE_DIR}/include/bainwizard.h
+)
+set_target_properties(test_fomod_corpus PROPERTIES AUTOMOC ON)
+target_include_directories(test_fomod_corpus PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/generated
+)
+target_link_libraries(test_fomod_corpus PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+
 # Bethesda subsystem: deploy, load order, archive ini, proton paths, adapters.
 add_executable(test_bethesda
     test_bethesda.cpp
@@ -460,6 +494,10 @@ add_test(NAME test_nxm COMMAND test_nxm)
 set_tests_properties(test_nxm PROPERTIES
     LABELS "unit"
     ENVIRONMENT "NEREVARINE_SKIP_INTEGRATION=1")
+
+add_test(NAME test_fomod_corpus COMMAND test_fomod_corpus)
+set_tests_properties(test_fomod_corpus PROPERTIES LABELS "corpus"
+    SKIP_RETURN_CODE 77)
 
 add_test(NAME test_nexus_v2_live COMMAND test_nexus_v2_live)
 set_tests_properties(test_nexus_v2_live PROPERTIES LABELS "integration"
