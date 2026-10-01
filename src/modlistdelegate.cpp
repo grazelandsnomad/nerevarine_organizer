@@ -1,5 +1,6 @@
 #include "modlistdelegate.h"
 #include "modroles.h"
+#include "row_caption.h"
 #include "translator.h"
 #include "video_reviews.h"
 #include "separator_theme.h"
@@ -198,83 +199,28 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
     // out is not an answer. Reserved out of the name's width below so a long
     // mod name elides instead of running underneath it.
     // Two halves, each in its own direction's colour: green for what this mod
-    // wins, orange for what it loses. Anchored right, "overwritten by" last so
-    // that when space runs out it is the "overwrites" half that elides - being
-    // overwritten is the half the user has to act on.
-    QString capWin, capLose;
-    // A record clash is a third kind: the mods share no file at all, so there
-    // is no direction to draw and this list's order does not settle it. Shown
-    // only when there is no file conflict competing for the space, which is the
-    // usual case - a translation ships its own filename.
-    bool capLoseIsRecords = false;
+    // wins, the "lose" half for what the user has to act on. Anchored right,
+    // the lose half last, so that when space runs out it is the "overwrites"
+    // half that elides. Which text takes the lose half is row_caption's call,
+    // precedence and all.
+    row_caption::Inputs ci;
+    ci.conflictNotices = m_conflictNotices;
     if (m_conflictNotices) {
-        const QStringList over  = index.data(ModRole::ConflictOverwrites).toStringList();
-        const QStringList under = index.data(ModRole::ConflictOverwrittenBy).toStringList();
-        auto part = [](const QString &verb, const QStringList &entries) {
-            if (entries.isEmpty()) return QString();
-            QString s = verb + QLatin1Char(' ') + entries.first().section('\t', 0, 0);
-            if (entries.size() > 1)
-                s += QStringLiteral(" +%1").arg(entries.size() - 1);
-            return s;
-        };
-        capWin  = part(tr("overwrites"),     over);
-        capLose = part(tr("overwritten by"), under);
-
-        if (capWin.isEmpty() && capLose.isEmpty()) {
-            const QStringList same =
-                index.data(ModRole::ConflictSameRecords).toStringList();
-            if (!same.isEmpty()) {
-                const QStringList f = same.first().split('\t');
-                capLose = tr("same %1 records as %2")
-                              .arg(f.value(1), f.value(0));
-                if (same.size() > 1)
-                    capLose += QStringLiteral(" +%1").arg(same.size() - 1);
-                capLoseIsRecords = true;
-            }
-        }
+        ci.overwrites    = index.data(ModRole::ConflictOverwrites).toStringList();
+        ci.overwrittenBy = index.data(ModRole::ConflictOverwrittenBy).toStringList();
+        ci.sameRecords   = index.data(ModRole::ConflictSameRecords).toStringList();
     }
-    // Translation coverage takes the "lose" half outright when it has something
-    // to say. A mod flagged here is nearly always already in a file or record
-    // conflict with its own translation, so drawing both just says the same
-    // thing twice in less space - and "no translation" is the actionable half.
-    const int translationState = m_untranslatedNotices
-        ? index.data(ModRole::TranslationState).toInt() : 0;
-    // Work the user has already started outranks either verdict. "No
-    // translation" is true and unhelpful once they are four hundred strings
-    // into translating it themselves; what they want to be told is where they
-    // got to.
-    const int translationStarted = m_untranslatedNotices
-        ? index.data(ModRole::TranslationInProgress).toInt() : 0;
-    // A row that IS a translation says which mod it belongs to. Unlike every
-    // other caption here this one is GOOD news, so it never takes the slot
-    // from a warning: it fills in only when nothing else claimed it. A
-    // translation almost always overwrites its source's files, and
-    // "overwritten by" is the half the user has to act on.
-    const QString translationOf = m_untranslatedNotices
-            && index.data(ModRole::IsTranslationOfOther).toBool()
-        ? index.data(ModRole::TranslationPartner).toString() : QString();
-    bool capLoseIsTranslation = false;
-    if (translationStarted > 0) {
-        capLose = tr("Translation in progress…");
-        capLoseIsRecords = false;
-    } else if (translationState == 0 && !translationOf.isEmpty()
-               && capLose.isEmpty()) {
-        capLose = tr("translation of %1").arg(translationOf);
-        capLoseIsRecords    = false;
-        capLoseIsTranslation = true;
-    } else if (translationState != 0) {
-        const QStringList d = index.data(ModRole::TranslationDetail).toStringList();
-        const QStringList head = d.value(0).split('\t');
-        if (translationState == 1) {
-            capLose = tr("no translation");
-        } else {
-            // "N of M" rather than a bare count: 40 untranslated strings means
-            // something different in a 60-string mod than in a 6000-string one.
-            capLose = tr("%1 of %2 strings untranslated")
-                          .arg(head.value(2), head.value(3));
-        }
-        capLoseIsRecords = false;
+    ci.translationNotices = m_untranslatedNotices;
+    if (m_untranslatedNotices) {
+        ci.translationState      = index.data(ModRole::TranslationState).toInt();
+        ci.translationInProgress = index.data(ModRole::TranslationInProgress).toInt();
+        ci.isTranslationOfOther  = index.data(ModRole::IsTranslationOfOther).toBool();
+        ci.translationPartner    = index.data(ModRole::TranslationPartner).toString();
+        ci.translationDetail     = index.data(ModRole::TranslationDetail).toStringList();
     }
+    const row_caption::Caption caption = row_caption::choose(ci);
+    QString capWin  = caption.win;
+    QString capLose = caption.lose;
     // Gap, not a separator glyph: eliding the win half would swallow a trailing
     // "·" and run the two halves together.
     const int capGap = (!capWin.isEmpty() && !capLose.isEmpty()) ? 12 : 0;
@@ -300,12 +246,21 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
     // deliberately warmer than the record-clash purple below it so the two
     // read apart across rows. They can never collide on one row: this caption
     // only fills a slot nothing else wanted.
-    const QColor capLoseColor =
-          translationStarted > 0  ? (darkRow ? QColor(255, 178,  92) : QColor(204, 102, 0))
-        : translationState == 1 ? (darkRow ? QColor(255, 190, 190) : QColor(140, 12, 12))
-        : capLoseIsTranslation  ? (darkRow ? QColor(229, 160, 245) : QColor(123, 31, 162))
-        : capLoseIsRecords      ? (darkRow ? QColor(190, 155, 250) : QColor(110, 70, 185))
-        :                         (darkRow ? QColor(250, 175,  90) : QColor(185, 88,   0));
+    QColor capLoseColor;
+    switch (caption.loseKind) {
+    case row_caption::LoseKind::InProgress:
+        capLoseColor = darkRow ? QColor(255, 178,  92) : QColor(204, 102, 0);   break;
+    case row_caption::LoseKind::NoTranslation:
+        capLoseColor = darkRow ? QColor(255, 190, 190) : QColor(140, 12, 12);   break;
+    case row_caption::LoseKind::TranslationOf:
+        capLoseColor = darkRow ? QColor(229, 160, 245) : QColor(123, 31, 162);  break;
+    case row_caption::LoseKind::SameRecords:
+        capLoseColor = darkRow ? QColor(190, 155, 250) : QColor(110, 70, 185);  break;
+    case row_caption::LoseKind::OverwrittenBy:
+    case row_caption::LoseKind::PartlyTranslated:
+    case row_caption::LoseKind::None:
+        capLoseColor = darkRow ? QColor(250, 175,  90) : QColor(185, 88,   0);  break;
+    }
 
     QFont captionFont = option.font;
     captionFont.setPointSize(qMax(option.font.pointSize() - 1, 7));

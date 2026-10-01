@@ -8,6 +8,7 @@
 #include "post_install.h"
 #include "variant_picker.h"
 #include "placeholder_state.h"
+#include "row_caption.h"
 #include "modroles.h"
 
 #include <QCoreApplication>
@@ -1146,6 +1147,94 @@ static void testRestoreInstalled()
           !placeholder_state::restoreInstalled(&hollow));
 }
 
+// === row_caption ===
+
+// Which text takes a row's "lose" half, and the order was only ever the order
+// ModListDelegate::paint's statements ran in.
+static void testRowCaptionPrecedence()
+{
+    std::cout << "\n[row_caption: who takes the lose half]\n";
+    using row_caption::LoseKind;
+    row_caption::Inputs base;
+    base.conflictNotices    = true;
+    base.translationNotices = true;
+
+    auto with = [&](auto edit) { row_caption::Inputs in = base; edit(in); return row_caption::choose(in); };
+
+    const auto conflict = with([](auto &in) {
+        in.overwrites    = {"Patch A\tmeshes/x.nif", "Patch B\tmeshes/y.nif", "Patch C\tz"};
+        in.overwrittenBy = {"Big Overhaul\ttextures/a.dds"};
+    });
+    check("the win half names the first and counts the rest",
+          conflict.win == "overwrites Patch A +2", conflict.win);
+    check("the lose half, the mod that overwrites this one",
+          conflict.lose == "overwritten by Big Overhaul"
+              && conflict.loseKind == LoseKind::OverwrittenBy, conflict.lose);
+
+    const auto records = with([](auto &in) {
+        in.sameRecords = {"Translation ES\tDIAL", "Other\tINFO"};
+    });
+    check("a record clash, with no file conflict to compete with",
+          records.lose == "same DIAL records as Translation ES +1"
+              && records.loseKind == LoseKind::SameRecords, records.lose);
+    const auto recordsUnderFiles = with([](auto &in) {
+        in.overwrittenBy = {"Big Overhaul\tx"};
+        in.sameRecords   = {"Translation ES\tDIAL"};
+    });
+    check("but never over a file conflict",
+          recordsUnderFiles.loseKind == LoseKind::OverwrittenBy);
+
+    // The bug the precedence exists for: good news over a warning.
+    const auto ofUnderWarning = with([](auto &in) {
+        in.overwrittenBy        = {"Big Overhaul\tx"};
+        in.isTranslationOfOther = true;
+        in.translationPartner   = "Tamriel Rebuilt";
+    });
+    check("\"translation of\" never takes the slot from a warning",
+          ofUnderWarning.loseKind == LoseKind::OverwrittenBy, ofUnderWarning.lose);
+    const auto ofAlone = with([](auto &in) {
+        in.isTranslationOfOther = true;
+        in.translationPartner   = "Tamriel Rebuilt";
+    });
+    check("it fills the slot nothing else wanted",
+          ofAlone.lose == "translation of Tamriel Rebuilt"
+              && ofAlone.loseKind == LoseKind::TranslationOf, ofAlone.lose);
+
+    const auto none = with([](auto &in) {
+        in.overwrittenBy    = {"Big Overhaul\tx"};
+        in.translationState = 1;
+    });
+    check("\"no translation\" takes the half over a file conflict",
+          none.lose == "no translation" && none.loseKind == LoseKind::NoTranslation);
+    check("leaving the win half alone", with([](auto &in) {
+        in.overwrites = {"A\tx"}; in.translationState = 1; }).win == "overwrites A");
+    const auto partial = with([](auto &in) {
+        in.translationState  = 2;
+        in.translationDetail = {"Mod.esp\tes\t40\t6000"};
+    });
+    check("a partial one counts against the whole",
+          partial.lose == "40 of 6000 strings untranslated"
+              && partial.loseKind == LoseKind::PartlyTranslated, partial.lose);
+
+    const auto started = with([](auto &in) {
+        in.overwrittenBy         = {"Big Overhaul\tx"};
+        in.translationState      = 1;
+        in.translationInProgress = 1;
+    });
+    check("work in progress outranks every verdict",
+          started.lose == "Translation in progress…"
+              && started.loseKind == LoseKind::InProgress, started.lose);
+
+    const auto quiet = with([](auto &in) {
+        in.conflictNotices    = false;
+        in.translationNotices = false;
+        in.overwrittenBy      = {"Big Overhaul\tx"};
+        in.translationState   = 1;
+    });
+    check("notices off say nothing",
+          quiet.win.isEmpty() && quiet.lose.isEmpty() && quiet.loseKind == LoseKind::None);
+}
+
 static void run_placeholder_state()
 {
     std::cout << "\n=== placeholder_state ===\n";
@@ -1165,6 +1254,8 @@ int main(int argc, char **argv)
     run_post_install();
     run_modlist_summary();
     run_placeholder_state();
+    std::cout << "\n=== row_caption ===\n";
+    testRowCaptionPrecedence();
 
     std::cout << "\n"
               << s_passed << " passed, "

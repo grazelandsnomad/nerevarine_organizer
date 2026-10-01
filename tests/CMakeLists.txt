@@ -362,6 +362,7 @@ add_executable(test_mods
     ${CMAKE_SOURCE_DIR}/src/fomod_copy.cpp
     ${CMAKE_SOURCE_DIR}/src/fomod_path.cpp
     ${CMAKE_SOURCE_DIR}/src/placeholder_state.cpp
+    ${CMAKE_SOURCE_DIR}/src/row_caption.cpp
 )
 target_include_directories(test_mods PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(test_mods PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)

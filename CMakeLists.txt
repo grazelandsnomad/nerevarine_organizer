@@ -92,6 +92,7 @@ set(SOURCES
     src/mainwindow_setup.cpp
     src/separatordialog.cpp
     src/modlistdelegate.cpp
+    src/row_caption.cpp
     src/translator.cpp
     src/fomodwizard.cpp
     src/fomod_copy.cpp
@@ -269,6 +270,7 @@ set(SOURCES
     include/nxmurl.h
     include/separatordialog.h
     include/modlistdelegate.h
+    include/row_caption.h
     include/fomodwizard.h
     include/fomod_install.h
     include/install_job.h
