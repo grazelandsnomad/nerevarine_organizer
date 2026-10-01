@@ -141,6 +141,7 @@ set(SOURCES
     src/bethesda_custom_ini.cpp
     src/extract_errors.cpp
     src/archive_magic.cpp
+    src/archive_policy.cpp
     src/log_triage.cpp
     src/log_triage_dialog.cpp
     src/plugin_collisions.cpp
@@ -258,6 +259,7 @@ set(SOURCES
     include/send_to_dialog.h
     include/logging.h
     include/downloadqueue.h
+    include/archive_policy.h
     include/download_integrity.h
     include/installcontroller.h
     include/install_layout.h

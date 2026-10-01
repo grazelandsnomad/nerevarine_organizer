@@ -1,4 +1,5 @@
 #include "archive_magic.h"
+#include "archive_policy.h"
 #include "download_integrity.h"
 #include "extract_errors.h"
 #include "installcontroller.h"
@@ -278,6 +279,31 @@ static void testCancelDuringVerifyBeatsTheHash()
     check("not cancelled", probe2.cancelled == 0);
 }
 
+// === archive_policy ===
+
+static void testArchivePolicy()
+{
+    std::cout << "\n[archive_policy: what an ended install does with its archive]\n";
+    using archive_policy::Action;
+    using archive_policy::Outcome;
+    using archive_policy::onOutcome;
+    check("installed: cleaned up", onOutcome(Outcome::Installed) == Action::Delete);
+    check("cancelled: kept - no second download to reach the same wizard",
+          onOutcome(Outcome::Cancelled) == Action::Keep);
+    check("nothing picked: kept, as cancelled",
+          onOutcome(Outcome::NothingPicked) == Action::Keep);
+    check("verification failed: not the file - deleted",
+          onOutcome(Outcome::VerifyFailed) == Action::Delete);
+    check("the extractor failed on it: deleted",
+          onOutcome(Outcome::ExtractFailed) == Action::Delete);
+    // Deleted with the bad ones until now, and downloaded again after the user
+    // installed 7z - though nothing was ever wrong with it.
+    check("no extractor to run: kept, the archive is fine",
+          onOutcome(Outcome::ExtractorMissing) == Action::Keep);
+    check("its row removed: nothing will use it - deleted",
+          onOutcome(Outcome::RowGone) == Action::Delete);
+}
+
 // === download_integrity ===
 
 static void testQuickProblem()
@@ -357,6 +383,9 @@ int main(int argc, char **argv)
     testBareUuidRarRegression();
     testExtensionFor();
     testArchiveFileName();
+
+    std::cout << "\n=== archive_policy ===\n";
+    testArchivePolicy();
 
     std::cout << "\n=== download_integrity ===\n";
     testQuickProblem();

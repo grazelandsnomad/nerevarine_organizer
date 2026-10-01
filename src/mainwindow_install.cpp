@@ -15,6 +15,7 @@
 #include "bainwizard.h"
 #include "extract_errors.h"
 #include "archive_magic.h"
+#include "archive_policy.h"
 #include "installcontroller.h"
 #include "modlist_model.h"
 #include "modlist_model_widget_bridge.h"
@@ -136,17 +137,30 @@ using fsutils::sanitizeFolderName;
 static QListWidgetItem *findPendingRowForModId(QListWidget *list, int modId, const QString &gameId);
 static int modIdFromArchiveName(const QString &archiveFileName);
 
+// The archive's fate when an install ends, by archive_policy. Kept, it is
+// remembered on the row, so installing again reuses it (handleNxmUrl) instead
+// of downloading it again; with no row, nothing would, so it goes.
+static void settleArchive(const QString &archivePath,
+                          archive_policy::Outcome outcome, QListWidgetItem *row)
+{
+    if (!row && outcome != archive_policy::Outcome::Installed)
+        outcome = archive_policy::Outcome::RowGone;
+    if (archive_policy::onOutcome(outcome) == archive_policy::Action::Keep)
+        row->setData(ModRole::PendingArchive, archivePath);
+    else
+        QFile::remove(archivePath);
+}
+
 void MainWindow::onArchiveVerificationFailed(const QString &archivePath,
                                              const QUuid &installToken,
                                              InstallController::VerifyFailKind kind,
                                              const QString &actual,
                                              const QString &expected)
 {
-    // Archive is toast regardless of kind - remove it.
-    QFile::remove(archivePath);
-
     QString profileKey;
     QListWidgetItem *placeholder = findPlaceholderByToken(installToken, &profileKey);
+    // Not the file Nexus listed, whichever check caught it.
+    settleArchive(archivePath, archive_policy::Outcome::VerifyFailed, placeholder);
     // Reset the row to "not installed" so the user can retry. Skip if it was
     // removed mid-verify.
     if (placeholder) {
@@ -194,7 +208,8 @@ void MainWindow::onExtractionFailed(const QString &archivePath,
     // Roll the row back like verification failure does; without this the
     // placeholder kept spinning until the next launch's stale-download sweep.
     QString profileKey;
-    if (QListWidgetItem *ph = findPlaceholderByToken(installToken, &profileKey)) {
+    QListWidgetItem *ph = findPlaceholderByToken(installToken, &profileKey);
+    if (ph) {
         if (profileKey.isEmpty()) {
             resetPlaceholderAfterInstallCancel(ph, archivePath);
         } else {
@@ -228,7 +243,10 @@ void MainWindow::onExtractionFailed(const QString &archivePath,
     ui::warn(this, T("extraction_error_title"), body);
     statusBar()->showMessage(T("status_extraction_failed"), 4000);
     QDir(extractDir).removeRecursively();
-    QFile::remove(archivePath); // auto-clean on failure too
+    // A missing extractor says nothing about the archive: kept for the retry.
+    settleArchive(archivePath,
+                  missing ? archive_policy::Outcome::ExtractorMissing
+                          : archive_policy::Outcome::ExtractFailed, ph);
 }
 
 void MainWindow::onExtractionCancelled(const QString &archivePath,
@@ -248,8 +266,9 @@ void MainWindow::onExtractionCancelled(const QString &archivePath,
     // still delete; success paths still clean up.
 
     QString profileKey;
-    if (QListWidgetItem *ph = findPlaceholderByToken(installToken, &profileKey)) {
-        ph->setData(ModRole::PendingArchive, archivePath);
+    QListWidgetItem *ph = findPlaceholderByToken(installToken, &profileKey);
+    settleArchive(archivePath, archive_policy::Outcome::Cancelled, ph);
+    if (ph) {
         if (profileKey.isEmpty()) {
             resetPlaceholderAfterInstallCancel(ph, archivePath);
         } else {
@@ -279,7 +298,7 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
         // it instead of leaking unreferenced GBs onto the user's disk.
         // The archive goes too.
         QDir(extractDir).removeRecursively();
-        QFile::remove(archivePath);
+        settleArchive(archivePath, archive_policy::Outcome::RowGone, nullptr);
         return;
     }
 
@@ -316,10 +335,10 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
 
             if (d.kind == FomodWizard::Decision::Kind::Cancelled) {
                 removeModFoldersAsync({extractDir});
-                // Archive kept - see onExtractionCancelled.
                 QString fkey;
-                if (QListWidgetItem *fph = findPlaceholderByToken(installToken, &fkey)) {
-                    fph->setData(ModRole::PendingArchive, archivePath);
+                QListWidgetItem *fph = findPlaceholderByToken(installToken, &fkey);
+                settleArchive(archivePath, archive_policy::Outcome::Cancelled, fph);
+                if (fph) {
                     if (fkey.isEmpty()) {
                         resetPlaceholderAfterInstallCancel(fph, archivePath);
                     } else {
@@ -440,10 +459,10 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
 
             if (chosen.isEmpty()) {
                 removeModFoldersAsync({extractDir});
-                // Archive kept - see onExtractionCancelled.
                 QString fkey;
-                if (QListWidgetItem *bph = findPlaceholderByToken(installToken, &fkey)) {
-                    bph->setData(ModRole::PendingArchive, archivePath);
+                QListWidgetItem *bph = findPlaceholderByToken(installToken, &fkey);
+                settleArchive(archivePath, archive_policy::Outcome::Cancelled, bph);
+                if (bph) {
                     if (fkey.isEmpty()) {
                         resetPlaceholderAfterInstallCancel(bph, archivePath);
                     } else {
@@ -505,7 +524,7 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
         applyInstalledStateToStrandedPlaceholder(placeholder, modPath, profileKey);
         saveModListFor(profileKey, placeholder);
     }
-    QFile::remove(archivePath);
+    settleArchive(archivePath, archive_policy::Outcome::Installed, placeholder);
 }
 
 // Delete folders without freezing the GUI. Recursive removal on the (often
@@ -625,15 +644,14 @@ void MainWindow::finishInstallJob(const InstallFollowUp &follow,
     if (!ph) {
         if (r.outcome != Outcome::NothingStaged && !r.merged)
             removeModFoldersAsync({r.finalPath});
-        QFile::remove(follow.archivePath);
+        settleArchive(follow.archivePath, archive_policy::Outcome::RowGone, nullptr);
         return;
     }
 
     if (r.outcome == Outcome::NothingStaged) {
         // Every picked package was empty: nothing to install, as a cancel.
-        // The job has already removed the unpack; the archive is kept - see
-        // onExtractionCancelled.
-        ph->setData(ModRole::PendingArchive, follow.archivePath);
+        // The job has already set the unpack aside.
+        settleArchive(follow.archivePath, archive_policy::Outcome::NothingPicked, ph);
         if (key.isEmpty()) {
             resetPlaceholderAfterInstallCancel(ph, follow.archivePath);
         } else {
@@ -671,7 +689,7 @@ void MainWindow::finishInstallJob(const InstallFollowUp &follow,
         applyInstalledStateToStrandedPlaceholder(ph, r.finalPath, key);
         saveModListFor(key, ph);
     }
-    QFile::remove(follow.archivePath);
+    settleArchive(follow.archivePath, archive_policy::Outcome::Installed, ph);
 }
 
 void MainWindow::updateInstallProgress()
