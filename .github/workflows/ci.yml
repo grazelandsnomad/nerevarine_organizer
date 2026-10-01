@@ -40,6 +40,12 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             g++-14 cmake ninja-build qt6-base-dev
 
+      - name: Translation keys
+        # A T("key") missing from english.ini shows the user the raw key, so
+        # that fails the job; a key nothing uses is only reported. Python
+        # only - no build needed, so it runs first.
+        run: python3 scripts/check_translation_parity.py
+
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
