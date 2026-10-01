@@ -2,40 +2,38 @@
 
 A native Linux mod manager for OpenMW.
 
-## 0.72 - in development
+## 0.73 - in development
 
 Changes for the next release are collected in
-[`docs/release-notes/0.72.md`](docs/release-notes/0.72.md) as they land.
+[`docs/release-notes/0.73.md`](docs/release-notes/0.73.md) as they land.
 
 Guides: [mod conflicts and how to fix each kind](docs/conflicts.md).
 
-### Latest release: 0.71
+### Latest release: 0.72
 
 Download: [AppImage or plain Linux
-binary](https://github.com/grazelandsnomad/nerevarine_organizer/releases/tag/v0.71).
+binary](https://github.com/grazelandsnomad/nerevarine_organizer/releases/tag/v0.72).
 The AppImage is portable and runs on most distros, Steam Deck included.
 
-The install wizard started answering its own questions. It reads your mod
-list, your game's executable and the mod page's requirements table, and picks
-what an installer would otherwise leave to you - saying why under each choice:
+Installs stopped looking broken and stopped losing things:
 
-- **Patches for the mods you have.** A patch named after a mod missing from
-  your list arrives unticked and says which; a variant built on a framework
-  follows whether you have it (Base Object Swapper, Baka Framework); the
-  game's own previs is picked over PRP when PRP is not installed.
-- **Fallout 4's F4SE build is read off the game** - the version in
-  `Fallout4.exe` and the extender beside it - instead of left on a default.
-- **Each option's picture**, in a preview pane beside the steps and full size
-  in its own window on a click.
-- **Requirements from the author's own list**, split into needed, optional and
-  merely linked, with a tick for what you already have.
-- **A translation says which mod it translates**, and cancelling an install
-  no longer throws the download away.
+- **Big installs run in the background**, with a progress bar on the mod's
+  row, instead of freezing the window for minutes - a BAIN archive like
+  Tamriel Data now installs in seconds.
+- **Updating a mod keeps your load order**, and cancelling an update, a failed
+  download or closing the app halfway no longer leaves the mod uninstalled.
+- **Oblivion Remastered** is found on its own and deploys, `.pak`, UE4SS and
+  OBSE64 mods included.
+- **Check Updates notices a retired file** - one its Nexus page archived or
+  replaced - and says what the page offers now.
+- **Mod-list backups survive cleaning a source checkout**, with a second copy
+  kept outside it.
 
-Full notes: [`docs/release-notes/0.71.md`](docs/release-notes/0.71.md)
-(prior: [0.70](docs/release-notes/0.70.md), [0.5](docs/release-notes/0.5.md),
-[0.4](docs/release-notes/0.4.md), [0.3.1](docs/release-notes/0.3.1.md),
-[0.3](docs/release-notes/0.3.md), [0.2](docs/release-notes/0.2.md))
+Full notes: [`docs/release-notes/0.72.md`](docs/release-notes/0.72.md)
+(prior: [0.71](docs/release-notes/0.71.md), [0.70](docs/release-notes/0.70.md),
+[0.5](docs/release-notes/0.5.md), [0.4](docs/release-notes/0.4.md),
+[0.3.1](docs/release-notes/0.3.1.md), [0.3](docs/release-notes/0.3.md),
+[0.2](docs/release-notes/0.2.md))
 
 # Tech Stack
 C++26 and Qt6.
