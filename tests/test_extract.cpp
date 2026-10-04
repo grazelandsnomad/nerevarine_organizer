@@ -279,6 +279,57 @@ static void testCancelDuringVerifyBeatsTheHash()
     check("not cancelled", probe2.cancelled == 0);
 }
 
+// === InstallController: a zip unzip can't read goes to 7z ===
+//
+// Info-ZIP UnZip 6.00 calls some zip64 archives over 4 GB corrupt (exit 3,
+// "start of central directory not found"); Sim Settlements 2 Chapter 3 was
+// thrown away twice that way. A fake unzip that fails like it stands in for
+// the 5.6 GB archive: the zip must still come out, via 7z.
+
+static void testZipFallsBackTo7z()
+{
+    std::cout << "\n[unzip fails on a zip: 7z extracts it instead]\n";
+    if (QStandardPaths::findExecutable(QStringLiteral("7z")).isEmpty()) {
+        std::cout << "  (7z not installed - skipped)\n";
+        return;
+    }
+    QTemporaryDir tmp;
+    QDir(tmp.path()).mkpath("src/Data");
+    writeBytes(tmp.filePath("src/Data/Test.esp"), QByteArrayLiteral("TES4"));
+    const QString archive = tmp.filePath("mod.zip");
+    QProcess zip;
+    zip.setWorkingDirectory(tmp.filePath("src"));
+    zip.start(QStringLiteral("7z"), {"a", "-tzip", archive, "Data"});
+    zip.waitForFinished(30000);
+    check("test zip built", zip.exitCode() == 0 && QFile::exists(archive));
+
+    // A bin dir whose unzip fails as UnZip does on the big archive.
+    QDir(tmp.path()).mkpath("bin");
+    const QString fake = tmp.filePath("bin/unzip");
+    writeBytes(fake, QByteArrayLiteral(
+        "#!/bin/sh\necho 'start of central directory not found;' >&2\nexit 3\n"));
+    QFile::setPermissions(fake, QFile::permissions(fake) | QFile::ExeOwner);
+    const QByteArray oldPath = qgetenv("PATH");
+    qputenv("PATH", tmp.filePath("bin").toLocal8Bit() + ':' + oldPath);
+
+    const QString modsDir = tmp.filePath("mods");
+    QDir().mkpath(modsDir);
+    InstallController ctl;
+    CancelProbe probe(ctl);
+    ctl.extractArchive(archive, modsDir, QUuid::createUuid());
+    // unzip fails, then 7z runs: wait past the first process too.
+    QElapsedTimer t; t.start();
+    while (probe.succeeded + probe.failed + probe.cancelled == 0
+           && t.elapsed() < 20000)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    qputenv("PATH", oldPath);
+
+    check("extraction succeeded", probe.succeeded == 1);
+    check("no failure reported", probe.failed == 0);
+    check("the plugin came out",
+          QFile::exists(QDir(modsDir).filePath("mod/Data/Test.esp")));
+}
+
 // === archive_policy ===
 
 static void testArchivePolicy()
@@ -398,6 +449,7 @@ int main(int argc, char **argv)
     std::cout << "\n=== InstallController cancel ===\n";
     testCancelBeforeExtractShortCircuits();
     testCancelDuringVerifyBeatsTheHash();
+    testZipFallsBackTo7z();
 
     std::cout << "\n"
               << s_passed << " passed, "

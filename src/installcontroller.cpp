@@ -254,22 +254,67 @@ void InstallController::extractArchive(const QString &archivePath,
         return p->waitForStarted(3000);
     };
 
+    // 7z as the fallback extractor, for when the format's own tool failed or
+    // is not installed. `missingDetail` names both programs for the "neither
+    // ran" message. The partial output of the first tool is cleared first.
+    auto trySevenZ = [this, archivePath, extractDir, installToken,
+                      emitSuccess](const QString &missingDetail) {
+        QDir(extractDir).removeRecursively();
+        QDir().mkpath(extractDir);
+        auto *p2 = new QProcess(this);
+        connect(p2, &QProcess::finished, this,
+                [this, p2, archivePath, extractDir, installToken, emitSuccess]
+                (int code2, QProcess::ExitStatus) {
+            m_running.remove(installToken);
+            p2->deleteLater();
+            if (takeCancelled(installToken)) {
+                emit extractionCancelled(archivePath, extractDir,
+                                         installToken);
+                return;
+            }
+            if (code2 != 0) {
+                logExtractFailure("7z", archivePath, extractDir, code2, p2);
+                emit extractionFailed(archivePath, extractDir, installToken,
+                                      ExtractFailKind::NonzeroExit,
+                                      QString::number(code2));
+                return;
+            }
+            emitSuccess();
+        });
+        p2->start("7z", {"x", archivePath,
+                          "-o" + extractDir, "-y"});
+        if (!p2->waitForStarted(3000)) {
+            p2->deleteLater();
+            emit extractionFailed(archivePath, extractDir, installToken,
+                                  ExtractFailKind::ProgramMissing,
+                                  missingDetail);
+        } else {
+            m_running.insert(installToken, p2);
+        }
+    };
+
     if (fmt == archive_magic::Format::Zip) {
+        // unzip first, 7z if it fails. Info-ZIP UnZip 6.00 misreads some
+        // zip64 archives over 4 GB ("extra bytes at beginning... zipfile
+        // corrupt", the byte count being the size minus 4 GiB): Sim
+        // Settlements 2 Chapter 3, 5.6 GB, failed that way twice, and each
+        // time the intact download was thrown away as broken.
         auto *proc = new QProcess(this);
         connect(proc, &QProcess::finished, this,
-                [this, proc, archivePath, extractDir, installToken, emitSuccess]
+                [this, proc, archivePath, extractDir, installToken,
+                 emitSuccess, trySevenZ]
                 (int code, QProcess::ExitStatus) {
             m_running.remove(installToken);
             proc->deleteLater();
+            // Cancelled while unzip ran: the kill's nonzero exit must not
+            // start the 7z retry.
             if (takeCancelled(installToken)) {
                 emit extractionCancelled(archivePath, extractDir, installToken);
                 return;
             }
             if (code != 0) {
                 logExtractFailure("unzip", archivePath, extractDir, code, proc);
-                emit extractionFailed(archivePath, extractDir, installToken,
-                                      ExtractFailKind::NonzeroExit,
-                                      QString::number(code));
+                trySevenZ(QStringLiteral("unzip|7z"));
                 return;
             }
             emitSuccess();
@@ -277,48 +322,12 @@ void InstallController::extractArchive(const QString &archivePath,
         if (!launch(proc, "unzip",
                     {"-o", archivePath, "-d", extractDir})) {
             proc->deleteLater();
-            emit extractionFailed(archivePath, extractDir, installToken,
-                                  ExtractFailKind::ProgramMissing, "unzip");
+            trySevenZ(QStringLiteral("unzip|7z"));   // no unzip - 7z reads zips
         } else {
             m_running.insert(installToken, proc);
         }
 
     } else if (fmt == archive_magic::Format::Rar) {
-        auto trySevenZ = [this, archivePath, extractDir, installToken,
-                          emitSuccess]() {
-            auto *p2 = new QProcess(this);
-            connect(p2, &QProcess::finished, this,
-                    [this, p2, archivePath, extractDir, installToken, emitSuccess]
-                    (int code2, QProcess::ExitStatus) {
-                m_running.remove(installToken);
-                p2->deleteLater();
-                if (takeCancelled(installToken)) {
-                    emit extractionCancelled(archivePath, extractDir,
-                                             installToken);
-                    return;
-                }
-                if (code2 != 0) {
-                    logExtractFailure("7z", archivePath, extractDir, code2, p2);
-                    emit extractionFailed(archivePath, extractDir, installToken,
-                                          ExtractFailKind::NonzeroExit,
-                                          QString::number(code2));
-                    return;
-                }
-                emitSuccess();
-            });
-            p2->start("7z", {"x", archivePath,
-                              "-o" + extractDir, "-y"});
-            if (!p2->waitForStarted(3000)) {
-                p2->deleteLater();
-                // Neither unrar nor 7z ran.
-                emit extractionFailed(archivePath, extractDir, installToken,
-                                      ExtractFailKind::ProgramMissing,
-                                      "unrar|7z");
-            } else {
-                m_running.insert(installToken, p2);
-            }
-        };
-
         auto *proc = new QProcess(this);
         connect(proc, &QProcess::finished, this,
                 [this, proc, archivePath, extractDir, installToken,
@@ -334,7 +343,7 @@ void InstallController::extractArchive(const QString &archivePath,
                 return;
             }
             if (code != 0) {
-                trySevenZ();   // unrar failed - retry with 7z
+                trySevenZ(QStringLiteral("unrar|7z"));   // unrar failed - retry with 7z
                 return;
             }
             emitSuccess();
@@ -342,7 +351,7 @@ void InstallController::extractArchive(const QString &archivePath,
         if (!launch(proc, "unrar",
                     {"x", "-o+", archivePath, extractDir + "/"}))  {
             proc->deleteLater();
-            trySevenZ();   // unrar not found - try 7z directly
+            trySevenZ(QStringLiteral("unrar|7z"));   // unrar not found - try 7z directly
         } else {
             m_running.insert(installToken, proc);
         }
