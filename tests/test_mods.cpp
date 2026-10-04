@@ -1147,6 +1147,30 @@ static void testRestoreInstalled()
           !placeholder_state::restoreInstalled(&hollow));
 }
 
+// A free account's update: the link is refused, the row goes back to
+// installed and is marked as awaiting its own download, so the nxm:// link
+// that comes back replaces without asking. The mark must survive the restore
+// and go once an install lands.
+static void testAwaitingUpdateDownloadLifetime()
+{
+    std::cout << "\n[AwaitingUpdateDownload: kept through the restore, cleared on landing]\n";
+    QTemporaryDir tmp;
+    const QString folder = tmp.filePath("Mod");
+    QDir().mkpath(folder);
+    QFile f(folder + "/Mod.esp");
+    if (f.open(QIODevice::WriteOnly)) f.write("TES3");
+    f.close();
+
+    QListWidgetItem row;
+    row.setData(ModRole::InstallStatus, 2);
+    row.setData(ModRole::ModPath,       folder);
+    row.setData(ModRole::AwaitingUpdateDownload, true);
+    check("restored", placeholder_state::restoreInstalled(&row));
+    check("still awaiting its update", row.data(ModRole::AwaitingUpdateDownload).toBool());
+    placeholder_state::clearInstallTransients(&row);
+    check("cleared once an install lands", !row.data(ModRole::AwaitingUpdateDownload).isValid());
+}
+
 // === row_caption ===
 
 // Which text takes a row's "lose" half, and the order was only ever the order
@@ -1240,6 +1264,7 @@ static void run_placeholder_state()
     std::cout << "\n=== placeholder_state ===\n";
     testFolderInstalled();
     testRestoreInstalled();
+    testAwaitingUpdateDownloadLifetime();
 }
 
 int main(int argc, char **argv)

@@ -287,7 +287,25 @@ void MainWindow::handleNxmUrl(const QString &url)
     // via PrevModPath after install). Separate: fresh placeholder, new download
     // lands beside the existing entry. Merge: reuse the row but overlay new
     // files onto the existing folder (MergeTargetPath) instead of deleting.
-    const auto reinstallChoice = confirmReinstallIfInstalled(game, modId);
+    //
+    // An update the user is fetching by hand (a free account, the link
+    // refused, Nexus opened: ModRole::AwaitingUpdateDownload) IS a Replace -
+    // asking would only repeat the Update click.
+    bool awaitedUpdate = false;
+    for (int i = 0; i < m_modList->count() && !awaitedUpdate; ++i) {
+        QListWidgetItem *it = m_modList->item(i);
+        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (it->data(ModRole::InstallStatus).toInt() != 1) continue;
+        if (!it->data(ModRole::AwaitingUpdateDownload).toBool()) continue;
+        const auto ref = parseNexusModUrl(it->data(ModRole::NexusUrl).toString());
+        if (!ref || ref->modId != modId
+            || ref->game.compare(game, Qt::CaseInsensitive) != 0) continue;
+        it->setData(ModRole::AwaitingUpdateDownload, QVariant());
+        awaitedUpdate = true;
+    }
+    const auto reinstallChoice = awaitedUpdate
+        ? ReinstallChoice::Replace
+        : confirmReinstallIfInstalled(game, modId);
     if (reinstallChoice == ReinstallChoice::Cancel) return;
     const bool forceSeparate = (reinstallChoice == ReinstallChoice::Separate);
     const bool forceMerge    = (reinstallChoice == ReinstallChoice::Merge);

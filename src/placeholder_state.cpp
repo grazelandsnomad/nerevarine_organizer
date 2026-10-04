@@ -45,6 +45,7 @@ void clearInstallTransients(QListWidgetItem *item)
     item->setData(ModRole::MergeTargetPath, QVariant());
     item->setData(ModRole::InstallToken,    QVariant());
     item->setData(ModRole::PendingFileId,   QVariant());
+    item->setData(ModRole::AwaitingUpdateDownload, QVariant());
 }
 
 bool restoreInstalled(QListWidgetItem *item)

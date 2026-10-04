@@ -192,6 +192,11 @@ void DownloadQueue::fetchDownloadLink(const QString &game, int modId, int fileId
             dlg->show();
 
             resetPlaceholder();
+            // An update stays installed while the user fetches it by hand
+            // (restoreInstalled); remember the link coming back is its own.
+            if (placeholder
+                && placeholder->data(ModRole::InstallStatus).toInt() == 1)
+                placeholder->setData(ModRole::AwaitingUpdateDownload, true);
             emit statusMessage(T("manual_dl_status"), 6000);
         };
 

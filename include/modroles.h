@@ -62,6 +62,12 @@ namespace ModRole {
     // record alone; cleared with the other install transients. A Merge never
     // sets it: the row still holds the file it was installed from.
     constexpr int PendingFileId        = Qt::UserRole + 60; // qint64
+    // An update whose download a free account has to fetch by hand: the API
+    // refused the link, the row went back to installed, and the Nexus page
+    // was opened. The nxm:// link that comes back is that update, so it
+    // replaces the mod without asking "Already Installed". Session-only;
+    // cleared with the other install transients.
+    constexpr int AwaitingUpdateDownload = Qt::UserRole + 61; // bool
     constexpr int DependsOn         = Qt::UserRole + 25; // QStringList of Nexus URLs this mod depends on
     constexpr int HighlightRole     = Qt::UserRole + 26; // int: 0=none, 1=dependency of selected, 2=uses selected
     constexpr int HasMissingDependency  = Qt::UserRole + 27; // bool: ≥1 DependsOn URL is missing/disabled/uninstalled
