@@ -2,38 +2,33 @@
 
 A native Linux mod manager for OpenMW.
 
-## 0.73 - in development
+## 0.74 - in development
 
 Changes for the next release are collected in
-[`docs/release-notes/0.73.md`](docs/release-notes/0.73.md) as they land.
+[`docs/release-notes/0.74.md`](docs/release-notes/0.74.md) as they land.
 
 Guides: [mod conflicts and how to fix each kind](docs/conflicts.md).
 
-### Latest release: 0.72
+### Latest release: 0.73
 
 Download: [AppImage or plain Linux
-binary](https://github.com/grazelandsnomad/nerevarine_organizer/releases/tag/v0.72).
+binary](https://github.com/grazelandsnomad/nerevarine_organizer/releases/tag/v0.73).
 The AppImage is portable and runs on most distros, Steam Deck included.
 
-Installs stopped looking broken and stopped losing things:
+Updating a mod now works the way it should:
 
-- **Big installs run in the background**, with a progress bar on the mod's
-  row, instead of freezing the window for minutes - a BAIN archive like
-  Tamriel Data now installs in seconds.
-- **Updating a mod keeps your load order**, and cancelling an update, a failed
-  download or closing the app halfway no longer leaves the mod uninstalled.
-- **Oblivion Remastered** is found on its own and deploys, `.pak`, UE4SS and
-  OBSE64 mods included.
-- **Check Updates notices a retired file** - one its Nexus page archived or
-  replaced - and says what the page offers now.
-- **Mod-list backups survive cleaning a source checkout**, with a second copy
-  kept outside it.
+- **An update fetched by hand replaces the mod without asking.** On a free
+  Nexus account the download you were sent to fetch no longer meets the
+  Merge / Install separately / Replace prompt.
+- **Big zip archives no longer fail as "corrupt" and get thrown away.** A zip
+  over 4 GB that `unzip` misreads is unpacked with 7z instead, so a 5.6 GB
+  update installs rather than being deleted every time.
+- **The Dark mode button draws its moon in the AppImage** instead of an
+  empty box.
 
-Full notes: [`docs/release-notes/0.72.md`](docs/release-notes/0.72.md)
-(prior: [0.71](docs/release-notes/0.71.md), [0.70](docs/release-notes/0.70.md),
-[0.5](docs/release-notes/0.5.md), [0.4](docs/release-notes/0.4.md),
-[0.3.1](docs/release-notes/0.3.1.md), [0.3](docs/release-notes/0.3.md),
-[0.2](docs/release-notes/0.2.md))
+Full notes: [`docs/release-notes/0.73.md`](docs/release-notes/0.73.md)
+(prior: [0.72](docs/release-notes/0.72.md), [0.71](docs/release-notes/0.71.md),
+[0.70](docs/release-notes/0.70.md))
 
 # Tech Stack
 C++26 and Qt6.
