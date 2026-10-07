@@ -158,9 +158,14 @@ int main(int argc, char *argv[])
     app.setWindowIcon(QIcon(":/assets/icons/cystal_full_0.png"));
     app.setDesktopFileName("nerevarine_organizer");
 
-    // Register a bundled emoji font when present so AppImage builds
-    // render any remaining colour glyphs even on hosts without NotoColorEmoji.
-    // Toolbar symbols (◆ ⊘ ☘ etc.) are BMP characters and need no emoji font.
+    // Register a bundled emoji font when present so AppImage builds can
+    // render colour glyphs on hosts without NotoColorEmoji. It only helps
+    // where fontconfig lists few fonts: Qt before 6.9 has no emoji handling
+    // and walks at most 255 fallback families (QFontEngineMulti::stringToCMap),
+    // so on a host with hundreds of families the emoji font is never reached
+    // and a non-BMP emoji draws as a box (the AppImage ships Qt 6.4). That is
+    // why toolbar symbols (◆ ⊘ ☘ ☽ ☀ etc.) must stay BMP characters,
+    // which DejaVu Sans / Noto Sans Symbols cover on the first fallback step.
     {
         const QString appDir = QCoreApplication::applicationDirPath();
         for (const QString &rel : {QStringLiteral("/../share/fonts/NotoColorEmoji.ttf"),
