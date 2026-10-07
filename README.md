@@ -13,7 +13,11 @@ Guides: [mod conflicts and how to fix each kind](docs/conflicts.md).
 
 Download: [AppImage or plain Linux
 binary](https://github.com/grazelandsnomad/nerevarine_organizer/releases/tag/v0.72).
-The AppImage is portable and runs on most distros, Steam Deck included.
+The AppImage is portable and runs on most distros, Steam Deck included. It
+needs FUSE 2 (`libfuse2t64` or `libfuse2` on Ubuntu and Debian, `fuse2` on
+Arch); without it, start it with `--appimage-extract-and-run`. The plain
+binary keeps its mod lists and settings next to itself, so unpack a new
+version over the old folder to keep them.
 
 Installs stopped looking broken and stopped losing things:
 

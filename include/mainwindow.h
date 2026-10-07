@@ -940,7 +940,8 @@ private:
 
     // One-time welcome wizard (game, mods dir, API key, integrations); gated by
     // a QSettings flag.
-    void maybeShowFirstRunWizard();
+    void maybeShowFirstRunWizard();   // wizard, then the other first-launch prompts
+    void showFirstRunWizardIfNeeded();
 
     // Filter bar - live text filter + ★ favourites toggle, owned by FilterBar.
     FilterBar     *m_filterBar = nullptr;

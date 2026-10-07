@@ -19,6 +19,15 @@ namespace firstrun {
 
 namespace {
 
+// Page text runs a sentence or two wide; without wrapping it is clipped at
+// the wizard's right edge instead of flowing onto a second line.
+QLabel *wrappedLabel(const QString &text, QWidget *parent)
+{
+    auto *l = new QLabel(text, parent);
+    l->setWordWrap(true);
+    return l;
+}
+
 // Page 1: pick a game
 class GamePage : public QWizardPage {
 public:
@@ -29,7 +38,7 @@ public:
         setSubTitle(T("wizard_game_subtitle"));
 
         auto *v = new QVBoxLayout(this);
-        v->addWidget(new QLabel(T("wizard_game_body")));
+        v->addWidget(wrappedLabel(T("wizard_game_body"), this));
 
         m_combo = new QComboBox(this);
         for (const GameChoice &g : m_games)
@@ -42,10 +51,15 @@ public:
         v->addWidget(m_combo);
         v->addStretch();
 
-        registerField("game_id*", m_combo, "currentData",
+        // Not a mandatory ('*') field: QWizard counts one as filled only once
+        // its value differs from the value at registration, and the combo is
+        // already on its default here, so with a single game to pick Next
+        // stayed disabled for good. isComplete() gates on a selection instead.
+        registerField("game_id", m_combo, "currentData",
                       SIGNAL(currentIndexChanged(int)));
     }
 
+    bool isComplete() const override { return m_combo->currentIndex() >= 0; }
     QString selectedId() const { return m_combo->currentData().toString(); }
     QString selectedDefaultDir() const {
         QString id = selectedId();
@@ -69,7 +83,7 @@ public:
         setSubTitle(T("wizard_modsdir_subtitle"));
 
         auto *v = new QVBoxLayout(this);
-        v->addWidget(new QLabel(T("wizard_modsdir_body")));
+        v->addWidget(wrappedLabel(T("wizard_modsdir_body"), this));
 
         auto *row = new QHBoxLayout;
         m_edit = new QLineEdit(this);
@@ -115,7 +129,7 @@ public:
         setSubTitle(T("wizard_apikey_subtitle"));
 
         auto *v = new QVBoxLayout(this);
-        v->addWidget(new QLabel(T("wizard_apikey_body")));
+        v->addWidget(wrappedLabel(T("wizard_apikey_body"), this));
 
         auto *linkBtn = new QPushButton(T("wizard_apikey_open_page"), this);
         connect(linkBtn, &QPushButton::clicked, this, []() {
@@ -129,7 +143,7 @@ public:
 
         v->addWidget(linkBtn);
         v->addWidget(m_edit);
-        v->addWidget(new QLabel(T("wizard_apikey_skip_hint")));
+        v->addWidget(wrappedLabel(T("wizard_apikey_skip_hint"), this));
         v->addStretch();
 
         // No '*': optional field, Next isn't gated on it.
@@ -154,14 +168,14 @@ public:
         auto *v = new QVBoxLayout(this);
 
         // NXM handler
-        v->addWidget(new QLabel(T("wizard_nxm_body")));
+        v->addWidget(wrappedLabel(T("wizard_nxm_body"), this));
         m_nxmCheck = new QCheckBox(T("wizard_nxm_checkbox"), this);
         m_nxmCheck->setChecked(true);
         v->addWidget(m_nxmCheck);
         v->addSpacing(12);
 
         // LOOT
-        v->addWidget(new QLabel(T("wizard_loot_body")));
+        v->addWidget(wrappedLabel(T("wizard_loot_body"), this));
         auto *lootBtn = new QPushButton(T("wizard_loot_open_page"), this);
         connect(lootBtn, &QPushButton::clicked, this, []() {
             QDesktopServices::openUrl(QUrl("https://loot.github.io/"));
@@ -169,7 +183,7 @@ public:
         v->addWidget(lootBtn);
         v->addSpacing(12);
 
-        v->addWidget(new QLabel(T("wizard_integrations_finish_hint")));
+        v->addWidget(wrappedLabel(T("wizard_integrations_finish_hint"), this));
         v->addStretch();
 
         registerField("nxm_register", m_nxmCheck);

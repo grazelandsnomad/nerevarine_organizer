@@ -162,7 +162,9 @@ static QString supersededText(const file_status::Verdict &v);   // below
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
-    setWindowTitle(T("window_title"));
+    // The version in the title so a bug report can say which build it is.
+    setWindowTitle(T("window_title") + QLatin1Char(' ')
+                   + QCoreApplication::applicationVersion());
     setMinimumSize(700, 500);
     setAcceptDrops(true); // for drag-and-drop mod archives
 
@@ -444,11 +446,9 @@ MainWindow::MainWindow(QWidget *parent)
     // Once per checkout: a build run from a git work tree keeps its state
     // there, where a deep clean deletes it - say where the backups went.
     QTimer::singleShot(1500, this, &MainWindow::maybeShowBackupMirrorNotice);
-    // First-run welcome. Deferred so the window paints before the modal grabs focus.
+    // First-run welcome, then the desktop-shortcut and missing-tools prompts
+    // in sequence. Deferred so the window paints before the modal grabs focus.
     QTimer::singleShot(300, this, &MainWindow::maybeShowFirstRunWizard);
-    // After that window: nag once if the archive extractors are missing (the
-    // helper self-gates on wizard-completed + a persisted "don't show again").
-    QTimer::singleShot(1200, this, &MainWindow::checkExtractorsAvailable);
 
     // Animation timer for "installing" spinner (120 ms ≈ 8 fps)
     m_animTimer = new QTimer(this);
@@ -486,8 +486,11 @@ MainWindow::MainWindow(QWidget *parent)
 
     statusBar()->showMessage(T("status_ready"));
 
-    QTimer::singleShot(200, this, &MainWindow::checkNxmHandlerRegistration);
-    QTimer::singleShot(400, this, &MainWindow::checkDesktopShortcut);
+    // Re-check the nxm:// handler every launch (the exec path can move), but
+    // only when the user kept the wizard's "register" box ticked.
+    QTimer::singleShot(200, this, [this]() {
+        if (Settings::registerNxmHandler()) checkNxmHandlerRegistration();
+    });
 
     // Undo / redo shortcuts
     auto *undoSc = new QShortcut(QKeySequence::Undo, this);
@@ -569,6 +572,16 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 
 void MainWindow::maybeShowFirstRunWizard()
 {
+    showFirstRunWizardIfNeeded();
+    // The other first-launch prompts follow the wizard (or run at once when
+    // there is none) instead of firing from their own timers, which stacked
+    // "Add Desktop Shortcut?" and the missing-tools box on top of it.
+    checkDesktopShortcut();
+    checkExtractorsAvailable();
+}
+
+void MainWindow::showFirstRunWizardIfNeeded()
+{
     if (Settings::wizardCompleted()) return;
 
     // Users from before the wizard existed already have profiles/modlists/API
@@ -608,12 +621,22 @@ void MainWindow::maybeShowFirstRunWizard()
             if (hasExistingModlist) break;
         }
     }
-    // Other signals of prior use: non-default game list, an API key (keychain or
-    // legacy QSettings), or a saved mods-dir override.
+    // Other signals of prior use: an API key (keychain or legacy QSettings), a
+    // second game profile, or a mods dir / OpenMW path the user set.
+    // GameProfileRegistry::load() creates and saves the default "morrowind"
+    // profile on the very first launch, so a saved game list by itself is not
+    // prior use - testing for a non-empty one skipped the wizard for every
+    // new user.
+    const QString defaultModsDir = QDir::homePath() + "/Games/nerevarine_mods";
     bool hasExistingSettings =
-        !m_apiKey.isEmpty() ||
-        !Settings::nexusApiKey().isEmpty() ||
-        !Settings::gameIds().isEmpty();
+        !m_apiKey.isEmpty() || !Settings::nexusApiKey().isEmpty();
+    for (const GameProfile &gp : m_profiles->games()) {
+        if (gp.id != QStringLiteral("morrowind") || !gp.openmwPath.isEmpty()
+            || (!gp.modsDir.isEmpty() && gp.modsDir != defaultModsDir)) {
+            hasExistingSettings = true;
+            break;
+        }
+    }
 
     if (hasExistingModlist || hasExistingSettings) {
         Settings::setWizardCompleted(true);
@@ -650,6 +673,7 @@ void MainWindow::maybeShowFirstRunWizard()
     }
 
     // nxm:// handler - force a re-check; the logic inside does the real work.
+    Settings::setRegisterNxmHandler(r.registerNxm);
     if (r.registerNxm) checkNxmHandlerRegistration();
 
     Settings::setWizardCompleted(true);
@@ -1847,11 +1871,27 @@ void MainWindow::checkExtractorsAvailable()
         subprocess::childEnvironment().value(QStringLiteral("PATH"))
             .split(QDir::listSeparator(), Qt::SkipEmptyParts);
 
+    // 7z opens every archive kind the installer handles - zip and rar fall
+    // back to it when unzip/unrar are absent or fail - so with 7z present
+    // only RAR can still be a gap: Debian's p7zip-full needs p7zip-rar for
+    // it. Listing unzip and unrar regardless told most users to install
+    // tools they did not need.
+    const QString sevenZip =
+        QStandardPaths::findExecutable(QStringLiteral("7z"), paths);
     QStringList missing;
-    for (const QString &prog : {QStringLiteral("7z"), QStringLiteral("unzip"),
-                                QStringLiteral("unrar")}) {
-        if (QStandardPaths::findExecutable(prog, paths).isEmpty())
-            missing << prog;
+    if (sevenZip.isEmpty()) {
+        for (const QString &prog : {QStringLiteral("7z"), QStringLiteral("unzip"),
+                                    QStringLiteral("unrar")}) {
+            if (QStandardPaths::findExecutable(prog, paths).isEmpty())
+                missing << prog;
+        }
+    } else if (QStandardPaths::findExecutable(QStringLiteral("unrar"), paths)
+                   .isEmpty()) {
+        QProcess probe;
+        probe.start(sevenZip, {QStringLiteral("i")});
+        const bool readsRar = probe.waitForFinished(5000)
+            && probe.readAllStandardOutput().contains("Rar");
+        if (!readsRar) missing << QStringLiteral("unrar");
     }
     if (missing.isEmpty()) return;
 
@@ -3288,8 +3328,9 @@ int MainWindow::createNewModlistProfile(const QString &suggestedName)
 
 void MainWindow::onAddGame()
 {
-    // Disable adding other games in this release - OpenMW only
-    ui::info(this, T("add_game_title"), "Only OpenMW (Morrowind) is supported in this release.");
+    // Reached from "More games…" under the toolbar's game button, whose menu
+    // already lists every game this release can manage.
+    ui::info(this, T("add_game_title"), T("add_game_more_body"));
 }
 
 void MainWindow::addAndDetectGame(const QString &gameId, const QString &displayName)

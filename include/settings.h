@@ -212,6 +212,9 @@ struct Settings {
 
     // -- Desktop-shortcut prompt suppression ---
     static bool    skipDesktopCheck();
+    // The wizard's "Register nxm:// handler" choice; the startup re-check honours it.
+    static bool    registerNxmHandler();
+    static void    setRegisterNxmHandler(bool on);
     static void    setSkipDesktopCheck(bool skip);
 
     // -- Archive-tool startup check suppression ---

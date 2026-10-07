@@ -49,6 +49,7 @@ constexpr auto kPatchesDeclined     = "patches/declined";
 constexpr auto kGroundcoverApproved = "groundcover/approved";
 constexpr auto kWizardCompleted     = "wizard/completed";
 constexpr auto kSkipDesktopCheck    = "shortcuts/skipDesktopCheck";
+constexpr auto kRegisterNxmHandler  = "nxm/register_handler";
 constexpr auto kExtractorCheckSkip  = "tools/skip_extractor_check";
 constexpr auto kShowAllGames        = "ui/showAllGames";
 constexpr auto kNexusApiKey         = "nexus/apikey";
@@ -593,6 +594,16 @@ void Settings::setWizardCompleted(bool completed)
 bool Settings::skipDesktopCheck()
 {
     return QSettings().value(kSkipDesktopCheck, false).toBool();
+}
+
+bool Settings::registerNxmHandler()
+{
+    return QSettings().value(kRegisterNxmHandler, true).toBool();
+}
+
+void Settings::setRegisterNxmHandler(bool on)
+{
+    QSettings().setValue(kRegisterNxmHandler, on);
 }
 
 bool Settings::showAllGames()

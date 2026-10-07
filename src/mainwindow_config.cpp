@@ -1338,6 +1338,10 @@ void MainWindow::syncOpenMWConfig()
             };
 
             (void)safefs::snapshotBackup(cfgPath);
+            // ~/.config/openmw does not exist until OpenMW has run once;
+            // without it the write failed and a red "Could not save
+            // openmw.cfg" banner greeted every new user at startup.
+            QDir().mkpath(QFileInfo(cfgPath).path());
             {
                 QFile f(cfgPath);
                 if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
