@@ -382,11 +382,12 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
     }
 
     // BAIN installer: reached only after FOMOD declined. A BAIN archive groups
-    // its content under numbered packages ("00 Core", "01 Optional", ...) the
-    // user picks among. Detection is conservative (every top-level folder must
-    // be numbered, no fomod/, no asset roots) and the picker pre-checks
-    // everything, so a false positive on an install-everything mod (Tamriel
-    // Rebuilt) is just one extra click with the same result as a plain install.
+    // its content under package folders ("00 Core", "01 Optional", ...) the
+    // user picks among. Detection follows Wrye Bash - no data at top level,
+    // two or more folders that are numbered or hold data, Docs/ ignored (see
+    // bain::packages) - and the picker pre-checks everything, so a false
+    // positive on an install-everything mod (Tamriel Rebuilt) is just one
+    // extra click with the same result as a plain install.
     if (bain::looksLikeBain(modPath)) {
         const QString archiveFileName = fi.fileName();
         const QString title = placeholder->data(ModRole::NexusTitle).toString().trimmed();

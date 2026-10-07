@@ -914,12 +914,61 @@ static void bain_testDetection()
         bain_mkdirs(d.filePath("meshes"));
         check("an asset-root sibling -> NOT BAIN", !bain::looksLikeBain(d.path()));
     }
-    {   // numbered + ordinary folder isn't a package set
+    {   // one package plus its documentation is nothing to choose from
         QTemporaryDir d;
         bain_touch(d.filePath("00 Core/x.esp"));
         bain_touch(d.filePath("Docs/readme.txt"));
-        check("numbered + non-numbered mix -> NOT BAIN",
+        check("single package + Docs -> NOT BAIN",
               !bain::looksLikeBain(d.path()));
+    }
+    {   // issue #2: Docs/ and Screenshots/ beside the packages
+        QTemporaryDir d;
+        bain_touch(d.filePath("00 Core/meshes/a.nif"));
+        bain_touch(d.filePath("01 Optional/textures/b.dds"));
+        bain_touch(d.filePath("Docs/readme.txt"));
+        bain_touch(d.filePath("Screenshots/1.jpg"));
+        check("packages + Docs + Screenshots -> BAIN", bain::looksLikeBain(d.path()));
+        check("Docs/Screenshots are not offered", bain::packages(d.path()).size() == 2);
+    }
+    {   // unnumbered package folders that each hold mod data
+        QTemporaryDir d;
+        bain_touch(d.filePath("Core/meshes/a.nif"));
+        bain_touch(d.filePath("Optional Textures/textures/b.dds"));
+        check("unnumbered data folders -> BAIN", bain::looksLikeBain(d.path()));
+        const auto pkgs = bain::packages(d.path());
+        check("both offered, by name", pkgs.size() == 2
+              && pkgs[0].name == "Core" && pkgs[1].name == "Optional Textures");
+    }
+    {   // one numbered package, one unnumbered data folder, one non-data extra
+        QTemporaryDir d;
+        bain_touch(d.filePath("00 Core/x.esp"));
+        bain_touch(d.filePath("Optional HD/Data Files/textures/b.dds"));
+        bain_touch(d.filePath("Tools/fix.exe"));
+        check("numbered + unnumbered data folder -> BAIN", bain::looksLikeBain(d.path()));
+        const auto pkgs = bain::packages(d.path());
+        check("numbered first, non-data extra left out", pkgs.size() == 2
+              && pkgs[0].name == "00 Core" && pkgs[1].name == "Optional HD");
+    }
+    {   // unnumbered folders without mod data are not a package set
+        QTemporaryDir d;
+        bain_touch(d.filePath("Docs/readme.txt"));
+        bain_touch(d.filePath("Extras/notes.txt"));
+        bain_touch(d.filePath("Tools/fix.exe"));
+        check("no data anywhere -> NOT BAIN", !bain::looksLikeBain(d.path()));
+    }
+    {   // a plugin at top level is a plain mod, whatever the folders are called
+        QTemporaryDir d;
+        bain_touch(d.filePath("mod.esp"));
+        bain_touch(d.filePath("00 Core/meshes/a.nif"));
+        bain_touch(d.filePath("01 Optional/textures/b.dds"));
+        check("top-level plugin -> NOT BAIN", !bain::looksLikeBain(d.path()));
+    }
+    {   // Morrowind's Data Files/ at top level is one mod
+        QTemporaryDir d;
+        bain_touch(d.filePath("Data Files/meshes/a.nif"));
+        bain_touch(d.filePath("Extras/textures/x.dds"));
+        bain_touch(d.filePath("Docs/readme.txt"));
+        check("Data Files at top -> NOT BAIN", !bain::looksLikeBain(d.path()));
     }
     {   // one numbered folder = nothing to choose
         QTemporaryDir d;

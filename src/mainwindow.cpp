@@ -1551,6 +1551,20 @@ void MainWindow::onAddMod()
     saveModList();
 }
 
+void MainWindow::onInstallArchive()
+{
+    // The menu / toolbar way to what dropping an archive on the window does.
+    // Start in Downloads, where a browser put the file; fall back to home.
+    QString startDir =
+        QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+    if (startDir.isEmpty() || !QDir(startDir).exists())
+        startDir = QDir::homePath();
+    const QStringList paths = QFileDialog::getOpenFileNames(
+        this, T("install_archive_dialog_title"), startDir,
+        T("install_archive_filter"));
+    for (const QString &p : paths) installLocalArchive(p);
+}
+
 
 void MainWindow::onMoveUp()
 {

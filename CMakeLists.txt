@@ -356,6 +356,13 @@ if(Qt6Keychain_FOUND)
     target_compile_definitions(nerevarine_organizer PRIVATE HAVE_QTKEYCHAIN)
 endif()
 
+if(UNIX AND NOT APPLE)
+    # Keep function names in the dynamic symbol table so the crash handler's
+    # backtrace_symbols_fd() prints them instead of bare offsets. strip keeps
+    # .dynsym, so the AppImage's stripped binary stays readable too.
+    target_link_options(nerevarine_organizer PRIVATE -rdynamic)
+endif()
+
 # Windows: link extra system libraries required by Qt6 static builds (MXE)
 if(WIN32)
     target_link_libraries(nerevarine_organizer PRIVATE

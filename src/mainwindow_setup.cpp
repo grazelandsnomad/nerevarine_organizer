@@ -256,6 +256,7 @@ void MainWindow::setupMenuBar()
     auto *modsMenu = menuBar()->addMenu(T("menu_mods"));
     modsMenu->addAction(T("menu_add_separator"),  this, &MainWindow::onAddSeparator);
     modsMenu->addAction(T("menu_add_mod_folder"), this, &MainWindow::onAddMod);
+    modsMenu->addAction(T("menu_install_archive"), this, &MainWindow::onInstallArchive);
     modsMenu->addSeparator();
     modsMenu->addAction(T("menu_sort_date_asc"),  this, [this]{ m_dateSortAsc = true;  onSortByDate(); });
     modsMenu->addAction(T("menu_sort_date_desc"), this, [this]{ m_dateSortAsc = false; onSortByDate(); });
@@ -550,6 +551,7 @@ void MainWindow::setupToolbar()
     });
     tb->addWidget(m_featuredModlistsBtn);
 
+    auto *actInstallArchive = tb->addAction(T("toolbar_install_archive"), this, &MainWindow::onInstallArchive);
     auto *actAddMod = tb->addAction(T("toolbar_add_mod"), this, &MainWindow::onAddMod);
 
     // Right-aligned section: expanding spacer pushes later actions to the far
@@ -676,6 +678,7 @@ void MainWindow::setupToolbar()
     m_tbCustom->registerAction("import",                actImport,                T("toolbar_import"),               /*defaultVisible=*/false);
     if (actFeatured)
         m_tbCustom->registerAction("featured_modlists", actFeatured,              T("toolbar_featured_modlists"),    /*defaultVisible=*/false);
+    m_tbCustom->registerAction("install_archive",       actInstallArchive,        T("toolbar_install_archive"));
     m_tbCustom->registerAction("add_mod",               actAddMod,                T("toolbar_add_mod"),              /*defaultVisible=*/false);
     m_tbCustom->registerAction("modlist_summary",       actSummary,               T("toolbar_modlist_summary"));
     m_tbCustom->registerAction("diag_bundle",           actDiagBundle,            T("toolbar_diag_bundle"),          /*defaultVisible=*/false);

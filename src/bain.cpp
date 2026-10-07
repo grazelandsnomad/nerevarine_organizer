@@ -23,17 +23,57 @@ const QRegularExpression &numberedRe()
     return re;
 }
 
-// Folder names that are an OpenMW data root, not a BAIN package. One of these
-// at top level means plain mod data, not a package set. Same as
-// install_layout's kDataRootNames.
-bool isAssetRoot(const QString &nameLower)
+// Folder names that are mod data themselves, not a BAIN package: an asset dir
+// (install_layout's kDataRootNames plus the Bethesda script-extender dirs), or
+// the data root wrapper itself ("Data Files" for Morrowind, "Data" for the
+// Bethesda engines). One of these at top level means a plain mod, not a
+// package set; one inside a candidate folder means that folder holds data.
+bool isDataName(const QString &nameLower)
 {
-    static const QSet<QString> kAssetDirs {
+    static const QSet<QString> kDataDirs {
         "textures", "meshes", "splash", "fonts", "sound", "music",
         "icons", "bookart", "mwscript", "video", "shaders", "scripts",
         "grass", "lod", "distantland", "fomod",
+        "data files", "data",
+        "skse", "f4se", "obse", "nvse", "fose", "sfse",
+        "interface", "strings", "materials", "facegen", "menus",
     };
-    return kAssetDirs.contains(nameLower);
+    return kDataDirs.contains(nameLower);
+}
+
+// Folders that document a package set rather than belong to it. They ride
+// along in the archive and install nothing, as in Wrye Bash.
+bool isDocsFolder(const QString &nameLower)
+{
+    static const QSet<QString> kDocs {
+        "docs", "doc", "documentation", "readme", "readmes",
+        "screenshots", "screenshot", "screens", "images", "pictures",
+    };
+    return kDocs.contains(nameLower);
+}
+
+// A plugin or asset archive: a file that is mod content on its own.
+bool isContentFile(const QString &name)
+{
+    const QString lower = name.toLower();
+    for (const QString &ext : plugins::contentExtensions())
+        if (lower.endsWith(ext)) return true;
+    return lower.endsWith(QLatin1String(".bsa"))
+        || lower.endsWith(QLatin1String(".ba2"));
+}
+
+// Does `dir` hold mod data at its top: an asset dir, a Data Files/ wrapper,
+// or a plugin / archive file? That is what makes an unnumbered folder a
+// package.
+bool looksLikeData(const QString &dir)
+{
+    const QDir d(dir);
+    for (const QString &s : d.entryList(QDir::Dirs | QDir::NoDotAndDotDot
+                                        | QDir::NoSymLinks))
+        if (isDataName(s.toLower())) return true;
+    for (const QString &f : d.entryList(QDir::Files))
+        if (isContentFile(f)) return true;
+    return false;
 }
 
 // Numeric value of a package's leading digits, for ordering ("10" > "02" > "1").
@@ -44,48 +84,69 @@ int leadingNumber(const QString &name)
     return i ? name.left(i).toInt() : 0;
 }
 
-} // namespace
-
-bool looksLikeBain(const QString &modPath)
+// The package folders of `modPath` - numbered ones first in numeric order,
+// unnumbered ones after, by name - or an empty list when the layout is not a
+// package set.
+//
+// Wrye Bash's rule, roughly: a "complex" package is an archive whose top level
+// holds no data itself, only folders that do. The "00 Core" numbering is a
+// convention, not a requirement. So a numbered folder is a package on its
+// name alone, an unnumbered folder is one when it holds data, Docs/ and
+// Screenshots/ ride along unoffered, and anything else (Tools/, Source/) is
+// neither. Two packages make a set; one is nothing to choose from. A plain
+// mod - an asset dir, Data Files/, or a plugin at top level - is never a
+// package set, whatever sits beside it. Requiring every top-level folder to
+// be numbered, as this once did, rejected real archives over a Docs/ folder
+// (GitHub issue #2).
+QList<Package> scanPackages(const QString &modPath)
 {
     QDir d(modPath);
-    if (!d.exists()) return false;
+    if (!d.exists()) return {};
 
     // FOMOD precedence: never offer BAIN when an installer is present.
     if (QFileInfo::exists(d.filePath(QStringLiteral("fomod/ModuleConfig.xml"))))
-        return false;
+        return {};
 
-    const QStringList subdirs =
-        d.entryList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks);
-    if (subdirs.size() < 2) return false;     // need a real choice to be BAIN
+    for (const QString &f : d.entryList(QDir::Files))
+        if (isContentFile(f)) return {};            // plain mod
 
-    int numbered = 0;
-    for (const QString &s : subdirs) {
-        if (isAssetRoot(s.toLower())) return false;   // plain data root, not BAIN
-        if (numberedRe().match(s).hasMatch()) ++numbered;
-    }
-    // Require EVERY top-level folder numbered; a mix is some other layout.
-    return numbered >= 2 && numbered == subdirs.size();
-}
-
-QList<Package> packages(const QString &modPath)
-{
-    QList<Package> out;
-    if (!looksLikeBain(modPath)) return out;
-
-    QDir d(modPath);
+    QList<Package> numbered, plain;
     for (const QString &s : d.entryList(QDir::Dirs | QDir::NoDotAndDotDot
                                         | QDir::NoSymLinks)) {
+        const QString lower = s.toLower();
+        if (isDataName(lower)) return {};           // plain mod
+        if (isDocsFolder(lower)) continue;
+        const Package p{s, d.filePath(s)};
         if (numberedRe().match(s).hasMatch())
-            out.append({s, d.filePath(s)});
+            numbered.append(p);
+        else if (looksLikeData(p.path))
+            plain.append(p);
     }
-    std::stable_sort(out.begin(), out.end(),
+    if (numbered.size() + plain.size() < 2) return {};
+
+    std::stable_sort(numbered.begin(), numbered.end(),
         [](const Package &a, const Package &b) {
             const int na = leadingNumber(a.name), nb = leadingNumber(b.name);
             if (na != nb) return na < nb;
             return a.name.compare(b.name, Qt::CaseInsensitive) < 0;
         });
-    return out;
+    std::stable_sort(plain.begin(), plain.end(),
+        [](const Package &a, const Package &b) {
+            return a.name.compare(b.name, Qt::CaseInsensitive) < 0;
+        });
+    return numbered + plain;
+}
+
+} // namespace
+
+bool looksLikeBain(const QString &modPath)
+{
+    return !scanPackages(modPath).isEmpty();
+}
+
+QList<Package> packages(const QString &modPath)
+{
+    return scanPackages(modPath);
 }
 
 namespace {

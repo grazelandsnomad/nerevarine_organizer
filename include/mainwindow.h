@@ -80,6 +80,7 @@ public slots:
 private slots:
     void onAddSeparator();
     void onAddMod();
+    void onInstallArchive();   // file picker -> installLocalArchive, what a drop does
     // Shared insert for onAddSeparator (append) and "Add separator above".
     // targetRow clamped to [0, count]. Never spawn collapsed - it'd land between
     // a collapsed neighbour and its hidden children and swallow that section.
