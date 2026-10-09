@@ -440,6 +440,22 @@ void MainWindow::setupMenuBar()
                             [this]{ m_forbidden->showManageDialog(this); });
 }
 
+namespace {
+
+// Stretch for the main toolbar. Besides expanding, it reports a sizeHint wider
+// than any window; that hint is what keeps Check Updates on screen, see the
+// comment where it is added in MainWindow::setupToolbar().
+class ToolbarStretch : public QWidget {
+public:
+    explicit ToolbarStretch(QWidget *parent = nullptr) : QWidget(parent)
+    {
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    }
+    QSize sizeHint() const override { return {16384, 0}; }
+};
+
+} // namespace
+
 void MainWindow::setupToolbar()
 {
     auto *tb = addToolBar("Main");
@@ -551,15 +567,26 @@ void MainWindow::setupToolbar()
     });
     tb->addWidget(m_featuredModlistsBtn);
 
-    auto *actInstallArchive = tb->addAction(T("toolbar_install_archive"), this, &MainWindow::onInstallArchive);
     auto *actAddMod = tb->addAction(T("toolbar_add_mod"), this, &MainWindow::onAddMod);
+    // Install from Archive… is a Mods-menu entry only. Its toolbar button
+    // (0.73 dev) pushed Check Updates into the overflow chevron at 1920 px.
 
-    // Right-aligned section: expanding spacer pushes later actions to the far
-    // end. Forbidden Mods / Check Updates are "status" actions, grouped with
-    // Modlist Summary at the right edge to keep the left region for editing.
-    auto *tbSpacer = new QWidget(tb);
-    tbSpacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    tb->addWidget(tbSpacer);
+    // Right-aligned section: the stretch pushes later actions to the far end.
+    // Forbidden Mods / Modlist Summary are "status" actions grouped at the
+    // right edge to keep the left region for editing.
+    //
+    // The stretch also reports a sizeHint wider than any window, and that is
+    // what pins Check Updates, which lives on its own bar after this one.
+    // QMainWindow sizes the bars sharing a row in order, each up to its
+    // sizeHint, then stretches the last one to the row end
+    // (QToolBarAreaLayoutLine::fitLayout). With this bar's hint always above
+    // the row width it takes every spare pixel, so the one-button bar after
+    // it gets exactly its minimum, which for a lone item is the whole button.
+    // Inside this bar the fixed-size buttons get their hints first and the
+    // stretch absorbs the rest (qGeomCalc), so it looks as it did with a
+    // plain spacer. The huge hint never sizes the window: MainWindow always
+    // restores or sets its geometry explicitly, so adjustSize() is not used.
+    tb->addWidget(new ToolbarStretch(tb));
 
     // -- Light/Dark theme toggle ---
     // Flips the whole-app palette (see theme::) and persists it. Label names
@@ -630,11 +657,20 @@ void MainWindow::setupToolbar()
     if (auto *btn = qobject_cast<QToolButton *>(tb->widgetForAction(actDiagBundle)))
         btn->setStyleSheet("color: #6a1b9a; font-weight: bold;");
 
-    // Utmost-right slot: Check Updates.  Last widget added to the toolbar
-    // before the menu-extension chevron, so on narrow windows it stays
-    // visible when other right-aligned buttons collapse into the overflow.
-    auto *actCheck = tb->addAction(T("toolbar_check_updates"), this, &MainWindow::onCheckUpdates);
-    if (auto *btn = qobject_cast<QToolButton *>(tb->widgetForAction(actCheck))) {
+    // Utmost-right slot: Check Updates, on a bar of its own. A QToolBar hides
+    // items from the END of its action list when the window is too narrow,
+    // so the last button of the main bar is the first into the chevron, the
+    // opposite of what this slot needs. A one-item bar cannot be squeezed
+    // below its item (QToolBarLayout's minimum is its first item, with no
+    // extension extent for a single one), and the main bar's oversized
+    // stretch (ToolbarStretch above) guarantees this bar is never asked to
+    // shrink. When room runs out, the main bar's chevron, now directly left
+    // of this button, takes Modlist Summary, Restore Backup… instead.
+    auto *checkBar = addToolBar(QStringLiteral("Check Updates"));
+    checkBar->setMovable(false);
+    checkBar->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    auto *actCheck = checkBar->addAction(T("toolbar_check_updates"), this, &MainWindow::onCheckUpdates);
+    if (auto *btn = qobject_cast<QToolButton *>(checkBar->widgetForAction(actCheck))) {
         btn->setStyleSheet(
             "QToolButton {"
             "  background-color: #1a8a1a;"
@@ -678,7 +714,6 @@ void MainWindow::setupToolbar()
     m_tbCustom->registerAction("import",                actImport,                T("toolbar_import"),               /*defaultVisible=*/false);
     if (actFeatured)
         m_tbCustom->registerAction("featured_modlists", actFeatured,              T("toolbar_featured_modlists"),    /*defaultVisible=*/false);
-    m_tbCustom->registerAction("install_archive",       actInstallArchive,        T("toolbar_install_archive"));
     m_tbCustom->registerAction("add_mod",               actAddMod,                T("toolbar_add_mod"),              /*defaultVisible=*/false);
     m_tbCustom->registerAction("modlist_summary",       actSummary,               T("toolbar_modlist_summary"));
     m_tbCustom->registerAction("diag_bundle",           actDiagBundle,            T("toolbar_diag_bundle"),          /*defaultVisible=*/false);
