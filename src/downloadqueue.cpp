@@ -243,8 +243,11 @@ bool DownloadQueue::haveUsableArchive(const QString &path,
     // archiveProblem() - shells out to `7z t`, synchronously, on the UI
     // thread: on a 450 MB archive that is a multi-second freeze, to answer a
     // question md5 verification downstream answers anyway.
-    const qint64 expected = placeholder
-        ? placeholder->data(ModRole::ExpectedSize).toLongLong() : 0;
+    // Only the size stashed for THIS file counts (applicableExpectations):
+    // one left over from another file on the page would call a complete
+    // archive short, or vouch for a wrong one.
+    const qint64 expected =
+        placeholder_state::applicableExpectations(placeholder).size;
     return safefs::isCompleteDownload(path, expected);
 }
 
@@ -735,12 +738,11 @@ void DownloadQueue::downloadFile(const QUrl    &downloadUrl,
         const QString quick = size < 0
             ? QStringLiteral("unreadable")
             : download_integrity::quickProblem(ctype, header, size);
-        const QString expectedMd5 = placeholder
-            ? placeholder->data(ModRole::ExpectedMd5).toString() : QString();
-        const qint64 expectedSize = placeholder
-            ? placeholder->data(ModRole::ExpectedSize).toLongLong() : 0;
+        // Expectations for another file do not count as a check downstream:
+        // verification will drop them, so the structural test must run.
+        const auto expect = placeholder_state::applicableExpectations(placeholder);
         if (quick.isEmpty()
-            && download_integrity::needsStructuralTest(expectedMd5, expectedSize,
+            && download_integrity::needsStructuralTest(expect.md5, expect.size,
                                                        header)) {
             testArchiveThenContinue(placeholder, downloadUrl, filename, savePath);
             return;

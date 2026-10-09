@@ -636,6 +636,9 @@ void MainWindow::finishWabbajackImport(const QJsonObject &root)
                 item->setData(ModRole::SourceUrl, mod.sourceUrl);
             item->setData(ModRole::InstallStatus, 0);
             item->setData(ModRole::DateAdded,     QDateTime::currentDateTime());
+            // Untagged (no ExpectedFileId: the Wabbajack record names no
+            // Nexus file), so it never judges a download; the nxm-time
+            // lookup brings the size for the file actually fetched.
             if (mod.sizeBytes > 0)
                 item->setData(ModRole::ExpectedSize, mod.sizeBytes);
             item->setCheckState(Qt::Checked);

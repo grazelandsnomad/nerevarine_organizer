@@ -34,6 +34,21 @@ QString quickProblem(const QString &contentType, const QByteArray &header,
 bool needsStructuralTest(const QString &expectedMd5, qint64 expectedSize,
                          const QByteArray &header);
 
+// Whether the md5/size stashed on a row (described by expectedFileId, the
+// Nexus file they were read for) may judge the archive being installed
+// (pendingFileId). Only when both are known and the same file: an
+// expectation left by an earlier look at the mod page, or one whose file is
+// not known (a local drop, an import re-adopted by hand), must not fail a
+// good download of some other file. What does not apply is simply not
+// checked, and needsStructuralTest() takes over. Inline: placeholder_state
+// calls it, and the tests that link placeholder_state.cpp do not carry this
+// module's .cpp (7z and archive sniffing behind it).
+inline bool expectationsApply(qint64 expectedFileId, qint64 pendingFileId)
+{
+    return expectedFileId > 0 && pendingFileId > 0
+        && expectedFileId == pendingFileId;
+}
+
 // `7z t` on `path`. Blocks for as long as 7z takes (up to the 30 s timeout):
 // run it on a worker. "7z-test-failed exit=N" when 7z opened the archive and
 // found it broken; "" when it is fine - or when it could not be checked (7z

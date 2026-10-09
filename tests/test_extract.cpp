@@ -391,6 +391,21 @@ static void testNeedsStructuralTest()
           !needsStructuralTest("", 0, QByteArray("TES3\x00\x00\x00\x00", 8)));
 }
 
+// Faster Decompression (Fallout 4 mod 102435): a free account's update stashed
+// the size of the file the app picked, the user fetched another file from the
+// website, and the download was failed against the wrong size every time.
+static void testExpectationsApply()
+{
+    std::cout << "\n[expectationsApply: only the file the expectations were read for]\n";
+    using download_integrity::expectationsApply;
+    check("the same file", expectationsApply(5281, 5281));
+    check("another file from the page", !expectationsApply(5281, 5300));
+    check("untagged expectations never apply", !expectationsApply(0, 5281));
+    check("an install of an unknown file (a drop) is not judged by a tag",
+          !expectationsApply(5281, 0));
+    check("nothing known either way", !expectationsApply(0, 0));
+}
+
 // The real 7z, when the machine has one: the check moved to a worker, and the
 // worker's answer is what decides retry-or-extract.
 static void testStructuralProblem()
@@ -441,6 +456,7 @@ int main(int argc, char **argv)
     std::cout << "\n=== download_integrity ===\n";
     testQuickProblem();
     testNeedsStructuralTest();
+    testExpectationsApply();
     testStructuralProblem();
 
     std::cout << "\n=== extract_errors ===\n";

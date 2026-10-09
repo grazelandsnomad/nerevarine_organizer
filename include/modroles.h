@@ -62,6 +62,15 @@ namespace ModRole {
     // record alone; cleared with the other install transients. A Merge never
     // sets it: the row still holds the file it was installed from.
     constexpr int PendingFileId        = Qt::UserRole + 60; // qint64
+    // Which file ExpectedMd5 / ExpectedSize / NexusFileName describe. They are
+    // stashed by whoever last looked at the mod's file list (the picker, an
+    // import, the nxm-time lookup), and a row keeps them until a verification
+    // runs, so an update fetched by hand from the website could be checked
+    // against the size of the file the app had picked instead (Faster
+    // Decompression: "680227 bytes, but Nexus says 346773", every time).
+    // Honoured only when it equals PendingFileId; see
+    // placeholder_state::applicableExpectations.
+    constexpr int ExpectedFileId       = Qt::UserRole + 62; // qint64
     // An update whose download a free account has to fetch by hand: the API
     // refused the link, the row went back to installed, and the Nexus page
     // was opened. The nxm:// link that comes back is that update, so it

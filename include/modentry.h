@@ -63,6 +63,7 @@ struct ModEntry {
     bool    updateAvailable  = false;
     QString expectedMd5;               // lower-case hex, cleared after verify
     qint64  expectedSize     = 0;      // bytes, cleared after verify
+    qint64  expectedFileId   = 0;      // the Nexus file the two above describe
     // Stable per-install id (ModRole::InstallToken). Only meaningful while
     // installStatus == 2; serialized so an interrupted install can be matched
     // back up after relaunch. Null QUuid otherwise.

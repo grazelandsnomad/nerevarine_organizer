@@ -101,8 +101,9 @@ private slots:
     // other Skyrim runtime. Warns and names the file that fits this profile.
     void onModFileSiblings(QListWidgetItem *item, const QString &chosenName,
                            const QStringList &siblingNames);
-    void onExpectedChecksumFetched(QListWidgetItem *item, const QString &fileName,
-                                   const QString &md5, qint64 sizeBytes);
+    void onExpectedChecksumFetched(QListWidgetItem *item, int fileId,
+                                   const QString &fileName, const QString &md5,
+                                   qint64 sizeBytes);
     void onFileListFetched(QListWidgetItem *item,
                            const QString &game, int modId,
                            const QList<NexusClient::FileEntry> &files);

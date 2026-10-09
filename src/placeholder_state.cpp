@@ -1,5 +1,6 @@
 #include "placeholder_state.h"
 
+#include "download_integrity.h"
 #include "modroles.h"
 
 #include <QDateTime>
@@ -46,6 +47,27 @@ void clearInstallTransients(QListWidgetItem *item)
     item->setData(ModRole::InstallToken,    QVariant());
     item->setData(ModRole::PendingFileId,   QVariant());
     item->setData(ModRole::AwaitingUpdateDownload, QVariant());
+}
+
+Expectations applicableExpectations(const QListWidgetItem *item)
+{
+    Expectations e;
+    if (!item) return e;
+    const qint64 forFile  = item->data(ModRole::ExpectedFileId).toLongLong();
+    const qint64 inFlight = item->data(ModRole::PendingFileId).toLongLong();
+    if (!download_integrity::expectationsApply(forFile, inFlight)) return e;
+    e.md5  = item->data(ModRole::ExpectedMd5).toString().trimmed().toLower();
+    e.size = item->data(ModRole::ExpectedSize).toLongLong();
+    return e;
+}
+
+void clearExpectations(QListWidgetItem *item)
+{
+    if (!item) return;
+    item->setData(ModRole::ExpectedMd5,    QVariant());
+    item->setData(ModRole::ExpectedSize,   QVariant());
+    item->setData(ModRole::ExpectedFileId, QVariant());
+    item->setData(ModRole::NexusFileName,  QVariant());
 }
 
 bool restoreInstalled(QListWidgetItem *item)

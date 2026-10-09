@@ -10,8 +10,10 @@
 // Takes a QListWidgetItem* but needs no live QListWidget, so it's testable
 // against a standalone heap item.
 
+#include <QString>
+#include <QtGlobal>
+
 class QListWidgetItem;
-class QString;
 
 namespace placeholder_state {
 
@@ -36,6 +38,21 @@ bool folderInstalled(const QListWidgetItem *item);
 // Clear the mid-install hint roles once an install settles: IntendedModPath,
 // PrevModPath, MergeTargetPath, InstallToken.
 void clearInstallTransients(QListWidgetItem *item);
+
+// What Nexus said about the file this row is installing, for verification:
+// ExpectedMd5 / ExpectedSize, but only when ExpectedFileId names the file in
+// flight (PendingFileId) - download_integrity::expectationsApply. Otherwise
+// both come back empty, as if nothing had been stashed.
+struct Expectations {
+    QString md5;        // lower-case hex, or empty
+    qint64  size = 0;   // bytes, or 0
+};
+Expectations applicableExpectations(const QListWidgetItem *item);
+
+// Drop the stashed expectations and the file they were for: ExpectedMd5,
+// ExpectedSize, ExpectedFileId and NexusFileName (the name the staged archive
+// would be renamed to, which belongs to the same file).
+void clearExpectations(QListWidgetItem *item);
 
 // A row whose install did not land - cancelled, failed, abandoned - back to
 // installed at the folder it still has, when it has one. An update, a Replace

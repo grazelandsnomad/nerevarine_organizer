@@ -843,10 +843,24 @@ MainWindow::verifyAndExtract(const QString &archivePath, QListWidgetItem *placeh
 
     // Expectations off the placeholder. Absent -> controller short-circuits and
     // signals verified() immediately (local-archive drops, NXM flows whose
-    // metadata fetch failed).
-    const QString expectedMd5  = placeholder->data(ModRole::ExpectedMd5).toString()
-                                      .trimmed().toLower();
-    const qint64  expectedSize = placeholder->data(ModRole::ExpectedSize).toLongLong();
+    // metadata fetch failed). Ones stashed for another file - the app's own
+    // pick, when a free account then fetched a different file from the
+    // website - are dropped here rather than failing a good download; the
+    // structural test in the download queue has already covered corruption.
+    const auto expect = placeholder_state::applicableExpectations(placeholder);
+    if (expect.md5.isEmpty() && expect.size <= 0
+        && (placeholder->data(ModRole::ExpectedSize).toLongLong() > 0
+            || !placeholder->data(ModRole::ExpectedMd5).toString().trimmed().isEmpty())) {
+        qCInfo(logging::lcInstall)
+            << "expectations stashed for file"
+            << placeholder->data(ModRole::ExpectedFileId).toLongLong()
+            << "do not describe file"
+            << placeholder->data(ModRole::PendingFileId).toLongLong()
+            << "being installed; verification skipped";
+        placeholder_state::clearExpectations(placeholder);
+    }
+    const QString expectedMd5  = expect.md5;
+    const qint64  expectedSize = expect.size;
     // Tokens minted in prepareItemForInstall(); a path without one is an older
     // placeholder - backfill so InstallController signals can match it.
     QUuid token = placeholder->data(ModRole::InstallToken).toUuid();
@@ -878,9 +892,11 @@ void MainWindow::onArchiveVerified(const QString &archivePath, const QUuid &inst
     // "verified OK" so the user sees the hash ran; empty path says nothing.
     if (!placeholder->data(ModRole::ExpectedMd5).toString().trimmed().isEmpty())
         statusBar()->showMessage(T("verify_status_ok"), 3000);
-    // Clear expectation roles now that they've served their purpose.
-    placeholder->setData(ModRole::ExpectedMd5,  QVariant());
-    placeholder->setData(ModRole::ExpectedSize, QVariant());
+    // Clear expectation roles now that they've served their purpose
+    // (NexusFileName stays: extractAndAdd consumes it for the rename).
+    placeholder->setData(ModRole::ExpectedMd5,    QVariant());
+    placeholder->setData(ModRole::ExpectedSize,   QVariant());
+    placeholder->setData(ModRole::ExpectedFileId, QVariant());
     if (const auto r = extractAndAdd(archivePath, placeholder); !r) {
         qCWarning(logging::lcInstall)
             << "extractAndAdd after verify failed precondition:" << r.error();
@@ -1050,13 +1066,25 @@ void MainWindow::applyInstalledStateToStrandedPlaceholder(
 
 
 
-void MainWindow::onExpectedChecksumFetched(QListWidgetItem *item, const QString &fileName,
-                                            const QString &md5, qint64 sizeBytes)
+void MainWindow::onExpectedChecksumFetched(QListWidgetItem *item, int fileId,
+                                            const QString &fileName, const QString &md5,
+                                            qint64 sizeBytes)
 {
     if (!m_modList->indexFromItem(item).isValid()) return;
+    // Only for the file the row is fetching right now. The reply races the
+    // download; one that lands after the install, or after the row moved on
+    // to another file, would sit on the row and judge the next archive.
+    if (item->data(ModRole::InstallStatus).toInt() != 2
+        || item->data(ModRole::PendingFileId).toLongLong() != qint64(fileId)) {
+        qCInfo(logging::lcInstall)
+            << "expected checksum for file" << fileId
+            << "arrived for a row no longer installing it; ignored";
+        return;
+    }
     if (!fileName.isEmpty()) item->setData(ModRole::NexusFileName, fileName);
     if (!md5.isEmpty())      item->setData(ModRole::ExpectedMd5,  md5);
     if (sizeBytes > 0)       item->setData(ModRole::ExpectedSize, sizeBytes);
+    item->setData(ModRole::ExpectedFileId, QVariant::fromValue(qint64(fileId)));
 }
 
 // Removes not-installed, path-less placeholders whose NexusUrl or CustomName

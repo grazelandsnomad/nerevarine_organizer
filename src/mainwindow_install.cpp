@@ -162,9 +162,7 @@ void MainWindow::onArchiveVerificationFailed(const QString &archivePath,
     // Reset the row to "not installed" so the user can retry. Skip if it was
     // removed mid-verify.
     if (placeholder) {
-        placeholder->setData(ModRole::ExpectedMd5,      QVariant());
-        placeholder->setData(ModRole::ExpectedSize,     QVariant());
-        placeholder->setData(ModRole::NexusFileName,    QVariant());
+        placeholder_state::clearExpectations(placeholder);
         // An update whose new archive failed verification: the installed
         // folder is untouched, so the mod stays installed there.
         if (!placeholder_state::restoreInstalled(placeholder)) {

@@ -830,6 +830,9 @@ void MainWindow::onFileListFetched(QListWidgetItem *item,
         if (!f.name.isEmpty()) ph->setData(ModRole::NexusFileName, f.name);
         if (!f.md5.isEmpty())  ph->setData(ModRole::ExpectedMd5,  f.md5);
         if (f.sizeBytes > 0)   ph->setData(ModRole::ExpectedSize, f.sizeBytes);
+        // Which file these describe: a free account that ends up fetching
+        // another file from the website must not be judged by this one.
+        ph->setData(ModRole::ExpectedFileId, QVariant::fromValue(qint64(f.fileId)));
     };
 
     // Engine-aware default: Nexus mods often ship parallel MWSE/MGE XE and
@@ -1069,6 +1072,7 @@ void MainWindow::onFileListFetched(QListWidgetItem *item,
     item->setData(ModRole::PendingFileId, QVariant::fromValue(qint64(fileId)));
     if (!md5.isEmpty()) item->setData(ModRole::ExpectedMd5,  md5);
     if (sz > 0)         item->setData(ModRole::ExpectedSize, sz);
+    item->setData(ModRole::ExpectedFileId, QVariant::fromValue(qint64(fileId)));
     autoLinkSameModpage(item, cat);
     m_downloadQueue->fetchDownloadLink(game, modId, fileId, "", "", item);
 }

@@ -55,8 +55,8 @@ public:
     // Pre-fetch the file's name + md5 + size_in_bytes so post-download verify
     // has something to compare and the staged file can be given its real name.
     // Runs alongside the download. Success ->
-    // expectedChecksumFetched(item, fileName, md5, sizeBytes); errors/missing
-    // fields silent (download still completes, verify just checks less).
+    // expectedChecksumFetched(item, fileId, fileName, md5, sizeBytes); errors/
+    // missing fields silent (download still completes, verify just checks less).
     void fetchExpectedChecksum(QListWidgetItem *item, const QString &game,
                                int modId, int fileId);
 
@@ -93,8 +93,11 @@ signals:
     // window can notice a wrong-runtime download without a second API call.
     void modFileSiblings(QListWidgetItem *item, const QString &chosenName,
                          const QStringList &siblingNames);
-    void expectedChecksumFetched(QListWidgetItem *item, const QString &fileName,
-                                 const QString &md5, qint64 sizeBytes);
+    // fileId echoes the request: the slot checks it against the file the row
+    // is installing by then, so a reply that lands late stamps nothing.
+    void expectedChecksumFetched(QListWidgetItem *item, int fileId,
+                                 const QString &fileName, const QString &md5,
+                                 qint64 sizeBytes);
     void fileListFetched(QListWidgetItem *item, const QString &game, int modId,
                          const QList<NexusClient::FileEntry> &files);
     void fileListFetchFailed(QListWidgetItem *item, const QString &reason, int httpStatus);

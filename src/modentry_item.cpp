@@ -48,6 +48,7 @@ ModEntry ModEntry::fromItem(const QListWidgetItem *item)
     e.updateAvailable  = item->data(ModRole::UpdateAvailable).toBool();
     e.expectedMd5      = item->data(ModRole::ExpectedMd5).toString();
     e.expectedSize     = item->data(ModRole::ExpectedSize).toLongLong();
+    e.expectedFileId   = item->data(ModRole::ExpectedFileId).toLongLong();
     e.installToken     = item->data(ModRole::InstallToken).toUuid();
 
     e.dependsOn            = item->data(ModRole::DependsOn).toStringList();
@@ -124,6 +125,7 @@ void ModEntry::applyToItem(QListWidgetItem *item) const
     item->setData(ModRole::UpdateAvailable,  updateAvailable);
     item->setData(ModRole::ExpectedMd5,      expectedMd5);
     item->setData(ModRole::ExpectedSize,     QVariant::fromValue(expectedSize));
+    item->setData(ModRole::ExpectedFileId,   QVariant::fromValue(expectedFileId));
     item->setData(ModRole::InstallToken,
                   installToken.isNull() ? QVariant() : QVariant(installToken));
 
