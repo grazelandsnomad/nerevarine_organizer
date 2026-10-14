@@ -5,14 +5,19 @@
 // through it is what fails, so these cases carry weight there.
 
 #include "bulk_install_queue.h"
+#include "downloadqueue.h"
 #include "mod_row.h"
+#include "nexusclient.h"
 #include "modentry.h"
 #include "modroles.h"
 
 #include <QApplication>
+#include <QDir>
 #include <QEventLoop>
 #include <QListWidget>
 #include <QListWidgetItem>
+#include <QMainWindow>
+#include <QNetworkAccessManager>
 #include <QStringList>
 #include <QTimer>
 
@@ -63,6 +68,36 @@ void testBulkQueueSkipsARowDeletedBeforeItsTurn()
           started.join(QLatin1Char(',')));
 }
 
+// -- DownloadQueue: a download whose row vanished ------------------------
+
+void testDownloadQueueOutlivesItsRow()
+{
+    std::cout << "testDownloadQueueOutlivesItsRow\n";
+    QMainWindow window;
+    auto *list = new QListWidget(&window);
+    window.setCentralWidget(list);
+    QNetworkAccessManager net;
+    NexusClient nexus;
+    DownloadQueue queue(list, &net, &nexus, &window);
+    (void)queue.setup(&window);
+    queue.setModsDir(QDir::tempPath());
+
+    auto *a = addMod(*list, QStringLiteral("A"));
+    const QUuid row = mod_row::rowId(a);
+    // Nothing listens on port 1; the transfer fails at once, and its finished
+    // handler runs after the row is gone.
+    queue.enqueueDownload(row, QUrl(QStringLiteral("http://127.0.0.1:1/never.7z")),
+                          QStringLiteral("never.7z"));
+    check("the row is queued under its id", queue.isQueued(row));
+    delete list->takeItem(list->row(a));
+
+    spin(1500);
+    check("the failed transfer left the queue", !queue.isQueued(row)
+                                                 && !queue.isDownloadActive(row));
+    queue.cancelQueued(row);
+    check("and a cancel for the vanished row is a no-op", !queue.isQueued(row));
+}
+
 // -- row identity (mod_row::rowId) --------------------------------------
 
 void testRowIdIsMintedOnceAndTravelsThroughSnapshots()
@@ -102,6 +137,7 @@ int main(int argc, char **argv)
 
     testBulkQueueSkipsARowDeletedBeforeItsTurn();
     testRowIdIsMintedOnceAndTravelsThroughSnapshots();
+    testDownloadQueueOutlivesItsRow();
 
     std::cout << "\n" << s_passed << " passed, " << s_failed << " failed\n";
     return s_failed == 0 ? 0 : 1;

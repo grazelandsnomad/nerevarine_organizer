@@ -14,7 +14,10 @@
 //   4. Connect extractionRequested/saveRequested/statusMessage to MainWindow.
 //
 // Nothing here calls back into MainWindow directly: coupling is via signals so
-// the class tests in isolation.
+// the class tests in isolation. A row is named by its id (mod_row::rowId) and
+// never held as an item: the queue resolves the id to a live row through the
+// resolver MainWindow installs at the moment it needs to read or write one,
+// and a row that is gone by then resolves to nothing.
 
 #include <QElapsedTimer>
 #include <QHash>
@@ -23,6 +26,7 @@
 #include <QPointer>
 #include <QString>
 #include <QUrl>
+#include <QUuid>
 
 #include <functional>
 
@@ -45,7 +49,8 @@ class NexusClient;
 class DownloadQueue : public QObject {
     Q_OBJECT
 public:
-    // modList: MainWindow's mod-list widget; items are shared.
+    // modList: MainWindow's mod-list widget, for the crash-recovery sweep and
+    // repaints; rows are otherwise reached by id.
     // net: shared QNetworkAccessManager.
     // nexus: Nexus API client for CDN-link requests.
     // parentWidget: parent for any QMessageBox dialogs.
@@ -67,13 +72,13 @@ public:
     // log survives an AppImage's read-only mount. Empty: fall back to qWarning.
     void setDiagLogPath(const QString &path) { m_diagLogPath = path; }
 
-    // How the queue decides whether a placeholder is still a row it may
-    // touch. Every placeholder here is a raw pointer into MainWindow's list,
-    // and a row can be removed - or the list cleared by a profile switch or an
-    // import - while its download runs. The default answers "is in the mod
-    // list"; MainWindow widens it to the rows it parks across a profile
-    // switch, which leave the list but are still being installed.
-    void setRowAliveCheck(std::function<bool(QListWidgetItem *)> check);
+    // How a row id becomes a row the queue may read or write. The default
+    // searches the mod list; MainWindow widens it to the rows it parks across
+    // a profile switch, which leave the list but are still being installed.
+    // A row removed - or the list cleared by a profile switch or an import -
+    // while its download runs resolves to nullptr from then on.
+    using RowResolver = std::function<QListWidgetItem *(const QUuid &)>;
+    void setRowResolver(RowResolver resolve);
 
     // -- Entry points called by MainWindow ---
 
@@ -82,29 +87,29 @@ public:
     // empty for the free-tier flow.
     void fetchDownloadLink(const QString &game, int modId, int fileId,
                            const QString &key, const QString &expires,
-                           QListWidgetItem *placeholder);
+                           const QUuid &row);
 
     // Append a ready item to the queue and start processing if a slot is free
     // and the queue isn't paused.
-    void enqueueDownload(QListWidgetItem *placeholder,
+    void enqueueDownload(const QUuid &row,
                          const QUrl &url, const QString &filename);
 
     // Cancel an in-flight or queued download. Active ones abort the
-    // QNetworkReply; its finished() handler resets the placeholder and advances
+    // QNetworkReply; its finished() handler resets the row and advances
     // the queue. Queued-only entries are removed immediately.
-    void cancelQueued(QListWidgetItem *placeholder);
+    void cancelQueued(const QUuid &row);
 
     // Crash-recovery, call on startup after loadModList(). Resets any
-    // placeholder stuck at InstallStatus=2 with no live reply.
+    // row stuck at InstallStatus=2 with no live reply.
     void cleanStaleDownloads();
 
-    // Returns true when `placeholder` has an in-flight QNetworkReply.
-    bool isDownloadActive(QListWidgetItem *placeholder) const;
+    // Returns true when `row` has an in-flight QNetworkReply.
+    bool isDownloadActive(const QUuid &row) const;
 
-    // Returns true while `placeholder` is in the download queue at all -
+    // Returns true while `row` is in the download queue at all -
     // waiting OR actively downloading. False once the download handed off to
     // verification/extraction (the row is then the InstallController's).
-    bool isQueued(QListWidgetItem *placeholder) const;
+    bool isQueued(const QUuid &row) const;
 
     // True when nothing is queued or active; callers gate destructive FS ops on
     // this. Must check m_active too: an integrity-retry requeue briefly clears
@@ -115,7 +120,7 @@ public:
 signals:
     // On successful download; triggers MainWindow::verifyAndExtract.
     void extractionRequested(const QString &archivePath,
-                             QListWidgetItem *placeholder);
+                             const QUuid &row);
 
     // When the queue changes a modlist item that needs persisting; connects to
     // MainWindow::saveModList().
@@ -139,7 +144,7 @@ private slots:
 private:
     // One per pending/active download. Order matches the (draggable) UI rows.
     struct QueuedDownload {
-        QListWidgetItem *placeholder = nullptr;   // row in m_modList
+        QUuid            row;                     // the mod-list row, by id
         QListWidgetItem *queueRow    = nullptr;   // row in m_list
         QProgressBar    *progressBar = nullptr;   // widget inside queueRow
         QLabel          *statusLabel = nullptr;   // widget inside queueRow
@@ -152,7 +157,7 @@ private:
 
     void processDownloadQueue();
     void downloadFile(const QUrl &url, const QString &filename,
-                      QListWidgetItem *placeholder);
+                      const QUuid &row);
 
     // Is a file already sitting where this download would land, and is it
     // worth handing to the installer instead of transferring it again?
@@ -161,27 +166,27 @@ private:
     // still goes through the normal verify-then-extract path, so a truncated
     // or corrupt file fails md5/size verification, gets deleted there, and
     // the next attempt downloads fresh. The worst case is today's behaviour.
-    bool haveUsableArchive(const QString &path, QListWidgetItem *placeholder) const;
+    bool haveUsableArchive(const QString &path, const QUuid &row) const;
 
     // The integrity gate's slow half, on a worker: a structural `7z t`
     // (download_integrity), then afterIntegrityGate on the UI thread.
-    void testArchiveThenContinue(QListWidgetItem *placeholder, const QUrl &url,
+    void testArchiveThenContinue(const QUuid &row, const QUrl &url,
                                  const QString &filename, const QString &savePath);
     // After the gate: `problem` empty -> hand the archive to extraction; else
     // retry the download once, then keep the bad copy and say so.
-    void afterIntegrityGate(QListWidgetItem *placeholder, const QUrl &url,
+    void afterIntegrityGate(const QUuid &row, const QUrl &url,
                             const QString &filename, const QString &savePath,
                             const QString &problem);
     // Rows whose download is done and whose archive a worker is testing,
     // with the file being tested. Part of the queue as far as isQueued and
     // cancelQueued are concerned.
-    QHash<QListWidgetItem *, QString> m_testing;
+    QHash<QUuid, QString> m_testing;
 
     // Append one line to m_diagLogPath (or qWarning if unset).
     void writeDiag(const QString &line) const;
-    void updateQueueRowProgress(QListWidgetItem *placeholder,
+    void updateQueueRowProgress(const QUuid &row,
                                 qint64 received, qint64 total);
-    void removeQueueRow(QListWidgetItem *placeholder);
+    void removeQueueRow(const QUuid &row);
     void updateQueueTotals();
 
     // Put a row back to "not installed" after a failed download: clears the
@@ -190,13 +195,11 @@ private:
     // it leaves the row spinning forever, and because processDownloadQueue()
     // marks the entry active *before* starting it, the (single) concurrency
     // slot stays occupied and the whole queue wedges.
-    void resetPlaceholderToIdle(QListWidgetItem *placeholder);
+    void resetPlaceholderToIdle(const QUuid &row);
 
-    // True while `placeholder` is a row the queue may read or write. By
-    // address only: the pointer may already be freed, so nothing here reads
-    // through it (QListWidget::indexFromItem does). See setRowAliveCheck.
-    bool rowAlive(QListWidgetItem *placeholder) const;
-    std::function<bool(QListWidgetItem *)> m_rowAlive;
+    // The live row for an id, or nullptr. See setRowResolver.
+    QListWidgetItem *rowFor(const QUuid &row) const;
+    RowResolver m_resolve;
 
     // -- Injected (owned by MainWindow, outlive us) ---
     QListWidget           *m_modList;
@@ -209,16 +212,16 @@ private:
     QList<QueuedDownload>                   m_queue;
     bool                                    m_paused = false;
     static constexpr int                    kMaxConcurrent = 1;
-    QHash<QListWidgetItem*, QNetworkReply*> m_active;    // in-flight replies
-    QHash<QListWidgetItem*, QElapsedTimer>  m_startTime; // per-download ETA
-    QHash<QListWidgetItem*, int>            m_dlAttempts;// integrity-retry count
+    QHash<QUuid, QNetworkReply*> m_active;    // in-flight replies
+    QHash<QUuid, QElapsedTimer>  m_startTime; // per-download ETA
+    QHash<QUuid, int>            m_dlAttempts;// integrity-retry count
 
     // See setDiagLogPath().
     QString m_diagLogPath;
 
-    // Open "manual download" hint dialog, one per placeholder. Auto-closed when
-    // a new download for the same placeholder gets queued via nxm://.
-    QHash<QListWidgetItem*, QPointer<QDialog>> m_manualDlBoxes;
+    // Open "manual download" hint dialog, one per row. Auto-closed when a new
+    // download for the same row gets queued via nxm://.
+    QHash<QUuid, QPointer<QDialog>> m_manualDlBoxes;
 
     // -- Dock UI (owned after setup()) ---
     QDockWidget *m_dock       = nullptr;

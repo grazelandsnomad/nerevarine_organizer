@@ -590,8 +590,11 @@ void MainWindow::onRemoveSelected()
     // A row still in the download queue leaves it first, or its reply would
     // land on freed memory. A queued entry is dropped on the spot; an active
     // transfer aborts and cleans up when its reply finishes.
-    for (auto *item : toRemove)
-        if (m_downloadQueue->isQueued(item)) m_downloadQueue->cancelQueued(item);
+    for (auto *item : toRemove) {
+        const QUuid rowKey = mod_row::rowIdIfAny(item);
+        if (!rowKey.isNull() && m_downloadQueue->isQueued(rowKey))
+            m_downloadQueue->cancelQueued(rowKey);
+    }
 
     for (auto *item : toRemove)
         delete m_modList->takeItem(m_modList->row(item));
@@ -1358,9 +1361,10 @@ void MainWindow::onContextMenu(const QPoint &pos)
                 // cancel; after the handoff the row belongs to the
                 // InstallController (verify/extract), reached by its token.
                 // Both cover the big-mod case where each phase runs minutes.
-                if (m_downloadQueue->isQueued(item)) {
-                    menu.addAction(T("ctx_cancel_download"), this, [this, item]{
-                        m_downloadQueue->cancelQueued(item);
+                const QUuid rowKey = mod_row::rowIdIfAny(item);
+                if (!rowKey.isNull() && m_downloadQueue->isQueued(rowKey)) {
+                    menu.addAction(T("ctx_cancel_download"), this, [this, rowKey]{
+                        m_downloadQueue->cancelQueued(rowKey);
                     });
                 } else if (!item->data(ModRole::InstallToken).toUuid().isNull()) {
                     menu.addAction(T("ctx_cancel_install"), this, [this, item]{

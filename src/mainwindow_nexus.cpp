@@ -410,23 +410,25 @@ void MainWindow::handleNxmUrl(const QString &url)
         return;
     }
 
-    m_downloadQueue->fetchDownloadLink(game, modId, fileId, key, expires, placeholder);
+    m_downloadQueue->fetchDownloadLink(game, modId, fileId, key, expires,
+                                       mod_row::rowId(placeholder));
 }
 
 void MainWindow::setupDownloadQueue()
 {
     m_downloadQueue = new DownloadQueue(m_modList, m_net, m_nexus, this, this);
-    // The queue keys its state by row pointer and must not touch a row that
-    // is gone; a row parked across a profile switch is still being installed.
-    m_downloadQueue->setRowAliveCheck([this](QListWidgetItem *row) {
-        return liveRow(row, "download") != nullptr;
-    });
+    // The queue names rows by id; a row parked across a profile switch is
+    // still being installed, so the lookup covers those too.
+    m_downloadQueue->setRowResolver([this](const QUuid &row) { return rowById(row); });
 
     // Adapter lambda: verifyAndExtract is [[nodiscard]], so the PMF connect form
     // would warn. It already logs + shows a status on failure, so discard here.
     connect(m_downloadQueue, &DownloadQueue::extractionRequested, this,
-            [this](const QString &archivePath, QListWidgetItem *placeholder) {
-                (void)verifyAndExtract(archivePath, placeholder);
+            [this](const QString &archivePath, const QUuid &row) {
+                // The download outlived its row (removed, or the list cleared):
+                // the archive stays on disk, there is nothing to attach it to.
+                if (QListWidgetItem *item = replyRow(row, "download finished"))
+                    (void)verifyAndExtract(archivePath, item);
             });
     connect(m_downloadQueue, &DownloadQueue::saveRequested,
             this, &MainWindow::saveModList);
@@ -983,7 +985,7 @@ void MainWindow::onFileListFetched(const QUuid &rowKey,
         item->setData(ModRole::PendingFileId, QVariant::fromValue(qint64(f.fileId)));
         stashChecksum(item, f);
         autoLinkSameModpage(item, f.category);
-        m_downloadQueue->fetchDownloadLink(game, modId, f.fileId, "", "", item);
+        m_downloadQueue->fetchDownloadLink(game, modId, f.fileId, "", "", rowKey);
         return;
     }
 
@@ -1089,7 +1091,7 @@ void MainWindow::onFileListFetched(const QUuid &rowKey,
     if (sz > 0)         item->setData(ModRole::ExpectedSize, sz);
     item->setData(ModRole::ExpectedFileId, QVariant::fromValue(qint64(fileId)));
     autoLinkSameModpage(item, cat);
-    m_downloadQueue->fetchDownloadLink(game, modId, fileId, "", "", item);
+    m_downloadQueue->fetchDownloadLink(game, modId, fileId, "", "", rowKey);
 }
 
 void MainWindow::onSetApiKey()
