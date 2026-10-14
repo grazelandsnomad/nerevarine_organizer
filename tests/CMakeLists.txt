@@ -1,465 +1,47 @@
-find_package(Qt6 REQUIRED COMPONENTS Core Concurrent Gui Network Test Widgets)
+# One executable per suite, each a single source file linked against
+# nerevarine_core (top-level CMakeLists): the library carries the include
+# dirs, the Qt modules and the generated translation header, so a test lists
+# nothing but itself. No test defines a Q_OBJECT class, so moc has nothing to
+# do here.
+set(CMAKE_AUTOMOC OFF)
 
-# nxm:// URL parsing. Kept on its own because its integration sub-tests gate on
-# an env var (see add_test below).
-add_executable(test_nxm
-    test_nxm.cpp
-    ${CMAKE_SOURCE_DIR}/src/nxmurl.cpp
-    ${CMAKE_SOURCE_DIR}/src/game_match.cpp
-)
-target_include_directories(test_nxm PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(test_nxm PRIVATE Qt6::Core Qt6::Network)
+find_package(Qt6 REQUIRED COMPONENTS Test)   # QSignalSpy, in test_profiles
 
-# openmw.cfg + launcher.cfg writers and sync-prep.
-add_executable(test_openmw_config
-    test_openmw_config.cpp
-    ${CMAKE_SOURCE_DIR}/src/openmwconfigwriter.cpp
-    ${CMAKE_SOURCE_DIR}/src/master_satisfaction.cpp
-    ${CMAKE_SOURCE_DIR}/src/pluginparser.cpp
-    ${CMAKE_SOURCE_DIR}/src/load_order_merge.cpp
-)
-target_include_directories(test_openmw_config PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(test_openmw_config PRIVATE Qt6::Core)
+function(nrv_test name)
+    add_executable(${name} ${name}.cpp)
+    target_link_libraries(${name} PRIVATE nerevarine_core)
+    nrv_warnings(${name})
+endfunction()
 
-# FOMOD/BAIN install path: path resolve, copy, scripts, install, BAIN, and the
-# headless wizard UI driver (FomodWizard is a QDialog Q_OBJECT -> AUTOMOC +
-# Widgets, and pulls translator.h -> generated translation_keys.h).
-add_executable(test_fomod
-    test_fomod.cpp
-    ${CMAKE_SOURCE_DIR}/src/fomod_path.cpp
-    ${CMAKE_SOURCE_DIR}/src/fomod_copy.cpp
-    ${CMAKE_SOURCE_DIR}/src/fomod_hint.cpp
-    ${CMAKE_SOURCE_DIR}/src/fomod_choices.cpp
-    ${CMAKE_SOURCE_DIR}/src/mod_aliases.cpp
-    ${CMAKE_SOURCE_DIR}/src/mod_match.cpp
-    ${CMAKE_SOURCE_DIR}/src/bain_hint.cpp
-    ${CMAKE_SOURCE_DIR}/src/pluginparser.cpp
-    ${CMAKE_SOURCE_DIR}/src/nxmurl.cpp
-    ${CMAKE_SOURCE_DIR}/src/fomod_scripts.cpp
-    ${CMAKE_SOURCE_DIR}/src/fomod_install.cpp
-    ${CMAKE_SOURCE_DIR}/src/fomod_plan.cpp
-    ${CMAKE_SOURCE_DIR}/src/install_job.cpp
-    ${CMAKE_SOURCE_DIR}/src/safe_fs.cpp
-    ${CMAKE_SOURCE_DIR}/src/bain.cpp
-    ${CMAKE_SOURCE_DIR}/src/bainwizard.cpp
-    ${CMAKE_SOURCE_DIR}/src/fomodwizard.cpp
-    ${CMAKE_SOURCE_DIR}/src/game_runtime.cpp
-    ${CMAKE_SOURCE_DIR}/src/pe_info.cpp
-    ${CMAKE_SOURCE_DIR}/src/translator.cpp
-    ${CMAKE_SOURCE_DIR}/include/fomodwizard.h
-    ${CMAKE_SOURCE_DIR}/include/bainwizard.h
-)
-set_target_properties(test_fomod PROPERTIES AUTOMOC ON)
-target_include_directories(test_fomod PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_BINARY_DIR}/generated
-)
-target_link_libraries(test_fomod PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
-
-# Real FOMOD installers replayed against a recorded baseline. Local only: the
-# corpus is other people's installers, kept outside the repo and named by
-# NRV_FOMOD_CORPUS; unset, the binary skips (77). See test_fomod_corpus.cpp.
-add_executable(test_fomod_corpus
-    test_fomod_corpus.cpp
-    ${CMAKE_SOURCE_DIR}/src/fomod_path.cpp
-    ${CMAKE_SOURCE_DIR}/src/fomod_copy.cpp
-    ${CMAKE_SOURCE_DIR}/src/fomod_hint.cpp
-    ${CMAKE_SOURCE_DIR}/src/fomod_choices.cpp
-    ${CMAKE_SOURCE_DIR}/src/mod_aliases.cpp
-    ${CMAKE_SOURCE_DIR}/src/mod_match.cpp
-    ${CMAKE_SOURCE_DIR}/src/bain_hint.cpp
-    ${CMAKE_SOURCE_DIR}/src/pluginparser.cpp
-    ${CMAKE_SOURCE_DIR}/src/nxmurl.cpp
-    ${CMAKE_SOURCE_DIR}/src/fomod_scripts.cpp
-    ${CMAKE_SOURCE_DIR}/src/fomod_install.cpp
-    ${CMAKE_SOURCE_DIR}/src/fomod_plan.cpp
-    ${CMAKE_SOURCE_DIR}/src/install_job.cpp
-    ${CMAKE_SOURCE_DIR}/src/safe_fs.cpp
-    ${CMAKE_SOURCE_DIR}/src/bain.cpp
-    ${CMAKE_SOURCE_DIR}/src/bainwizard.cpp
-    ${CMAKE_SOURCE_DIR}/src/fomodwizard.cpp
-    ${CMAKE_SOURCE_DIR}/src/game_runtime.cpp
-    ${CMAKE_SOURCE_DIR}/src/pe_info.cpp
-    ${CMAKE_SOURCE_DIR}/src/translator.cpp
-    ${CMAKE_SOURCE_DIR}/include/fomodwizard.h
-    ${CMAKE_SOURCE_DIR}/include/bainwizard.h
-)
-set_target_properties(test_fomod_corpus PROPERTIES AUTOMOC ON)
-target_include_directories(test_fomod_corpus PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_BINARY_DIR}/generated
-)
-target_link_libraries(test_fomod_corpus PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
-
-# Bethesda subsystem: deploy, load order, archive ini, proton paths, adapters.
-add_executable(test_bethesda
-    test_bethesda.cpp
-    ${CMAKE_SOURCE_DIR}/src/deployment_report.cpp
-    ${CMAKE_SOURCE_DIR}/src/bethesda_deploy.cpp
-    ${CMAKE_SOURCE_DIR}/src/bethesda_loadorder.cpp
-    ${CMAKE_SOURCE_DIR}/src/root_routes.cpp
-    ${CMAKE_SOURCE_DIR}/src/bethesda_archives.cpp
-    ${CMAKE_SOURCE_DIR}/src/bethesda_custom_ini.cpp
-    ${CMAKE_SOURCE_DIR}/src/proton_paths.cpp
-    ${CMAKE_SOURCE_DIR}/src/dll_overrides.cpp
-    ${CMAKE_SOURCE_DIR}/src/game_adapters.cpp
-    ${CMAKE_SOURCE_DIR}/include/game_adapter.h
-)
-target_include_directories(test_bethesda PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(test_bethesda PRIVATE Qt6::Core)
-
-# OpenGothic (Gothic II): install detection, VDFS archive stamps, mod inis.
-# game_adapters.cpp comes along so the Gothic profile's own wiring is checked
-# against the same registry the app uses.
-add_executable(test_opengothic
-    test_opengothic.cpp
-    ${CMAKE_SOURCE_DIR}/src/opengothic.cpp
-    ${CMAKE_SOURCE_DIR}/src/fomod_path.cpp
-    ${CMAKE_SOURCE_DIR}/src/game_adapters.cpp
-    ${CMAKE_SOURCE_DIR}/include/game_adapter.h
-)
-target_include_directories(test_opengothic PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(test_opengothic PRIVATE Qt6::Core)
-
-# Store detection: Heroic/GOG caches, Steam appmanifest, title normalisation.
-# game_adapters.cpp comes along so the shipped folder candidates are what the
-# match is tested against, not a copy of them.
-# Script-extender plugins against the installed game: PE version data, the
-# address library's format header, and the verdict over both.
-add_executable(test_skse
-    test_skse.cpp
-    ${CMAKE_SOURCE_DIR}/src/pe_info.cpp
-    ${CMAKE_SOURCE_DIR}/src/skse_check.cpp
-)
-target_include_directories(test_skse PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(test_skse PRIVATE Qt6::Core)
-
-# The translation-coverage verdict: what decides every red "no translation"
-# caption. It lived inside a QThread until a user's finished translation was
-# disowned by it; extracting it is what made these thresholds testable.
-add_executable(test_translation_coverage
-    test_translation_coverage.cpp
-    ${CMAKE_SOURCE_DIR}/src/translation_coverage.cpp
-    ${CMAKE_SOURCE_DIR}/src/term_protect.cpp
-    ${CMAKE_SOURCE_DIR}/src/vanilla_text.cpp
-    ${CMAKE_SOURCE_DIR}/src/plugin_strings.cpp
-    ${CMAKE_SOURCE_DIR}/src/plugin_text.cpp
-    ${CMAKE_SOURCE_DIR}/src/language_guess.cpp
-    ${CMAKE_SOURCE_DIR}/src/target_language.cpp
-)
-target_include_directories(test_translation_coverage PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(test_translation_coverage PRIVATE Qt6::Core)
-
-# The scan workers' lifecycle: the conflict and translation scans run on
-# QThread workers, and the gap between a worker's run() returning and its
-# finished handler running was the app's most frequent crash (a worker deleted
-# while still scanning). Q_OBJECT header listed for AUTOMOC.
-add_executable(test_loadorder_controller
-    test_loadorder_controller.cpp
-    ${CMAKE_SOURCE_DIR}/src/loadordercontroller.cpp
-    ${CMAKE_SOURCE_DIR}/src/conflict_direction.cpp
-    ${CMAKE_SOURCE_DIR}/src/plugin_records.cpp
-    ${CMAKE_SOURCE_DIR}/src/pluginparser.cpp
-    ${CMAKE_SOURCE_DIR}/src/translation_coverage.cpp
-    ${CMAKE_SOURCE_DIR}/src/translation_rules.cpp
-    ${CMAKE_SOURCE_DIR}/src/term_protect.cpp
-    ${CMAKE_SOURCE_DIR}/src/vanilla_text.cpp
-    ${CMAKE_SOURCE_DIR}/src/plugin_strings.cpp
-    ${CMAKE_SOURCE_DIR}/src/plugin_text.cpp
-    ${CMAKE_SOURCE_DIR}/src/language_guess.cpp
-    ${CMAKE_SOURCE_DIR}/src/target_language.cpp
-    ${CMAKE_SOURCE_DIR}/include/loadordercontroller.h
-)
-set_target_properties(test_loadorder_controller PROPERTIES AUTOMOC ON)
-target_include_directories(test_loadorder_controller PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_BINARY_DIR}/generated
-)
-target_link_libraries(test_loadorder_controller PRIVATE Qt6::Core Qt6::Concurrent)
-
-# The launch-blocking rules: what stands between "play" and the game starting.
-# launch_warnings.cpp was already free functions with a header - the largest
-# zero-refactor coverage gap in the 2026-09 census - and needed only a target.
-# Widgets because scan() reads QListWidget rows; offscreen platform in main().
-add_executable(test_launch_warnings
-    test_launch_warnings.cpp
-    ${CMAKE_SOURCE_DIR}/src/launch_warnings.cpp
-    ${CMAKE_SOURCE_DIR}/src/settings.cpp
-    ${CMAKE_SOURCE_DIR}/src/pluginparser.cpp
-    ${CMAKE_SOURCE_DIR}/src/forbidden_mods.cpp
-    ${CMAKE_SOURCE_DIR}/src/skse_check.cpp
-    ${CMAKE_SOURCE_DIR}/src/pe_info.cpp
-    ${CMAKE_SOURCE_DIR}/src/reboot_check.cpp
-    ${CMAKE_SOURCE_DIR}/src/translator.cpp
-    ${CMAKE_SOURCE_DIR}/include/forbidden_mods.h
-)
-# Q_OBJECT in ForbiddenModsRegistry; the header is listed so AUTOMOC sees it,
-# the same shape test_settings uses for the same class.
-set_target_properties(test_launch_warnings PROPERTIES AUTOMOC ON)
-target_include_directories(test_launch_warnings PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_BINARY_DIR}/generated)
-add_dependencies(test_launch_warnings translation_keys_header)
-target_link_libraries(test_launch_warnings PRIVATE Qt6::Core Qt6::Widgets)
-
-add_executable(test_store_scan
-    test_store_scan.cpp
-    ${CMAKE_SOURCE_DIR}/src/store_scan.cpp
-    ${CMAKE_SOURCE_DIR}/src/game_store.cpp
-    ${CMAKE_SOURCE_DIR}/src/game_adapters.cpp
-    ${CMAKE_SOURCE_DIR}/include/game_adapter.h
-)
-target_include_directories(test_store_scan PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(test_store_scan PRIVATE Qt6::Core)
-
-# Catching a manual download: partial-name detection, mod id recovery, settle.
-# Q_OBJECT in the watcher, so AUTOMOC.
-add_executable(test_download_watch
-    test_download_watch.cpp
-    ${CMAKE_SOURCE_DIR}/src/download_watch.cpp
-    ${CMAKE_SOURCE_DIR}/include/download_watch.h
-)
-set_target_properties(test_download_watch PROPERTIES AUTOMOC ON)
-target_include_directories(test_download_watch PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(test_download_watch PRIVATE Qt6::Core)
-
-# Modlist persistence: io, serializer, ModEntry value type, sync guard.
-add_executable(test_modlist
-    test_modlist.cpp
-    ${CMAKE_SOURCE_DIR}/src/modlist_io.cpp
-    ${CMAKE_SOURCE_DIR}/src/safe_fs.cpp
-    ${CMAKE_SOURCE_DIR}/src/modlist_serializer.cpp
-    ${CMAKE_SOURCE_DIR}/src/modentry.cpp
-    ${CMAKE_SOURCE_DIR}/src/modlist_sync_guard.cpp
-)
-target_include_directories(test_modlist PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(test_modlist PRIVATE Qt6::Core Qt6::Gui)
-
-# ModlistModel (Q_OBJECT, QSignalSpy) + game/modlist profiles (Q_OBJECT).
-add_executable(test_profiles
-    test_profiles.cpp
-    ${CMAKE_SOURCE_DIR}/src/modlist_model.cpp
-    ${CMAKE_SOURCE_DIR}/src/modentry.cpp
-    ${CMAKE_SOURCE_DIR}/src/nxmurl.cpp
-    ${CMAKE_SOURCE_DIR}/src/game_profiles.cpp
-    ${CMAKE_SOURCE_DIR}/src/game_store.cpp
-    ${CMAKE_SOURCE_DIR}/src/game_adapters.cpp
-    ${CMAKE_SOURCE_DIR}/src/store_scan.cpp
-    ${CMAKE_SOURCE_DIR}/src/settings.cpp
-    ${CMAKE_SOURCE_DIR}/src/target_language.cpp
-    ${CMAKE_SOURCE_DIR}/src/language_guess.cpp
-    ${CMAKE_SOURCE_DIR}/src/lore_overrides.cpp
-    ${CMAKE_SOURCE_DIR}/src/mod_package.cpp
-    ${CMAKE_SOURCE_DIR}/src/term_protect.cpp
-    ${CMAKE_SOURCE_DIR}/src/translation_rules.cpp
-    ${CMAKE_SOURCE_DIR}/src/subprocess.cpp
-    ${CMAKE_SOURCE_DIR}/include/modlist_model.h
-    ${CMAKE_SOURCE_DIR}/include/game_profiles.h
-)
-set_target_properties(test_profiles PROPERTIES AUTOMOC ON)
-target_include_directories(test_profiles PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(test_profiles PRIVATE Qt6::Core Qt6::Gui Qt6::Test)
-
-# Nexus API parsing + dependency resolution.
-add_executable(test_nexus
-    test_nexus.cpp
-    ${CMAKE_SOURCE_DIR}/src/nexusclient.cpp
-    ${CMAKE_SOURCE_DIR}/src/file_status.cpp
-    ${CMAKE_SOURCE_DIR}/src/deps_resolver.cpp
-    ${CMAKE_SOURCE_DIR}/src/nxmurl.cpp
-    ${CMAKE_SOURCE_DIR}/src/file_pick.cpp
-    ${CMAKE_SOURCE_DIR}/src/game_store.cpp
-)
-target_include_directories(test_nexus PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(test_nexus PRIVATE Qt6::Core Qt6::Network)
-
-# The v2 GraphQL queries against the live endpoint - a canary for silent
-# truncation or schema drift, which every caller would otherwise absorb by
-# degrading quietly. Labelled "integration", so CI's -L unit run skips it.
-add_executable(test_nexus_v2_live
-    test_nexus_v2_live.cpp
-    ${CMAKE_SOURCE_DIR}/src/nexusclient.cpp
-    ${CMAKE_SOURCE_DIR}/src/file_status.cpp
-    ${CMAKE_SOURCE_DIR}/src/nxmurl.cpp
-    ${CMAKE_SOURCE_DIR}/src/file_pick.cpp
-    ${CMAKE_SOURCE_DIR}/src/game_store.cpp
-)
-target_include_directories(test_nexus_v2_live PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(test_nexus_v2_live PRIVATE Qt6::Core Qt6::Network)
-
-# Plugin/BSA parsing, master satisfaction, plugin + asset collisions.
-add_executable(test_plugins
-    test_plugins.cpp
-    ${CMAKE_SOURCE_DIR}/src/pluginparser.cpp
-    ${CMAKE_SOURCE_DIR}/src/bsareader.cpp
-    ${CMAKE_SOURCE_DIR}/src/master_satisfaction.cpp
-    ${CMAKE_SOURCE_DIR}/src/plugin_collisions.cpp
-    ${CMAKE_SOURCE_DIR}/src/asset_collisions.cpp
-    ${CMAKE_SOURCE_DIR}/src/log_triage.cpp
-)
-target_include_directories(test_plugins PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(test_plugins PRIVATE Qt6::Core)
-
-# Load-order merge + ScanCoordinator (Q_OBJECT, takes a QListWidget*).
-add_executable(test_load_order
-    test_load_order.cpp
-    ${CMAKE_SOURCE_DIR}/src/load_order_merge.cpp
-    ${CMAKE_SOURCE_DIR}/src/scan_coordinator.cpp
-    ${CMAKE_SOURCE_DIR}/src/conflict_direction.cpp
-    ${CMAKE_SOURCE_DIR}/src/plugin_records.cpp
-    ${CMAKE_SOURCE_DIR}/src/plugin_strings.cpp
-    ${CMAKE_SOURCE_DIR}/src/plugin_writer.cpp
-    ${CMAKE_SOURCE_DIR}/src/plugin_text.cpp
-    ${CMAKE_SOURCE_DIR}/src/target_language.cpp
-    ${CMAKE_SOURCE_DIR}/src/language_guess.cpp
-    ${CMAKE_SOURCE_DIR}/src/lore_overrides.cpp
-    ${CMAKE_SOURCE_DIR}/src/mod_package.cpp
-    ${CMAKE_SOURCE_DIR}/src/term_protect.cpp
-    ${CMAKE_SOURCE_DIR}/src/translation_rules.cpp
-    ${CMAKE_SOURCE_DIR}/src/subprocess.cpp
-    ${CMAKE_SOURCE_DIR}/src/google_translate.cpp
-    ${CMAKE_SOURCE_DIR}/src/libre_translate.cpp
-    ${CMAKE_SOURCE_DIR}/src/translation_store.cpp
-    ${CMAKE_SOURCE_DIR}/src/translation_mod.cpp
-    ${CMAKE_SOURCE_DIR}/src/pluginparser.cpp
-    ${CMAKE_SOURCE_DIR}/src/modentry.cpp
-    ${CMAKE_SOURCE_DIR}/src/modentry_item.cpp
-    ${CMAKE_SOURCE_DIR}/src/undo_stack.cpp
-    ${CMAKE_SOURCE_DIR}/include/scan_coordinator.h
-    ${CMAKE_SOURCE_DIR}/include/undo_stack.h
-)
-set_target_properties(test_load_order PROPERTIES AUTOMOC ON)
-target_include_directories(test_load_order PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(test_load_order PRIVATE
-    Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::Widgets)
-
-# Filesystem helpers: safe_fs + fs_utils (header-only).
-add_executable(test_fs
-    test_fs.cpp
-    ${CMAKE_SOURCE_DIR}/src/safe_fs.cpp
-)
-target_include_directories(test_fs PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(test_fs PRIVATE Qt6::Core)
-
-# async::guarded helper (header-only; needs a real thread pool + event loop).
-add_executable(test_async
-    test_async.cpp
-)
-target_include_directories(test_async PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(test_async PRIVATE Qt6::Core Qt6::Concurrent)
-
-# BackupManager checkpoints, incl. the auto pre-sort good-state (Q_OBJECT ->
-# AUTOMOC; pulls prompts + translator.h -> generated translation_keys.h).
-add_executable(test_backup
-    test_backup.cpp
-    ${CMAKE_SOURCE_DIR}/src/backup_manager.cpp
-    ${CMAKE_SOURCE_DIR}/src/backup_ops.cpp
-    ${CMAKE_SOURCE_DIR}/src/safe_fs.cpp
-    ${CMAKE_SOURCE_DIR}/src/prompts.cpp
-    ${CMAKE_SOURCE_DIR}/src/translator.cpp
-    ${CMAKE_SOURCE_DIR}/include/backup_manager.h
-)
-set_target_properties(test_backup PROPERTIES AUTOMOC ON)
-target_include_directories(test_backup PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_BINARY_DIR}/generated
-)
-target_link_libraries(test_backup PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
-
-# Settings migrations + per-game forbidden mods (registry TU is a Q_OBJECT and
-# pulls translator.h -> generated translation_keys.h).
-add_executable(test_settings
-    test_settings.cpp
-    ${CMAKE_SOURCE_DIR}/src/settings_migrations.cpp
-    ${CMAKE_SOURCE_DIR}/src/forbidden_mods.cpp
-    ${CMAKE_SOURCE_DIR}/src/settings.cpp
-    ${CMAKE_SOURCE_DIR}/src/translator.cpp
-    ${CMAKE_SOURCE_DIR}/include/forbidden_mods.h
-)
-set_target_properties(test_settings PROPERTIES AUTOMOC ON)
-target_include_directories(test_settings PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_BINARY_DIR}/generated
-)
-target_link_libraries(test_settings PRIVATE Qt6::Core Qt6::Widgets)
-
-# Mod naming, sharing, install layout, post-install heuristics, modlist summary.
-add_executable(test_mods
-    test_mods.cpp
-    ${CMAKE_SOURCE_DIR}/src/mod_naming.cpp
-    ${CMAKE_SOURCE_DIR}/src/mod_cleanup.cpp
-    ${CMAKE_SOURCE_DIR}/src/mod_sharing.cpp
-    ${CMAKE_SOURCE_DIR}/src/modlist_serializer.cpp
-    ${CMAKE_SOURCE_DIR}/src/modlist_summary.cpp
-    ${CMAKE_SOURCE_DIR}/src/modentry.cpp
-    ${CMAKE_SOURCE_DIR}/src/install_layout.cpp
-    ${CMAKE_SOURCE_DIR}/src/post_install.cpp
-    ${CMAKE_SOURCE_DIR}/src/variant_picker.cpp
-    ${CMAKE_SOURCE_DIR}/src/fomod_copy.cpp
-    ${CMAKE_SOURCE_DIR}/src/fomod_path.cpp
-    ${CMAKE_SOURCE_DIR}/src/placeholder_state.cpp
-    ${CMAKE_SOURCE_DIR}/src/row_caption.cpp
-)
-target_include_directories(test_mods PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(test_mods PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
-
-# Archive magic sniffing + extractor error-message routing (both pure, moc-free).
-add_executable(test_extract
-    test_extract.cpp
-    ${CMAKE_SOURCE_DIR}/src/archive_magic.cpp
-    ${CMAKE_SOURCE_DIR}/src/archive_policy.cpp
-    ${CMAKE_SOURCE_DIR}/src/download_integrity.cpp
-    ${CMAKE_SOURCE_DIR}/src/subprocess.cpp
-    ${CMAKE_SOURCE_DIR}/src/extract_errors.cpp
-    ${CMAKE_SOURCE_DIR}/src/installcontroller.cpp
-    ${CMAKE_SOURCE_DIR}/src/install_layout.cpp
-    ${CMAKE_SOURCE_DIR}/src/logging.cpp
-    # Header listed so AUTOMOC mocs it (it lives in include/, not next to the
-    # .cpp, so the same-directory header scan alone misses it).
-    ${CMAKE_SOURCE_DIR}/include/installcontroller.h
-)
-target_include_directories(test_extract PRIVATE ${CMAKE_SOURCE_DIR}/include)
-# Concurrent: InstallController's MD5 verify hashes on a QtConcurrent worker.
-# AUTOMOC: InstallController is a Q_OBJECT (signals drive the cancel tests).
-target_link_libraries(test_extract PRIVATE Qt6::Core Qt6::Concurrent)
-set_target_properties(test_extract PROPERTIES AUTOMOC ON)
-
-
-# Translate editor's table behaviour. A QDialog with Q_OBJECT -> AUTOMOC +
-# Widgets, and translator.h pulls the generated translation_keys.h.
-add_executable(test_translate_ui
-    test_translate_ui.cpp
-    ${CMAKE_SOURCE_DIR}/src/translate_dialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/markup_protect.cpp
-    ${CMAKE_SOURCE_DIR}/src/translation_store.cpp
-    ${CMAKE_SOURCE_DIR}/src/translation_progress.cpp
-    ${CMAKE_SOURCE_DIR}/src/translation_mod.cpp
-    ${CMAKE_SOURCE_DIR}/src/translation_rules.cpp
-    ${CMAKE_SOURCE_DIR}/src/term_protect.cpp
-    ${CMAKE_SOURCE_DIR}/src/google_translate.cpp
-    ${CMAKE_SOURCE_DIR}/src/libre_translate.cpp
-    ${CMAKE_SOURCE_DIR}/src/settings.cpp
-    ${CMAKE_SOURCE_DIR}/src/lore_overrides.cpp
-    ${CMAKE_SOURCE_DIR}/src/target_language.cpp
-    ${CMAKE_SOURCE_DIR}/src/plugin_writer.cpp
-    ${CMAKE_SOURCE_DIR}/src/plugin_strings.cpp
-    ${CMAKE_SOURCE_DIR}/src/vanilla_text.cpp
-    ${CMAKE_SOURCE_DIR}/src/plugin_text.cpp
-    ${CMAKE_SOURCE_DIR}/src/prompts.cpp
-    ${CMAKE_SOURCE_DIR}/src/subprocess.cpp
-    ${CMAKE_SOURCE_DIR}/src/translator.cpp
-    ${CMAKE_SOURCE_DIR}/include/translate_dialog.h
-)
-set_target_properties(test_translate_ui PROPERTIES AUTOMOC ON)
-target_include_directories(test_translate_ui PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_BINARY_DIR}/generated
-)
-target_link_libraries(test_translate_ui PRIVATE
-    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network)
-
-# CTest registration. "unit" = hermetic; test_nxm also carries an "integration"
-# variant gated on NEREVARINE_SKIP_INTEGRATION.
+# Hermetic suites: what CI runs, as `ctest -L unit`.
+#   test_openmw_config          openmw.cfg + launcher.cfg writers, sync-prep
+#   test_fomod                  FOMOD/BAIN install path and the headless wizard
+#                               driver (a real QApplication, offscreen)
+#   test_bethesda               Bethesda deploy, load order, archive ini, proton
+#                               paths, game adapters
+#   test_opengothic             Gothic II detection, VDFS stamps, mod inis
+#   test_store_scan             Heroic/GOG/Steam detection, title normalisation
+#   test_skse                   script-extender plugins against the installed game
+#   test_download_watch         catching a manual download
+#   test_modlist                modlist io, serializer, ModEntry, sync guard
+#   test_profiles               ModlistModel signals, game + modlist profiles
+#   test_translate_ui           the translate editor's table behaviour
+#   test_nexus                  Nexus API parsing, dependency resolution
+#   test_plugins                plugin/BSA parsing, masters, collisions
+#   test_load_order             load-order merge, ScanCoordinator, undo
+#   test_fs                     safe_fs + fs_utils
+#   test_async                  async::guarded (a real thread pool + event loop)
+#   test_backup                 BackupManager checkpoints
+#   test_settings               settings migrations, forbidden mods
+#   test_mods                   naming, sharing, install layout, post-install,
+#                               summary, placeholder state, row captions
+#   test_extract                archive magic, extractor errors, InstallController
+#   test_loadorder_controller   the scan workers' lifecycle
+#   test_translation_coverage   the "no translation" verdict
+#   test_launch_warnings        the launch-blocking rules
+#   test_queues                 the install queues and rows that vanish mid-flight
+#   test_nxm                    nxm:// URL parsing; its networked sub-tests are
+#                               the integration variant registered below
 set(UNIT_TESTS
     test_openmw_config
     test_fomod
@@ -481,39 +63,41 @@ set(UNIT_TESTS
     test_mods
     test_extract
     test_loadorder_controller
+    test_translation_coverage
+    test_launch_warnings
+    test_queues
+    test_nxm
 )
-
-foreach(t ${UNIT_TESTS})
+foreach(t IN LISTS UNIT_TESTS)
+    nrv_test(${t})
     add_test(NAME ${t} COMMAND ${t})
     set_tests_properties(${t} PROPERTIES LABELS "unit")
 endforeach()
-
-add_test(NAME test_translation_coverage COMMAND test_translation_coverage)
-set_tests_properties(test_translation_coverage PROPERTIES LABELS "unit")
-add_test(NAME test_launch_warnings COMMAND test_launch_warnings)
-set_tests_properties(test_launch_warnings PROPERTIES LABELS "unit")
-add_test(NAME test_nxm COMMAND test_nxm)
+target_link_libraries(test_profiles PRIVATE Qt6::Test)
 set_tests_properties(test_nxm PROPERTIES
-    LABELS "unit"
     ENVIRONMENT "NEREVARINE_SKIP_INTEGRATION=1")
 
+# Not hermetic, so not under the unit label. 77 = "skipped", the automake
+# convention: the binary returns it when its input is not there (no corpus,
+# no network), so a machine without it reports a skip instead of a failure.
+
+# Real FOMOD installers replayed against a recorded baseline. The corpus is
+# other people's installers, kept outside the repo and named by
+# NRV_FOMOD_CORPUS; unset, the binary skips.
+nrv_test(test_fomod_corpus)
 add_test(NAME test_fomod_corpus COMMAND test_fomod_corpus)
 set_tests_properties(test_fomod_corpus PROPERTIES LABELS "corpus"
     SKIP_RETURN_CODE 77)
 
+# The v2 GraphQL queries against the live endpoint - a canary for silent
+# truncation or schema drift, which every caller would otherwise absorb by
+# degrading quietly. Run daily by sanitizers.yml.
+nrv_test(test_nexus_v2_live)
 add_test(NAME test_nexus_v2_live COMMAND test_nexus_v2_live)
 set_tests_properties(test_nexus_v2_live PROPERTIES LABELS "integration"
     SKIP_RETURN_CODE 77)
 
+# test_nxm again, this time with its networked sub-tests on.
 add_test(NAME test_nxm_integration COMMAND test_nxm)
 set_tests_properties(test_nxm_integration PROPERTIES LABELS "integration"
-    # 77 = "skipped", the automake convention: the binary returns it when there
-    # is no network, so an offline machine reports the test as skipped instead
-    # of failing a tree that has nothing wrong with it.
     SKIP_RETURN_CODE 77)
-
-# Same warning set as the app (nrv_warnings in the top-level CMakeLists).
-foreach(t IN LISTS UNIT_TESTS ITEMS test_translation_coverage test_launch_warnings
-        test_nxm test_fomod_corpus test_nexus_v2_live)
-    nrv_warnings(${t})
-endforeach()

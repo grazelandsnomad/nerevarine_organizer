@@ -129,19 +129,13 @@ fi
 # AUTOMOC outputs and the generated translation header have to exist
 # before clang-tidy parses the TUs that include them.
 cmake --build "$BUILD_DIR" --target translation_keys_header
-cmake --build "$BUILD_DIR" --target nerevarine_organizer_autogen
+cmake --build "$BUILD_DIR" --target nerevarine_core_autogen nerevarine_organizer_autogen
 
 # clang-tidy analyses a file once per compile_commands.json entry, and CMake
-# emits one entry per (source, target) pair.  47 of our 88 sources are
-# compiled into a test target as well as the app - 148 entries - so most of
-# them are analysed two to four times for no new findings (clang-tidy even
-# collapses the duplicate diagnostics before printing).  It is just run time.
-#
-# So point -p at a filtered database holding one entry per source.  The app
-# target's entry specifically, not merely the first one seen: each test target
-# carries its own include dirs and not all of them add <build>/generated, so a
-# test entry can fail to compile a TU that the app entry handles.  Every
-# src/*.cpp is in CMakeLists' SOURCES, so an app entry always exists.
+# emits one entry per (source, target) pair.  Every src/*.cpp is compiled
+# once, into nerevarine_core, so there is one entry each today; the filter
+# keeps it that way should a source ever be listed in a second target again,
+# preferring the library's entry, whose include dirs are the full set.
 #
 # Written beside the real database rather than over it - CMake owns that file,
 # regenerates it on reconfigure, and .clangd reads it for the editor.
@@ -155,7 +149,9 @@ source, dest = sys.argv[1], sys.argv[2]
 best = {}
 for entry in json.load(open(source)):
     # CMake's "output" is <build>/[tests/]CMakeFiles/<target>.dir/<path>.o
-    is_app = "/CMakeFiles/nerevarine_organizer.dir/" in entry.get("output", "")
+    out = entry.get("output", "")
+    is_app = ("/CMakeFiles/nerevarine_core.dir/" in out
+              or "/CMakeFiles/nerevarine_organizer.dir/" in out)
     keep, seen = best.get(entry["file"], (False, None))
     if seen is None or (is_app and not keep):
         best[entry["file"]] = (is_app, entry)

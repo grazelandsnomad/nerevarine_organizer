@@ -26,8 +26,6 @@ function(nrv_warnings target)
     endif()
 endfunction()
 
-enable_testing()
-add_subdirectory(tests)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
@@ -56,25 +54,6 @@ add_custom_target(translation_keys_header
     DEPENDS ${TRANSLATION_ENUM_HEADER}
 )
 
-# tests/test_fomod_wizard_ui compiles fomodwizard.cpp, which includes
-# translator.h -> the generated translation_keys.h. The test target lives in
-# tests/ (added above, before this target exists) but target names are global,
-# so wire the generation dependency here to keep clean builds race-free.
-if(TARGET test_fomod)
-    add_dependencies(test_fomod translation_keys_header)
-endif()
-if(TARGET test_fomod_corpus)
-    add_dependencies(test_fomod_corpus translation_keys_header)
-endif()
-if(TARGET test_settings)
-    add_dependencies(test_settings translation_keys_header)
-endif()
-# translate_dialog.cpp reaches T() too, so this target has always needed the
-# generated header - it has been getting it by build-order luck.
-if(TARGET test_translate_ui)
-    add_dependencies(test_translate_ui translation_keys_header)
-endif()
-
 # Optional: qt6keychain for secure API-key storage (libsecret / KWallet /
 # DPAPI backend).  When present, the Nexus API key is stored there instead
 # of in plain-text QSettings.  When absent, the app falls back to QSettings
@@ -97,8 +76,7 @@ if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
            CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
 endif()
 
-set(SOURCES
-    main.cpp
+set(CORE_SOURCES
     src/prompts.cpp
     src/subprocess.cpp
     src/theme.cpp
@@ -322,7 +300,6 @@ set(SOURCES
     include/download_watch.h
     include/dep_graph.h
     include/settings.h
-    resources.qrc
 )
 
 # Platform-specific executable flags (Linux + Windows only; macOS not supported)
@@ -331,13 +308,38 @@ if(APPLE)
         "macOS is not a supported target. Build on Linux or Windows.")
 endif()
 
+# Everything but main() in a static library that the app and every test link.
+# One compile per source (the per-test source lists compiled pluginparser.cpp
+# seven times), and a test can no longer fail to link because its list missed
+# the file a new function landed in.
+#
+# The usage requirements are PUBLIC on purpose: the include dirs, the Qt
+# modules, the generated translation header and HAVE_QTKEYCHAIN reach every
+# consumer, so a test lists nothing but its own file. resources.qrc stays on
+# the executable: inside a static library a resource bundle's initializer is
+# dropped by the linker unless something references it, and nothing does.
+add_library(nerevarine_core STATIC ${CORE_SOURCES})
+nrv_warnings(nerevarine_core)
+target_include_directories(nerevarine_core PUBLIC
+    include
+    ${CMAKE_BINARY_DIR}/generated
+)
+add_dependencies(nerevarine_core translation_keys_header)
+target_link_libraries(nerevarine_core PUBLIC
+    Qt6::Core
+    Qt6::Widgets
+    Qt6::Network
+    Qt6::Concurrent
+)
+
 if(WIN32)
     # WIN32 suppresses the console window on Windows
-    add_executable(nerevarine_organizer WIN32 ${SOURCES})
+    add_executable(nerevarine_organizer WIN32 main.cpp resources.qrc)
 else()
-    add_executable(nerevarine_organizer ${SOURCES})
+    add_executable(nerevarine_organizer main.cpp resources.qrc)
 endif()
 nrv_warnings(nerevarine_organizer)
+target_link_libraries(nerevarine_organizer PRIVATE nerevarine_core)
 
 # Single-source the app version: main.cpp reads NR_APP_VERSION instead of
 # hardcoding a literal, so project(... VERSION) above is the only place a
@@ -345,19 +347,6 @@ nrv_warnings(nerevarine_organizer)
 # whole app.
 set_property(SOURCE main.cpp APPEND PROPERTY
     COMPILE_DEFINITIONS NR_APP_VERSION="${PROJECT_VERSION}")
-
-target_include_directories(nerevarine_organizer PRIVATE
-    include
-    ${CMAKE_BINARY_DIR}/generated
-)
-add_dependencies(nerevarine_organizer translation_keys_header)
-
-target_link_libraries(nerevarine_organizer PRIVATE
-    Qt6::Core
-    Qt6::Widgets
-    Qt6::Network
-    Qt6::Concurrent
-)
 
 # GCC 14 keeps std::print / std::println symbols in libstdc++exp.a;
 # GCC 15 promoted them into libstdc++ on Linux but still keeps the
@@ -367,11 +356,11 @@ target_link_libraries(nerevarine_organizer PRIVATE
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
         AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "14"
         AND (WIN32 OR CMAKE_CXX_COMPILER_VERSION VERSION_LESS "15"))
-    target_link_libraries(nerevarine_organizer PRIVATE stdc++exp)
+    target_link_libraries(nerevarine_core PUBLIC stdc++exp)
 endif()
 if(Qt6Keychain_FOUND)
-    target_link_libraries(nerevarine_organizer PRIVATE Qt6Keychain::Qt6Keychain)
-    target_compile_definitions(nerevarine_organizer PRIVATE HAVE_QTKEYCHAIN)
+    target_link_libraries(nerevarine_core PUBLIC Qt6Keychain::Qt6Keychain)
+    target_compile_definitions(nerevarine_core PUBLIC HAVE_QTKEYCHAIN)
 endif()
 
 if(UNIX AND NOT APPLE)
@@ -458,3 +447,8 @@ if(WIN32 AND NOT DEFINED MXE_TARGET)
 endif()
 
 # macOS is not supported.
+
+# -- Tests -------------------------------------------------------------
+# After the library: each test is one source file linked against it.
+enable_testing()
+add_subdirectory(tests)

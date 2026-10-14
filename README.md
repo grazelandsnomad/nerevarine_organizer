@@ -126,6 +126,9 @@ Bug reports and pull requests are welcome.
 ctest --test-dir build -L unit       # offline tests
 ctest --test-dir build               # also run integration (needs a Nexus API key)
 ```
+Every suite is one file in `tests/`, linked against the `nerevarine_core`
+library that holds everything but `main()`; a new suite is its file plus one
+line in `tests/CMakeLists.txt`.
 CI runs `ctest -L unit` on Ubuntu 24.04 with GCC 14 / Qt 6 from the
 distro repos. The integration tests need KIO `.protocol` files
 registered and a live Nexus API key, so they only run locally.

@@ -50,9 +50,8 @@ jobs:
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DNRV_WARNINGS_AS_ERRORS=ON
 
       - name: Build
-        # Builds the app, not just the tests, on purpose: mainwindow.cpp is ~38%
-        # of the codebase and has no test coverage, so compiling it is the only
-        # automated check it gets.
+        # Everything: the library (every source, mainwindow.cpp included, which
+        # no test exercises), the app and the tests.
         run: cmake --build build -j"$(nproc)"
 
       - name: Unit tests
