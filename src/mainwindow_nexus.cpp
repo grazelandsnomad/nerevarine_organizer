@@ -3,6 +3,7 @@
 
 #include "mainwindow.h"
 #include "mainwindow_internal.h"
+#include "user_state_paths.h"
 
 #ifdef HAVE_QTKEYCHAIN
 #  include <qt6keychain/keychain.h>
@@ -144,7 +145,6 @@ using plugins::readTes3Masters;
 #include <QDropEvent>
 #include <QMimeData>
 using fsutils::sanitizeFolderName;
-#include "mainwindow_internal.h"
 
 void MainWindow::checkNxmHandlerRegistration()
 {

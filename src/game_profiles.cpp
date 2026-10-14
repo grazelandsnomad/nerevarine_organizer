@@ -3,6 +3,7 @@
 #include "game_adapter.h"
 #include "game_store.h"
 #include "store_scan.h"
+#include "user_state_paths.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -58,28 +59,6 @@ QStringList steamCommonRoots()
         if (QFileInfo::exists(common) && !out.contains(common)) out << common;
     }
     return out;
-}
-
-QString resolveStateFile(const QString &filename)
-{
-    // Same logic as MainWindow::resolveUserStatePath, duplicated so the
-    // registry doesn't pull QtWidgets/MainWindow into its deps. Keep both in
-    // sync - they must resolve to the same path.
-    const bool inAppImage = !qEnvironmentVariableIsEmpty("APPIMAGE");
-    const QString data = QStandardPaths::writableLocation(
-                             QStandardPaths::AppDataLocation) + "/" + filename;
-    if (inAppImage) {
-        QDir().mkpath(QFileInfo(data).absolutePath());
-        return QFileInfo(data).absoluteFilePath();
-    }
-    const QString next = QCoreApplication::applicationDirPath() + "/" + filename;
-    QFileInfo binDir(QCoreApplication::applicationDirPath());
-    for (const QString &p : {next, data})
-        if (QFile::exists(p)) return QFileInfo(p).absoluteFilePath();
-    if (binDir.isWritable())
-        return QFileInfo(next).absoluteFilePath();
-    QDir().mkpath(QFileInfo(data).absolutePath());
-    return QFileInfo(data).absoluteFilePath();
 }
 
 } // namespace
@@ -332,8 +311,8 @@ int GameProfileRegistry::cloneModlistProfile(int srcIdx, const QString &newName)
     // fine - the new profile just starts empty.
     auto duplicate = [](const QString &srcFile, const QString &dstFile) {
         if (srcFile.isEmpty() || dstFile.isEmpty()) return;
-        const QString srcAbs = resolveStateFile(srcFile);
-        const QString dstAbs = resolveStateFile(dstFile);
+        const QString srcAbs = resolveUserStatePath(srcFile);
+        const QString dstAbs = resolveUserStatePath(dstFile);
         if (!QFile::exists(srcAbs)) return;
         QFile::remove(dstAbs);                // drop any stale copy first
         QFile::copy(srcAbs, dstAbs);
@@ -356,9 +335,9 @@ bool GameProfileRegistry::removeModlistProfile(int idx, bool deleteStateFiles)
     if (deleteStateFiles) {
         const ModlistProfile &mp = gp.modlistProfiles[idx];
         if (!mp.modlistFilename.isEmpty())
-            QFile::remove(resolveStateFile(mp.modlistFilename));
+            QFile::remove(resolveUserStatePath(mp.modlistFilename));
         if (!mp.loadOrderFilename.isEmpty())
-            QFile::remove(resolveStateFile(mp.loadOrderFilename));
+            QFile::remove(resolveUserStatePath(mp.loadOrderFilename));
     }
 
     // Drop the QSettings group, else a recreated profile of the same name
@@ -404,8 +383,8 @@ bool GameProfileRegistry::renameModlistProfile(int idx, const QString &newName)
         // installs) is a no-op; just register the new filename for next time.
         auto renameFile = [](const QString &fromFile, const QString &toFile) {
             if (fromFile == toFile || fromFile.isEmpty() || toFile.isEmpty()) return;
-            const QString fromAbs = resolveStateFile(fromFile);
-            const QString toAbs   = resolveStateFile(toFile);
+            const QString fromAbs = resolveUserStatePath(fromFile);
+            const QString toAbs   = resolveUserStatePath(toFile);
             if (QFile::exists(fromAbs)) {
                 QFile::remove(toAbs);
                 QFile::rename(fromAbs, toAbs);

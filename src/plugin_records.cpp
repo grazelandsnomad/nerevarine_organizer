@@ -1,5 +1,7 @@
 #include "plugin_records.h"
 
+#include "plugin_bytes.h"
+
 #include <QDataStream>
 #include <QFile>
 #include <QFileInfo>
@@ -10,27 +12,12 @@ namespace plugin_records {
 
 namespace {
 
-// TES4-family layout: every record and every GRUP opens with a 24-byte header.
-//   record: type[4] dataSize[4] flags[4] formId[4] ...8 more
-//   GRUP:   "GRUP"  groupSize[4] (INCLUDING these 24) label[4] type[4] ...8
-constexpr int kHeader = 24;
+// Record/GRUP framing: plugin_bytes.h.
+using namespace plugin_bytes;
 
 bool readExactly(QFile &f, char *buf, int n)
 {
     return f.read(buf, n) == n;
-}
-
-quint32 le32(const char *p)
-{
-    return quint32(quint8(p[0]))
-         | (quint32(quint8(p[1])) <<  8)
-         | (quint32(quint8(p[2])) << 16)
-         | (quint32(quint8(p[3])) << 24);
-}
-
-quint16 le16(const char *p)
-{
-    return quint16(quint8(p[0])) | (quint16(quint8(p[1])) << 8);
 }
 
 // Master list from the TES4 header record's MAST fields.

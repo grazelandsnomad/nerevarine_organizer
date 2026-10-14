@@ -9,12 +9,6 @@
 #include <QString>
 #include <QStringList>
 
-// Resolve a writable path for a user-state file (modlist, load order, deploy
-// manifest, ...). Under an AppImage the app dir is a read-only squashfs mount,
-// so this routes to AppDataLocation; otherwise it prefers next to the binary.
-// Defined in mainwindow.cpp; used there and by the deploy TU's state paths.
-QString resolveUserStatePath(const QString &filename);
-
 // The per-language rules file (translation_rules.h). Shared because the editor
 // and the untranslated scan must resolve the very same file: the scan reads
 // [ordinary] to decide whether a bare display name counts as translatable, and

@@ -1,5 +1,6 @@
 #include "plugin_writer.h"
 
+#include "plugin_bytes.h"
 #include "plugin_strings.h"
 #include "plugin_text.h"
 
@@ -11,36 +12,7 @@
 namespace plugin_writer {
 namespace {
 
-constexpr int    kHeader         = 24;            // record and GRUP alike
-constexpr quint32 kFlagCompressed = 0x00040000;
-constexpr quint32 kFlagLocalized  = 0x00000080;   // TES4 header only
-
-quint32 le32(const char *p)
-{
-    return quint32(quint8(p[0]))
-         | (quint32(quint8(p[1])) <<  8)
-         | (quint32(quint8(p[2])) << 16)
-         | (quint32(quint8(p[3])) << 24);
-}
-
-quint16 le16(const char *p)
-{
-    return quint16(quint8(p[0])) | (quint16(quint8(p[1])) << 8);
-}
-
-void putLe32(char *p, quint32 v)
-{
-    p[0] = char( v        & 0xff);
-    p[1] = char((v >>  8) & 0xff);
-    p[2] = char((v >> 16) & 0xff);
-    p[3] = char((v >> 24) & 0xff);
-}
-
-void putLe16(char *p, quint16 v)
-{
-    p[0] = char( v       & 0xff);
-    p[1] = char((v >> 8) & 0xff);
-}
+using namespace plugin_bytes;   // kHeader, the flags, le/putLe
 
 bool isTextSubrecord(const char *sub)
 {

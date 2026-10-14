@@ -503,6 +503,48 @@ QString renderOpenMWConfig(const QList<ConfigMod> &mods,
     return out;
 }
 
+namespace {
+
+// The [Profiles] section of launcher.cfg: the CR-stripped lines, the
+// section's range, and the active profile's timestamp key, which prefixes
+// that profile's data=/content= lines. One walk for the renderer and the two
+// readers below, which used to carry a copy each.
+struct LauncherProfiles {
+    QStringList lines;
+    int         start = -1;   // index of "[Profiles]"; -1 when absent
+    int         end   = 0;    // index of the next section header, or lines.size()
+    QString     ts;           // currentprofile= value; empty when absent
+};
+
+LauncherProfiles launcherProfiles(const QString &in)
+{
+    LauncherProfiles lp;
+    lp.lines = in.split('\n');
+    for (QString &l : lp.lines) if (l.endsWith('\r')) l.chop(1);
+    lp.end = lp.lines.size();
+    for (int i = 0; i < lp.lines.size(); ++i) {
+        const QString &l = lp.lines.at(i);
+        if (!l.startsWith('[') || !l.endsWith(']')) continue;
+        if (l == QStringLiteral("[Profiles]")) {
+            lp.start = i;
+        } else if (lp.start >= 0) {
+            lp.end = i;
+            break;
+        }
+    }
+    if (lp.start < 0) return lp;
+    static const QString kKey = QStringLiteral("currentprofile=");
+    for (int i = lp.start + 1; i < lp.end; ++i) {
+        if (lp.lines.at(i).startsWith(kKey)) {
+            lp.ts = lp.lines.at(i).mid(kKey.size());
+            break;
+        }
+    }
+    return lp;
+}
+
+} // namespace
+
 QString renderLauncherCfg(const QString     &in,
                           const QStringList &dataPaths,
                           const QStringList &contentFiles)
@@ -516,35 +558,14 @@ QString renderLauncherCfg(const QString     &in,
     const bool crlf = in.contains(QStringLiteral("\r\n"));
     const QString nl = crlf ? QStringLiteral("\r\n") : QStringLiteral("\n");
 
-    QStringList lines = in.split('\n');
-    // Normalise CR now; we avoid re-emitting the final-"\n" blank later.
-    for (QString &l : lines) if (l.endsWith('\r')) l.chop(1);
-
-    // Locate [Profiles] section range.
-    int profStart = -1;
-    int profEnd   = lines.size();
-    for (int i = 0; i < lines.size(); ++i) {
-        const QString &l = lines.at(i);
-        if (!l.startsWith('[') || !l.endsWith(']')) continue;
-        if (l == QStringLiteral("[Profiles]")) {
-            profStart = i;
-        } else if (profStart >= 0) {
-            profEnd = i;
-            break;
-        }
-    }
-    if (profStart < 0) return {};       // no [Profiles], nothing to do
-
-    // Find currentprofile= inside the section.
-    QString ts;
-    for (int i = profStart + 1; i < profEnd; ++i) {
-        static const QString kKey = QStringLiteral("currentprofile=");
-        if (lines.at(i).startsWith(kKey)) {
-            ts = lines.at(i).mid(kKey.size());
-            break;
-        }
-    }
-    if (ts.isEmpty()) return {};        // no active profile - no-op
+    // CR is normalised in the walk; the final-"\n" blank is not re-emitted.
+    const LauncherProfiles lp = launcherProfiles(in);
+    if (lp.start < 0)    return {};     // no [Profiles], nothing to do
+    if (lp.ts.isEmpty()) return {};     // no active profile - no-op
+    const QStringList &lines = lp.lines;
+    const int profStart = lp.start;
+    const int profEnd   = lp.end;
+    const QString &ts   = lp.ts;
 
     const QString prefix    = ts + QStringLiteral("/");
     const QString dataKey   = prefix + QStringLiteral("data=");
@@ -599,35 +620,14 @@ QStringList readLauncherCfgContentOrder(const QString &in)
 {
     if (in.isEmpty()) return {};
 
-    // Same parsing shape as renderLauncherCfg: locate [Profiles], find
-    // currentprofile=, enumerate <ts>/content= lines in encounter order.
-    // data= and fallback-archive= ignored here.
-    QStringList lines = in.split('\n');
-    for (QString &l : lines) if (l.endsWith('\r')) l.chop(1);
-
-    int profStart = -1;
-    int profEnd   = lines.size();
-    for (int i = 0; i < lines.size(); ++i) {
-        const QString &l = lines.at(i);
-        if (!l.startsWith('[') || !l.endsWith(']')) continue;
-        if (l == QStringLiteral("[Profiles]")) {
-            profStart = i;
-        } else if (profStart >= 0) {
-            profEnd = i;
-            break;
-        }
-    }
-    if (profStart < 0) return {};
-
-    QString ts;
-    for (int i = profStart + 1; i < profEnd; ++i) {
-        static const QString kKey = QStringLiteral("currentprofile=");
-        if (lines.at(i).startsWith(kKey)) {
-            ts = lines.at(i).mid(kKey.size());
-            break;
-        }
-    }
-    if (ts.isEmpty()) return {};
+    // The active profile's <ts>/content= lines in encounter order; data= and
+    // fallback-archive= ignored here.
+    const LauncherProfiles lp = launcherProfiles(in);
+    if (lp.start < 0 || lp.ts.isEmpty()) return {};
+    const QStringList &lines = lp.lines;
+    const int profStart = lp.start;
+    const int profEnd   = lp.end;
+    const QString &ts   = lp.ts;
 
     const QString contentKey = ts + QStringLiteral("/content=");
     QStringList out;
@@ -643,36 +643,15 @@ QStringList readLauncherCfgDataPaths(const QString &in)
 {
     if (in.isEmpty()) return {};
 
-    // Same parsing shape as readLauncherCfgContentOrder: locate [Profiles],
-    // find currentprofile=, enumerate <ts>/data= lines in encounter order.
-    // Returned unquoted (the launcher writes them unquoted; quoting mangles
-    // paths with spaces).
-    QStringList lines = in.split('\n');
-    for (QString &l : lines) if (l.endsWith('\r')) l.chop(1);
-
-    int profStart = -1;
-    int profEnd   = lines.size();
-    for (int i = 0; i < lines.size(); ++i) {
-        const QString &l = lines.at(i);
-        if (!l.startsWith('[') || !l.endsWith(']')) continue;
-        if (l == QStringLiteral("[Profiles]")) {
-            profStart = i;
-        } else if (profStart >= 0) {
-            profEnd = i;
-            break;
-        }
-    }
-    if (profStart < 0) return {};
-
-    QString ts;
-    for (int i = profStart + 1; i < profEnd; ++i) {
-        static const QString kKey = QStringLiteral("currentprofile=");
-        if (lines.at(i).startsWith(kKey)) {
-            ts = lines.at(i).mid(kKey.size());
-            break;
-        }
-    }
-    if (ts.isEmpty()) return {};
+    // The active profile's <ts>/data= lines in encounter order. Returned
+    // unquoted (the launcher writes them unquoted; quoting mangles paths with
+    // spaces).
+    const LauncherProfiles lp = launcherProfiles(in);
+    if (lp.start < 0 || lp.ts.isEmpty()) return {};
+    const QStringList &lines = lp.lines;
+    const int profStart = lp.start;
+    const int profEnd   = lp.end;
+    const QString &ts   = lp.ts;
 
     const QString dataKey = ts + QStringLiteral("/data=");
     QStringList out;

@@ -1,8 +1,7 @@
 // mainwindow_deploy - Bethesda deploy/undeploy + game-launch slots, split out
 // of mainwindow.cpp so this ~800-line cluster compiles in parallel with the
 // rest of MainWindow. Same class, different TU: every definition here is still
-// MainWindow::. The Bethesda path-resolution file-statics travel with it; the
-// one cross-cutting helper (resolveUserStatePath) comes via mainwindow_internal.h.
+// MainWindow::. The Bethesda path-resolution file-statics travel with it.
 
 #include "mainwindow.h"
 #include "settings.h"
@@ -145,6 +144,7 @@ using plugins::readTes3Masters;
 #include <QMimeData>
 using fsutils::sanitizeFolderName;
 #include "mainwindow_internal.h"
+#include "user_state_paths.h"
 #include "root_routes.h"
 
 // Forward-declare the moved file-statics so intra-TU call order is irrelevant.
@@ -158,7 +158,6 @@ static void bethesdaStatePaths(const QString &modlistFile, QString &manifestPath
 static QString findScriptExtenderLoader(const GameAdapter *adapter, const QString &installDir);
 static bool launchViaProton(QWidget *parent, const QString &appId, const QString &exePath);
 static QList<bethesda_deploy::DeploySource> gatherBethesdaSources(QListWidget *list, const QList<int> &order, const GameAdapter *adapter, const QString &modsDir);
-static QString heroicGogAppId(const QString &exeOrDirPath);
 static bool launchViaGog(const QString &gogExe);
 static QString resolveBethesdaIniDir(const QString &id, const GameAdapter *adapter, const QString &dataDir);
 static QString resolveBethesdaPluginsTxt(const QString &id, const GameAdapter *adapter, const QString &dataDir);
@@ -1818,39 +1817,6 @@ void MainWindow::onLaunchOpenMWLauncher()
     currentProfile().openmwLauncherPath = m_openmwLauncherPath;
 }
 
-// File-local: reads Heroic's installed.json and returns the GOG numeric app-ID
-// for the entry whose install_path contains the given hint.
-// Returns the Heroic GOG appName for the entry whose install_path is a prefix
-// of (or equals) exeOrDirPath.  Handles games whose exe lives in a subdirectory
-// (e.g. Cyberpunk 2077's bin/x64/Cyberpunk2077.exe).
-static QString heroicGogAppId(const QString &exeOrDirPath)
-{
-    const QString home = QDir::homePath();
-    const QStringList heroicConfigs = {
-        home + "/.config/heroic",
-        home + "/.var/app/com.heroicgameslauncher.hgl/config/heroic",
-    };
-    for (const QString &cfg : heroicConfigs) {
-        QFile f(cfg + "/gog_store/installed.json");
-        if (!f.open(QIODevice::ReadOnly)) continue;
-        QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
-        QJsonArray arr;
-        if (doc.isArray())
-            arr = doc.array();
-        else if (doc.isObject() && doc.object().contains("installed"))
-            arr = doc.object().value("installed").toArray();
-        for (const QJsonValue &v : arr) {
-            const QJsonObject obj = v.toObject();
-            const QString installPath = obj.value("install_path").toString();
-            if (installPath.isEmpty()) continue;
-            // Match if the exe path starts with the install_path (handles subdirs)
-            if (exeOrDirPath.startsWith(installPath, Qt::CaseInsensitive))
-                return obj.value("appName").toString();
-        }
-    }
-    return {};
-}
-
 // Helper used by both launch functions: tries Heroic URL → Heroic binary →
 // Heroic Flatpak → direct exe, in that order.  Returns true if anything started.
 static bool launchViaGog(const QString &gogExe)
@@ -1858,9 +1824,9 @@ static bool launchViaGog(const QString &gogExe)
     if (gogExe.isEmpty() || !QFile::exists(gogExe)) return false;
 
     // Ask Heroic to handle it so Wine/Proton and runtime env are set up correctly
-    // Pass the full exe path - heroicGogAppId matches entries whose install_path
-    // is a prefix of the exe path, so subdir exes (e.g. bin/x64/...) work too.
-    const QString appId = heroicGogAppId(gogExe);
+    // Pass the full exe path - the lookup matches entries whose install_path
+    // is a prefix of it, so subdir exes (e.g. bin/x64/...) work too.
+    const QString appId = GameProfileRegistry::findHeroicGogAppId(gogExe);
     if (!appId.isEmpty()) {
         const QString url = "heroic://launch/gog/" + appId;
         if (subprocess::startDetached("xdg-open",  {url}))              return true;

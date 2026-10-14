@@ -1,5 +1,6 @@
 #include "plugin_strings.h"
 
+#include "plugin_bytes.h"
 #include "plugin_text.h"
 
 #include <QByteArray>
@@ -12,29 +13,10 @@ namespace plugin_strings {
 
 namespace {
 
-// Same 24-byte record/GRUP framing as plugin_records.cpp - see that file for
-// the layout notes. The difference here is that record bodies get read and
-// decompressed instead of skipped.
-constexpr int kHeader = 24;
-
-// TES4 header record flags.
-constexpr quint32 kFlagLocalized  = 0x00000080;
-// Per-record flag: body is a 4-byte little-endian uncompressed size followed
-// by a raw zlib stream.
-constexpr quint32 kFlagCompressed = 0x00040000;
-
-quint32 le32(const char *p)
-{
-    return quint32(quint8(p[0]))
-         | (quint32(quint8(p[1])) <<  8)
-         | (quint32(quint8(p[2])) << 16)
-         | (quint32(quint8(p[3])) << 24);
-}
-
-quint16 le16(const char *p)
-{
-    return quint16(quint8(p[0])) | (quint16(quint8(p[1])) << 8);
-}
+// Record/GRUP framing and the header flags: plugin_bytes.h. The difference
+// from plugin_records.cpp is that record bodies get read and decompressed
+// here instead of skipped.
+using namespace plugin_bytes;
 
 // CORE: record types whose FULL/DESC/SHRT the player reads AND whose identical
 // rate is low enough to compute a ratio from. See the header for the

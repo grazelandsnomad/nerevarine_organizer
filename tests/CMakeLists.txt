@@ -30,6 +30,8 @@ endfunction()
 #   test_plugins                plugin/BSA parsing, masters, collisions
 #   test_load_order             load-order merge, ScanCoordinator, undo
 #   test_fs                     safe_fs + fs_utils
+#   test_user_state_paths       where a state file lives, and the one-time move
+#                               of a file an older layout left one dir up
 #   test_async                  async::guarded (a real thread pool + event loop)
 #   test_backup                 BackupManager checkpoints
 #   test_settings               settings migrations, forbidden mods
@@ -57,6 +59,7 @@ set(UNIT_TESTS
     test_plugins
     test_load_order
     test_fs
+    test_user_state_paths
     test_async
     test_backup
     test_settings

@@ -17,6 +17,21 @@
 #include <QStyle>
 #include <QToolTip>
 
+// A full-row wash with a 6 px stripe down each edge: the "bracketed band"
+// every row highlight is drawn as. A plain 35-alpha wash scrolled past too
+// easily; the stripes make the band read at a glance.
+static void paintBand(QPainter *painter, const QRect &rect,
+                      const QColor &tint, const QColor &stripe)
+{
+    painter->save();
+    painter->fillRect(rect, tint);
+    const int stripeW = 6;
+    painter->fillRect(QRect(rect.left(), rect.top(), stripeW, rect.height()), stripe);
+    painter->fillRect(QRect(rect.right() - stripeW + 1, rect.top(),
+                            stripeW, rect.height()), stripe);
+    painter->restore();
+}
+
 static QString relativeTimeStr(const QDateTime &dt)
 {
     if (!dt.isValid()) return {};
@@ -367,21 +382,12 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
     // Dependency highlight: full-row tint + bookended stripes.
     //   1 = dependency of the selected mod  → green
     //   2 = uses the selected mod           → blue/purple
-    // A 35-alpha wash scrolled past too easily; bumped to ~115 with 6px edge
-    // stripes so it reads as a bracketed band.
-    int hlRole = index.data(ModRole::HighlightRole).toInt();
+    const int hlRole = index.data(ModRole::HighlightRole).toInt();
     if (hlRole > 0) {
-        painter->save();
-        bool isDep = (hlRole == 1);
-        QColor tint   = isDep ? QColor(60, 200, 100, 115) : QColor(100, 140, 240, 90);
-        QColor stripe = isDep ? QColor(30, 170,  70)      : QColor(70, 110, 220);
-        painter->fillRect(option.rect, tint);
-        const int stripeW = 6;
-        painter->fillRect(QRect(option.rect.left(),                 option.rect.top(),
-                                stripeW, option.rect.height()),     stripe);
-        painter->fillRect(QRect(option.rect.right() - stripeW + 1,  option.rect.top(),
-                                stripeW, option.rect.height()),     stripe);
-        painter->restore();
+        const bool isDep = (hlRole == 1);
+        paintBand(painter, option.rect,
+                  isDep ? QColor(60, 200, 100, 115) : QColor(100, 140, 240, 90),
+                  isDep ? QColor(30, 170,  70)      : QColor(70, 110, 220));
     }
 
     // Conflict highlight: while a mod is selected, its conflict partners are
@@ -395,17 +401,10 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
     const int conflictHl = m_conflictNotices
         ? index.data(ModRole::ConflictHighlight).toInt() : 0;
     if (hlRole == 0 && conflictHl > 0) {
-        painter->save();
         const bool rowWins = (conflictHl == 2);
-        QColor tint   = rowWins ? QColor( 46, 160, 67, 105) : QColor(210, 120, 20, 105);
-        QColor stripe = rowWins ? QColor( 46, 160, 67)      : QColor(210, 100,  0);
-        painter->fillRect(option.rect, tint);
-        const int stripeW = 6;
-        painter->fillRect(QRect(option.rect.left(),                option.rect.top(),
-                                stripeW, option.rect.height()),    stripe);
-        painter->fillRect(QRect(option.rect.right() - stripeW + 1, option.rect.top(),
-                                stripeW, option.rect.height()),    stripe);
-        painter->restore();
+        paintBand(painter, option.rect,
+                  rowWins ? QColor( 46, 160, 67, 105) : QColor(210, 120, 20, 105),
+                  rowWins ? QColor( 46, 160, 67)      : QColor(210, 100,  0));
     }
 
     // Untranslated wash. Unlike the two above this one is STANDING, not
@@ -429,19 +428,9 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
     const bool pairHl = m_untranslatedNotices && hlRole == 0 && conflictHl == 0
                      && translationHl == 0 && startedHl == 0
                      && index.data(ModRole::IsTranslationOfOther).toBool();
-    if (pairHl) {
-        painter->save();
-        painter->fillRect(option.rect, QColor(156, 39, 176, 40));
-        const int stripeW = 6;
-        const QColor stripe(142, 36, 170);
-        painter->fillRect(QRect(option.rect.left(), option.rect.top(),
-                                stripeW, option.rect.height()), stripe);
-        painter->fillRect(QRect(option.rect.right() - stripeW + 1, option.rect.top(),
-                                stripeW, option.rect.height()), stripe);
-        painter->restore();
-    }
+    if (pairHl)
+        paintBand(painter, option.rect, QColor(156, 39, 176, 40), QColor(142, 36, 170));
     if (hlRole == 0 && conflictHl == 0 && (translationHl > 0 || startedHl > 0)) {
-        painter->save();
         const bool none = (translationHl == 1);
         QColor tint   = none ? QColor(200,  50,  50, 105) : QColor(210, 150, 20, 95);
         QColor stripe = none ? QColor(200,  40,  40)      : QColor(210, 140,  0);
@@ -449,13 +438,7 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
             tint   = QColor(245, 124,   0, 100);
             stripe = QColor(240, 120,   0);
         }
-        painter->fillRect(option.rect, tint);
-        const int stripeW = 6;
-        painter->fillRect(QRect(option.rect.left(),                option.rect.top(),
-                                stripeW, option.rect.height()),    stripe);
-        painter->fillRect(QRect(option.rect.right() - stripeW + 1, option.rect.top(),
-                                stripeW, option.rect.height()),    stripe);
-        painter->restore();
+        paintBand(painter, option.rect, tint, stripe);
     }
 
     // Update-available icon: green down-triangle (slot 0, left of status).

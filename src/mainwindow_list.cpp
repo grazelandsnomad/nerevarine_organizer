@@ -18,6 +18,7 @@
 #include "deps_snapshot.h"
 #include "async_guarded.h"
 #include "mainwindow_internal.h"
+#include "user_state_paths.h"
 #include "settings.h"
 #include "theme.h"
 #include "separatordialog.h"
