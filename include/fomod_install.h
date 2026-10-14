@@ -47,7 +47,7 @@ struct PromoteResult {
     PromoteOutcome outcome;
     QString        finalModPath;        // always non-empty
     bool           extractDirRemoved = false;  // true when wrapper tidied up
-    QString        leftover;   // leaveExtract: extractDir, set aside to delete
+    QString        leftover = {};   // leaveExtract: extractDir, set aside to delete
 };
 
 // `extractDir`         where the archive was extracted. Removed on promote

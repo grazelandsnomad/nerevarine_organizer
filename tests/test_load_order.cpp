@@ -1220,7 +1220,7 @@ static void testComparisonSeparatesTranslatedFromNot()
         writePlugin(d, "x.esp", [&]{
             QByteArray recs;
             quint32 id = 0x05000001;
-            for (const QString &n : {"Glass Dagger", "Ebony Bow"})
+            for (const QString &n : QStringList{"Glass Dagger", "Ebony Bow"})
                 recs.append(makeRecord("WEAP", id++, {{"FULL", n.toUtf8()}}));
             return makeStringPlugin(recs);
         }()));

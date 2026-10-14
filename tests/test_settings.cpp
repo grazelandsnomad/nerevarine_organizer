@@ -114,8 +114,8 @@ static void testAlreadyAtTargetNoOp()
     baseline.description = QStringLiteral("baseline");
     // If apply runs it sets a sentinel; the test passes only when apply is
     // skipped entirely and the sentinel stays unset.
-    baseline.apply = [](settings::Store &s) {
-        s.setValue("should/not/be/set", "oops");
+    baseline.apply = [](settings::Store &st) {
+        st.setValue("should/not/be/set", "oops");
     };
     const auto r = applyMigrations(s, {baseline}, 1);
     check("version stays at 1", r.storeVersionAfter == 1);
@@ -138,11 +138,11 @@ static void testChainAppliesInOrder()
     m2.fromVersion = 1;
     m2.toVersion   = 2;
     m2.description = QStringLiteral("translate ui/theme_legacy → ui/theme");
-    m2.apply = [](settings::Store &s) {
-        if (!s.contains("ui/theme_legacy")) return;
-        const bool dark = s.value("ui/theme_legacy").toBool();
-        s.setValue("ui/theme", dark ? "dark" : "light");
-        s.remove("ui/theme_legacy");
+    m2.apply = [](settings::Store &st) {
+        if (!st.contains("ui/theme_legacy")) return;
+        const bool dark = st.value("ui/theme_legacy").toBool();
+        st.setValue("ui/theme", dark ? "dark" : "light");
+        st.remove("ui/theme_legacy");
     };
     chain << m2;
 
@@ -208,7 +208,7 @@ static void testMalformedEntrySkipped()
     bad.fromVersion = 2;
     bad.toVersion   = 1;  // backwards
     bad.description = QStringLiteral("broken");
-    bad.apply = [](settings::Store &s) { s.setValue("side/effect", true); };
+    bad.apply = [](settings::Store &st) { st.setValue("side/effect", true); };
     chain << bad;
     chain << renameMigration(0, 1, "a", "b");
     s.setValue("a", 7);

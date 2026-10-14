@@ -189,11 +189,11 @@ void MainWindow::checkNxmHandlerRegistration()
         if (!f.open(QIODevice::ReadOnly)) return {};
         return f.readAll();
     };
-    auto writeFile = [](const QString &path, const QByteArray &data) -> bool {
+    auto writeFile = [](const QString &path, const QByteArray &bytes) -> bool {
         QDir().mkpath(QFileInfo(path).absolutePath());
         QFile f(path);
         if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
-        return f.write(data) == data.size();
+        return f.write(bytes) == bytes.size();
     };
 
     bool changed = false;

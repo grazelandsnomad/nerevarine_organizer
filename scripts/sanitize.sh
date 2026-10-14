@@ -31,6 +31,7 @@ SAN_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-fram
 if [[ ! -f $BUILD_DIR/CMakeCache.txt ]]; then
     cmake -S . -B "$BUILD_DIR" -G Ninja \
         -DCMAKE_BUILD_TYPE=Debug \
+        -DNRV_WARNINGS_AS_ERRORS=ON \
         -DCMAKE_C_COMPILER="${CC:-gcc}" \
         -DCMAKE_CXX_COMPILER="${CXX:-g++}" \
         -DCMAKE_CXX_FLAGS="$SAN_FLAGS" \

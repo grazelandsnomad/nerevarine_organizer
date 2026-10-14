@@ -826,10 +826,10 @@ void MainWindow::onEditLoadOrder()
             m_loadOrder.append(list->item(i)->text());
         autoSortLoadOrder();
         list->clear();
-        QFont mono("monospace");
+        QFont rowFont("monospace");
         for (const QString &cf : m_loadOrder) {
             auto *row = new QListWidgetItem(cf, list);
-            row->setFont(mono);
+            row->setFont(rowFont);
             if (cf.endsWith(".esm", Qt::CaseInsensitive))
                 row->setBackground(QColor(230, 240, 250));
         }

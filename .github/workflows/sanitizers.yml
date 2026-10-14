@@ -75,7 +75,7 @@ jobs:
             g++-14 cmake ninja-build qt6-base-dev
 
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DNRV_WARNINGS_AS_ERRORS=ON
 
       - name: Build the contract test only
         run: cmake --build build --target test_nexus_v2_live -j"$(nproc)"

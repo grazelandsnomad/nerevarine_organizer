@@ -9,6 +9,23 @@ project(NerevarineOrganizer VERSION 0.73 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# -- Compiler warnings ------------------------------------------------
+# Every target opts in through nrv_warnings(): the app, and each test in
+# tests/CMakeLists.txt. -Werror is a cache option so the CI gates (ci.yml,
+# scripts/sanitize.sh) are strict while a local build with a newer compiler
+# that invents a new warning still goes through.
+option(NRV_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+function(nrv_warnings target)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(${target} PRIVATE
+            -Wall -Wextra -Wshadow -Wnon-virtual-dtor -Woverloaded-virtual
+            -Wimplicit-fallthrough)
+        if(NRV_WARNINGS_AS_ERRORS)
+            target_compile_options(${target} PRIVATE -Werror)
+        endif()
+    endif()
+endfunction()
+
 enable_testing()
 add_subdirectory(tests)
 set(CMAKE_AUTOMOC ON)
@@ -320,6 +337,7 @@ if(WIN32)
 else()
     add_executable(nerevarine_organizer ${SOURCES})
 endif()
+nrv_warnings(nerevarine_organizer)
 
 # Single-source the app version: main.cpp reads NR_APP_VERSION instead of
 # hardcoding a literal, so project(... VERSION) above is the only place a

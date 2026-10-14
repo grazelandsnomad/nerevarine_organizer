@@ -511,3 +511,9 @@ set_tests_properties(test_nxm_integration PROPERTIES LABELS "integration"
     # is no network, so an offline machine reports the test as skipped instead
     # of failing a tree that has nothing wrong with it.
     SKIP_RETURN_CODE 77)
+
+# Same warning set as the app (nrv_warnings in the top-level CMakeLists).
+foreach(t IN LISTS UNIT_TESTS ITEMS test_translation_coverage test_launch_warnings
+        test_nxm test_fomod_corpus test_nexus_v2_live)
+    nrv_warnings(${t})
+endforeach()

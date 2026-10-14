@@ -510,11 +510,11 @@ void MainWindow::onRemoveSelected()
             if (cand->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
             if (selectedSet.contains(cand)) continue;
             QStringList deps = cand->data(ModRole::DependsOn).toStringList();
-            int before = deps.size();
+            const int depsBefore = deps.size();
             deps.erase(std::remove_if(deps.begin(), deps.end(),
                        [&](const QString &u) { return goingAway.contains(u); }),
                        deps.end());
-            if (deps.size() != before)
+            if (deps.size() != depsBefore)
                 cand->setData(ModRole::DependsOn, deps);
         }
     }

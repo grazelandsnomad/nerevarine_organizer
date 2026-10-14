@@ -596,7 +596,7 @@ static void testAutoLinkUnknownCategoryIsDependent()
     };
     // OPTIONAL, MISCELLANEOUS, OLD and anything unrecognised fall through
     // to the dependent branch.
-    for (const QString &cat : {"OPTIONAL", "MISCELLANEOUS", "OLD", "", "xyzzy"}) {
+    for (const QString &cat : QStringList{"OPTIONAL", "MISCELLANEOUS", "OLD", "", "xyzzy"}) {
         auto acts = deps::autoLinkSameModpage(all[1], all, cat);
         check(("category '" + cat.toStdString() + "' → dependent").c_str(),
               acts.size() == 1 && acts.first().targetIdx == 1);
@@ -1146,12 +1146,12 @@ static void testHighlightUtilityFlipsUserToDep()
 static void testHighlightNonUtilitySelectionUsesBlue()
 {
     std::cout << "testHighlightNonUtilitySelectionUsesBlue\n";
-    const QString URL_BASE  = "https://www.nexusmods.com/morrowind/mods/100";
-    const QString URL_PATCH = "https://www.nexusmods.com/morrowind/mods/101";
+    const QString kUrlBase  = "https://www.nexusmods.com/morrowind/mods/100";
+    const QString kUrlPatch = "https://www.nexusmods.com/morrowind/mods/101";
 
     const QList<ModEntry> all = {
-        mk(0, "Base Mod",  URL_BASE),
-        mk(1, "Patch Mod", URL_PATCH, true, true, {URL_BASE}),
+        mk(0, "Base Mod",  kUrlBase),
+        mk(1, "Patch Mod", kUrlPatch, true, true, {kUrlBase}),
     };
     const auto hl = deps::computeSelectionHighlights(all, /*selected=*/0);
     check("patch shows up as User when base is selected",

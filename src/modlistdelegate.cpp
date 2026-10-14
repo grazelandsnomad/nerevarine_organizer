@@ -687,7 +687,6 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
         painter->drawLine(statusX, option.rect.top() + 3, statusX, option.rect.bottom() - 3);
 
         static const char *kSpinner[] = {"⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"};
-        int installStatus = index.data(ModRole::InstallStatus).toInt();
         QString statusText;
         QColor  statusColor;
         if (installStatus == 2) {

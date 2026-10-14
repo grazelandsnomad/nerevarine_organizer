@@ -47,7 +47,7 @@ jobs:
         run: python3 scripts/check_translation_parity.py
 
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DNRV_WARNINGS_AS_ERRORS=ON
 
       - name: Build
         # Builds the app, not just the tests, on purpose: mainwindow.cpp is ~38%

@@ -339,7 +339,7 @@ private:
 };
 
 LoadOrderController::LoadOrderController(QObject *parent)
-    : QObject(parent), m_mastersCacheMu(new QMutex), m_stringsCacheMu(new QMutex) {}
+    : QObject(parent), m_stringsCacheMu(new QMutex), m_mastersCacheMu(new QMutex) {}
 
 LoadOrderController::~LoadOrderController()
 {

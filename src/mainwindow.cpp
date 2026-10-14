@@ -140,8 +140,6 @@
 using plugins::collectDataFolders;
 using plugins::readTes3Masters;
 
-static QString     detectLootBinary();
-
 // By value so the wizard doesn't need BuiltinGameDef visible here.
 static QList<firstrun::GameChoice> builtinGameChoices();
 #include <QDropEvent>
