@@ -42,6 +42,7 @@ endfunction()
 #   test_translation_coverage   the "no translation" verdict
 #   test_launch_warnings        the launch-blocking rules
 #   test_queues                 the install queues and rows that vanish mid-flight
+#   test_modlist_views          the model bridge, the dependency snapshot, the sort orders
 #   test_nxm                    nxm:// URL parsing; its networked sub-tests are
 #                               the integration variant registered below
 set(UNIT_TESTS
@@ -69,6 +70,7 @@ set(UNIT_TESTS
     test_translation_coverage
     test_launch_warnings
     test_queues
+    test_modlist_views
     test_nxm
 )
 foreach(t IN LISTS UNIT_TESTS)

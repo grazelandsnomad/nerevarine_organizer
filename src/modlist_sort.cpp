@@ -19,76 +19,82 @@
 #include <algorithm>
 
 #include "mod_row.h"
+#include "modlist_model_widget_bridge.h"
 #include "modroles.h"
 #include "translator.h"
 #include "prompts.h"
 
 namespace modlist_sort {
 
-void byDate(QListWidget *list, bool ascending)
+QList<int> orderByDate(const QList<ModEntry> &rows, bool ascending)
 {
-    int n = list->count();
-    QList<QListWidgetItem *> items;
-    items.reserve(n);
-    for (int i = 0; i < n; ++i)
-        items << list->takeItem(0);
+    QList<int> order;
+    order.reserve(rows.size());
+    for (int i = 0; i < rows.size(); ++i) order << i;
 
-    std::stable_sort(items.begin(), items.end(),
-        [ascending](QListWidgetItem *a, QListWidgetItem *b) {
-            bool aIsSep = mod_row::isSeparator(a);
-            bool bIsSep = mod_row::isSeparator(b);
+    std::stable_sort(order.begin(), order.end(),
+        [&rows, ascending](int ia, int ib) {
+            const ModEntry &a = rows.at(ia);
+            const ModEntry &b = rows.at(ib);
             // Separators go to the end, keeping their relative order.
-            if (aIsSep && bIsSep) return false;
-            if (aIsSep)           return false;
-            if (bIsSep)           return true;
+            if (a.isSeparator() || b.isSeparator()) return !a.isSeparator() && b.isSeparator();
 
-            QDateTime da = a->data(ModRole::DateAdded).toDateTime();
-            QDateTime db = b->data(ModRole::DateAdded).toDateTime();
+            const QDateTime &da = a.dateAdded;
+            const QDateTime &db = b.dateAdded;
             // Mods without a date sort to the end.
-            if (!da.isValid() && !db.isValid()) return false;
-            if (!da.isValid()) return false;
-            if (!db.isValid()) return true;
+            if (!da.isValid() || !db.isValid()) return da.isValid() && !db.isValid();
             return ascending ? (da < db) : (da > db);
         });
+    return order;
+}
 
-    for (auto *item : items)
-        list->addItem(item);
+QList<int> orderBySize(const QList<ModEntry> &rows, bool ascending)
+{
+    // Separators keep their slots; the mods are sorted globally and poured
+    // back into the mod slots in order.
+    QList<int> mods;
+    for (int i = 0; i < rows.size(); ++i)
+        if (!rows.at(i).isSeparator()) mods << i;
+
+    std::stable_sort(mods.begin(), mods.end(),
+        [&rows, ascending](int ia, int ib) {
+            const qint64 sa = rows.at(ia).modSize;
+            const qint64 sb = rows.at(ib).modSize;
+            // Unknown-size mods go to the end either direction.
+            if (sa <= 0 || sb <= 0) return sa > 0 && sb <= 0;
+            return ascending ? (sa < sb) : (sa > sb);
+        });
+
+    QList<int> order;
+    order.reserve(rows.size());
+    int next = 0;
+    for (int i = 0; i < rows.size(); ++i)
+        order << (rows.at(i).isSeparator() ? i : mods.at(next++));
+    return order;
+}
+
+namespace {
+
+// Re-add the list's items in `order` (indices into the current order).
+void applyOrder(QListWidget *list, const QList<int> &order)
+{
+    QList<QListWidgetItem *> items;
+    items.reserve(list->count());
+    while (list->count() > 0) items << list->takeItem(0);
+    for (int i : order) list->addItem(items.at(i));
+}
+
+} // namespace
+
+void byDate(QListWidget *list, bool ascending)
+{
+    applyOrder(list, orderByDate(modlist::snapshotEntries(list), ascending));
 }
 
 void bySize(QListWidget *list, bool ascending)
 {
-    int n = list->count();
-    if (n == 0) return;
-
-    QVector<bool> isSepAt(n);
-    for (int i = 0; i < n; ++i)
-        isSepAt[i] = mod_row::isSeparator(list->item(i));
-
-    QList<QListWidgetItem *> seps, mods;
-    for (int i = 0; i < n; ++i) {
-        auto *it = list->takeItem(0);
-        if (mod_row::isSeparator(it))
-            seps.append(it);
-        else
-            mods.append(it);
-    }
-
-    std::stable_sort(mods.begin(), mods.end(),
-        [ascending](QListWidgetItem *a, QListWidgetItem *b) {
-            qint64 sa = a->data(ModRole::ModSize).toLongLong();
-            qint64 sb = b->data(ModRole::ModSize).toLongLong();
-            // Unknown-size mods go to the end either direction.
-            if (sa <= 0 && sb <= 0) return false;
-            if (sa <= 0) return false;
-            if (sb <= 0) return true;
-            return ascending ? (sa < sb) : (sa > sb);
-        });
-
-    int sepIdx = 0, modIdx = 0;
-    for (int i = 0; i < n; ++i) {
-        if (isSepAt[i]) list->addItem(seps[sepIdx++]);
-        else            list->addItem(mods[modIdx++]);
-    }
+    if (list->count() == 0) return;
+    applyOrder(list, orderBySize(modlist::snapshotEntries(list), ascending));
 }
 
 QList<QListWidgetItem *> showReorderSeparatorsDialog(QWidget *parent,

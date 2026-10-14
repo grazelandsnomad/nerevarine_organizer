@@ -67,6 +67,14 @@ void ModlistModel::update(int row, ModEntry e)
     emit rowChanged(row);
 }
 
+int ModlistModel::findByRowId(const QUuid &row) const
+{
+    if (row.isNull()) return -1;
+    for (int i = 0; i < m_entries.size(); ++i)
+        if (m_entries[i].rowId == row) return i;
+    return -1;
+}
+
 int ModlistModel::findByNexusUrl(const QString &url) const
 {
     if (url.isEmpty()) return -1;

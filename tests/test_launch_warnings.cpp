@@ -10,12 +10,12 @@
 #include "launch_warnings.h"
 
 #include "forbidden_mods.h"
+#include "modentry.h"
 #include "modroles.h"
 
-#include <QApplication>
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
-#include <QListWidget>
 #include <QTemporaryDir>
 
 #include <iostream>
@@ -24,56 +24,49 @@
 
 namespace {
 
-// One mod row, shaped the way MainWindow shapes them.
-QListWidgetItem *addMod(QListWidget *list, const QString &name,
-                        bool enabled = true, int installStatus = 1,
-                        const QString &modPath = {})
+// One mod row, shaped the way a snapshot of the list shapes them.
+ModEntry mod(const QString &name, bool enabled = true, int installStatus = 1,
+             const QString &modPath = {})
 {
-    auto *it = new QListWidgetItem(name);
-    it->setData(ModRole::ItemType,      ItemType::Mod);
-    it->setData(ModRole::InstallStatus, installStatus);
-    it->setData(ModRole::ModPath,       modPath);
-    it->setCheckState(enabled ? Qt::Checked : Qt::Unchecked);
-    list->addItem(it);
-    return it;
+    ModEntry e;
+    e.displayName   = name;
+    e.installStatus = installStatus;
+    e.modPath       = modPath;
+    e.checked       = enabled;
+    return e;
 }
 
 void testOnlyEnabledModsCanBlockLaunch()
 {
     std::cout << "\n[a warning needs an enabled mod behind it]\n";
-    QListWidget list;
+    ModEntry off = mod(QStringLiteral("Disabled One"), false);
+    off.hasMissingDependency = true;
+    off.missingDependencies  = {QStringLiteral("Some Framework - disabled")};
 
-    auto *off = addMod(&list, QStringLiteral("Disabled One"), false);
-    off->setData(ModRole::HasMissingDependency, true);
-    off->setData(ModRole::MissingDependencies,
-                 QStringList{QStringLiteral("Some Framework - disabled")});
+    ModEntry sep;
+    sep.itemType    = QStringLiteral("separator");
+    sep.displayName = QStringLiteral("-- Visuals --");
+    sep.checked     = true;
 
-    auto *sep = new QListWidgetItem(QStringLiteral("-- Visuals --"));
-    sep->setData(ModRole::ItemType, ItemType::Separator);
-    sep->setCheckState(Qt::Checked);
-    list.addItem(sep);
-
-    const auto r = launch_warnings::scan(&list, nullptr, QStringLiteral("morrowind"));
+    const auto r = launch_warnings::scan({off, sep}, nullptr, QStringLiteral("morrowind"));
     check("a disabled mod's missing deps are not launch-blocking",
           r.missingDeps.isEmpty(), r.missingDeps.join("; "));
     check("a separator is not a mod", r.total() == 0);
-    check("no list, no warnings",
-          launch_warnings::scan(nullptr, nullptr, {}).total() == 0);
+    check("no rows, no warnings",
+          launch_warnings::scan({}, nullptr, {}).total() == 0);
 }
 
 void testMissingDependenciesAreNamedPerEntry()
 {
     std::cout << "\n[missing dependencies, one row each]\n";
-    QListWidget list;
-    auto *m = addMod(&list, QStringLiteral("Folder Name"));
+    ModEntry m = mod(QStringLiteral("Folder Name"));
     // The display name the user chose outranks the folder the row carries.
-    m->setData(ModRole::CustomName, QStringLiteral("My Nice Name"));
-    m->setData(ModRole::HasMissingDependency, true);
-    m->setData(ModRole::MissingDependencies,
-               QStringList{QStringLiteral("Framework A - disabled"),
-                           QStringLiteral("Framework B - not installed")});
+    m.customName           = QStringLiteral("My Nice Name");
+    m.hasMissingDependency = true;
+    m.missingDependencies  = {QStringLiteral("Framework A - disabled"),
+                              QStringLiteral("Framework B - not installed")};
 
-    const auto r = launch_warnings::scan(&list, nullptr, {});
+    const auto r = launch_warnings::scan({m}, nullptr, {});
     check("both entries become rows", r.missingDeps.size() == 2,
           QString::number(r.missingDeps.size()));
     check("named by the custom name, not the folder",
@@ -99,13 +92,14 @@ void testAnEmptyInstallIsFlaggedAndAnyContentClearsIt()
     { QFile f(anyFilePath + QStringLiteral("/readme.txt"));
       check("fixture file opens", f.open(QIODevice::WriteOnly)); f.write("hi"); }
 
-    QListWidget list;
-    addMod(&list, QStringLiteral("Empty"),   true, 1, emptyPath);
-    addMod(&list, QStringLiteral("HasFile"), true, 1, anyFilePath);
-    // Not installed yet: nothing on disk is exactly what is expected.
-    addMod(&list, QStringLiteral("Pending"), true, 0, emptyPath);
+    const QList<ModEntry> rows = {
+        mod(QStringLiteral("Empty"),   true, 1, emptyPath),
+        mod(QStringLiteral("HasFile"), true, 1, anyFilePath),
+        // Not installed yet: nothing on disk is exactly what is expected.
+        mod(QStringLiteral("Pending"), true, 0, emptyPath),
+    };
 
-    const auto r = launch_warnings::scan(&list, nullptr, {});
+    const auto r = launch_warnings::scan(rows, nullptr, {});
     check("the empty install is flagged", r.emptyInstalls.size() == 1,
           r.emptyInstalls.join("; "));
     check("and it is the right one",
@@ -128,18 +122,15 @@ void testForbiddenModsAreCaughtByModPage()
     reg.reload(path, QStringLiteral("oblivion"), QString());
     check("the fixture entry loaded", reg.size() == 1, QString::number(reg.size()));
 
-    QListWidget list;
-    auto *bad = addMod(&list, QStringLiteral("Bad Mod"));
-    bad->setData(ModRole::NexusUrl,
-                 QStringLiteral("https://www.nexusmods.com/oblivion/mods/123"));
-    auto *fine = addMod(&list, QStringLiteral("Fine Mod"));
-    fine->setData(ModRole::NexusUrl,
-                  QStringLiteral("https://www.nexusmods.com/oblivion/mods/999"));
-    auto *off = addMod(&list, QStringLiteral("Bad But Off"), false);
-    off->setData(ModRole::NexusUrl,
-                 QStringLiteral("https://www.nexusmods.com/oblivion/mods/123"));
+    ModEntry bad = mod(QStringLiteral("Bad Mod"));
+    bad.nexusUrl = QStringLiteral("https://www.nexusmods.com/oblivion/mods/123");
+    ModEntry fine = mod(QStringLiteral("Fine Mod"));
+    fine.nexusUrl = QStringLiteral("https://www.nexusmods.com/oblivion/mods/999");
+    ModEntry off = mod(QStringLiteral("Bad But Off"), false);
+    off.nexusUrl = QStringLiteral("https://www.nexusmods.com/oblivion/mods/123");
+    const QList<ModEntry> rows = {bad, fine, off};
 
-    const auto r = launch_warnings::scan(&list, &reg, QStringLiteral("oblivion"));
+    const auto r = launch_warnings::scan(rows, &reg, QStringLiteral("oblivion"));
     check("the enabled forbidden mod is one row", r.forbiddenEnabled.size() == 1,
           r.forbiddenEnabled.join("; "));
     check("with the reason quoted",
@@ -151,7 +142,7 @@ void testForbiddenModsAreCaughtByModPage()
     // No game id means the check cannot know which list applies - silence,
     // not a guess against the wrong game's list.
     check("no game id, no forbidden rows",
-          launch_warnings::scan(&list, &reg, QString()).forbiddenEnabled.isEmpty());
+          launch_warnings::scan(rows, &reg, QString()).forbiddenEnabled.isEmpty());
 }
 
 void testScriptExtenderRowsOnlyExistWithFindings()
@@ -167,8 +158,7 @@ void testScriptExtenderRowsOnlyExistWithFindings()
 
 int main(int argc, char **argv)
 {
-    qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
-    QApplication app(argc, argv);
+    QCoreApplication app(argc, argv);
 
     testOnlyEnabledModsCanBlockLaunch();
     testMissingDependenciesAreNamedPerEntry();

@@ -1778,7 +1778,8 @@ bool MainWindow::confirmLaunchIfWarnings()
 
     const QString gameId =
         m_profiles->isEmpty() ? QString() : currentProfile().id;
-    auto warnings = launch_warnings::scan(m_modList, m_forbidden, gameId);
+    auto warnings = launch_warnings::scan(modlist::snapshotEntries(m_modList),
+                                          m_forbidden, gameId);
 
     // Script-extender plugins against the installed game.
     launch_warnings::addScriptExtender(

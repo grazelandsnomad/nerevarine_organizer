@@ -1,6 +1,8 @@
 #ifndef MODLIST_SORT_H
 #define MODLIST_SORT_H
 
+#include "modentry.h"
+
 #include <QList>
 
 class QListWidget;
@@ -8,6 +10,15 @@ class QListWidgetItem;
 class QWidget;
 
 namespace modlist_sort {
+
+// The row order Sort by Date / Sort by Size produce, as indices into `rows`:
+// the widget-free half of each sort, which byDate / bySize apply to the list.
+// Date: separators go to the end keeping their relative order, dateless mods
+// to the end of the mod section. Size: separators stay where they are as
+// dividers and the mods between them are refilled in global size order,
+// sizeless ones last either way.
+QList<int> orderByDate(const QList<ModEntry> &rows, bool ascending);
+QList<int> orderBySize(const QList<ModEntry> &rows, bool ascending);
 
 // Sort by ModRole::DateAdded. Separators move to the end (relative order
 // kept); dateless mods sort to the end of the mod section.

@@ -10,10 +10,15 @@
 #include <QList>
 
 #include "deps_resolver.h"
+#include "modentry.h"
 
 class QListWidget;
 
 namespace deps {
+
+// The same, from typed rows (modlist::snapshotEntries, or any
+// QList<ModEntry>): the widget-free half, which is what the tests feed.
+QList<ModEntry> snapshot(const QList<::ModEntry> &rows);
 
 // Every row, in order, with `idx` equal to the row number.
 //

@@ -22,9 +22,11 @@ QList<ModEntry> snapshotEntries(const QListWidget *list);
 void refreshModelFromList(ModlistModel *model, const QListWidget *list);
 
 // Subscribe `model` to `list`'s row/item-change signals so it tracks the
-// widget live (checkbox toggles, drag-reorders, takeItem/addItem all flow
-// through). The model follows the widget until Stage 3 inverts the
-// direction.
+// widget live: a row's change updates that row, a shape change (insert,
+// remove, move, reset) rebuilds the list. The model follows the widget until
+// Stage 3 inverts the direction. A change made with the widget's signals
+// blocked does not reach the model; readers that need the truth of the
+// moment take modlist::snapshotEntries(list) instead.
 //
 // Idempotent: each call disconnects the previous wiring before reconnecting.
 // Connection lifetime is otherwise tied to model destruction via Qt's

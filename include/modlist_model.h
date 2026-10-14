@@ -19,6 +19,7 @@
 
 #include <QList>
 #include <QObject>
+#include <QUuid>
 
 class ModlistModel : public QObject {
     Q_OBJECT
@@ -50,6 +51,8 @@ public:
     // is small (typically < 2000) so a hash isn't worth it. -1 if not found.
     int findByNexusUrl(const QString &url) const;
     int findByModPath(const QString &path) const;
+    // Row with this session identity (ModEntry::rowId), -1 if none.
+    int findByRowId(const QUuid &row) const;
 
     // Row of an INSTALLED mod (installStatus == 1) whose NexusUrl parses to
     // (game, modId). game matched case-insensitively (slugs stored lowercase).

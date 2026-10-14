@@ -12,8 +12,6 @@
 #include <QFont>
 #include <QIcon>
 #include <QLabel>
-#include <QListWidget>
-#include <QListWidgetItem>
 #include <QMessageBox>
 #include <QPixmap>
 #include <QPlainTextEdit>
@@ -61,7 +59,7 @@ bool dirContainsAnyFile(const QString &path)
 
 } // namespace
 
-Result scan(QListWidget *list,
+Result scan(const QList<ModEntry> &rows,
             const ForbiddenModsRegistry *forbidden,
             const QString &gameId)
 {
@@ -70,29 +68,23 @@ Result scan(QListWidget *list,
     };
 
     Result r;
-    if (!list) return r;
 
-    for (int i = 0; i < list->count(); ++i) {
-        auto *item = list->item(i);
-        if (!mod_row::isMod(item)) continue;
-        if (item->checkState() != Qt::Checked) continue;
+    for (const ModEntry &row : rows) {
+        if (!row.isMod() || !row.checked) continue;
 
-        QString name = item->data(ModRole::CustomName).toString();
-        if (name.isEmpty()) name = item->text();
+        const QString name = row.effectiveName();
 
         // Missing deps: labels are already human-readable.
-        if (item->data(ModRole::HasMissingDependency).toBool()) {
-            const QStringList entries =
-                item->data(ModRole::MissingDependencies).toStringList();
-            for (const QString &entry : entries)
+        if (row.hasMissingDependency) {
+            for (const QString &entry : row.missingDependencies)
                 r.missingDeps << QString("%1: %2").arg(name, entry);
         }
 
         // Empty install: marked installed but no plugins on disk. Resource-only
         // mods are fine, so only flag when there are also no data= roots and no
         // shaders. If the folder has any files at all, accept it (unknown format).
-        if (mod_row::isInstalled(item)) {
-            const QString modPath = item->data(ModRole::ModPath).toString();
+        if (row.installStatus == int(InstallStatus::Installed)) {
+            const QString modPath = row.modPath;
             if (!modPath.isEmpty()
              && plugins::collectDataFolders(modPath, contentExts).isEmpty()
              && plugins::collectResourceFolders(modPath).isEmpty()
@@ -104,7 +96,7 @@ Result scan(QListWidget *list,
         }
 
         // Forbidden mods currently enabled.
-        const QString url = item->data(ModRole::NexusUrl).toString();
+        const QString url = row.nexusUrl;
         if (forbidden && !url.isEmpty() && !gameId.isEmpty()) {
             const QStringList p = QUrl(url).path().split('/', Qt::SkipEmptyParts);
             if (p.size() >= 3 && p[1] == "mods") {

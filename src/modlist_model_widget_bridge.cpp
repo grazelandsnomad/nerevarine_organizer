@@ -60,11 +60,15 @@ void connectAutoSync(ModlistModel *model, QListWidget *list)
                                           QAbstractItemModel::LayoutChangeHint) { resync(); });
     }
 
-    // Per-item changes (checkbox toggle, rename, setData role updates):
-    // full resync for simplicity. O(rows) per change, fine at our modlist
-    // sizes; swap to a per-row update if it ever shows up hot.
+    // Per-item changes (checkbox toggle, rename, setData role updates): that
+    // one row, in place. A full resync here cost O(rows) per change, which a
+    // size scan writing every row turned into O(rows^2) on the UI thread.
     QObject::connect(list, &QListWidget::itemChanged,
-                     model, [resync](QListWidgetItem *) { resync(); });
+                     model, [model, list, resync](QListWidgetItem *item) {
+        const int row = item ? list->row(item) : -1;
+        if (row < 0 || row >= model->count()) { resync(); return; }
+        model->update(row, ModEntry::fromItem(item));
+    });
 }
 
 } // namespace modlist
