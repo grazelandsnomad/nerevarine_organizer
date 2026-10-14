@@ -24,6 +24,8 @@
 #include <QString>
 #include <QUrl>
 
+#include <functional>
+
 class QDialog;
 
 class QAction;
@@ -64,6 +66,14 @@ public:
     // body/retry). MainWindow points this at a writable user-state path so the
     // log survives an AppImage's read-only mount. Empty: fall back to qWarning.
     void setDiagLogPath(const QString &path) { m_diagLogPath = path; }
+
+    // How the queue decides whether a placeholder is still a row it may
+    // touch. Every placeholder here is a raw pointer into MainWindow's list,
+    // and a row can be removed - or the list cleared by a profile switch or an
+    // import - while its download runs. The default answers "is in the mod
+    // list"; MainWindow widens it to the rows it parks across a profile
+    // switch, which leave the list but are still being installed.
+    void setRowAliveCheck(std::function<bool(QListWidgetItem *)> check);
 
     // -- Entry points called by MainWindow ---
 
@@ -181,6 +191,12 @@ private:
     // marks the entry active *before* starting it, the (single) concurrency
     // slot stays occupied and the whole queue wedges.
     void resetPlaceholderToIdle(QListWidgetItem *placeholder);
+
+    // True while `placeholder` is a row the queue may read or write. By
+    // address only: the pointer may already be freed, so nothing here reads
+    // through it (QListWidget::indexFromItem does). See setRowAliveCheck.
+    bool rowAlive(QListWidgetItem *placeholder) const;
+    std::function<bool(QListWidgetItem *)> m_rowAlive;
 
     // -- Injected (owned by MainWindow, outlive us) ---
     QListWidget           *m_modList;

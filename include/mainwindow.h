@@ -339,6 +339,21 @@ private:
     // saveModListFor. nullptr on no match.
     QListWidgetItem *findPlaceholderByToken(const QUuid &installToken,
                                             QString *outProfileKey = nullptr) const;
+    // The row an async reply names, or nullptr when that row is gone. The
+    // controllers echo the QListWidgetItem* they were handed; by the time the
+    // reply lands the row may have been removed, or the whole list cleared by
+    // a profile switch or an import, and the pointer dangles. Only the active
+    // list and the stranded-install buckets can vouch for it, and both are
+    // searched by address: a dangling pointer is never read through (which
+    // rules out QListWidget::indexFromItem, which reads the item). A miss also
+    // drops the row from the pointer-keyed side tables and logs `what`.
+    // Call it again after any modal dialog inside the slot: rows can be
+    // removed while one is open.
+    //
+    // An address is not an identity: a new row allocated where a freed one
+    // was passes this check. Closing that gap means keying replies by a
+    // stable row id rather than by pointer.
+    QListWidgetItem *liveRow(QListWidgetItem *item, const char *what);
     void loadModList(const QString &path = QString(),
                      const QString &remapFrom = QString(),
                      const QString &remapTo   = QString());
@@ -421,6 +436,8 @@ private:
     // Return carries synchronous preconditions only, same as extractAndAdd:
     //   "null-placeholder" - placeholder was nullptr
     //   "archive-missing"  - archivePath missing or empty
+    //   "row-gone"         - placeholder is no longer a row (removed, or the
+    //                        list was cleared while the download ran)
     [[nodiscard]] std::expected<void, QString>
     verifyAndExtract(const QString &archivePath, QListWidgetItem *placeholder);
 

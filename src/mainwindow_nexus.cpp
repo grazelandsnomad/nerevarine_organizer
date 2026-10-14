@@ -415,6 +415,11 @@ void MainWindow::handleNxmUrl(const QString &url)
 void MainWindow::setupDownloadQueue()
 {
     m_downloadQueue = new DownloadQueue(m_modList, m_net, m_nexus, this, this);
+    // The queue keys its state by row pointer and must not touch a row that
+    // is gone; a row parked across a profile switch is still being installed.
+    m_downloadQueue->setRowAliveCheck([this](QListWidgetItem *row) {
+        return liveRow(row, "download") != nullptr;
+    });
 
     // Adapter lambda: verifyAndExtract is [[nodiscard]], so the PMF connect form
     // would warn. It already logs + shows a status on failure, so discard here.
@@ -481,6 +486,7 @@ void MainWindow::onDependenciesScanned(QListWidgetItem *item,
                                        const QList<deps::ClassifiedDep> &classified,
                                        int gameIdNumeric)
 {
+    if (!liveRow(item, "dependency scan")) return;
     // Cache the Nexus mod-page title for later use (e.g. naming a FOMOD
     // install's output folder something meaningful instead of "fomod_install").
     if (!title.isEmpty())
@@ -732,6 +738,7 @@ void MainWindow::onDependenciesScanned(QListWidgetItem *item,
     v->addWidget(btns);
 
     const bool install = (box.exec() == QDialog::Accepted);
+    if (!liveRow(item, "dependency dialog")) return;
     if (install)
         fetchModFiles(game, modId, item);
 }
@@ -812,6 +819,7 @@ void MainWindow::onFileListFetched(QListWidgetItem *item,
                                    const QString &game, int modId,
                                    const QList<NexusClient::FileEntry> &allFiles)
 {
+    if (!liveRow(item, "file list")) return;
     const bool autoPickMain = m_autoPickMainItems.remove(item);
 
     // Prefer MAIN + UPDATE files; fall back to everything if none found.
@@ -1064,6 +1072,7 @@ void MainWindow::onFileListFetched(QListWidgetItem *item,
 
     auto *sel = fileList->currentItem();
     if (!sel) return;
+    if (!liveRow(item, "file picker")) return;
     const int     fileId = sel->data(Qt::UserRole).toInt();
     const QString md5    = sel->data(Qt::UserRole + 1).toString();
     const qint64  sz     = sel->data(Qt::UserRole + 2).toLongLong();
@@ -1269,7 +1278,7 @@ void MainWindow::onModFileSiblings(QListWidgetItem *item,
                                    const QString &chosenName,
                                    const QStringList &siblingNames)
 {
-    if (!item || m_profiles->isEmpty()) return;
+    if (!liveRow(item, "file siblings") || m_profiles->isEmpty()) return;
 
     const auto pref = fomod::runtimePreferenceForGame(currentProfile().id,
                                                      gameRuntimeProbe().game);

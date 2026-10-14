@@ -585,6 +585,12 @@ void MainWindow::onRemoveSelected()
         if (!mp.isEmpty()) m_scans->invalidateDataFoldersCache(mp);
     }
 
+    // A row still in the download queue leaves it first, or its reply would
+    // land on freed memory. A queued entry is dropped on the spot; an active
+    // transfer aborts and cleans up when its reply finishes.
+    for (auto *item : toRemove)
+        if (m_downloadQueue->isQueued(item)) m_downloadQueue->cancelQueued(item);
+
     for (auto *item : toRemove)
         delete m_modList->takeItem(m_modList->row(item));
 

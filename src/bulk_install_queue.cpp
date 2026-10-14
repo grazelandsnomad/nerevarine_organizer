@@ -50,7 +50,12 @@ void BulkInstallQueue::processTick()
         if (!item) continue;
         // Row may have been deleted, already installed, or its URL cleared
         // since the user clicked bulk-install - skip and try the next.
-        if (!m_list->indexFromItem(item).isValid()) continue;
+        // By address: the pointer may already be freed, so it is not read
+        // through until the list has vouched for it.
+        bool present = false;
+        for (int i = 0; i < m_list->count() && !present; ++i)
+            present = (m_list->item(i) == item);
+        if (!present) continue;
         if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
         if (item->data(ModRole::InstallStatus).toInt() != 0) continue;
         if (item->data(ModRole::NexusUrl).toString().isEmpty()) continue;

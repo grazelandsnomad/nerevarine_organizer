@@ -145,6 +145,8 @@ static QList<firstrun::GameChoice> builtinGameChoices();
 #include <QDropEvent>
 #include <QMimeData>
 
+#include <utility>
+
 // Drop onto a separator lands just after it (mod becomes the section's first
 // entry) instead of Qt's above/below-by-y default.
 
@@ -211,6 +213,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_nexusCtl = new NexusController(m_nexus, this);
     connect(m_nexusCtl, &NexusController::updateFoundForItem,
             this, [this](QListWidgetItem *item) {
+        if (!liveRow(item, "update check")) return;
         item->setData(ModRole::UpdateAvailable, true);
         m_modList->update(m_modList->indexFromItem(item));
         // Tint the parent separator grey to nudge update-or-delete; clears once
@@ -219,7 +222,7 @@ MainWindow::MainWindow(QWidget *parent)
     });
     connect(m_nexusCtl, &NexusController::fileSupersededForItem,
             this, [this](QListWidgetItem *item, const file_status::Verdict &v) {
-        if (!m_modList->indexFromItem(item).isValid()) return;   // row gone mid-check
+        if (!liveRow(item, "superseded check")) return;
         item->setData(ModRole::FileSuperseded, supersededText(v));
         m_modList->update(m_modList->indexFromItem(item));
     });
@@ -831,6 +834,14 @@ MainWindow::verifyAndExtract(const QString &archivePath, QListWidgetItem *placeh
             << "verifyAndExtract: null placeholder for" << archivePath;
         return std::unexpected(QStringLiteral("null-placeholder"));
     }
+    // The download outlived its row (removed, or the list cleared by a
+    // profile switch or an import). The archive stays on disk; there is
+    // nothing left to attach the install to.
+    if (!liveRow(placeholder, "download finished")) {
+        qCWarning(logging::lcInstall)
+            << "verifyAndExtract: row gone for" << archivePath;
+        return std::unexpected(QStringLiteral("row-gone"));
+    }
     if (archivePath.isEmpty() || !QFileInfo::exists(archivePath)) {
         qCWarning(logging::lcInstall)
             << "verifyAndExtract: archive missing:" << archivePath;
@@ -1068,7 +1079,7 @@ void MainWindow::onExpectedChecksumFetched(QListWidgetItem *item, int fileId,
                                             const QString &fileName, const QString &md5,
                                             qint64 sizeBytes)
 {
-    if (!m_modList->indexFromItem(item).isValid()) return;
+    if (!liveRow(item, "expected checksum")) return;
     // Only for the file the row is fetching right now. The reply races the
     // download; one that lands after the install, or after the row moved on
     // to another file, would sit on the row and judge the next archive.
@@ -1119,11 +1130,7 @@ void MainWindow::purgeDuplicatePlaceholders(QListWidgetItem *installed)
 
 void MainWindow::onTitleFetched(QListWidgetItem *item, const QString &name)
 {
-    // The controller doesn't know whether the row has since been removed.
-    if (!m_modList->indexFromItem(item).isValid()) {
-        m_titleSetsCustomName.remove(item);
-        return;
-    }
+    if (!liveRow(item, "title")) return;
     item->setData(ModRole::NexusTitle, name);
     if (m_titleSetsCustomName.remove(item)
         && item->data(ModRole::CustomName).toString().isEmpty()) {
@@ -1310,6 +1317,7 @@ void MainWindow::checkModDependencies(const QString &game, int modId, QListWidge
 void MainWindow::onDependencyScanFailed(QListWidgetItem *item,
                                         const QString &game, int modId)
 {
+    if (!liveRow(item, "dependency scan failure")) return;
     // Network or API error - don't block install, just continue.
     fetchModFiles(game, modId, item);
 }
@@ -1370,6 +1378,7 @@ void MainWindow::fetchModFiles(const QString &game, int modId, QListWidgetItem *
 
 void MainWindow::onFileListFetchFailed(QListWidgetItem *item, const QString &reason, int httpStatus)
 {
+    if (!liveRow(item, "file list failure")) return;
     m_autoPickMainItems.remove(item);
     const QString msg =
           (httpStatus == 401) ? T("nexus_api_error_link_401")
@@ -3109,6 +3118,24 @@ QListWidgetItem *MainWindow::findPlaceholderByToken(
     return nullptr;
 }
 
+
+QListWidgetItem *MainWindow::liveRow(QListWidgetItem *item, const char *what)
+{
+    if (!item) return nullptr;
+    // By address only: `item` may already be freed, so nothing here may read
+    // through it. The list is short (hundreds of rows) and this runs once
+    // per network reply.
+    if (m_modList) {
+        for (int i = 0; i < m_modList->count(); ++i)
+            if (m_modList->item(i) == item) return item;
+    }
+    for (const QList<QListWidgetItem *> &bucket : std::as_const(m_strandedInstalls))
+        if (bucket.contains(item)) return item;
+    m_titleSetsCustomName.remove(item);
+    m_autoPickMainItems.remove(item);
+    qCInfo(logging::lcNexus) << what << "reply for a row that is gone; dropped";
+    return nullptr;
+}
 
 bool MainWindow::shareModIntoProfile(const ModEntry &source,
                                      const QString &targetProfileKey,
