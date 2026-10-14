@@ -24,6 +24,7 @@
 #include <Qt>
 
 #include "forbidden_mods.h"
+#include "mod_row.h"
 #include "modroles.h"
 #include "pluginparser.h"
 #include "reboot_check.h"
@@ -73,7 +74,7 @@ Result scan(QListWidget *list,
 
     for (int i = 0; i < list->count(); ++i) {
         auto *item = list->item(i);
-        if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(item)) continue;
         if (item->checkState() != Qt::Checked) continue;
 
         QString name = item->data(ModRole::CustomName).toString();
@@ -90,7 +91,7 @@ Result scan(QListWidget *list,
         // Empty install: marked installed but no plugins on disk. Resource-only
         // mods are fine, so only flag when there are also no data= roots and no
         // shaders. If the folder has any files at all, accept it (unknown format).
-        if (item->data(ModRole::InstallStatus).toInt() == 1) {
+        if (mod_row::isInstalled(item)) {
             const QString modPath = item->data(ModRole::ModPath).toString();
             if (!modPath.isEmpty()
              && plugins::collectDataFolders(modPath, contentExts).isEmpty()

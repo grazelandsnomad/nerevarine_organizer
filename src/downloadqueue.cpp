@@ -3,6 +3,7 @@
 #include "downloadqueue.h"
 #include "async_guarded.h"
 #include "download_integrity.h"
+#include "mod_row.h"
 #include "modroles.h"
 #include "placeholder_state.h"
 #include "nexusclient.h"
@@ -155,7 +156,7 @@ void DownloadQueue::fetchDownloadLink(const QString &game, int modId, int fileId
                 emit saveRequested();
                 return;
             }
-            placeholder->setData(ModRole::InstallStatus, 0);
+            mod_row::setInstallStatus(placeholder, InstallStatus::NotInstalled);
             placeholder->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
                                   Qt::ItemIsDragEnabled |
                                   Qt::ItemIsUserCheckable);
@@ -210,7 +211,7 @@ void DownloadQueue::fetchDownloadLink(const QString &game, int modId, int fileId
             // An update stays installed while the user fetches it by hand
             // (restoreInstalled); remember the link coming back is its own.
             if (rowAlive(placeholder)
-                && placeholder->data(ModRole::InstallStatus).toInt() == 1)
+                && mod_row::isInstalled(placeholder))
                 placeholder->setData(ModRole::AwaitingUpdateDownload, true);
             emit statusMessage(T("manual_dl_status"), 6000);
         };
@@ -406,7 +407,7 @@ void DownloadQueue::cancelQueued(QListWidgetItem *placeholder)
         && placeholder_state::restoreInstalled(placeholder)) {
         emit saveRequested();
     } else if (rowAlive(placeholder)) {
-        placeholder->setData(ModRole::InstallStatus, 0);
+        mod_row::setInstallStatus(placeholder, InstallStatus::NotInstalled);
         placeholder->setData(ModRole::DownloadProgress, QVariant());
         placeholder->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
                               Qt::ItemIsDragEnabled | Qt::ItemIsUserCheckable);
@@ -442,11 +443,11 @@ void DownloadQueue::cleanStaleDownloads()
     int healed = 0;
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *it = m_modList->item(i);
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
-        if (it->data(ModRole::InstallStatus).toInt() != 2)           continue;
+        if (!mod_row::isMod(it)) continue;
+        if (!mod_row::isInstalling(it))           continue;
         if (m_active.contains(it))                                    continue;
 
-        it->setData(ModRole::InstallStatus,   0);
+        mod_row::setInstallStatus(it, InstallStatus::NotInstalled);
         it->setData(ModRole::DownloadProgress, QVariant());
         it->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
                      Qt::ItemIsDragEnabled | Qt::ItemIsUserCheckable);
@@ -514,7 +515,7 @@ void DownloadQueue::resetPlaceholderToIdle(QListWidgetItem *placeholder)
         emit saveRequested();
         return;
     }
-    placeholder->setData(ModRole::InstallStatus,    0);
+    mod_row::setInstallStatus(placeholder, InstallStatus::NotInstalled);
     placeholder->setData(ModRole::DownloadProgress, QVariant());
     placeholder->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
                           Qt::ItemIsDragEnabled | Qt::ItemIsUserCheckable);

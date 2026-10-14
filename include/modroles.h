@@ -194,6 +194,14 @@ namespace ItemType {
     constexpr auto Separator = "separator";
 }
 
+// What ModRole::InstallStatus holds. The role stores the int (so does the
+// modlist file); mod_row.h reads and writes it as this.
+enum class InstallStatus {
+    NotInstalled = 0,
+    Installed    = 1,
+    Installing   = 2,   // a download, verify or extract is under way
+};
+
 // Default column widths (used as initial values and minimums)
 namespace ColWidth {
     constexpr int Status       = 110;

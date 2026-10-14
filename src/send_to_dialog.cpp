@@ -10,6 +10,7 @@
 #include <QVBoxLayout>
 #include <Qt>
 
+#include "mod_row.h"
 #include "modroles.h"
 #include "translator.h"
 
@@ -35,7 +36,7 @@ QListWidgetItem *pickSeparator(QWidget *parent, QListWidget *list)
     // to the real separator.
     for (int i = 0; i < list->count(); ++i) {
         auto *cand = list->item(i);
-        if (cand->data(ModRole::ItemType).toString() != ItemType::Separator) continue;
+        if (!mod_row::isSeparator(cand)) continue;
         auto *row = new QListWidgetItem(cand->text(), uiList);
         row->setData(Qt::UserRole, i);
         // Use the separator's own colors.
@@ -80,7 +81,7 @@ QListWidgetItem *pickSeparator(QWidget *parent, QListWidget *list)
     int origRow = picked->data(Qt::UserRole).toInt();
     if (origRow < 0 || origRow >= list->count()) return nullptr;
     QListWidgetItem *sep = list->item(origRow);
-    if (!sep || sep->data(ModRole::ItemType).toString() != ItemType::Separator)
+    if (!sep || !mod_row::isSeparator(sep))
         return nullptr;
     return sep;
 }

@@ -1,6 +1,7 @@
 #include "placeholder_state.h"
 
 #include "download_integrity.h"
+#include "mod_row.h"
 #include "modroles.h"
 
 #include <QDateTime>
@@ -86,7 +87,7 @@ bool restoreInstalled(QListWidgetItem *item)
 
     item->setData(ModRole::ItemType,         ItemType::Mod);
     item->setData(ModRole::ModPath,          folder);
-    item->setData(ModRole::InstallStatus,    1);
+    mod_row::setInstallStatus(item, InstallStatus::Installed);
     item->setData(ModRole::DownloadProgress, QVariant());
     item->setData(ModRole::PrevModPath,      QVariant());
     item->setData(ModRole::MergeTargetPath,  QVariant());
@@ -102,7 +103,7 @@ bool restoreInstalled(QListWidgetItem *item)
 void resetToNotInstalled(QListWidgetItem *item, const QString &fallbackName)
 {
     if (!item) return;
-    item->setData(ModRole::InstallStatus,    0);
+    mod_row::setInstallStatus(item, InstallStatus::NotInstalled);
     item->setData(ModRole::DownloadProgress, QVariant());
     // The extracted folder was deleted - clear its path so the modlist doesn't
     // store a reference to a non-existent dir.
@@ -130,7 +131,7 @@ void markInstalled(QListWidgetItem *item, const QString &modPath)
     restoreInteractiveFlags(item);
     item->setData(ModRole::ItemType,         ItemType::Mod);
     item->setData(ModRole::ModPath,          modPath);
-    item->setData(ModRole::InstallStatus,    1);
+    mod_row::setInstallStatus(item, InstallStatus::Installed);
     item->setData(ModRole::DownloadProgress, QVariant());
     item->setData(ModRole::UpdateAvailable,  false);
     clearInstallTransients(item);

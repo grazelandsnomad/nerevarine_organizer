@@ -11,6 +11,7 @@
 #include <QPixmap>
 #include <Qt>
 
+#include "mod_row.h"
 #include "modroles.h"
 #include "translator.h"
 
@@ -85,7 +86,7 @@ void FilterBar::apply()
         QListWidgetItem *curSep = nullptr;
         for (int i = 0; i < m_list->count(); ++i) {
             auto *it = m_list->item(i);
-            if (it->data(ModRole::ItemType).toString() == ItemType::Separator) {
+            if (mod_row::isSeparator(it)) {
                 curSep = it;
                 it->setHidden(false);
             } else {
@@ -104,7 +105,7 @@ void FilterBar::apply()
 
     for (int i = 0; i < m_list->count(); ++i) {
         auto *it = m_list->item(i);
-        if (it->data(ModRole::ItemType).toString() == ItemType::Separator) {
+        if (mod_row::isSeparator(it)) {
             currentSepIdx = sections.size();
             sections.append(it);
             sectionHasMatch.append(false);

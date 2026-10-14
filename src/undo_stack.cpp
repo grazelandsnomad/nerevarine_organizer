@@ -4,6 +4,7 @@
 #include <QListWidgetItem>
 #include <QObject>
 
+#include "mod_row.h"
 #include "modroles.h"
 
 UndoStack::UndoStack(QListWidget *list, QObject *parent)
@@ -37,7 +38,7 @@ void UndoStack::applyState(const QList<ModEntry> &state)
     // hide/show in collapseSection(); we just signal which separators need it.
     for (int i = 0; i < m_list->count(); ++i) {
         auto *sep = m_list->item(i);
-        if (sep->data(ModRole::ItemType).toString() == ItemType::Separator
+        if (mod_row::isSeparator(sep)
                 && sep->data(ModRole::Collapsed).toBool())
             emit requestCollapse(sep);
     }

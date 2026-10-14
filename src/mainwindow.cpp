@@ -5,6 +5,7 @@
 #include "settings.h"
 #include "separatordialog.h"
 #include "modlistdelegate.h"
+#include "mod_row.h"
 #include "modroles.h"
 #include "translation_mod.h"
 #include "translation_progress.h"
@@ -564,7 +565,7 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
         auto *me = static_cast<QMouseEvent*>(event);
         if (me->button() == Qt::LeftButton) {
             auto *item = m_modList->itemAt(me->pos());
-            if (item && item->data(ModRole::ItemType).toString() == ItemType::Mod
+            if (item && mod_row::isMod(item)
                      && (item->flags() & Qt::ItemIsUserCheckable)) {
                 QRect r = m_modList->visualItemRect(item);
                 if (me->pos().x() <= r.left() + 22)
@@ -596,7 +597,7 @@ void MainWindow::showFirstRunWizardIfNeeded()
     bool hasExistingModlist = false;
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *it = m_modList->item(i);
-        if (it->data(ModRole::ItemType).toString() == ItemType::Mod) {
+        if (mod_row::isMod(it)) {
             hasExistingModlist = true;
             break;
         }
@@ -734,7 +735,7 @@ void MainWindow::updateModCount()
     int total = 0, active = 0;
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *it = m_modList->item(i);
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(it)) continue;
         ++total;
         if (it->checkState() == Qt::Checked) ++active;
     }
@@ -1051,7 +1052,7 @@ void MainWindow::prepareItemForInstall(QListWidgetItem *item)
     QString name = item->data(ModRole::CustomName).toString();
     if (name.isEmpty()) name = item->text();
     item->setText(QString("⠋ %1 (%2)").arg(T("status_installing_label"), name));
-    item->setData(ModRole::InstallStatus, 2);
+    mod_row::setInstallStatus(item, InstallStatus::Installing);
     // Mint a stable per-install identity so InstallController signals can
     // route back to this row even after a profile switch parks it in
     // m_strandedInstalls.  Reuse an existing token if one is already
@@ -1088,7 +1089,7 @@ void MainWindow::onExpectedChecksumFetched(QListWidgetItem *item, int fileId,
     // Only for the file the row is fetching right now. The reply races the
     // download; one that lands after the install, or after the row moved on
     // to another file, would sit on the row and judge the next archive.
-    if (item->data(ModRole::InstallStatus).toInt() != 2
+    if (!mod_row::isInstalling(item)
         || item->data(ModRole::PendingFileId).toLongLong() != qint64(fileId)) {
         qCInfo(logging::lcInstall)
             << "expected checksum for file" << fileId
@@ -1117,8 +1118,8 @@ void MainWindow::purgeDuplicatePlaceholders(QListWidgetItem *installed)
     for (int r = m_modList->count() - 1; r >= 0; --r) {
         auto *cand = m_modList->item(r);
         if (cand == installed) continue;
-        if (cand->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
-        if (cand->data(ModRole::InstallStatus).toInt() != 0) continue;
+        if (!mod_row::isMod(cand)) continue;
+        if (mod_row::installStatusOf(cand) != InstallStatus::NotInstalled) continue;
         if (!cand->data(ModRole::ModPath).toString().isEmpty()) continue;
         const bool sameUrl  = !installedUrl.isEmpty()
                               && cand->data(ModRole::NexusUrl).toString() == installedUrl;
@@ -1145,7 +1146,7 @@ void MainWindow::onTitleFetched(QListWidgetItem *item, const QString &name)
     }
     // Second-pass dedup: if the title arrived after addModFromPath already ran
     // (CustomName was empty at install time), purge any matching placeholder now.
-    if (item->data(ModRole::InstallStatus).toInt() == 1)
+    if (mod_row::isInstalled(item))
         purgeDuplicatePlaceholders(item);
 }
 
@@ -1309,7 +1310,7 @@ void MainWindow::checkModDependencies(const QString &game, int modId, QListWidge
     QMap<int, QString> idToUrl;
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *it = m_modList->item(i);
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(it)) continue;
         const QString u = it->data(ModRole::NexusUrl).toString();
         if (u.isEmpty()) continue;
         const auto ref = parseNexusModUrl(u);
@@ -1343,13 +1344,13 @@ void MainWindow::autoLinkSameModpage(QListWidgetItem *item, const QString &categ
     int newIdx = -1;
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *it = m_modList->item(i);
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(it)) continue;
 
         deps::ModEntry e;
         e.idx       = i;
         e.nexusUrl  = it->data(ModRole::NexusUrl).toString();
         e.enabled   = (it->checkState() == Qt::Checked);
-        e.installed = (it->data(ModRole::InstallStatus).toInt() == 1);
+        e.installed = (mod_row::isInstalled(it));
         e.dependsOn = it->data(ModRole::DependsOn).toStringList();
         snap.append(e);
 
@@ -1515,8 +1516,8 @@ void MainWindow::offerBundledPatchReenable(QListWidgetItem *item)
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *other = m_modList->item(i);
         if (other == item) continue;
-        if (other->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
-        if (other->data(ModRole::InstallStatus).toInt() != 1) continue;
+        if (!mod_row::isMod(other)) continue;
+        if (!mod_row::isInstalled(other)) continue;
         const QString hostPath = other->data(ModRole::ModPath).toString();
         if (hostPath.isEmpty()) continue;
         QDir host(hostPath);
@@ -1579,7 +1580,7 @@ void MainWindow::onAddMod()
     auto *item = new QListWidgetItem(fi.fileName());
     item->setData(ModRole::ItemType,      ItemType::Mod);
     item->setData(ModRole::ModPath,       path);
-    item->setData(ModRole::InstallStatus, 1); // user browsed to it - it exists
+    mod_row::setInstallStatus(item, InstallStatus::Installed); // user browsed to it - it exists
     item->setData(ModRole::DateAdded,     QDateTime::currentDateTime());
     item->setCheckState(Qt::Checked);
     item->setToolTip(path);
@@ -1673,8 +1674,8 @@ collectUpdateTargets(QListWidget *modList, const QStringList &only)
     QList<NexusController::CheckTarget> toCheck;
     for (int i = 0; i < modList->count(); ++i) {
         auto *item = modList->item(i);
-        if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
-        if (item->data(ModRole::InstallStatus).toInt() != 1) continue;
+        if (!mod_row::isMod(item)) continue;
+        if (!mod_row::isInstalled(item)) continue;
         if (!only.isEmpty()) {
             QString label = item->data(ModRole::CustomName).toString();
             if (label.isEmpty()) label = item->text();
@@ -1809,7 +1810,7 @@ void MainWindow::onReviewUpdates()
     QList<ReviewUpdates::Candidate> candidates;
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *it = m_modList->item(i);
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(it)) continue;
         if (!it->data(ModRole::UpdateAvailable).toBool())            continue;
 
         const QString url = it->data(ModRole::NexusUrl).toString();
@@ -1856,7 +1857,7 @@ void MainWindow::onCurrentModChanged(QListWidgetItem *current, QListWidgetItem *
     for (int i = 0; i < m_modList->count(); ++i)
         m_modList->item(i)->setData(ModRole::HighlightRole, 0);
 
-    if (!current || current->data(ModRole::ItemType).toString() != ItemType::Mod) {
+    if (!current || !mod_row::isMod(current)) {
         applyConflictHighlights(nullptr);
         m_modList->viewport()->update();
         return;
@@ -1873,7 +1874,7 @@ void MainWindow::onCurrentModChanged(QListWidgetItem *current, QListWidgetItem *
         auto *it = m_modList->item(i);
         deps::ModEntry e;
         e.idx = i;
-        if (it->data(ModRole::ItemType).toString() == ItemType::Mod) {
+        if (mod_row::isMod(it)) {
             e.nexusUrl  = it->data(ModRole::NexusUrl).toString();
             e.dependsOn = it->data(ModRole::DependsOn).toStringList();
             e.isUtility = it->data(ModRole::IsUtility).toBool();
@@ -2427,8 +2428,8 @@ void MainWindow::onMoveModsDir()
 
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *it = m_modList->item(i);
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
-        if (it->data(ModRole::InstallStatus).toInt() != 1)           continue;
+        if (!mod_row::isMod(it)) continue;
+        if (!mod_row::isInstalled(it))           continue;
         const QString path = it->data(ModRole::ModPath).toString();
         if (path.isEmpty() || !QFileInfo(path).isDir())              continue;
 
@@ -2549,8 +2550,8 @@ void MainWindow::onConsolidateModsIntoActiveProfile()
 
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *it = m_modList->item(i);
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
-        if (it->data(ModRole::InstallStatus).toInt() != 1)           continue;
+        if (!mod_row::isMod(it)) continue;
+        if (!mod_row::isInstalled(it))           continue;
         const QString path = it->data(ModRole::ModPath).toString();
         if (path.isEmpty() || !QFileInfo(path).isDir())              continue;
 
@@ -2635,9 +2636,9 @@ void MainWindow::onInspectConflicts()
     QList<ConflictScanInput> snapshot;
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *item = m_modList->item(i);
-        if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(item)) continue;
         if (item->checkState() != Qt::Checked) continue;
-        if (item->data(ModRole::InstallStatus).toInt() != 1) continue;
+        if (!mod_row::isInstalled(item)) continue;
 
         ConflictScanInput e;
         e.modPath  = item->data(ModRole::ModPath).toString();
@@ -2693,8 +2694,8 @@ void MainWindow::onTriageOpenMWLog()
     triageMods.reserve(m_modList->count());
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *item = m_modList->item(i);
-        if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
-        if (item->data(ModRole::InstallStatus).toInt() != 1) continue;
+        if (!mod_row::isMod(item)) continue;
+        if (!mod_row::isInstalled(item)) continue;
 
         openmw::TriageMod tm;
         tm.displayName = item->data(ModRole::CustomName).toString();
@@ -2791,7 +2792,7 @@ void MainWindow::onMissingMastersScanned(
 {
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *item = m_modList->item(i);
-        if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(item)) continue;
         const QString path = item->data(ModRole::ModPath).toString();
         auto it = byModPath.constFind(path);
         if (it == byModPath.constEnd()) {
@@ -2850,7 +2851,7 @@ bool MainWindow::confirmReplaceModList()
     QStringList installedPaths;
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *item = m_modList->item(i);
-        if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(item)) continue;
         const QString p = item->data(ModRole::ModPath).toString();
         if (!p.isEmpty() && QDir(p).exists()) installedPaths << p;
     }
@@ -2943,7 +2944,7 @@ void MainWindow::onAnimTick()
     m_animFrame = (m_animFrame + 1) % 10;
     bool anyInstalling = false;
     for (int i = 0; i < m_modList->count(); ++i) {
-        if (m_modList->item(i)->data(ModRole::InstallStatus).toInt() == 2) {
+        if (mod_row::isInstalling(m_modList->item(i))) {
             anyInstalling = true;
             break;
         }
@@ -3025,7 +3026,7 @@ QListWidgetItem *MainWindow::findPlaceholderByToken(
     // through the install" case in O(N) over the visible rows.
     for (int i = 0; i < m_modList->count(); ++i) {
         QListWidgetItem *it = m_modList->item(i);
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(it)) continue;
         if (it->data(ModRole::InstallToken).toUuid() == installToken)
             return it;
     }
@@ -3146,8 +3147,8 @@ void MainWindow::strandInflightInstalls()
     QList<QListWidgetItem*> stranded;
     for (int i = m_modList->count() - 1; i >= 0; --i) {
         QListWidgetItem *it = m_modList->item(i);
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
-        if (it->data(ModRole::InstallStatus).toInt() != 2)           continue;
+        if (!mod_row::isMod(it)) continue;
+        if (!mod_row::isInstalling(it))           continue;
         stranded.prepend(m_modList->takeItem(i));
     }
     if (!stranded.isEmpty())
@@ -3174,7 +3175,7 @@ void MainWindow::restoreStrandedInstalls()
         int matchRow = -1;
         for (int i = 0; i < m_modList->count(); ++i) {
             QListWidgetItem *it = m_modList->item(i);
-            if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+            if (!mod_row::isMod(it)) continue;
             const QString iUrl = it->data(ModRole::NexusUrl).toString();
             if (!sUrl.isEmpty() && !iUrl.isEmpty() && sUrl == iUrl) {
                 matchRow = i; break;
@@ -3449,9 +3450,9 @@ void MainWindow::runConflictScan()
     QList<conflict_direction::Mod> mods;
     for (int idx : rowOrderForPersist()) {
         auto *it = m_modList->item(idx);
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(it)) continue;
         if (it->checkState() != Qt::Checked) continue;
-        if (it->data(ModRole::InstallStatus).toInt() != 1) continue;
+        if (!mod_row::isInstalled(it)) continue;
         const QString path = it->data(ModRole::ModPath).toString();
         if (path.isEmpty() || !QDir(path).exists()) continue;
         mods.append({path, it->text()});
@@ -3493,7 +3494,7 @@ void MainWindow::onConflictsScanned(
     int conflictCount = 0;
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *it = m_modList->item(i);
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(it)) continue;
         const QString path = it->data(ModRole::ModPath).toString();
         const auto found   = res.constFind(path);
         const auto clashed = recordClashes.constFind(path);
@@ -3539,9 +3540,9 @@ void MainWindow::runTranslationScan()
     QList<conflict_direction::Mod> mods;
     for (int idx : rowOrderForPersist()) {
         auto *it = m_modList->item(idx);
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(it)) continue;
         if (it->checkState() != Qt::Checked) continue;
-        if (it->data(ModRole::InstallStatus).toInt() != 1) continue;
+        if (!mod_row::isInstalled(it)) continue;
         const QString path = it->data(ModRole::ModPath).toString();
         if (path.isEmpty() || !QDir(path).exists()) continue;
         mods.append({path, it->text()});
@@ -3574,7 +3575,7 @@ void MainWindow::onTranslationsScanned(
     int flagged = 0, noTranslation = 0, inProgress = 0;
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *it = m_modList->item(i);
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(it)) continue;
 
         // Work the user has already started on this mod, from its own progress
         // file. A stat per row and a read only for the handful that have one -
@@ -3676,7 +3677,7 @@ void MainWindow::applyTranslationPairs(const QHash<QString, QString> &pairs)
     QHash<QString, QString> nameByPath;
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *it = m_modList->item(i);
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(it)) continue;
         const QString path = it->data(ModRole::ModPath).toString();
         if (path.isEmpty()) continue;
         const QString custom = it->data(ModRole::CustomName).toString();
@@ -3685,7 +3686,7 @@ void MainWindow::applyTranslationPairs(const QHash<QString, QString> &pairs)
 
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *it = m_modList->item(i);
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(it)) continue;
 
         // The user's own answer first, and it is not a hint: a person saying
         // "this translates that" outranks anything inferred, and is how a
@@ -3726,7 +3727,7 @@ void MainWindow::clearTranslationMarks()
 void MainWindow::applyConflictHighlights(QListWidgetItem *current)
 {
     const QString selPath =
-        (current && current->data(ModRole::ItemType).toString() == ItemType::Mod)
+        (current && mod_row::isMod(current))
             ? current->data(ModRole::ModPath).toString() : QString();
     const conflict_direction::Directions d = m_conflicts.value(selPath);
 

@@ -23,6 +23,7 @@ static constexpr int kKeychainReadTimeoutMs = 10000;
 #include "settings.h"
 #include "theme.h"
 #include "separatordialog.h"
+#include "mod_row.h"
 #include "modroles.h"
 #include "translator.h"
 #include "placeholder_state.h"
@@ -294,8 +295,8 @@ void MainWindow::handleNxmUrl(const QString &url)
     bool awaitedUpdate = false;
     for (int i = 0; i < m_modList->count() && !awaitedUpdate; ++i) {
         QListWidgetItem *it = m_modList->item(i);
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
-        if (it->data(ModRole::InstallStatus).toInt() != 1) continue;
+        if (!mod_row::isMod(it)) continue;
+        if (!mod_row::isInstalled(it)) continue;
         if (!it->data(ModRole::AwaitingUpdateDownload).toBool()) continue;
         const auto ref = parseNexusModUrl(it->data(ModRole::NexusUrl).toString());
         if (!ref || ref->modId != modId
@@ -331,15 +332,15 @@ void MainWindow::handleNxmUrl(const QString &url)
     QListWidgetItem *installedMatch = nullptr;
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *it = m_modList->item(i);
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
-        const int status = it->data(ModRole::InstallStatus).toInt();
-        if (status != 0 && status != 1) continue;
+        if (!mod_row::isMod(it)) continue;
+        const InstallStatus status = mod_row::installStatusOf(it);
+        if (status != InstallStatus::NotInstalled && status != InstallStatus::Installed) continue;
         const QString storedUrl = it->data(ModRole::NexusUrl).toString();
         if (storedUrl.isEmpty()) continue;
         const auto ref = parseNexusModUrl(storedUrl);
         if (!ref || ref->modId != modId) continue;
         if (ref->game.compare(game, Qt::CaseInsensitive) != 0) continue;
-        if (status == 0) { placeholder = it; break; }
+        if (status == InstallStatus::NotInstalled) { placeholder = it; break; }
         if (!installedMatch) installedMatch = it;
     }
     if (!placeholder && !forceSeparate) placeholder = installedMatch;
@@ -366,13 +367,13 @@ void MainWindow::handleNxmUrl(const QString &url)
             }
         }
         placeholder->setText(QString("⠋ %1 (mod %2)").arg(T("status_installing_label")).arg(modId));
-        placeholder->setData(ModRole::InstallStatus, 2);
+        mod_row::setInstallStatus(placeholder, InstallStatus::Installing);
         placeholder_state::setBusyFlags(placeholder);
     } else {
         placeholder = new QListWidgetItem(
             QString("⠋ %1 (mod %2)").arg(T("status_installing_label")).arg(modId));
         placeholder->setData(ModRole::ItemType,      ItemType::Mod);
-        placeholder->setData(ModRole::InstallStatus, 2);
+        mod_row::setInstallStatus(placeholder, InstallStatus::Installing);
         placeholder->setData(ModRole::NexusUrl,      nexusPageUrl);
         placeholder->setData(ModRole::DateAdded,     QDateTime::currentDateTime());
         placeholder->setCheckState(Qt::Checked);
@@ -606,7 +607,7 @@ void MainWindow::onDependenciesScanned(QListWidgetItem *item,
             const QString key = deps::urlKey(url);
             for (int i = 0; i < m_modList->count(); ++i) {
                 auto *it = m_modList->item(i);
-                if (it->data(ModRole::ItemType).toString() != ItemType::Mod)
+                if (!mod_row::isMod(it))
                     continue;
                 if (deps::urlKey(it->data(ModRole::NexusUrl).toString()) == key) {
                     const QString custom =

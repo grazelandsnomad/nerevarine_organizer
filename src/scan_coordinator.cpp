@@ -16,6 +16,7 @@
 #include <QtConcurrent/QtConcurrent>
 
 #include "async_guarded.h"
+#include "mod_row.h"
 #include "modroles.h"
 #include "pluginparser.h"
 
@@ -207,10 +208,10 @@ void ScanCoordinator::runSizeScan()
     QList<Input> inputs;
     for (int i = 0; i < m_list->count(); ++i) {
         auto *item = m_list->item(i);
-        if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(item)) continue;
         Input in;
         in.modPath    = item->data(ModRole::ModPath).toString();
-        in.installed  = (item->data(ModRole::InstallStatus).toInt() == 1);
+        in.installed  = (mod_row::isInstalled(item));
         in.folderMtime = in.installed
             ? QFileInfo(in.modPath).lastModified().toMSecsSinceEpoch()
             : -1;
@@ -262,8 +263,8 @@ void ScanCoordinator::applySizeResults(const QHash<QString, qint64> &bytesByPath
 {
     for (int i = 0; i < m_list->count(); ++i) {
         auto *item = m_list->item(i);
-        if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
-        if (item->data(ModRole::InstallStatus).toInt() != 1) {
+        if (!mod_row::isMod(item)) continue;
+        if (!mod_row::isInstalled(item)) {
             item->setData(ModRole::ModSize, QVariant());
             continue;
         }

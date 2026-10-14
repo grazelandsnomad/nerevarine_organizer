@@ -9,6 +9,7 @@
 #include "theme.h"
 #include "separatordialog.h"
 #include "modlistdelegate.h"
+#include "mod_row.h"
 #include "modroles.h"
 #include "translator.h"
 #include "placeholder_state.h"
@@ -210,7 +211,7 @@ protected:
         QPoint pos = event->position().toPoint();
         QListWidgetItem *target = itemAt(pos);
         if (event->source() == this && target &&
-            target->data(ModRole::ItemType).toString() == ItemType::Separator)
+            mod_row::isSeparator(target))
         {
             int sepRow = row(target);
             QList<int> rows;
@@ -1003,7 +1004,7 @@ void MainWindow::setupCentralWidget()
 
     // Update count whenever a checkbox is toggled; also re-scan conflicts (enabled set changed)
     connect(m_modList, &QListWidget::itemChanged, this, [this](QListWidgetItem *item) {
-        if (item->data(ModRole::ItemType).toString() == ItemType::Mod) {
+        if (mod_row::isMod(item)) {
             updateModCount();
             updateSectionCounts();
             scheduleConflictScan();
@@ -1225,7 +1226,7 @@ void MainWindow::onCleanUpModFolders()
         return;
     }
     for (int i = 0; i < m_modList->count(); ++i) {
-        if (m_modList->item(i)->data(ModRole::InstallStatus).toInt() == 2) {
+        if (mod_row::isInstalling(m_modList->item(i))) {
             ui::warn(this, T("cleanup_folders_title"), T("move_mods_err_downloads"));
             return;
         }
@@ -1242,7 +1243,7 @@ void MainWindow::onCleanUpModFolders()
     QStringList referenced;
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *it = m_modList->item(i);
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(it)) continue;
         for (int role : { ModRole::ModPath, ModRole::IntendedModPath,
                           ModRole::MergeTargetPath, ModRole::PrevModPath }) {
             const QString p = it->data(role).toString();
@@ -1500,13 +1501,13 @@ void MainWindow::onCreateDiagnosticBundle()
     int modCount = 0, sepCount = 0, enabled = 0, installing = 0;
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *it = m_modList->item(i);
-        if (it->data(ModRole::ItemType).toString() == ItemType::Separator) {
+        if (mod_row::isSeparator(it)) {
             ++sepCount;
             continue;
         }
         ++modCount;
         if (it->checkState() == Qt::Checked) ++enabled;
-        if (it->data(ModRole::InstallStatus).toInt() == 2) ++installing;
+        if (mod_row::isInstalling(it)) ++installing;
     }
     s << "Mods              : " << modCount << "\n";
     s << "Enabled           : " << enabled << "\n";
@@ -1588,8 +1589,8 @@ void MainWindow::onInspectOpenMWSetup()
 
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *item = m_modList->item(i);
-        if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
-        if (item->data(ModRole::InstallStatus).toInt() != 1) continue;
+        if (!mod_row::isMod(item)) continue;
+        if (!mod_row::isInstalled(item)) continue;
         ++totalMods;
         const bool enabled = item->checkState() == Qt::Checked;
         if (enabled) ++enabledMods;

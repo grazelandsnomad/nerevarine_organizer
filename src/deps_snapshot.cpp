@@ -1,4 +1,5 @@
 #include "deps_snapshot.h"
+#include "mod_row.h"
 #include "modroles.h"
 
 #include <QListWidget>
@@ -30,7 +31,7 @@ QList<ModEntry> snapshot(const QListWidget *list)
             e.dependsOn   = it->data(ModRole::DependsOn).toStringList();
             e.isUtility   = it->data(ModRole::IsUtility).toBool();
             e.enabled     = (it->checkState() == Qt::Checked);
-            e.installed   = (it->data(ModRole::InstallStatus).toInt() == 1);
+            e.installed   = (mod_row::isInstalled(it));
         }
         out.append(e);
     }

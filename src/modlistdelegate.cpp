@@ -1,4 +1,5 @@
 #include "modlistdelegate.h"
+#include "mod_row.h"
 #include "modroles.h"
 #include "row_caption.h"
 #include "translator.h"
@@ -64,7 +65,7 @@ ModListDelegate::ModListDelegate(QObject *parent)
 void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
                             const QModelIndex &index) const
 {
-    if (index.data(ModRole::ItemType).toString() == ItemType::Separator) {
+    if (mod_row::isSeparator(index)) {
         painter->save();
 
         // Separator colours are authored for light mode and glare in dark mode.
@@ -191,9 +192,9 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
     const bool indented = index.data(ModRole::HasInListDependency).toBool();
     const int indentPx  = indented ? 16 : 0;
 
-    int installStatus = index.data(ModRole::InstallStatus).toInt();
+    const InstallStatus installStatus = mod_row::installStatusOf(index);
     QStyleOptionViewItem nameOpt = option;
-    if (installStatus == 2)
+    if (installStatus == InstallStatus::Installing)
         nameOpt.rect.setBottom(nameOpt.rect.bottom() - 6); // leave room for bar
     if (indented)
         nameOpt.rect.setLeft(nameOpt.rect.left() + indentPx);
@@ -637,7 +638,7 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
                                      : QColor(190, 190, 205)), 1);
 
     // Progress bar for downloading/extracting items.
-    if (installStatus == 2) {
+    if (installStatus == InstallStatus::Installing) {
         QVariant pv = index.data(ModRole::DownloadProgress);
         int nameZoneRight = statusX - 1;
         int barH  = 4;
@@ -672,18 +673,18 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
         static const char *kSpinner[] = {"⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"};
         QString statusText;
         QColor  statusColor;
-        if (installStatus == 2) {
+        if (installStatus == InstallStatus::Installing) {
             statusText  = QString("%1 installing…").arg(kSpinner[m_animFrame % 10]);
             statusColor = sel ? option.palette.color(QPalette::HighlightedText)
                               : (updateRow ? QColor(Qt::white) : QColor(210, 130, 0));
-        } else if (installStatus == 1
+        } else if (installStatus == InstallStatus::Installed
                    && index.data(ModRole::ScriptExtenderStale).toBool()) {
             // Installed, deployed, and unable to load: the game shows one
             // message box and quits. "installed" is true and useless here.
             statusText  = T("status_older_than_game");
             statusColor = sel ? option.palette.color(QPalette::HighlightedText)
                               : (updateRow ? QColor(Qt::white) : QColor(210, 130, 0));
-        } else if (installStatus == 1) {
+        } else if (installStatus == InstallStatus::Installed) {
             statusText  = "● installed";
             statusColor = sel ? option.palette.color(QPalette::HighlightedText)
                               : (updateRow ? QColor(Qt::white) : QColor(40, 160, 40));
@@ -792,7 +793,7 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
                 text  = QString::number(bytes / 1024.0, 'f', 0) + " KB";
                 color = QColor(40, 140, 40);
             }
-        } else if (index.data(ModRole::InstallStatus).toInt() != 1) {
+        } else if (!mod_row::isInstalled(index)) {
             text = QString(QChar(0x2014)); // em-dash = not installed
         }
         if (!text.isEmpty()) {
@@ -917,7 +918,7 @@ bool ModListDelegate::helpEvent(QHelpEvent *event, QAbstractItemView *view,
                                 const QModelIndex &index)
 {
     if (event->type() == QEvent::ToolTip &&
-        index.data(ModRole::ItemType).toString() == ItemType::Mod)
+        mod_row::isMod(index))
     {
         const int videoW   = m_colVis.videoReview ? m_colVis.wVideoReview : 0;
         const int sizeW    = m_colVis.size    ? m_colVis.wSize    : 0;
@@ -1112,7 +1113,7 @@ bool ModListDelegate::editorEvent(QEvent *event, QAbstractItemModel *model,
 {
     // Separator +/- button: single-click toggles without opening edit.
     if (event->type() == QEvent::MouseButtonRelease &&
-        index.data(ModRole::ItemType).toString() == ItemType::Separator)
+        mod_row::isSeparator(index))
     {
         auto *me = static_cast<QMouseEvent *>(event);
         if (me->button() == Qt::LeftButton &&
@@ -1126,7 +1127,7 @@ bool ModListDelegate::editorEvent(QEvent *event, QAbstractItemModel *model,
     // Update-available down-arrow: left-click starts the update (re-install
     // via fetchModFiles). Without this hook the icon was just decorative.
     if (event->type() == QEvent::MouseButtonRelease &&
-        index.data(ModRole::ItemType).toString() == ItemType::Mod &&
+        mod_row::isMod(index) &&
         index.data(ModRole::UpdateAvailable).toBool())
     {
         auto *me = static_cast<QMouseEvent *>(event);
@@ -1149,7 +1150,7 @@ bool ModListDelegate::editorEvent(QEvent *event, QAbstractItemModel *model,
     // Superseded-file mark (no update arrow in the slot): open the mod page,
     // where the user can see what replaced the file.
     if (event->type() == QEvent::MouseButtonRelease &&
-        index.data(ModRole::ItemType).toString() == ItemType::Mod &&
+        mod_row::isMod(index) &&
         !index.data(ModRole::UpdateAvailable).toBool() &&
         !index.data(ModRole::FileSuperseded).toString().isEmpty())
     {
@@ -1170,7 +1171,7 @@ bool ModListDelegate::editorEvent(QEvent *event, QAbstractItemModel *model,
     }
     // Favourite star: left-click toggles the flag.
     if (event->type() == QEvent::MouseButtonRelease &&
-        index.data(ModRole::ItemType).toString() == ItemType::Mod)
+        mod_row::isMod(index))
     {
         auto *me = static_cast<QMouseEvent *>(event);
         if (me->button() == Qt::LeftButton) {
@@ -1189,7 +1190,7 @@ bool ModListDelegate::editorEvent(QEvent *event, QAbstractItemModel *model,
     }
     // Video review icon: left-click opens the URL in the browser.
     if (event->type() == QEvent::MouseButtonRelease &&
-        index.data(ModRole::ItemType).toString() == ItemType::Mod &&
+        mod_row::isMod(index) &&
         m_colVis.videoReview)
     {
         auto *me = static_cast<QMouseEvent *>(event);
@@ -1217,9 +1218,9 @@ QSize ModListDelegate::sizeHint(const QStyleOptionViewItem &option,
                                 const QModelIndex &index) const
 {
     int h = option.fontMetrics.height();
-    if (index.data(ModRole::ItemType).toString() == ItemType::Separator)
+    if (mod_row::isSeparator(index))
         return QSize(0, h + 14);
-    if (index.data(ModRole::InstallStatus).toInt() == 2)
+    if (mod_row::isInstalling(index))
         return QSize(0, h + 16); // room for progress bar
     return QSize(0, h + 8);
 }

@@ -6,6 +6,7 @@
 #include "mainwindow.h"
 #include "settings.h"
 #include "separatordialog.h"
+#include "mod_row.h"
 #include "modroles.h"
 #include "translator.h"
 #include "placeholder_state.h"
@@ -647,9 +648,9 @@ static QList<bethesda_deploy::DeploySource> gatherScriptExtenderSources(
 
     for (int i : order) {
         auto *item = list->item(i);
-        if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(item)) continue;
         if (item->checkState() != Qt::Checked) continue;
-        if (item->data(ModRole::InstallStatus).toInt() != 1) continue;
+        if (!mod_row::isInstalled(item)) continue;
         QString modPath = item->data(ModRole::ModPath).toString();
         if (modPath.isEmpty() || !QDir(modPath).exists()) continue;
 
@@ -814,9 +815,9 @@ static QList<bethesda_deploy::DeploySource> gatherBethesdaSources(QListWidget *l
     QList<bethesda_deploy::DeploySource> sources;
     for (int i : order) {
         auto *item = list->item(i);
-        if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(item)) continue;
         if (item->checkState() != Qt::Checked) continue;
-        if (item->data(ModRole::InstallStatus).toInt() != 1) continue;
+        if (!mod_row::isInstalled(item)) continue;
         const QString modPath = item->data(ModRole::ModPath).toString();
         if (modPath.isEmpty() || !QDir(modPath).exists()) continue;
 
@@ -1227,9 +1228,9 @@ QString MainWindow::deployFingerprint() const
     QStringList mods;
     for (int i : rowOrderForPersist()) {
         const auto *it = m_modList->item(i);
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(it)) continue;
         if (it->checkState() != Qt::Checked) continue;
-        if (it->data(ModRole::InstallStatus).toInt() != 1) continue;
+        if (!mod_row::isInstalled(it)) continue;
         const QString path = it->data(ModRole::ModPath).toString();
         if (path.isEmpty()) continue;
         mods << path + QLatin1Char('\t')
@@ -1282,9 +1283,9 @@ void MainWindow::updateDeployHint()
     int pending = 0;
     for (int i = 0; i < m_modList->count(); ++i) {
         const auto *it = m_modList->item(i);
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(it)) continue;
         if (it->checkState() != Qt::Checked) continue;
-        if (it->data(ModRole::InstallStatus).toInt() != 1) continue;
+        if (!mod_row::isInstalled(it)) continue;
         ++pending;
     }
     if (pending == 0) { clear(); return; }
@@ -1568,9 +1569,9 @@ void MainWindow::onInspectDeployment()
 
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *it = m_modList->item(i);
-        if (it->data(ModRole::ItemType).toString() == ItemType::Mod
+        if (mod_row::isMod(it)
             && it->checkState() == Qt::Checked
-            && it->data(ModRole::InstallStatus).toInt() == 1)
+            && mod_row::isInstalled(it))
             ++f.enabledInstalledMods;
     }
     f.dataRootCount = int(gatherBethesdaSources(m_modList, rowOrderForPersist(),
@@ -1734,7 +1735,7 @@ void MainWindow::refreshScriptExtenderFlags()
 
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *item = m_modList->item(i);
-        if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(item)) continue;
         QString label = item->data(ModRole::CustomName).toString();
         if (label.isEmpty()) label = item->text();
 

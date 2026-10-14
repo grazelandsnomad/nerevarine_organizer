@@ -18,6 +18,7 @@
 
 #include <algorithm>
 
+#include "mod_row.h"
 #include "modroles.h"
 #include "translator.h"
 #include "prompts.h"
@@ -34,8 +35,8 @@ void byDate(QListWidget *list, bool ascending)
 
     std::stable_sort(items.begin(), items.end(),
         [ascending](QListWidgetItem *a, QListWidgetItem *b) {
-            bool aIsSep = a->data(ModRole::ItemType).toString() == ItemType::Separator;
-            bool bIsSep = b->data(ModRole::ItemType).toString() == ItemType::Separator;
+            bool aIsSep = mod_row::isSeparator(a);
+            bool bIsSep = mod_row::isSeparator(b);
             // Separators go to the end, keeping their relative order.
             if (aIsSep && bIsSep) return false;
             if (aIsSep)           return false;
@@ -61,13 +62,12 @@ void bySize(QListWidget *list, bool ascending)
 
     QVector<bool> isSepAt(n);
     for (int i = 0; i < n; ++i)
-        isSepAt[i] = list->item(i)->data(ModRole::ItemType).toString()
-                     == ItemType::Separator;
+        isSepAt[i] = mod_row::isSeparator(list->item(i));
 
     QList<QListWidgetItem *> seps, mods;
     for (int i = 0; i < n; ++i) {
         auto *it = list->takeItem(0);
-        if (it->data(ModRole::ItemType).toString() == ItemType::Separator)
+        if (mod_row::isSeparator(it))
             seps.append(it);
         else
             mods.append(it);
@@ -105,7 +105,7 @@ QList<QListWidgetItem *> showReorderSeparatorsDialog(QWidget *parent,
     sections.append(Section{});                       // orphans
     for (int i = 0; i < list->count(); ++i) {
         auto *it = list->item(i);
-        if (it->data(ModRole::ItemType).toString() == ItemType::Separator) {
+        if (mod_row::isSeparator(it)) {
             sections.append(Section{ it, {} });
         } else {
             sections.last().mods.append(it);

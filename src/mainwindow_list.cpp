@@ -23,6 +23,7 @@
 #include "theme.h"
 #include "separatordialog.h"
 #include "modlistdelegate.h"
+#include "mod_row.h"
 #include "modroles.h"
 #include "translator.h"
 #include "placeholder_state.h"
@@ -236,7 +237,7 @@ void MainWindow::collapseSection(QListWidgetItem *sep, bool collapse)
     int row = m_modList->row(sep);
     for (int i = row + 1; i < m_modList->count(); ++i) {
         auto *it = m_modList->item(i);
-        if (it->data(ModRole::ItemType).toString() == ItemType::Separator) break;
+        if (mod_row::isSeparator(it)) break;
         it->setHidden(collapse);
     }
     m_modList->update(m_modList->indexFromItem(sep));
@@ -372,7 +373,7 @@ void MainWindow::checkPendingDisables()
         if (!pi.isValid()) continue;
         auto *it = m_modList->item(pi.row());
         if (!it) continue;
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(it)) continue;
         if (it->checkState() != Qt::Unchecked) continue;
         if (!rows.contains(pi.row())) rows.append(pi.row());
     }
@@ -508,7 +509,7 @@ void MainWindow::onRemoveSelected()
     if (!goingAway.isEmpty()) {
         for (int i = 0; i < m_modList->count(); ++i) {
             auto *cand = m_modList->item(i);
-            if (cand->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+            if (!mod_row::isMod(cand)) continue;
             if (selectedSet.contains(cand)) continue;
             QStringList deps = cand->data(ModRole::DependsOn).toStringList();
             const int depsBefore = deps.size();
@@ -556,14 +557,14 @@ void MainWindow::onRemoveSelected()
     QSet<QString> removedPluginFilenames;
     QStringList installedPaths;
     for (auto *it : toRemove) {
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(it)) continue;
         const QString mp = it->data(ModRole::ModPath).toString();
         if (mp.isEmpty()) continue;
         // Use cache - avoids a cold filesystem scan before the "delete from disk?" dialog.
         for (const auto &p : m_scans->cachedDataFolders(mp, kContentExts))
             for (const QString &cf : p.second)
                 removedPluginFilenames.insert(cf);
-        if (it->data(ModRole::InstallStatus).toInt() == 1 && QDir(mp).exists())
+        if (mod_row::isInstalled(it) && QDir(mp).exists())
             installedPaths << mp;
     }
 
@@ -648,7 +649,7 @@ void MainWindow::onRemoveSelected()
         bool anyVisibleMod = false;
         for (int i = 0; i < m_modList->count(); ++i) {
             auto *it = m_modList->item(i);
-            if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+            if (!mod_row::isMod(it)) continue;
             if (!it->isHidden()) { anyVisibleMod = true; break; }
         }
         if (!anyVisibleMod)
@@ -671,8 +672,8 @@ void MainWindow::onRemoveSelected()
     redistEntries.reserve(m_modList->count());
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *other = m_modList->item(i);
-        if (other->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
-        if (other->data(ModRole::InstallStatus).toInt() != 1) continue;
+        if (!mod_row::isMod(other)) continue;
+        if (!mod_row::isInstalled(other)) continue;
         const QString hp = other->data(ModRole::ModPath).toString();
         if (hp.isEmpty()) continue;
         redistEntries.append({other->text(), hp});
@@ -766,7 +767,7 @@ void MainWindow::sendSelectedToSeparator(QListWidgetItem *sep)
     int sepRow = m_modList->row(sep);
     QList<int> rows;
     for (auto *sel : selected) {
-        if (sel->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(sel)) continue;
         int r = m_modList->row(sel);
         if (r != sepRow) rows.append(r);
     }
@@ -789,8 +790,7 @@ void MainWindow::sendSelectedToSeparator(QListWidgetItem *sep)
     // separator, or at the end of the list if this is the last section.
     int insertAt = sepRow + 1;
     while (insertAt < m_modList->count() &&
-           m_modList->item(insertAt)->data(ModRole::ItemType).toString()
-               != ItemType::Separator) {
+           !mod_row::isSeparator(m_modList->item(insertAt))) {
         ++insertAt;
     }
     for (int k = 0; k < picked.size(); ++k)
@@ -812,7 +812,7 @@ void MainWindow::sendSelectedToEdge(bool toBeginning)
 
     QList<int> rows;
     for (auto *sel : selected) {
-        if (sel->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(sel)) continue;
         rows.append(m_modList->row(sel));
     }
     if (rows.isEmpty()) return;
@@ -922,7 +922,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
     QMenu menu(this);
 
     if (item) {
-        bool isSep = item->data(ModRole::ItemType).toString() == ItemType::Separator;
+        bool isSep = mod_row::isSeparator(item);
         if (isSep) {
             menu.addAction(T("ctx_edit_separator"), this,
                 [this, item]{ onEditSeparator(item); });
@@ -940,7 +940,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                 int start = m_modList->row(item) + 1;
                 for (int i = start; i < m_modList->count(); ++i) {
                     auto *it = m_modList->item(i);
-                    if (it->data(ModRole::ItemType).toString() == ItemType::Separator)
+                    if (mod_row::isSeparator(it))
                         break;
                     if (it->flags() & Qt::ItemIsUserCheckable)
                         it->setCheckState(state);
@@ -962,8 +962,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
             {
                 bool hasAnySep = false;
                 for (int i = 0; i < m_modList->count() && !hasAnySep; ++i)
-                    hasAnySep = m_modList->item(i)->data(ModRole::ItemType).toString()
-                              == ItemType::Separator;
+                    hasAnySep = mod_row::isSeparator(m_modList->item(i));
 
                 auto *sendMenu = menu.addMenu(T("ctx_send_to"));
                 if (hasAnySep) {
@@ -980,8 +979,8 @@ void MainWindow::onContextMenu(const QPoint &pos)
 
             buildConflictMenu(&menu, item);
 
-            int installStatus = item->data(ModRole::InstallStatus).toInt();
-            if (installStatus == 1) {
+            const InstallStatus installStatus = mod_row::installStatusOf(item);
+            if (installStatus == InstallStatus::Installed) {
                 menu.addAction(T("ctx_open_folder"), this, [item]{
                     QString path = item->data(ModRole::ModPath).toString();
                     subprocess::startDetached("xdg-open", {path});
@@ -1088,7 +1087,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                     for (int r = 0; r < m_modList->count() && offered < 200; ++r) {
                         auto *cand = m_modList->item(r);
                         if (cand == item) continue;
-                        if (cand->data(ModRole::ItemType).toString() != ItemType::Mod)
+                        if (!mod_row::isMod(cand))
                             continue;
                         const QString path = cand->data(ModRole::ModPath).toString();
                         if (path.isEmpty() || path == selfPath) continue;
@@ -1277,7 +1276,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                     }
                 }
             }
-            if (installStatus == 0) {
+            if (installStatus == InstallStatus::NotInstalled) {
                 QString nexusUrl = item->data(ModRole::NexusUrl).toString();
                 if (!nexusUrl.isEmpty()) {
                     // Bulk install: if multiple rows are selected, queue them
@@ -1289,8 +1288,8 @@ void MainWindow::onContextMenu(const QPoint &pos)
                     QSet<QListWidgetItem*>  bulkSet;
                     auto addIfEligible = [&](QListWidgetItem *it) {
                         if (!it || bulkSet.contains(it)) return;
-                        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) return;
-                        if (it->data(ModRole::InstallStatus).toInt() != 0) return;
+                        if (!mod_row::isMod(it)) return;
+                        if (mod_row::installStatusOf(it) != InstallStatus::NotInstalled) return;
                         if (it->data(ModRole::NexusUrl).toString().isEmpty()) return;
                         bulk << it;
                         bulkSet.insert(it);
@@ -1311,7 +1310,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                 }
 
                 // Non-Nexus placeholder: offer a Nexus search + local-file install.
-                if (installStatus == 0 && nexusUrl.isEmpty()) {
+                if (installStatus == InstallStatus::NotInstalled && nexusUrl.isEmpty()) {
                     const QString srcUrl = item->data(ModRole::SourceUrl).toString();
                     if (!srcUrl.isEmpty()) {
                         // Known non-Nexus URL (GitHub release, etc.) stored on import.
@@ -1354,7 +1353,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                     onViewChangelog(item);
                 });
             }
-            if (installStatus == 2) {
+            if (installStatus == InstallStatus::Installing) {
                 // Download phase (queued or transferring) is the queue's to
                 // cancel; after the handoff the row belongs to the
                 // InstallController (verify/extract), reached by its token.
@@ -1370,7 +1369,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                     });
                 }
             }
-            if (installStatus != 2) { // don't allow toggling while installing
+            if (installStatus != InstallStatus::Installing) { // don't allow toggling while installing
                 menu.addAction(
                     item->checkState() == Qt::Checked
                         ? T("ctx_disable") : T("ctx_enable"),
@@ -1390,7 +1389,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                 const QList<QListWidgetItem *> utilTargets = [&]{
                     QList<QListWidgetItem *> sel;
                     for (auto *it : m_modList->selectedItems())
-                        if (it->data(ModRole::ItemType).toString() == ItemType::Mod)
+                        if (mod_row::isMod(it))
                             sel << it;
                     if (!sel.contains(item)) sel.prepend(item);
                     return sel;
@@ -1428,7 +1427,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                 const QList<QListWidgetItem *> favTargets = [&]{
                     QList<QListWidgetItem *> sel;
                     for (auto *it : m_modList->selectedItems())
-                        if (it->data(ModRole::ItemType).toString() == ItemType::Mod)
+                        if (mod_row::isMod(it))
                             sel << it;
                     if (!sel.contains(item)) sel.prepend(item);
                     return sel;
@@ -1466,7 +1465,7 @@ void MainWindow::onItemDoubleClicked(QListWidgetItem *item)
 {
     if (!item) return;
 
-    if (item->data(ModRole::ItemType).toString() == ItemType::Separator) {
+    if (mod_row::isSeparator(item)) {
         onEditSeparator(item);
     } else {
         // Mod: edit display name and personal annotation
@@ -1502,7 +1501,7 @@ void MainWindow::onItemDoubleClicked(QListWidgetItem *item)
         // translate a Spanish mod into Spanish.
         QListWidgetItem *const transSource = translationSourceRowFor(item);
         const auto tpHere =
-            (!transSource && item->data(ModRole::InstallStatus).toInt() == 1)
+            (!transSource && mod_row::isInstalled(item))
                 ? translationProgressStateFor(item)
                 : TranslationProgressState{};
         const int startedHere = tpHere.saved;
@@ -1562,7 +1561,7 @@ void MainWindow::onItemDoubleClicked(QListWidgetItem *item)
         for (int i = 0; i < m_modList->count(); ++i) {
             auto *it = m_modList->item(i);
             if (it == item) continue;
-            if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+            if (!mod_row::isMod(it)) continue;
             QString u = it->data(ModRole::NexusUrl).toString();
             if (!u.isEmpty()) urlToName[u] = it->text();
         }
@@ -1806,7 +1805,7 @@ void MainWindow::resetToSavedOrder()
     // that were collapsed (mirrors loadModList's post-build pass).
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *sep = m_modList->item(i);
-        if (sep->data(ModRole::ItemType).toString() == ItemType::Separator
+        if (mod_row::isSeparator(sep)
                 && sep->data(ModRole::Collapsed).toBool())
             collapseSection(sep, true);
     }
@@ -1850,7 +1849,7 @@ void MainWindow::updateSectionCounts()
     bool anyUpdate = false;
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *it = m_modList->item(i);
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod)
+        if (!mod_row::isMod(it))
             continue;
         if (it->data(ModRole::UpdateAvailable).toBool()) {
             anyUpdate = true;
@@ -1868,7 +1867,7 @@ void MainWindow::updateSectionCounts()
     };
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *it = m_modList->item(i);
-        if (it->data(ModRole::ItemType).toString() == ItemType::Separator) {
+        if (mod_row::isSeparator(it)) {
             flush();
             currentSep = it;
             active = total = 0;
@@ -2192,7 +2191,7 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
     QListWidgetItem *existing = nullptr;
     for (int i = 0; i < m_modList->count() && !existing; ++i) {
         auto *cand = m_modList->item(i);
-        if (cand->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(cand)) continue;
         if (cand->data(ModRole::ModPath).toString() == built.modPath
             || cand->text().trimmed() == wanted)
             existing = cand;
@@ -2203,7 +2202,7 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
         // the plugin contents build() just rewrote, and pushing a snapshot
         // that claims otherwise is worse than not offering one.
         existing->setData(ModRole::ModPath,       built.modPath);
-        existing->setData(ModRole::InstallStatus, 1);
+        mod_row::setInstallStatus(existing, InstallStatus::Installed);
         existing->setData(ModRole::IsGeneratedTranslation, true);
         existing->setToolTip(built.modPath);
         m_modList->setCurrentItem(existing);
@@ -2216,7 +2215,7 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
         auto *tr = new QListWidgetItem(built.modName);
         tr->setData(ModRole::ItemType,      ItemType::Mod);
         tr->setData(ModRole::ModPath,       built.modPath);
-        tr->setData(ModRole::InstallStatus, 1);
+        mod_row::setInstallStatus(tr, InstallStatus::Installed);
         tr->setData(ModRole::DateAdded,     QDateTime::currentDateTime());
         // Marks this as ours, which is what makes "package as archive" appear
         // on it and nowhere else.
@@ -2268,7 +2267,7 @@ QListWidgetItem *
 MainWindow::translationSourceRowFor(const QListWidgetItem *item) const
 {
     if (!item) return nullptr;
-    if (item->data(ModRole::ItemType).toString() != ItemType::Mod) return nullptr;
+    if (!mod_row::isMod(item)) return nullptr;
 
     const QString name = item->text().trimmed();
     // The flag first: it is the only one of the two that a rename cannot
@@ -2282,7 +2281,7 @@ MainWindow::translationSourceRowFor(const QListWidgetItem *item) const
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *cand = m_modList->item(i);
         if (cand == item) continue;
-        if (cand->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(cand)) continue;
         if (cand->text().trimmed() == source) return cand;
     }
     return nullptr;   // the source was uninstalled; there is nothing to review
@@ -2318,7 +2317,7 @@ MainWindow::translationProgressStateFor(const QListWidgetItem *item) const
         item->text().trimmed(), translationLanguage());
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *cand = m_modList->item(i);
-        if (cand->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(cand)) continue;
         if (cand->text().trimmed() == wanted) { st.built = true; break; }
     }
     return st;
@@ -2515,16 +2514,16 @@ void MainWindow::onDependencyGraph()
         auto *it = m_modList->item(i);
         deps::ModEntry e;
         e.idx = i;
-        if (it->data(ModRole::ItemType).toString() == ItemType::Separator)
+        if (mod_row::isSeparator(it))
             section = it->text().trimmed();
-        if (it->data(ModRole::ItemType).toString() == ItemType::Mod) {
+        if (mod_row::isMod(it)) {
             e.section     = section;
             e.nexusUrl    = it->data(ModRole::NexusUrl).toString();
             e.displayName = it->text().trimmed();
             e.dependsOn   = it->data(ModRole::DependsOn).toStringList();
             e.isUtility   = it->data(ModRole::IsUtility).toBool();
             e.enabled     = it->checkState() == Qt::Checked;
-            e.installed   = it->data(ModRole::InstallStatus).toInt() == 1;
+            e.installed   = mod_row::isInstalled(it);
             if (!e.nexusUrl.isEmpty()) rowUrl.insert(i, e.nexusUrl);
         }
         snap.append(e);

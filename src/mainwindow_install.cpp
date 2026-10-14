@@ -4,6 +4,7 @@
 #include "mainwindow.h"
 #include "mainwindow_internal.h"
 #include "separatordialog.h"
+#include "mod_row.h"
 #include "modroles.h"
 #include "translator.h"
 #include "async_guarded.h"
@@ -166,7 +167,7 @@ void MainWindow::onArchiveVerificationFailed(const QString &archivePath,
         // An update whose new archive failed verification: the installed
         // folder is untouched, so the mod stays installed there.
         if (!placeholder_state::restoreInstalled(placeholder)) {
-            placeholder->setData(ModRole::InstallStatus,    0);
+            mod_row::setInstallStatus(placeholder, InstallStatus::NotInstalled);
             placeholder->setData(ModRole::DownloadProgress, QVariant());
             placeholder->setData(ModRole::InstallToken,     QVariant());
             placeholder_state::restoreInteractiveFlags(placeholder);
@@ -422,9 +423,9 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
                 for (int i = 0; i < m_modList->count(); ++i) {
                     auto *row = m_modList->item(i);
                     if (!row) continue;
-                    if (row->data(ModRole::ItemType).toString() != ItemType::Mod)
+                    if (!mod_row::isMod(row))
                         continue;
-                    if (row->data(ModRole::InstallStatus).toInt() != 1) continue;
+                    if (!mod_row::isInstalled(row)) continue;
                     const QString rowPath = row->data(ModRole::ModPath).toString();
                     // A row that calls itself installed but has no readable
                     // folder is a HOLE in the evidence, not an absence of
@@ -820,7 +821,7 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
             for (int r = 0; r < m_modList->count() && !referenced; ++r) {
                 auto *row = m_modList->item(r);
                 if (row == item) continue;
-                if (row->data(ModRole::ItemType).toString() != ItemType::Mod)
+                if (!mod_row::isMod(row))
                     continue;
                 for (int role : { ModRole::ModPath, ModRole::IntendedModPath }) {
                     const QString rmp = row->data(role).toString();
@@ -835,7 +836,7 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
 
     item->setData(ModRole::ItemType,      ItemType::Mod);
     item->setData(ModRole::ModPath,       dirPath);
-    item->setData(ModRole::InstallStatus, 1); // installed
+    mod_row::setInstallStatus(item, InstallStatus::Installed); // installed
     commitInstalledFileId(item);
     m_scans->invalidateDataFoldersCache(dirPath);      // force re-scan next time
     // Files were just (re)written. A reinstall into the same folder keeps the
@@ -886,7 +887,7 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
                 for (int r = m_modList->count() - 1; r >= 0; --r) {
                     auto *row = m_modList->item(r);
                     if (row == item) continue;
-                    if (row->data(ModRole::ItemType).toString() != ItemType::Mod)
+                    if (!mod_row::isMod(row))
                         continue;
                     const QString rmp = row->data(ModRole::ModPath).toString();
                     if (QDir::cleanPath(rmp) == QDir::cleanPath(oldPath))
@@ -921,7 +922,7 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
                     for (int r = 0; r < m_modList->count() && !referenced; ++r) {
                         auto *row = m_modList->item(r);
                         if (row == item) continue;
-                        if (row->data(ModRole::ItemType).toString() != ItemType::Mod)
+                        if (!mod_row::isMod(row))
                             continue;
                         for (int role : { ModRole::ModPath, ModRole::IntendedModPath }) {
                             const QString rmp = row->data(role).toString();
@@ -1125,13 +1126,13 @@ void MainWindow::repairEmptyModPaths()
     int healed = 0;
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *item = m_modList->item(i);
-        if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(item)) continue;
         QString modPath = item->data(ModRole::ModPath).toString();
         if (modPath.isEmpty() || modsRootAbs.isEmpty()) continue;
         if (QFileInfo(modPath).absoluteFilePath() != modsRootAbs) continue;
 
         item->setData(ModRole::ModPath,       QString());
-        item->setData(ModRole::InstallStatus, 0);
+        mod_row::setInstallStatus(item, InstallStatus::NotInstalled);
         item->setData(ModRole::HasMissingMaster, false);
         item->setData(ModRole::MissingMasters,   QStringList());
         item->setData(ModRole::ModSize,          QVariant());
@@ -1149,7 +1150,7 @@ void MainWindow::repairEmptyModPaths()
     QSet<QString> pathsInUse;
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *item = m_modList->item(i);
-        if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(item)) continue;
         QString p = item->data(ModRole::ModPath).toString();
         if (!p.isEmpty()) pathsInUse.insert(QFileInfo(p).absoluteFilePath());
     }
@@ -1157,12 +1158,12 @@ void MainWindow::repairEmptyModPaths()
     bool changed = (healed > 0);
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *item = m_modList->item(i);
-        if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(item)) continue;
         // InstallStatus 2 = currently installing - leave those alone. We also
         // handle status 0: loadModList() demotes a mod to "not installed" when
         // its ModPath exists but is empty (OAAB_Data reinstall-leftover case).
         // Without this branch the sibling rescue below never runs.
-        if (item->data(ModRole::InstallStatus).toInt() == 2) continue;
+        if (mod_row::isInstalling(item)) continue;
 
         QString modPath = item->data(ModRole::ModPath).toString();
         if (modPath.isEmpty()) continue;
@@ -1313,7 +1314,7 @@ void MainWindow::repairEmptyModPaths()
         // item rebound from an empty folder stays at status=0 (set by
         // loadModList because the original folder was empty) and OpenMW
         // never sees the plugins even though ModPath is now correct.
-        item->setData(ModRole::InstallStatus, 1);
+        mod_row::setInstallStatus(item, InstallStatus::Installed);
         pathsInUse.insert(rebind);
         changed = true;
     }
@@ -1351,9 +1352,8 @@ static QListWidgetItem *findPendingRowForModId(QListWidget *list, int modId,
     for (int i = 0; i < list->count(); ++i) {
         auto *it = list->item(i);
         if (!it) continue;
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
-        const int status = it->data(ModRole::InstallStatus).toInt();
-        if (status == 1) continue;                // already installed - don't clobber
+        if (!mod_row::isMod(it)) continue;
+        if (mod_row::isInstalled(it)) continue;   // already installed - don't clobber
         const QString url = it->data(ModRole::NexusUrl).toString();
         if (url.isEmpty()) continue;
         const auto ref = parseNexusModUrl(url);
@@ -1420,7 +1420,7 @@ void MainWindow::installLocalArchive(const QString &archivePath,
         if (existingName.isEmpty()) existingName = placeholder->text();
         placeholder->setText(QString("⠋ %1 (%2)").arg(
             T("status_installing_label"), existingName));
-        placeholder->setData(ModRole::InstallStatus, 2);
+        mod_row::setInstallStatus(placeholder, InstallStatus::Installing);
         placeholder_state::setBusyFlags(placeholder);
         m_modList->scrollToItem(placeholder);
     } else {
@@ -1430,7 +1430,7 @@ void MainWindow::installLocalArchive(const QString &archivePath,
             QString("⠋ %1 (%2)").arg(T("status_installing_label"),
                                       srcFi.completeBaseName()));
         placeholder->setData(ModRole::ItemType,      ItemType::Mod);
-        placeholder->setData(ModRole::InstallStatus, 2);
+        mod_row::setInstallStatus(placeholder, InstallStatus::Installing);
         placeholder->setData(ModRole::DateAdded,     QDateTime::currentDateTime());
         placeholder->setCheckState(Qt::Checked);
         placeholder_state::setBusyFlags(placeholder);

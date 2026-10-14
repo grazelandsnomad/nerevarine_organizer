@@ -7,6 +7,7 @@
 #include "install_layout.h"
 #include "post_install.h"
 #include "variant_picker.h"
+#include "mod_row.h"
 #include "placeholder_state.h"
 #include "row_caption.h"
 #include "modroles.h"
@@ -1259,6 +1260,45 @@ static void testRowCaptionPrecedence()
           quiet.win.isEmpty() && quiet.lose.isEmpty() && quiet.loseKind == LoseKind::None);
 }
 
+// -- mod_row: the typed view of ItemType and InstallStatus -----------------
+
+static void testModRowAnswersFromTheTwoRoles()
+{
+    std::cout << "testModRowAnswersFromTheTwoRoles\n";
+    QListWidgetItem fresh;
+    check("a blank item is neither kind of row",
+          !mod_row::isMod(&fresh) && !mod_row::isSeparator(&fresh));
+    check("a blank item is not installed",
+          mod_row::installStatusOf(&fresh) == InstallStatus::NotInstalled
+          && !mod_row::isInstalled(&fresh) && !mod_row::isInstalling(&fresh));
+
+    QListWidgetItem mod;
+    mod.setData(ModRole::ItemType, ItemType::Mod);
+    check("a mod row reads as one", mod_row::isMod(&mod) && !mod_row::isSeparator(&mod));
+    QListWidgetItem sep;
+    sep.setData(ModRole::ItemType, ItemType::Separator);
+    check("a separator row reads as one", mod_row::isSeparator(&sep) && !mod_row::isMod(&sep));
+
+    mod_row::setInstallStatus(&mod, InstallStatus::Installing);
+    check("the status is stored as the int the modlist file holds",
+          mod.data(ModRole::InstallStatus).toInt() == 2);
+    check("and read back typed", mod_row::isInstalling(&mod) && !mod_row::isInstalled(&mod));
+    mod.setData(ModRole::InstallStatus, 1);
+    check("an int written the old way reads back typed", mod_row::isInstalled(&mod));
+
+    check("a null item answers no to everything",
+          !mod_row::isMod(nullptr) && !mod_row::isSeparator(nullptr)
+          && !mod_row::isInstalled(nullptr)
+          && mod_row::installStatusOf(nullptr) == InstallStatus::NotInstalled);
+    mod_row::setInstallStatus(nullptr, InstallStatus::Installed);   // must not crash
+}
+
+static void run_mod_row()
+{
+    std::cout << "\n=== mod_row ===\n";
+    testModRowAnswersFromTheTwoRoles();
+}
+
 static void run_placeholder_state()
 {
     std::cout << "\n=== placeholder_state ===\n";
@@ -1279,6 +1319,7 @@ int main(int argc, char **argv)
     run_post_install();
     run_modlist_summary();
     run_placeholder_state();
+    run_mod_row();
     std::cout << "\n=== row_caption ===\n";
     testRowCaptionPrecedence();
 

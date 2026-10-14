@@ -6,6 +6,7 @@
 #include <QString>
 #include <QTimer>
 
+#include "mod_row.h"
 #include "modroles.h"
 #include "translator.h"
 
@@ -56,8 +57,8 @@ void BulkInstallQueue::processTick()
         for (int i = 0; i < m_list->count() && !present; ++i)
             present = (m_list->item(i) == item);
         if (!present) continue;
-        if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
-        if (item->data(ModRole::InstallStatus).toInt() != 0) continue;
+        if (!mod_row::isMod(item)) continue;
+        if (mod_row::installStatusOf(item) != InstallStatus::NotInstalled) continue;
         if (item->data(ModRole::NexusUrl).toString().isEmpty()) continue;
         m_installFn(item);
         break; // one per tick

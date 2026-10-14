@@ -4,6 +4,7 @@
 #include "mainwindow.h"
 #include "mainwindow_internal.h"
 #include "separatordialog.h"
+#include "mod_row.h"
 #include "modroles.h"
 #include "translator.h"
 #include "placeholder_state.h"
@@ -253,7 +254,7 @@ void MainWindow::doImportMO2ModList(const QString &path)
         } else {
             item->setData(ModRole::ItemType,      ItemType::Mod);
             item->setData(ModRole::CustomName,    name);
-            item->setData(ModRole::InstallStatus, 0);
+            mod_row::setInstallStatus(item, InstallStatus::NotInstalled);
             item->setData(ModRole::DateAdded,     QDateTime::currentDateTime());
             item->setCheckState(enabled ? Qt::Checked : Qt::Unchecked);
 
@@ -634,7 +635,7 @@ void MainWindow::finishWabbajackImport(const QJsonObject &root)
             item->setData(ModRole::NexusId,       mod.nexusId);
             if (!mod.sourceUrl.isEmpty())
                 item->setData(ModRole::SourceUrl, mod.sourceUrl);
-            item->setData(ModRole::InstallStatus, 0);
+            mod_row::setInstallStatus(item, InstallStatus::NotInstalled);
             item->setData(ModRole::DateAdded,     QDateTime::currentDateTime());
             // Untagged (no ExpectedFileId: the Wabbajack record names no
             // Nexus file), so it never judges a download; the nxm-time
@@ -851,7 +852,8 @@ void MainWindow::onImportMO2Profile()
             item->setData(ModRole::ItemType,      ItemType::Mod);
             item->setData(ModRole::CustomName,    name);
             item->setData(ModRole::ModPath,       modPath);
-            item->setData(ModRole::InstallStatus, modPath.isEmpty() ? 0 : 1);
+            mod_row::setInstallStatus(item, modPath.isEmpty() ? InstallStatus::NotInstalled
+                                                      : InstallStatus::Installed);
             item->setData(ModRole::DateAdded,     QDateTime::currentDateTime());
             item->setCheckState(enabled ? Qt::Checked : Qt::Unchecked);
 

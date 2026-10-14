@@ -7,6 +7,7 @@
 #include "load_order_merge.h"
 #include "separatordialog.h"
 #include "modlistdelegate.h"
+#include "mod_row.h"
 #include "modroles.h"
 #include "translator.h"
 #include "placeholder_state.h"
@@ -347,7 +348,7 @@ void MainWindow::reconcileLoadOrder()
     QHash<QString, QString> pathByName;
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *item = m_modList->item(i);
-        if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(item)) continue;
         if (!placeholder_state::folderInstalled(item)) continue;
         QString modPath = item->data(ModRole::ModPath).toString();
         for (const auto &p : m_scans->cachedDataFolders(modPath, contentExts))
@@ -370,7 +371,7 @@ void MainWindow::reconcileLoadOrder()
     const QList<int> loOrder = rowOrderForPersist();
     for (int oi = 0; oi < loOrder.size(); ++oi) {
         auto *item = m_modList->item(loOrder[oi]);
-        if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(item)) continue;
         if (!placeholder_state::folderInstalled(item)) continue;
         QString modPath = item->data(ModRole::ModPath).toString();
         for (const auto &p : m_scans->cachedDataFolders(modPath, contentExts)) {
@@ -750,8 +751,8 @@ void MainWindow::onEditLoadOrder()
     QSet<QString> enabledSet;
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *item = m_modList->item(i);
-        if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
-        if (item->data(ModRole::InstallStatus).toInt() != 1) continue;
+        if (!mod_row::isMod(item)) continue;
+        if (!mod_row::isInstalled(item)) continue;
         if (item->checkState() != Qt::Checked) continue;
         for (const auto &p : collectDataFolders(
                  item->data(ModRole::ModPath).toString(), contentExts))
@@ -874,13 +875,13 @@ void MainWindow::scanMissingDependencies()
     snap.reserve(m_modList->count());
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *it = m_modList->item(i);
-        if (it->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(it)) continue;
 
         deps::ModEntry e;
         e.idx         = i;
         e.nexusUrl    = it->data(ModRole::NexusUrl).toString();
         e.enabled     = (it->checkState() == Qt::Checked);
-        e.installed   = (it->data(ModRole::InstallStatus).toInt() == 1);
+        e.installed   = (mod_row::isInstalled(it));
         e.dependsOn   = it->data(ModRole::DependsOn).toStringList();
         e.displayName = it->data(ModRole::CustomName).toString();
         if (e.displayName.isEmpty()) e.displayName = it->text();
@@ -975,8 +976,8 @@ void MainWindow::runMissingMastersScan()
     static const QStringList contentExts{".esp", ".esm"};
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *item = m_modList->item(i);
-        if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
-        if (item->data(ModRole::InstallStatus).toInt() != 1) continue;
+        if (!mod_row::isMod(item)) continue;
+        if (!mod_row::isInstalled(item)) continue;
         if (item->checkState() != Qt::Checked) continue;
 
         LoadOrderController::MastersInput e;
@@ -1137,7 +1138,7 @@ void MainWindow::syncOpenMWConfig()
     const QList<int> cfgOrder = rowOrderForPersist();
     for (int oi = 0; oi < cfgOrder.size(); ++oi) {
         auto *item = m_modList->item(cfgOrder[oi]);
-        if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
+        if (!mod_row::isMod(item)) continue;
 
         openmw::ConfigMod cm;
         cm.enabled   = (item->checkState() == Qt::Checked);
@@ -1450,7 +1451,7 @@ void MainWindow::loadModList(const QString &path,
             item->setData(ModRole::CustomName,    e.customName);
             item->setData(ModRole::NexusUrl,      e.nexusUrl);
             item->setData(ModRole::DateAdded,     e.dateAdded);
-            item->setData(ModRole::InstallStatus, 0);   // not actually mid-install anymore
+            mod_row::setInstallStatus(item, InstallStatus::NotInstalled);   // not actually mid-install anymore
             item->setCheckState(Qt::Unchecked);
             m_modList->addItem(item);
             continue;
@@ -1502,7 +1503,8 @@ void MainWindow::loadModList(const QString &path,
             const bool installed = !modPath.isEmpty()
                                 && d.exists()
                                 && !d.isEmpty();
-            item->setData(ModRole::InstallStatus, installed ? 1 : 0);
+            mod_row::setInstallStatus(item, installed ? InstallStatus::Installed
+                                              : InstallStatus::NotInstalled);
         }
         item->setCheckState(e.checked ? Qt::Checked : Qt::Unchecked);
         QString tip = e.annotation.isEmpty() ? modPath
@@ -1520,7 +1522,7 @@ void MainWindow::loadModList(const QString &path,
     // Apply any collapsed separators (hidden items must be set after all items exist)
     for (int i = 0; i < m_modList->count(); ++i) {
         auto *sep = m_modList->item(i);
-        if (sep->data(ModRole::ItemType).toString() == ItemType::Separator
+        if (mod_row::isSeparator(sep)
                 && sep->data(ModRole::Collapsed).toBool())
             collapseSection(sep, true);
     }
@@ -1543,8 +1545,8 @@ void MainWindow::loadModList(const QString &path,
         QStringList paths;
         for (int i = 0; i < m_modList->count(); ++i) {
             auto *item = m_modList->item(i);
-            if (item->data(ModRole::ItemType).toString() != ItemType::Mod) continue;
-            if (item->data(ModRole::InstallStatus).toInt() != 1) continue;
+            if (!mod_row::isMod(item)) continue;
+            if (!mod_row::isInstalled(item)) continue;
             paths << item->data(ModRole::ModPath).toString();
         }
         m_scans->warmDataFoldersCache(paths);
