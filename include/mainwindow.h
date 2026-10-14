@@ -1004,6 +1004,9 @@ private:
     // closeEvent drains it so the work has landed on disk before exit.
     SaveQueue m_saveQueue;
     void runMissingMastersScan();  // slot wired to m_mastersScanTimer::timeout
+    // The size scan's result, written into ModRole::ModSize by mod path; a
+    // row that is not installed loses its size.
+    void onModSizesScanned(const QHash<QString, qint64> &bytesByPath);
     // Missing-master cache + in-flight tracking + scan live in
     // LoadOrderController; this is the UI-side sink that writes the result map
     // into ModRole::HasMissingMaster / MissingMasters.

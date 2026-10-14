@@ -298,7 +298,7 @@ void testCachedDataFolders_returnsAndCaches()
     const QString modPath = makeMod(tmp.path(), "ModA",
                                      {"plugin.esp"}, {});
 
-    ScanCoordinator sc(nullptr);
+    ScanCoordinator sc;
     auto first = sc.cachedDataFolders(modPath, plugins::contentExtensions());
     check("returns one folder", first.size() == 1);
     check("folder lists the plugin",
@@ -330,7 +330,7 @@ void testCachedBsaFiles_basicAndCacheHit()
     writeFile(modPath + "/00 Core/primary.bsa");
     writeFile(modPath + "/01 Patches/extra.BSA");  // case-insensitive
 
-    ScanCoordinator sc(nullptr);
+    ScanCoordinator sc;
     auto bsas = sc.cachedBsaFiles(modPath);
     check("primary.bsa found", bsas.contains("primary.bsa"));
     check("extra.BSA found (case-insensitive glob)",
@@ -354,7 +354,7 @@ void testInvalidateClearsBoth()
     const QString modPath = makeMod(tmp.path(), "ModC",
                                      {"plugin.esp"}, {"a.bsa"});
 
-    ScanCoordinator sc(nullptr);
+    ScanCoordinator sc;
     (void)sc.cachedDataFolders(modPath, plugins::contentExtensions());
     (void)sc.cachedBsaFiles(modPath);
 
@@ -380,7 +380,7 @@ void testWarmDataFoldersCachePopulatesBoth()
     const QString a = makeMod(tmp.path(), "ModA", {"a.esp"}, {"a.bsa"});
     const QString b = makeMod(tmp.path(), "ModB", {"b.esp"}, {});
 
-    ScanCoordinator sc(nullptr);
+    ScanCoordinator sc;
     sc.warmDataFoldersCache({a, b});
 
     const bool warmed = waitFor([&]() {
@@ -405,7 +405,7 @@ void testWarmSkipsAlreadyCached()
 
     const QString modPath = makeMod(tmp.path(), "ModWarm",
                                      {"x.esp"}, {});
-    ScanCoordinator sc(nullptr);
+    ScanCoordinator sc;
 
     // Prime synchronously.
     auto cached = sc.cachedDataFolders(modPath, plugins::contentExtensions());
@@ -463,7 +463,7 @@ void testCachedTes3Masters_mtimeKeyed()
         f.write(buildTes3("Morrowind.esm"));
     }
 
-    ScanCoordinator sc(nullptr);
+    ScanCoordinator sc;
     auto masters = sc.cachedTes3Masters(plug);
     check("first call returns the parsed master",
           masters == QStringList{"Morrowind.esm"});
@@ -524,7 +524,7 @@ void testCachedTes3Masters_invalidatedOnContainingPath()
         f.write(miniTes3("Morrowind.esm"));
     }
 
-    ScanCoordinator sc(nullptr);
+    ScanCoordinator sc;
     (void)sc.cachedTes3Masters(plug);   // prime
 
     // File gone: cachedTes3Masters detects the missing file, drops the entry,
@@ -563,7 +563,7 @@ void testExtensionFilter()
                                       "scripts.omwscripts"},
                                      {});
 
-    ScanCoordinator sc(nullptr);
+    ScanCoordinator sc;
     auto allExts = sc.cachedDataFolders(modPath,
                                           plugins::contentExtensions());
     check("full extensions returns all three",

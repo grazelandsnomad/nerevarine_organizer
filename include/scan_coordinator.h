@@ -1,6 +1,8 @@
 #ifndef SCAN_COORDINATOR_H
 #define SCAN_COORDINATOR_H
 
+#include "modentry.h"
+
 #include <QHash>
 #include <QList>
 #include <QMutex>
@@ -9,7 +11,8 @@
 #include <QString>
 #include <QStringList>
 
-class QListWidget;
+#include <functional>
+
 class QTimer;
 
 // Owns the size-scan debounce timer + cache + in-flight tracking, plus the
@@ -19,7 +22,12 @@ class QTimer;
 class ScanCoordinator : public QObject {
     Q_OBJECT
 public:
-    ScanCoordinator(QListWidget *list, QObject *parent = nullptr);
+    // rows() hands the size scan its input: every row of the modlist, as a
+    // snapshot taken on the UI thread (modlist::snapshotEntries in the app).
+    // Results come back through sizesScanned, keyed by mod path; the
+    // coordinator never touches the widget.
+    using RowsProvider = std::function<QList<ModEntry>()>;
+    explicit ScanCoordinator(RowsProvider rows = {}, QObject *parent = nullptr);
 
     // Debounced trigger (200 ms single-shot). Every checkbox toggle fires
     // saveModList -> this, so rapid calls coalesce into one worker run. No-op
@@ -58,12 +66,17 @@ public:
     // invalidateDataFoldersCache on the containing modPath.
     QStringList cachedTes3Masters(const QString &pluginPath);
 
+signals:
+    // The size scan landed: bytes per installed mod path. A path missing
+    // from the hash was not installed or could not be measured.
+    void sizesScanned(const QHash<QString, qint64> &bytesByPath);
+
 private:
     void runSizeScan();
-    void applySizeResults(const QHash<QString, qint64> &bytesByPath);
+    void finishSizeScan(const QHash<QString, qint64> &bytesByPath);
 
-    QListWidget *m_list = nullptr;
-    QTimer      *m_sizeScanTimer = nullptr;
+    RowsProvider  m_rows;
+    QTimer       *m_sizeScanTimer = nullptr;
 
     // modPath -> (folder mtime ms, total bytes). mtime -1 = unknown.
     QHash<QString, QPair<qint64, qint64>> m_sizeCache;

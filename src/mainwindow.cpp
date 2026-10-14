@@ -322,7 +322,10 @@ MainWindow::MainWindow(QWidget *parent)
     setupDownloadQueue();
     // ScanCoordinator must exist before loadModList(), which calls
     // warmDataFoldersCache() on the worker.
-    m_scans = new ScanCoordinator(m_modList, this);
+    m_scans = new ScanCoordinator([this] { return modlist::snapshotEntries(m_modList); },
+                                  this);
+    connect(m_scans, &ScanCoordinator::sizesScanned,
+            this, &MainWindow::onModSizesScanned);
     loadModList();
     // The translate editor's first open builds the vanilla-text table - a walk
     // of Morrowind's masters, ~94 MB. Start it on a worker now, in the shadow
@@ -1821,7 +1824,7 @@ void MainWindow::onReviewUpdates()
 
         QString name = it->data(ModRole::CustomName).toString();
         if (name.isEmpty()) name = it->text();
-        candidates.append({it, name, ref->game, ref->modId, url});
+        candidates.append({mod_row::rowId(it), name, ref->game, ref->modId, url});
     }
 
     if (candidates.isEmpty()) {
@@ -1836,11 +1839,12 @@ void MainWindow::onReviewUpdates()
     // actual network I/O, so we just loop and kick each one off.
     statusBar()->showMessage(T("review_updates_kicking_off").arg(picked.size()));
     for (const auto &c : picked) {
-        // Re-validate: user could have removed a row between check-updates
+        // Re-validate: the user could have removed a row between check-updates
         // and the dialog exec.
-        if (!m_modList->indexFromItem(c.item).isValid()) continue;
-        prepareItemForInstall(c.item);
-        fetchModFiles(c.game, c.modId, c.item, /*autoPickMain=*/true);
+        QListWidgetItem *item = rowById(c.row);
+        if (!item) continue;
+        prepareItemForInstall(item);
+        fetchModFiles(c.game, c.modId, item, /*autoPickMain=*/true);
     }
 }
 
@@ -3046,6 +3050,22 @@ QListWidgetItem *MainWindow::findPlaceholderByToken(
     return nullptr;
 }
 
+
+void MainWindow::onModSizesScanned(const QHash<QString, qint64> &bytesByPath)
+{
+    for (int i = 0; i < m_modList->count(); ++i) {
+        QListWidgetItem *item = m_modList->item(i);
+        if (!mod_row::isMod(item)) continue;
+        if (!mod_row::isInstalled(item)) {
+            item->setData(ModRole::ModSize, QVariant());
+            continue;
+        }
+        const auto it = bytesByPath.constFind(item->data(ModRole::ModPath).toString());
+        if (it != bytesByPath.constEnd())
+            item->setData(ModRole::ModSize, it.value());
+    }
+    m_modList->viewport()->update();
+}
 
 QListWidgetItem *MainWindow::rowById(const QUuid &row) const
 {

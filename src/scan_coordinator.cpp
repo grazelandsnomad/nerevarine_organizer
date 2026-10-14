@@ -3,8 +3,6 @@
 #include <QDir>
 #include <QDirIterator>
 #include <QFileInfo>
-#include <QListWidget>
-#include <QListWidgetItem>
 #include <QMetaObject>
 #include <QMutexLocker>
 #include <QPointer>
@@ -16,7 +14,6 @@
 #include <QtConcurrent/QtConcurrent>
 
 #include "async_guarded.h"
-#include "mod_row.h"
 #include "modroles.h"
 #include "pluginparser.h"
 
@@ -35,8 +32,8 @@ qint64 computeDirSize(const QString &path)
 }
 } // namespace
 
-ScanCoordinator::ScanCoordinator(QListWidget *list, QObject *parent)
-    : QObject(parent), m_list(list)
+ScanCoordinator::ScanCoordinator(RowsProvider rows, QObject *parent)
+    : QObject(parent), m_rows(std::move(rows))
 {
     m_sizeScanTimer = new QTimer(this);
     m_sizeScanTimer->setSingleShot(true);
@@ -197,21 +194,20 @@ void ScanCoordinator::warmDataFoldersCache(const QStringList &paths)
 
 void ScanCoordinator::runSizeScan()
 {
-    // Snapshot inputs on the UI thread. The worker never touches
-    // QListWidget items (they can be deleted/reordered concurrently).
-    // Results come back keyed by ModPath, stable while an item exists.
+    // Snapshot inputs on the UI thread. The worker never sees a row, only
+    // paths; results come back keyed by mod path.
     struct Input {
         QString modPath;
         qint64  folderMtime;  // -1 if the folder is gone
         bool    installed;
     };
     QList<Input> inputs;
-    for (int i = 0; i < m_list->count(); ++i) {
-        auto *item = m_list->item(i);
-        if (!mod_row::isMod(item)) continue;
+    const QList<ModEntry> rows = m_rows ? m_rows() : QList<ModEntry>();
+    for (const ModEntry &row : rows) {
+        if (!row.isMod()) continue;
         Input in;
-        in.modPath    = item->data(ModRole::ModPath).toString();
-        in.installed  = (mod_row::isInstalled(item));
+        in.modPath     = row.modPath;
+        in.installed   = (row.installStatus == int(InstallStatus::Installed));
         in.folderMtime = in.installed
             ? QFileInfo(in.modPath).lastModified().toMSecsSinceEpoch()
             : -1;
@@ -255,25 +251,13 @@ void ScanCoordinator::runSizeScan()
             return results;
         },
         [](ScanCoordinator *self, QHash<QString, qint64> results) {
-            self->applySizeResults(results);
+            self->finishSizeScan(results);
         });
 }
 
-void ScanCoordinator::applySizeResults(const QHash<QString, qint64> &bytesByPath)
+void ScanCoordinator::finishSizeScan(const QHash<QString, qint64> &bytesByPath)
 {
-    for (int i = 0; i < m_list->count(); ++i) {
-        auto *item = m_list->item(i);
-        if (!mod_row::isMod(item)) continue;
-        if (!mod_row::isInstalled(item)) {
-            item->setData(ModRole::ModSize, QVariant());
-            continue;
-        }
-        QString path = item->data(ModRole::ModPath).toString();
-        auto it = bytesByPath.constFind(path);
-        if (it != bytesByPath.constEnd())
-            item->setData(ModRole::ModSize, it.value());
-    }
-    m_list->viewport()->update();
+    emit sizesScanned(bytesByPath);
 
     m_sizeScanInFlight = false;
     if (m_sizeScanPending) {

@@ -3,18 +3,18 @@
 
 #include <QList>
 #include <QString>
+#include <QUuid>
 
-class QListWidgetItem;
 class QWidget;
 
 namespace ReviewUpdates {
 
 struct Candidate {
-    QListWidgetItem *item;
-    QString          name;
-    QString          game;
-    int              modId;
-    QString          url;
+    QUuid   row;       // mod_row::rowId: resolved again after the dialog
+    QString name;
+    QString game;
+    int     modId;
+    QString url;
 };
 
 // Modal "review updates" dialog. Shows a checkable list of candidates with
