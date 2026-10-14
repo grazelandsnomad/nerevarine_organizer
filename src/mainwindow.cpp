@@ -486,7 +486,8 @@ MainWindow::MainWindow(QWidget *parent)
 
     // Drip-feed: one onInstallFromNexus at a time so the Nexus rate-limiter and
     // the modal file pickers don't pile up.
-    m_bulkInstall = new BulkInstallQueue(m_modList,
+    m_bulkInstall = new BulkInstallQueue(
+        [this](const QUuid &row) { return rowById(row); },
         [this](QListWidgetItem *item) { onInstallFromNexus(item); }, this);
     connect(m_bulkInstall, &BulkInstallQueue::statusMessage,
             this, [this](const QString &msg, int ms) {
@@ -841,14 +842,6 @@ MainWindow::verifyAndExtract(const QString &archivePath, QListWidgetItem *placeh
         qCWarning(logging::lcInstall)
             << "verifyAndExtract: null placeholder for" << archivePath;
         return std::unexpected(QStringLiteral("null-placeholder"));
-    }
-    // The download outlived its row (removed, or the list cleared by a
-    // profile switch or an import). The archive stays on disk; there is
-    // nothing left to attach the install to.
-    if (!liveRow(placeholder, "download finished")) {
-        qCWarning(logging::lcInstall)
-            << "verifyAndExtract: row gone for" << archivePath;
-        return std::unexpected(QStringLiteral("row-gone"));
     }
     if (archivePath.isEmpty() || !QFileInfo::exists(archivePath)) {
         qCWarning(logging::lcInstall)
@@ -2337,9 +2330,9 @@ void MainWindow::moveModFolders(const QList<FolderMove> &moves, const QString &d
             const FolderMove &m = moves.at(out.index);
             if (out.ok) {
                 ++tally->movedOk;
-                if (liveRow(m.item, "folder move")) {
-                    m.item->setData(ModRole::ModPath, out.newPath);
-                    m.item->setToolTip(out.newPath);
+                if (QListWidgetItem *item = rowById(m.row)) {
+                    item->setData(ModRole::ModPath, out.newPath);
+                    item->setToolTip(out.newPath);
                 }
                 saveModList();
             } else {
@@ -2454,7 +2447,7 @@ void MainWindow::onMoveModsDir()
         if (folderName.contains('/')) continue;
 
         FolderMove m;
-        m.item       = it;
+        m.row        = mod_row::rowId(it);
         m.oldPath    = abs;
         m.folderName = folderName;
         m.sizeBytes  = it->data(ModRole::ModSize).toLongLong();
@@ -2570,7 +2563,7 @@ void MainWindow::onConsolidateModsIntoActiveProfile()
         if (abs == modsRoot || abs.startsWith(modsRoot + "/"))       continue;
 
         FolderMove m;
-        m.item       = it;
+        m.row        = mod_row::rowId(it);
         m.oldPath    = abs;
         m.folderName = QFileInfo(abs).fileName();
         m.sizeBytes  = it->data(ModRole::ModSize).toLongLong();
@@ -3075,22 +3068,6 @@ QListWidgetItem *MainWindow::replyRow(const QUuid &row, const char *what)
     m_titleSetsCustomName.remove(row);
     m_autoPickMainItems.remove(row);
     qCInfo(logging::lcNexus) << what << "reply for a row that is gone; dropped";
-    return nullptr;
-}
-
-QListWidgetItem *MainWindow::liveRow(QListWidgetItem *item, const char *what)
-{
-    if (!item) return nullptr;
-    // By address only: `item` may already be freed, so nothing here may read
-    // through it. The list is short (hundreds of rows) and this runs once
-    // per network reply.
-    if (m_modList) {
-        for (int i = 0; i < m_modList->count(); ++i)
-            if (m_modList->item(i) == item) return item;
-    }
-    for (const QList<QListWidgetItem *> &bucket : std::as_const(m_strandedInstalls))
-        if (bucket.contains(item)) return item;
-    qCInfo(logging::lcNexus) << what << "for a row that is gone; dropped";
     return nullptr;
 }
 

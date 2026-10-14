@@ -350,10 +350,6 @@ private:
     // rowById for a controller reply: a miss is logged and the row is dropped
     // from the id-keyed side tables.
     QListWidgetItem *replyRow(const QUuid &row, const char *what);
-    // Same job, by address, for the few paths that still hand a row pointer
-    // across an event-loop turn. Searched by address only - a dangling pointer
-    // is never read through - and an address is not an identity.
-    QListWidgetItem *liveRow(QListWidgetItem *item, const char *what);
     void loadModList(const QString &path = QString(),
                      const QString &remapFrom = QString(),
                      const QString &remapTo   = QString());
@@ -436,8 +432,6 @@ private:
     // Return carries synchronous preconditions only, same as extractAndAdd:
     //   "null-placeholder" - placeholder was nullptr
     //   "archive-missing"  - archivePath missing or empty
-    //   "row-gone"         - placeholder is no longer a row (removed, or the
-    //                        list was cleared while the download ran)
     [[nodiscard]] std::expected<void, QString>
     verifyAndExtract(const QString &archivePath, QListWidgetItem *placeholder);
 
@@ -504,8 +498,8 @@ private:
     // One folder to move: the row it belongs to, where it is now, and what
     // it will be called under the destination root.
     struct FolderMove {
-        QListWidgetItem *item = nullptr;
-        QString          oldPath;
+        QUuid   row;              // mod_row::rowId; resolved when the move lands
+        QString oldPath;
         QString          folderName;
         qint64           sizeBytes = 0;
     };

@@ -1287,14 +1287,14 @@ void MainWindow::onContextMenu(const QPoint &pos)
                     // The clicked row is always included even if it wasn't in
                     // the selection (matches Qt's usual right-click-on-unselected
                     // behaviour of treating the clicked row as the target).
-                    QList<QListWidgetItem*> bulk;
+                    QList<QUuid>            bulk;      // rows by id
                     QSet<QListWidgetItem*>  bulkSet;
                     auto addIfEligible = [&](QListWidgetItem *it) {
                         if (!it || bulkSet.contains(it)) return;
                         if (!mod_row::isMod(it)) return;
                         if (mod_row::installStatusOf(it) != InstallStatus::NotInstalled) return;
                         if (it->data(ModRole::NexusUrl).toString().isEmpty()) return;
-                        bulk << it;
+                        bulk << mod_row::rowId(it);
                         bulkSet.insert(it);
                     };
                     addIfEligible(item);

@@ -1,6 +1,5 @@
 #include "bulk_install_queue.h"
 
-#include <QListWidget>
 #include <QListWidgetItem>
 #include <QSet>
 #include <QString>
@@ -10,9 +9,9 @@
 #include "modroles.h"
 #include "translator.h"
 
-BulkInstallQueue::BulkInstallQueue(QListWidget *list, InstallFn installFn,
-                                    QObject *parent)
-    : QObject(parent), m_list(list), m_installFn(std::move(installFn))
+BulkInstallQueue::BulkInstallQueue(RowResolver resolve, InstallFn installFn,
+                                   QObject *parent)
+    : QObject(parent), m_resolve(std::move(resolve)), m_installFn(std::move(installFn))
 {
     // 1.2 s between Nexus API kickoffs. Long enough that the Nexus rate-
     // limiter and modal file-picker dialogs don't pile up; short enough
@@ -22,17 +21,16 @@ BulkInstallQueue::BulkInstallQueue(QListWidget *list, InstallFn installFn,
     connect(m_timer, &QTimer::timeout, this, &BulkInstallQueue::processTick);
 }
 
-void BulkInstallQueue::enqueue(const QList<QListWidgetItem *> &items)
+void BulkInstallQueue::enqueue(const QList<QUuid> &rows)
 {
-    if (items.isEmpty()) return;
+    if (rows.isEmpty()) return;
     // Fast lookup of what's already pending so a second context-menu bulk
     // action doesn't double-queue rows that are still waiting their turn.
-    QSet<QListWidgetItem *> pending(m_queue.begin(), m_queue.end());
-    for (auto *it : items) {
-        if (!it) continue;
-        if (pending.contains(it)) continue;
-        m_queue.append(it);
-        pending.insert(it);
+    QSet<QUuid> pending(m_queue.begin(), m_queue.end());
+    for (const QUuid &row : rows) {
+        if (row.isNull() || pending.contains(row)) continue;
+        m_queue.append(row);
+        pending.insert(row);
     }
     if (!m_timer->isActive()) {
         processTick();
@@ -47,16 +45,11 @@ void BulkInstallQueue::enqueue(const QList<QListWidgetItem *> &items)
 void BulkInstallQueue::processTick()
 {
     while (!m_queue.isEmpty()) {
-        auto *item = m_queue.takeFirst();
-        if (!item) continue;
+        const QUuid row = m_queue.takeFirst();
         // Row may have been deleted, already installed, or its URL cleared
         // since the user clicked bulk-install - skip and try the next.
-        // By address: the pointer may already be freed, so it is not read
-        // through until the list has vouched for it.
-        bool present = false;
-        for (int i = 0; i < m_list->count() && !present; ++i)
-            present = (m_list->item(i) == item);
-        if (!present) continue;
+        QListWidgetItem *item = m_resolve ? m_resolve(row) : nullptr;
+        if (!item) continue;
         if (!mod_row::isMod(item)) continue;
         if (mod_row::installStatusOf(item) != InstallStatus::NotInstalled) continue;
         if (item->data(ModRole::NexusUrl).toString().isEmpty()) continue;

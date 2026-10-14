@@ -53,17 +53,27 @@ void testBulkQueueSkipsARowDeletedBeforeItsTurn()
     auto *c = addMod(list, QStringLiteral("C"));
 
     QStringList started;
-    BulkInstallQueue queue(&list, [&](QListWidgetItem *it) { started << it->text(); });
-    queue.enqueue({a, b, c});
+    BulkInstallQueue queue(
+        [&list](const QUuid &id) -> QListWidgetItem * {
+            for (int i = 0; i < list.count(); ++i)
+                if (mod_row::rowIdIfAny(list.item(i)) == id) return list.item(i);
+            return nullptr;
+        },
+        [&](QListWidgetItem *it) { started << it->text(); });
+    queue.enqueue({mod_row::rowId(a), mod_row::rowId(b), mod_row::rowId(c)});
     check("the first row starts at once", started == QStringList{QStringLiteral("A")},
           started.join(QLatin1Char(',')));
 
-    // B leaves the list before its tick. The queue still holds its address;
-    // it must skip it without reading it.
+    // B leaves the list before its tick, and a new row takes its place: the
+    // queue holds B's id, which nothing resolves any more - not even a row at
+    // the same position (or, outside a test, the same address).
     delete list.takeItem(list.row(b));
+    auto *b2 = addMod(list, QStringLiteral("B2"));
+    list.takeItem(list.row(b2));
+    list.insertItem(1, b2);
 
     spin(1500);   // past one 1.2 s tick
-    check("the deleted row is skipped and the next one starts",
+    check("the vanished row is skipped, its replacement untouched, the next starts",
           started == QStringList{QStringLiteral("A"), QStringLiteral("C")},
           started.join(QLatin1Char(',')));
 }
