@@ -145,6 +145,7 @@ using plugins::readTes3Masters;
 #include <QMimeData>
 using fsutils::sanitizeFolderName;
 #include "mainwindow_internal.h"
+#include "modlist_model.h"
 #include "user_state_paths.h"
 #include "root_routes.h"
 
@@ -1281,11 +1282,12 @@ void MainWindow::updateDeployHint()
     if (!adapter || adapter->dataSubdir().isEmpty()) { clear(); return; }
 
     int pending = 0;
-    for (int i = 0; i < m_modList->count(); ++i) {
-        const auto *it = m_modList->item(i);
-        if (!mod_row::isMod(it)) continue;
-        if (it->checkState() != Qt::Checked) continue;
-        if (!mod_row::isInstalled(it)) continue;
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        const ModEntry &it = modRows.at(i);
+        if (!it.isMod()) continue;
+        if (!it.checked) continue;
+        if (!it.isInstalled()) continue;
         ++pending;
     }
     if (pending == 0) { clear(); return; }
@@ -1567,11 +1569,12 @@ void MainWindow::onInspectDeployment()
         }
     }
 
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *it = m_modList->item(i);
-        if (mod_row::isMod(it)
-            && it->checkState() == Qt::Checked
-            && mod_row::isInstalled(it))
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        const ModEntry &it = modRows.at(i);
+        if (it.isMod()
+            && it.checked
+            && it.isInstalled())
             ++f.enabledInstalledMods;
     }
     f.dataRootCount = int(gatherBethesdaSources(m_modList, rowOrderForPersist(),

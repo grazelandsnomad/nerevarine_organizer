@@ -251,8 +251,8 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_nexusCtl, &NexusController::dependencyScanFailed,
             this, &MainWindow::onDependencyScanFailed);
 
-    // QListWidget->model decoupling, stage 1. Synced from m_modList via
-    // refreshModelFromList; later stages move readers onto the model.
+    // QListWidget->model decoupling: kept current by the widget bridge
+    // (wired in setupCentralWidget); read-only passes read it.
     m_model = new ModlistModel(this);
 
     m_installCtl = new InstallController(this);
@@ -601,9 +601,10 @@ void MainWindow::showFirstRunWizardIfNeeded()
     // keys. Don't show them "pick your game" - detect prior setup and mark
     // completed. The completion flag alone isn't enough; probe for state.
     bool hasExistingModlist = false;
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *it = m_modList->item(i);
-        if (mod_row::isMod(it)) {
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        const ModEntry &it = modRows.at(i);
+        if (it.isMod()) {
             hasExistingModlist = true;
             break;
         }
@@ -739,11 +740,12 @@ void MainWindow::updateModCount()
         return;
     }
     int total = 0, active = 0;
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *it = m_modList->item(i);
-        if (!mod_row::isMod(it)) continue;
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        const ModEntry &it = modRows.at(i);
+        if (!it.isMod()) continue;
         ++total;
-        if (it->checkState() == Qt::Checked) ++active;
+        if (it.checked) ++active;
     }
     m_modCountLabel->setText(T("status_mod_count").arg(active).arg(total));
 }
@@ -1308,10 +1310,11 @@ void MainWindow::checkModDependencies(const QString &game, int modId, QListWidge
     // scan can bucket present vs. missing without ever touching the
     // QListWidget.
     QMap<int, QString> idToUrl;
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *it = m_modList->item(i);
-        if (!mod_row::isMod(it)) continue;
-        const QString u = it->data(ModRole::NexusUrl).toString();
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        const ModEntry &it = modRows.at(i);
+        if (!it.isMod()) continue;
+        const QString u = it.nexusUrl;
         if (u.isEmpty()) continue;
         const auto ref = parseNexusModUrl(u);
         if (!ref || ref->game != game) continue;
@@ -1343,19 +1346,21 @@ void MainWindow::autoLinkSameModpage(QListWidgetItem *item, const QString &categ
     // mutations here. Idempotency check stays at the widget boundary.
     QList<deps::ModEntry> snap;
     int newIdx = -1;
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *it = m_modList->item(i);
-        if (!mod_row::isMod(it)) continue;
+    const int itemRow = m_modList->row(item);
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        const ModEntry &it = modRows.at(i);
+        if (!it.isMod()) continue;
 
         deps::ModEntry e;
         e.idx       = i;
-        e.nexusUrl  = it->data(ModRole::NexusUrl).toString();
-        e.enabled   = (it->checkState() == Qt::Checked);
-        e.installed = (mod_row::isInstalled(it));
-        e.dependsOn = it->data(ModRole::DependsOn).toStringList();
+        e.nexusUrl  = it.nexusUrl;
+        e.enabled   = it.checked;
+        e.installed = it.isInstalled();
+        e.dependsOn = it.dependsOn;
         snap.append(e);
 
-        if (it == item) newIdx = i;
+        if (i == itemRow) newIdx = i;
     }
     if (newIdx < 0) return;
 
@@ -1516,18 +1521,20 @@ void MainWindow::offerBundledPatchReenable(QListWidgetItem *item)
 
     // Each hit = "<hostModDisplayName>\t<hostModPath>\t<subfolderName>"
     QStringList hits;
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *other = m_modList->item(i);
-        if (other == item) continue;
-        if (!mod_row::isMod(other)) continue;
-        if (!mod_row::isInstalled(other)) continue;
-        const QString hostPath = other->data(ModRole::ModPath).toString();
+    const int itemRow = m_modList->row(item);
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        const ModEntry &other = modRows.at(i);
+        if (i == itemRow) continue;
+        if (!other.isMod()) continue;
+        if (!other.isInstalled()) continue;
+        const QString hostPath = other.modPath;
         if (hostPath.isEmpty()) continue;
         QDir host(hostPath);
         const QStringList subs = host.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
         for (const QString &sub : subs) {
             if (post_install::bundledPatchMatchesMod(sub, newNormalized))
-                hits << other->text() + '\t' + hostPath + '\t' + sub;
+                hits << other.displayName + '\t' + hostPath + '\t' + sub;
         }
     }
     if (hits.isEmpty()) return;
@@ -1876,17 +1883,19 @@ void MainWindow::onCurrentModChanged(QListWidgetItem *current, QListWidgetItem *
     QList<deps::ModEntry> snap;
     snap.reserve(m_modList->count());
     int selectedIdx = -1;
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *it = m_modList->item(i);
+    const int currentRow = m_modList->row(current);
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        const ModEntry &it = modRows.at(i);
         deps::ModEntry e;
         e.idx = i;
-        if (mod_row::isMod(it)) {
-            e.nexusUrl  = it->data(ModRole::NexusUrl).toString();
-            e.dependsOn = it->data(ModRole::DependsOn).toStringList();
-            e.isUtility = it->data(ModRole::IsUtility).toBool();
+        if (it.isMod()) {
+            e.nexusUrl  = it.nexusUrl;
+            e.dependsOn = it.dependsOn;
+            e.isUtility = it.isUtility;
         }
         snap.append(e);
-        if (it == current) selectedIdx = i;
+        if (i == currentRow) selectedIdx = i;
     }
 
     const auto hl = deps::computeSelectionHighlights(snap, selectedIdx);
@@ -2640,16 +2649,17 @@ void MainWindow::onInspectConflicts()
     // thread-safe.  Build a POD vector here, hand it to QtConcurrent::run by
     // value.
     QList<ConflictScanInput> snapshot;
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *item = m_modList->item(i);
-        if (!mod_row::isMod(item)) continue;
-        if (item->checkState() != Qt::Checked) continue;
-        if (!mod_row::isInstalled(item)) continue;
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        const ModEntry &item = modRows.at(i);
+        if (!item.isMod()) continue;
+        if (!item.checked) continue;
+        if (!item.isInstalled()) continue;
 
         ConflictScanInput e;
-        e.modPath  = item->data(ModRole::ModPath).toString();
-        e.modLabel = item->data(ModRole::CustomName).toString();
-        if (e.modLabel.isEmpty()) e.modLabel = item->text();
+        e.modPath  = item.modPath;
+        e.modLabel = item.customName;
+        if (e.modLabel.isEmpty()) e.modLabel = item.displayName;
         snapshot.append(e);
     }
 
@@ -2698,16 +2708,17 @@ void MainWindow::onTriageOpenMWLog()
     static const QStringList contentExts{".esp", ".esm", ".omwaddon", ".omwscripts"};
     QList<openmw::TriageMod> triageMods;
     triageMods.reserve(m_modList->count());
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *item = m_modList->item(i);
-        if (!mod_row::isMod(item)) continue;
-        if (!mod_row::isInstalled(item)) continue;
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        const ModEntry &item = modRows.at(i);
+        if (!item.isMod()) continue;
+        if (!item.isInstalled()) continue;
 
         openmw::TriageMod tm;
-        tm.displayName = item->data(ModRole::CustomName).toString();
-        if (tm.displayName.isEmpty()) tm.displayName = item->text();
+        tm.displayName = item.customName;
+        if (tm.displayName.isEmpty()) tm.displayName = item.displayName;
 
-        const QString modPath = item->data(ModRole::ModPath).toString();
+        const QString modPath = item.modPath;
         for (const auto &p : collectDataFolders(modPath, contentExts))
             for (const QString &f : p.second) tm.plugins << f;
 
@@ -2855,10 +2866,11 @@ bool MainWindow::confirmReplaceModList()
 
     // Collect paths of installed mods that actually exist on disk.
     QStringList installedPaths;
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *item = m_modList->item(i);
-        if (!mod_row::isMod(item)) continue;
-        const QString p = item->data(ModRole::ModPath).toString();
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        const ModEntry &item = modRows.at(i);
+        if (!item.isMod()) continue;
+        const QString p = item.modPath;
         if (!p.isEmpty() && QDir(p).exists()) installedPaths << p;
     }
 
@@ -2949,8 +2961,9 @@ void MainWindow::onAnimTick()
 {
     m_animFrame = (m_animFrame + 1) % 10;
     bool anyInstalling = false;
-    for (int i = 0; i < m_modList->count(); ++i) {
-        if (mod_row::isInstalling(m_modList->item(i))) {
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        if (modRows.at(i).isInstalling()) {
             anyInstalling = true;
             break;
         }
@@ -3201,14 +3214,15 @@ void MainWindow::restoreStrandedInstalls()
         const QString sUrl  = si->data(ModRole::NexusUrl).toString();
         const QString sName = si->text();
         int matchRow = -1;
-        for (int i = 0; i < m_modList->count(); ++i) {
-            QListWidgetItem *it = m_modList->item(i);
-            if (!mod_row::isMod(it)) continue;
-            const QString iUrl = it->data(ModRole::NexusUrl).toString();
+        const QList<ModEntry> modRows = m_model->all();
+        for (int i = 0; i < modRows.size(); ++i) {
+            const ModEntry &it = modRows.at(i);
+            if (!it.isMod()) continue;
+            const QString iUrl = it.nexusUrl;
             if (!sUrl.isEmpty() && !iUrl.isEmpty() && sUrl == iUrl) {
                 matchRow = i; break;
             }
-            if (sUrl.isEmpty() && it->text() == sName) {
+            if (sUrl.isEmpty() && it.displayName == sName) {
                 matchRow = i; break;
             }
         }
@@ -3703,13 +3717,14 @@ void MainWindow::applyTranslationPairs(const QHash<QString, QString> &pairs)
     // Path -> the name the user sees, so the caption can name the partner the
     // way the list does rather than by folder.
     QHash<QString, QString> nameByPath;
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *it = m_modList->item(i);
-        if (!mod_row::isMod(it)) continue;
-        const QString path = it->data(ModRole::ModPath).toString();
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        const ModEntry &it = modRows.at(i);
+        if (!it.isMod()) continue;
+        const QString path = it.modPath;
         if (path.isEmpty()) continue;
-        const QString custom = it->data(ModRole::CustomName).toString();
-        nameByPath.insert(path, custom.isEmpty() ? it->text().trimmed() : custom);
+        const QString custom = it.customName;
+        nameByPath.insert(path, custom.isEmpty() ? it.displayName.trimmed() : custom);
     }
 
     for (int i = 0; i < m_modList->count(); ++i) {
@@ -3786,8 +3801,9 @@ void MainWindow::moveModAdjacentTo(QListWidgetItem *mod, const QString &targetPa
     if (!mod || targetPath.isEmpty()) return;
 
     int targetRow = -1;
-    for (int i = 0; i < m_modList->count(); ++i) {
-        if (m_modList->item(i)->data(ModRole::ModPath).toString() == targetPath) {
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        if (modRows.at(i).modPath == targetPath) {
             targetRow = i;
             break;
         }

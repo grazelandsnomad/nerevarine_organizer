@@ -842,11 +842,11 @@ private:
     // here once m_modList drops them, so clear()ing m_modList won't delete them.
     QHash<QString, QList<QListWidgetItem*>> m_strandedInstalls;
 
-    // Stage 1 of QListWidget->model decoupling: a typed-ModEntry copy of
-    // m_modList, refreshed via modlist::refreshModelFromList at key points
-    // (after loadModList, before saveModList). Later stages move readers onto
-    // the model and flip mutation direction so this becomes the source of truth.
-    // Child QObject; dies with the window.
+    // QListWidget->model decoupling: a typed-ModEntry copy of m_modList that
+    // the widget bridge (modlist::connectAutoSync) keeps current through every
+    // change, blocked signals included. Read-only passes over the list read
+    // m_model->all(); the next stage flips mutation direction so this becomes
+    // the source of truth. Child QObject; dies with the window.
     ModlistModel         *m_model = nullptr;
 
     // Game profiles - owned by GameProfileRegistry.

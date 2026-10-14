@@ -609,14 +609,13 @@ void MainWindow::onDependenciesScanned(const QUuid &rowKey,
         // it - no fetch, the answer is already in the list.
         const auto installedName = [this](const QString &url) {
             const QString key = deps::urlKey(url);
-            for (int i = 0; i < m_modList->count(); ++i) {
-                auto *it = m_modList->item(i);
-                if (!mod_row::isMod(it))
+            const QList<ModEntry> modRows = m_model->all();
+            for (int i = 0; i < modRows.size(); ++i) {
+                const ModEntry &it = modRows.at(i);
+                if (!it.isMod())
                     continue;
-                if (deps::urlKey(it->data(ModRole::NexusUrl).toString()) == key) {
-                    const QString custom =
-                        it->data(ModRole::CustomName).toString();
-                    return custom.isEmpty() ? it->text() : custom;
+                if (deps::urlKey(it.nexusUrl) == key) {
+                    return it.customName.isEmpty() ? it.displayName : it.customName;
                 }
             }
             return url;

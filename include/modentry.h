@@ -6,6 +6,8 @@
 // modroles.h). fromItem/applyToItem cross the widget boundary; prefer
 // ModEntry in logic so it stays QtCore-only.
 
+#include "modroles.h"
+
 #include <QColor>
 #include <QDateTime>
 #include <QString>
@@ -110,6 +112,10 @@ struct ModEntry {
 
     [[nodiscard]] bool    isSeparator()   const { return itemType == QStringLiteral("separator"); }
     [[nodiscard]] bool    isMod()         const { return itemType == QStringLiteral("mod"); }
+    // installStatus stays an int for the serializer; these read it the way
+    // mod_row::isInstalled / isInstalling read the item role.
+    [[nodiscard]] bool    isInstalled()   const { return installStatus == int(InstallStatus::Installed); }
+    [[nodiscard]] bool    isInstalling()  const { return installStatus == int(InstallStatus::Installing); }
     [[nodiscard]] QString effectiveName() const { return customName.isEmpty() ? displayName : customName; }
 
     friend bool operator==(const ModEntry &, const ModEntry &) = default;

@@ -420,13 +420,12 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
             if (anyForeign && m_scans) {
                 const QStringList exts = plugins::contentExtensions();
                 bool complete = true;
-                for (int i = 0; i < m_modList->count(); ++i) {
-                    auto *row = m_modList->item(i);
-                    if (!row) continue;
-                    if (!mod_row::isMod(row))
-                        continue;
-                    if (!mod_row::isInstalled(row)) continue;
-                    const QString rowPath = row->data(ModRole::ModPath).toString();
+                const QList<ModEntry> modRows = m_model->all();
+                for (int i = 0; i < modRows.size(); ++i) {
+                    const ModEntry &row = modRows.at(i);
+                    if (!row.isMod()) continue;
+                    if (!row.isInstalled()) continue;
+                    const QString rowPath = row.modPath;
                     // A row that calls itself installed but has no readable
                     // folder is a HOLE in the evidence, not an absence of
                     // plugins - and reading on would let a master this row
@@ -1148,10 +1147,11 @@ void MainWindow::repairEmptyModPaths()
     // Build the set of ModPaths that are ALREADY in use, so rebinding never
     // creates duplicates below.
     QSet<QString> pathsInUse;
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *item = m_modList->item(i);
-        if (!mod_row::isMod(item)) continue;
-        QString p = item->data(ModRole::ModPath).toString();
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        const ModEntry &item = modRows.at(i);
+        if (!item.isMod()) continue;
+        QString p = item.modPath;
         if (!p.isEmpty()) pathsInUse.insert(QFileInfo(p).absoluteFilePath());
     }
 

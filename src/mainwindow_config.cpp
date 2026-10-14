@@ -346,11 +346,12 @@ void MainWindow::reconcileLoadOrder()
     // invalidated explicitly in addModFromPath / onRemoveSelected for
     // paths whose contents we just changed.
     QHash<QString, QString> pathByName;
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *item = m_modList->item(i);
-        if (!mod_row::isMod(item)) continue;
-        if (!placeholder_state::folderInstalled(item)) continue;
-        QString modPath = item->data(ModRole::ModPath).toString();
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        const ModEntry &item = modRows.at(i);
+        if (!item.isMod()) continue;
+        if (!placeholder_state::folderInstalled(item.installStatus, item.modPath)) continue;
+        QString modPath = item.modPath;
         for (const auto &p : m_scans->cachedDataFolders(modPath, contentExts))
             for (const QString &cf : p.second)
                 pathByName.insert(cf, p.first + "/" + cf);
@@ -749,13 +750,14 @@ void MainWindow::onEditLoadOrder()
     // load order but not emitted to content=).
     static const QStringList contentExts{".esp", ".esm", ".omwaddon", ".omwscripts"};
     QSet<QString> enabledSet;
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *item = m_modList->item(i);
-        if (!mod_row::isMod(item)) continue;
-        if (!mod_row::isInstalled(item)) continue;
-        if (item->checkState() != Qt::Checked) continue;
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        const ModEntry &item = modRows.at(i);
+        if (!item.isMod()) continue;
+        if (!item.isInstalled()) continue;
+        if (!item.checked) continue;
         for (const auto &p : collectDataFolders(
-                 item->data(ModRole::ModPath).toString(), contentExts))
+                 item.modPath, contentExts))
             for (const QString &cf : p.second) enabledSet.insert(cf);
     }
 
@@ -873,18 +875,19 @@ void MainWindow::scanMissingDependencies()
     // and is unit-tested in tests/test_deps_resolver.cpp.
     QList<deps::ModEntry> snap;
     snap.reserve(m_modList->count());
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *it = m_modList->item(i);
-        if (!mod_row::isMod(it)) continue;
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        const ModEntry &it = modRows.at(i);
+        if (!it.isMod()) continue;
 
         deps::ModEntry e;
         e.idx         = i;
-        e.nexusUrl    = it->data(ModRole::NexusUrl).toString();
-        e.enabled     = (it->checkState() == Qt::Checked);
-        e.installed   = (mod_row::isInstalled(it));
-        e.dependsOn   = it->data(ModRole::DependsOn).toStringList();
-        e.displayName = it->data(ModRole::CustomName).toString();
-        if (e.displayName.isEmpty()) e.displayName = it->text();
+        e.nexusUrl    = it.nexusUrl;
+        e.enabled     = it.checked;
+        e.installed   = it.isInstalled();
+        e.dependsOn   = it.dependsOn;
+        e.displayName = it.customName;
+        if (e.displayName.isEmpty()) e.displayName = it.displayName;
         snap.append(e);
     }
 
@@ -974,14 +977,15 @@ void MainWindow::runMissingMastersScan()
     QSet<QString> availableLower;
 
     static const QStringList contentExts{".esp", ".esm"};
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *item = m_modList->item(i);
-        if (!mod_row::isMod(item)) continue;
-        if (!mod_row::isInstalled(item)) continue;
-        if (item->checkState() != Qt::Checked) continue;
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        const ModEntry &item = modRows.at(i);
+        if (!item.isMod()) continue;
+        if (!item.isInstalled()) continue;
+        if (!item.checked) continue;
 
         LoadOrderController::MastersInput e;
-        e.modPath = item->data(ModRole::ModPath).toString();
+        e.modPath = item.modPath;
         // Skip groundcover-approved mods - OpenMW gracefully handles missing
         // masters for groundcover= plugins, so flagging them just produces
         // noise (e.g. TOTSP plugins the user doesn't need).
@@ -1530,10 +1534,8 @@ void MainWindow::loadModList(const QString &path,
     updateModCount();
     m_modListLoaded = true;
 
-    // Sync m_modList -> m_model now the widget is populated. Part of the
-    // QListWidget->model decoupling: new reads use m_model. Until every reader
-    // is migrated, refresh after each bulk widget change so the model never
-    // goes stale by more than one operation.
+    // The bridge has tracked every row the load added; this rebuild is a
+    // belt-and-braces resync at the one point the whole list is known fresh.
     if (m_model)
         modlist::refreshModelFromList(m_model, m_modList);
 

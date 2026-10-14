@@ -5,6 +5,7 @@
 
 #include "mainwindow.h"
 #include "mainwindow_internal.h"
+#include "modlist_model.h"
 #include "settings.h"
 #include "theme.h"
 #include "separatordialog.h"
@@ -1225,8 +1226,9 @@ void MainWindow::onCleanUpModFolders()
         ui::warn(this, T("cleanup_folders_title"), T("move_mods_err_downloads"));
         return;
     }
-    for (int i = 0; i < m_modList->count(); ++i) {
-        if (mod_row::isInstalling(m_modList->item(i))) {
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        if (modRows.at(i).isInstalling()) {
             ui::warn(this, T("cleanup_folders_title"), T("move_mods_err_downloads"));
             return;
         }
@@ -1241,14 +1243,11 @@ void MainWindow::onCleanUpModFolders()
     // Three independent reference sources, so one unreadable file cannot make
     // the sweep think the library is empty.
     QStringList referenced;
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *it = m_modList->item(i);
-        if (!mod_row::isMod(it)) continue;
-        for (int role : { ModRole::ModPath, ModRole::IntendedModPath,
-                          ModRole::MergeTargetPath, ModRole::PrevModPath }) {
-            const QString p = it->data(role).toString();
+    for (const ModEntry &e : m_model->all()) {
+        if (!e.isMod()) continue;
+        for (const QString &p : {e.modPath, e.intendedModPath,
+                                 e.mergeTargetPath, e.prevModPath})
             if (!p.isEmpty()) referenced << p;
-        }
     }
     for (const auto &prof : otherProfileModlists())
         for (const ModEntry &e : prof.second)
@@ -1499,15 +1498,16 @@ void MainWindow::onCreateDiagnosticBundle()
     }
     s << "\n[Modlist counters]\n";
     int modCount = 0, sepCount = 0, enabled = 0, installing = 0;
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *it = m_modList->item(i);
-        if (mod_row::isSeparator(it)) {
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        const ModEntry &it = modRows.at(i);
+        if (it.isSeparator()) {
             ++sepCount;
             continue;
         }
         ++modCount;
-        if (it->checkState() == Qt::Checked) ++enabled;
-        if (mod_row::isInstalling(it)) ++installing;
+        if (it.checked) ++enabled;
+        if (it.isInstalling()) ++installing;
     }
     s << "Mods              : " << modCount << "\n";
     s << "Enabled           : " << enabled << "\n";
@@ -1587,17 +1587,18 @@ void MainWindow::onInspectOpenMWSetup()
     // the user re-enables it on another host.
     QList<openmw::SyncGuardInput> syncGuardInput;
 
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *item = m_modList->item(i);
-        if (!mod_row::isMod(item)) continue;
-        if (!mod_row::isInstalled(item)) continue;
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        const ModEntry &item = modRows.at(i);
+        if (!item.isMod()) continue;
+        if (!item.isInstalled()) continue;
         ++totalMods;
-        const bool enabled = item->checkState() == Qt::Checked;
+        const bool enabled = item.checked;
         if (enabled) ++enabledMods;
 
-        QString name = item->data(ModRole::CustomName).toString();
-        if (name.isEmpty()) name = item->text();
-        QString modPath = item->data(ModRole::ModPath).toString();
+        QString name = item.customName;
+        if (name.isEmpty()) name = item.displayName;
+        QString modPath = item.modPath;
 
         // Record every installed mod (enabled or not) for the sync-guard -
         // a disabled row with a broken path still matters next time it's

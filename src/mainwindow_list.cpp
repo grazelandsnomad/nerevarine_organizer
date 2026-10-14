@@ -18,6 +18,7 @@
 #include "deps_snapshot.h"
 #include "async_guarded.h"
 #include "mainwindow_internal.h"
+#include "modlist_model.h"
 #include "user_state_paths.h"
 #include "settings.h"
 #include "theme.h"
@@ -673,13 +674,14 @@ void MainWindow::onRemoveSelected()
     struct RedistEntry { QString name; QString path; };
     QList<RedistEntry> redistEntries;
     redistEntries.reserve(m_modList->count());
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *other = m_modList->item(i);
-        if (!mod_row::isMod(other)) continue;
-        if (!mod_row::isInstalled(other)) continue;
-        const QString hp = other->data(ModRole::ModPath).toString();
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        const ModEntry &other = modRows.at(i);
+        if (!other.isMod()) continue;
+        if (!other.isInstalled()) continue;
+        const QString hp = other.modPath;
         if (hp.isEmpty()) continue;
-        redistEntries.append({other->text(), hp});
+        redistEntries.append({other.displayName, hp});
     }
 
     auto cacheSnap = m_scans->dataFoldersSnapshot();   // value copy - safe to read off-thread
@@ -1562,12 +1564,14 @@ void MainWindow::onItemDoubleClicked(QListWidgetItem *item)
         // -- Dependency section ---
         // Build url→displayName map for all OTHER installed mods.
         QMap<QString, QString> urlToName;
-        for (int i = 0; i < m_modList->count(); ++i) {
-            auto *it = m_modList->item(i);
-            if (it == item) continue;
-            if (!mod_row::isMod(it)) continue;
-            QString u = it->data(ModRole::NexusUrl).toString();
-            if (!u.isEmpty()) urlToName[u] = it->text();
+        const int itemRow = m_modList->row(item);
+        const QList<ModEntry> modRows = m_model->all();
+        for (int i = 0; i < modRows.size(); ++i) {
+            const ModEntry &it = modRows.at(i);
+            if (i == itemRow) continue;
+            if (!it.isMod()) continue;
+            QString u = it.nexusUrl;
+            if (!u.isEmpty()) urlToName[u] = it.displayName;
         }
 
         // "Depends on" - editable
@@ -1851,11 +1855,12 @@ void MainWindow::updateSectionCounts()
     // to miss, so now a single update greys the whole scaffolding until
     // the user either installs the update or removes the offending mod.
     bool anyUpdate = false;
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *it = m_modList->item(i);
-        if (!mod_row::isMod(it))
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        const ModEntry &it = modRows.at(i);
+        if (!it.isMod())
             continue;
-        if (it->data(ModRole::UpdateAvailable).toBool()) {
+        if (it.updateAvailable) {
             anyUpdate = true;
             break;
         }
@@ -2319,10 +2324,11 @@ MainWindow::translationProgressStateFor(const QListWidgetItem *item) const
     // translation puts the row back to in-progress, which is then true.
     const QString wanted = translation_mod::nameFor(
         item->text().trimmed(), translationLanguage());
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *cand = m_modList->item(i);
-        if (!mod_row::isMod(cand)) continue;
-        if (cand->text().trimmed() == wanted) { st.built = true; break; }
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        const ModEntry &cand = modRows.at(i);
+        if (!cand.isMod()) continue;
+        if (cand.displayName.trimmed() == wanted) { st.built = true; break; }
     }
     return st;
 }
@@ -2514,20 +2520,21 @@ void MainWindow::onDependencyGraph()
     // The section a mod belongs to is the nearest separator above it - the list
     // has no other notion of grouping - so it is tracked while walking down.
     QString section;
-    for (int i = 0; i < m_modList->count(); ++i) {
-        auto *it = m_modList->item(i);
+    const QList<ModEntry> modRows = m_model->all();
+    for (int i = 0; i < modRows.size(); ++i) {
+        const ModEntry &it = modRows.at(i);
         deps::ModEntry e;
         e.idx = i;
-        if (mod_row::isSeparator(it))
-            section = it->text().trimmed();
-        if (mod_row::isMod(it)) {
+        if (it.isSeparator())
+            section = it.displayName.trimmed();
+        if (it.isMod()) {
             e.section     = section;
-            e.nexusUrl    = it->data(ModRole::NexusUrl).toString();
-            e.displayName = it->text().trimmed();
-            e.dependsOn   = it->data(ModRole::DependsOn).toStringList();
-            e.isUtility   = it->data(ModRole::IsUtility).toBool();
-            e.enabled     = it->checkState() == Qt::Checked;
-            e.installed   = mod_row::isInstalled(it);
+            e.nexusUrl    = it.nexusUrl;
+            e.displayName = it.displayName.trimmed();
+            e.dependsOn   = it.dependsOn;
+            e.isUtility   = it.isUtility;
+            e.enabled     = it.checked;
+            e.installed   = it.isInstalled();
             if (!e.nexusUrl.isEmpty()) rowUrl.insert(i, e.nexusUrl);
         }
         snap.append(e);
