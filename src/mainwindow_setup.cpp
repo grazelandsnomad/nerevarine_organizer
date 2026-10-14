@@ -794,10 +794,9 @@ void MainWindow::setupCentralWidget()
     m_modList = new ModListWidget(this);
 
     // Model migration stage 2: m_model tracks m_modList's change signals in
-    // real time (checkbox toggles, drag-reorders, insert/remove). Must run
-    // after m_modList exists; m_model is allocated earlier, in the ctor.
-    if (m_model)
-        modlist::connectAutoSync(m_model, m_modList);
+    // real time (checkbox toggles, drag-reorders, insert/remove). Wired before
+    // any of the window's own connections so its update lands first.
+    modlist::connectAutoSync(&m_model, m_modList);
 
     m_zoom = new ZoomController(m_modList, this);
     m_zoom->loadPrefs();
@@ -1226,7 +1225,7 @@ void MainWindow::onCleanUpModFolders()
         ui::warn(this, T("cleanup_folders_title"), T("move_mods_err_downloads"));
         return;
     }
-    const QList<ModEntry> modRows = m_model->all();
+    const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
         if (modRows.at(i).isInstalling()) {
             ui::warn(this, T("cleanup_folders_title"), T("move_mods_err_downloads"));
@@ -1243,7 +1242,7 @@ void MainWindow::onCleanUpModFolders()
     // Three independent reference sources, so one unreadable file cannot make
     // the sweep think the library is empty.
     QStringList referenced;
-    for (const ModEntry &e : m_model->all()) {
+    for (const ModEntry &e : m_model.all()) {
         if (!e.isMod()) continue;
         for (const QString &p : {e.modPath, e.intendedModPath,
                                  e.mergeTargetPath, e.prevModPath})
@@ -1498,7 +1497,7 @@ void MainWindow::onCreateDiagnosticBundle()
     }
     s << "\n[Modlist counters]\n";
     int modCount = 0, sepCount = 0, enabled = 0, installing = 0;
-    const QList<ModEntry> modRows = m_model->all();
+    const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
         const ModEntry &it = modRows.at(i);
         if (it.isSeparator()) {
@@ -1587,7 +1586,7 @@ void MainWindow::onInspectOpenMWSetup()
     // the user re-enables it on another host.
     QList<openmw::SyncGuardInput> syncGuardInput;
 
-    const QList<ModEntry> modRows = m_model->all();
+    const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
         const ModEntry &item = modRows.at(i);
         if (!item.isMod()) continue;

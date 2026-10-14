@@ -1282,7 +1282,7 @@ void MainWindow::updateDeployHint()
     if (!adapter || adapter->dataSubdir().isEmpty()) { clear(); return; }
 
     int pending = 0;
-    const QList<ModEntry> modRows = m_model->all();
+    const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
         const ModEntry &it = modRows.at(i);
         if (!it.isMod()) continue;
@@ -1569,7 +1569,7 @@ void MainWindow::onInspectDeployment()
         }
     }
 
-    const QList<ModEntry> modRows = m_model->all();
+    const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
         const ModEntry &it = modRows.at(i);
         if (it.isMod()

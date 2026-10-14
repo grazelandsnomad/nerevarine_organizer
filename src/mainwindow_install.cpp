@@ -312,12 +312,12 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
         // on the same footing as Pass E, which has always matched against
         // installedNexusUrls() below.
         const QStringList installedModNames =
-            m_model ? m_model->installedModDisplayNames() : QStringList();
+            m_model.installedModDisplayNames();
         // Nexus URLs of what's installed, so the wizard can warn about
         // compatibility options whose target mod the user doesn't have
         // (Pass E). Matched by mod id, hence URLs rather than names.
         const QStringList installedNexusUrls =
-            m_model ? m_model->installedNexusUrls() : QStringList();
+            m_model.installedNexusUrls();
         const QString archiveFileName = fi.fileName();
         const QString title = placeholder->data(ModRole::NexusTitle).toString().trimmed();
         const QString sanitizedTitle  = sanitizeFolderName(title);
@@ -396,7 +396,7 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
         // What the user currently HAS, so a package patching a mod that is not
         // there can start unticked and say so.
         const QStringList installedModNames =
-            m_model ? m_model->installedModDisplayNames() : QStringList();
+            m_model.installedModDisplayNames();
 
         // Every plugin filename the modlist provides, so a package whose plugin
         // demands a parent file nothing supplies is caught by the file rather
@@ -420,7 +420,7 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
             if (anyForeign && m_scans) {
                 const QStringList exts = plugins::contentExtensions();
                 bool complete = true;
-                const QList<ModEntry> modRows = m_model->all();
+                const QList<ModEntry> modRows = m_model.all();
                 for (int i = 0; i < modRows.size(); ++i) {
                     const ModEntry &row = modRows.at(i);
                     if (!row.isMod()) continue;
@@ -1147,7 +1147,7 @@ void MainWindow::repairEmptyModPaths()
     // Build the set of ModPaths that are ALREADY in use, so rebinding never
     // creates duplicates below.
     QSet<QString> pathsInUse;
-    const QList<ModEntry> modRows = m_model->all();
+    const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
         const ModEntry &item = modRows.at(i);
         if (!item.isMod()) continue;

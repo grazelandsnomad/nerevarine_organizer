@@ -20,6 +20,7 @@
 #include "conflict_direction.h"  // Directions complete type: by-value slot arg below
 #include "plugin_records.h"      // RecordClash likewise
 #include "loadordercontroller.h" // TranslationCoverage likewise
+#include "modlist_model.h"
 #include "downloadqueue.h"
 #include "installcontroller.h"   // for InstallController::VerifyFailKind in slot
 #include "save_queue.h"          // serialized off-thread save writes (by-value member)
@@ -40,7 +41,6 @@ class QListWidget;
 class QListWidgetItem;
 class QNetworkAccessManager;
 class QNetworkReply;
-class ModlistModel;
 class QPushButton;
 class QTimer;
 class QToolButton;
@@ -845,9 +845,9 @@ private:
     // QListWidget->model decoupling: a typed-ModEntry copy of m_modList that
     // the widget bridge (modlist::connectAutoSync) keeps current through every
     // change, blocked signals included. Read-only passes over the list read
-    // m_model->all(); the next stage flips mutation direction so this becomes
-    // the source of truth. Child QObject; dies with the window.
-    ModlistModel         *m_model = nullptr;
+    // m_model.all(); the next stage flips mutation direction so this becomes
+    // the source of truth. A member, so it exists for the window's whole life.
+    ModlistModel          m_model;
 
     // Game profiles - owned by GameProfileRegistry.
     GameProfileRegistry   *m_profiles = nullptr;

@@ -251,10 +251,6 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_nexusCtl, &NexusController::dependencyScanFailed,
             this, &MainWindow::onDependencyScanFailed);
 
-    // QListWidget->model decoupling: kept current by the widget bridge
-    // (wired in setupCentralWidget); read-only passes read it.
-    m_model = new ModlistModel(this);
-
     m_installCtl = new InstallController(this);
     connect(m_installCtl, &InstallController::verificationStarted,
             this, &MainWindow::onVerificationStarted);
@@ -601,7 +597,7 @@ void MainWindow::showFirstRunWizardIfNeeded()
     // keys. Don't show them "pick your game" - detect prior setup and mark
     // completed. The completion flag alone isn't enough; probe for state.
     bool hasExistingModlist = false;
-    const QList<ModEntry> modRows = m_model->all();
+    const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
         const ModEntry &it = modRows.at(i);
         if (it.isMod()) {
@@ -730,24 +726,8 @@ void MainWindow::resizeEvent(QResizeEvent *event)
 
 void MainWindow::updateModCount()
 {
-    // First reader to consume m_model directly instead of walking m_modList.
-    // m_model stays in sync via connectAutoSync, so the count is current on any
-    // toggle/drag. Null-check: this can fire before m_model is allocated during
-    // first setup - fall back to the widget walk in that window.
-    if (m_model) {
-        const auto c = m_model->modCounts();
-        m_modCountLabel->setText(T("status_mod_count").arg(c.active).arg(c.total));
-        return;
-    }
-    int total = 0, active = 0;
-    const QList<ModEntry> modRows = m_model->all();
-    for (int i = 0; i < modRows.size(); ++i) {
-        const ModEntry &it = modRows.at(i);
-        if (!it.isMod()) continue;
-        ++total;
-        if (it.checked) ++active;
-    }
-    m_modCountLabel->setText(T("status_mod_count").arg(active).arg(total));
+    const auto c = m_model.modCounts();
+    m_modCountLabel->setText(T("status_mod_count").arg(c.active).arg(c.total));
 }
 
 
@@ -1254,13 +1234,12 @@ MainWindow::confirmReinstallIfInstalled(const QString &game, int modId,
     // m_modList and re-parsing every NexusUrl by hand.  m_model is kept in sync
     // synchronously via modlist::connectAutoSync, so its row indices line up
     // with m_modList and the scan sees current state.
-    if (!m_model) return ReinstallChoice::NotInstalled;
     const int exceptRow = except ? m_modList->row(except) : -1;
-    const int row = m_model->findInstalledByModId(game, modId, exceptRow);
+    const int row = m_model.findInstalledByModId(game, modId, exceptRow);
     if (row < 0) return ReinstallChoice::NotInstalled;
 
     {
-        const QString existingName = m_model->at(row).effectiveName();
+        const QString existingName = m_model.at(row).effectiveName();
 
         // Four-way disambiguation: a single Nexus mod page can ship multiple
         // distinct optional files (Wretched + Sage's Backgrounds on mod
@@ -1310,7 +1289,7 @@ void MainWindow::checkModDependencies(const QString &game, int modId, QListWidge
     // scan can bucket present vs. missing without ever touching the
     // QListWidget.
     QMap<int, QString> idToUrl;
-    const QList<ModEntry> modRows = m_model->all();
+    const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
         const ModEntry &it = modRows.at(i);
         if (!it.isMod()) continue;
@@ -1347,7 +1326,7 @@ void MainWindow::autoLinkSameModpage(QListWidgetItem *item, const QString &categ
     QList<deps::ModEntry> snap;
     int newIdx = -1;
     const int itemRow = m_modList->row(item);
-    const QList<ModEntry> modRows = m_model->all();
+    const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
         const ModEntry &it = modRows.at(i);
         if (!it.isMod()) continue;
@@ -1522,7 +1501,7 @@ void MainWindow::offerBundledPatchReenable(QListWidgetItem *item)
     // Each hit = "<hostModDisplayName>\t<hostModPath>\t<subfolderName>"
     QStringList hits;
     const int itemRow = m_modList->row(item);
-    const QList<ModEntry> modRows = m_model->all();
+    const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
         const ModEntry &other = modRows.at(i);
         if (i == itemRow) continue;
@@ -1884,7 +1863,7 @@ void MainWindow::onCurrentModChanged(QListWidgetItem *current, QListWidgetItem *
     snap.reserve(m_modList->count());
     int selectedIdx = -1;
     const int currentRow = m_modList->row(current);
-    const QList<ModEntry> modRows = m_model->all();
+    const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
         const ModEntry &it = modRows.at(i);
         deps::ModEntry e;
@@ -2649,7 +2628,7 @@ void MainWindow::onInspectConflicts()
     // thread-safe.  Build a POD vector here, hand it to QtConcurrent::run by
     // value.
     QList<ConflictScanInput> snapshot;
-    const QList<ModEntry> modRows = m_model->all();
+    const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
         const ModEntry &item = modRows.at(i);
         if (!item.isMod()) continue;
@@ -2708,7 +2687,7 @@ void MainWindow::onTriageOpenMWLog()
     static const QStringList contentExts{".esp", ".esm", ".omwaddon", ".omwscripts"};
     QList<openmw::TriageMod> triageMods;
     triageMods.reserve(m_modList->count());
-    const QList<ModEntry> modRows = m_model->all();
+    const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
         const ModEntry &item = modRows.at(i);
         if (!item.isMod()) continue;
@@ -2866,7 +2845,7 @@ bool MainWindow::confirmReplaceModList()
 
     // Collect paths of installed mods that actually exist on disk.
     QStringList installedPaths;
-    const QList<ModEntry> modRows = m_model->all();
+    const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
         const ModEntry &item = modRows.at(i);
         if (!item.isMod()) continue;
@@ -2961,7 +2940,7 @@ void MainWindow::onAnimTick()
 {
     m_animFrame = (m_animFrame + 1) % 10;
     bool anyInstalling = false;
-    const QList<ModEntry> modRows = m_model->all();
+    const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
         if (modRows.at(i).isInstalling()) {
             anyInstalling = true;
@@ -3214,7 +3193,7 @@ void MainWindow::restoreStrandedInstalls()
         const QString sUrl  = si->data(ModRole::NexusUrl).toString();
         const QString sName = si->text();
         int matchRow = -1;
-        const QList<ModEntry> modRows = m_model->all();
+        const QList<ModEntry> modRows = m_model.all();
         for (int i = 0; i < modRows.size(); ++i) {
             const ModEntry &it = modRows.at(i);
             if (!it.isMod()) continue;
@@ -3717,7 +3696,7 @@ void MainWindow::applyTranslationPairs(const QHash<QString, QString> &pairs)
     // Path -> the name the user sees, so the caption can name the partner the
     // way the list does rather than by folder.
     QHash<QString, QString> nameByPath;
-    const QList<ModEntry> modRows = m_model->all();
+    const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
         const ModEntry &it = modRows.at(i);
         if (!it.isMod()) continue;
@@ -3801,7 +3780,7 @@ void MainWindow::moveModAdjacentTo(QListWidgetItem *mod, const QString &targetPa
     if (!mod || targetPath.isEmpty()) return;
 
     int targetRow = -1;
-    const QList<ModEntry> modRows = m_model->all();
+    const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
         if (modRows.at(i).modPath == targetPath) {
             targetRow = i;

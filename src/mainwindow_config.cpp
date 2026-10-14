@@ -346,7 +346,7 @@ void MainWindow::reconcileLoadOrder()
     // invalidated explicitly in addModFromPath / onRemoveSelected for
     // paths whose contents we just changed.
     QHash<QString, QString> pathByName;
-    const QList<ModEntry> modRows = m_model->all();
+    const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
         const ModEntry &item = modRows.at(i);
         if (!item.isMod()) continue;
@@ -750,7 +750,7 @@ void MainWindow::onEditLoadOrder()
     // load order but not emitted to content=).
     static const QStringList contentExts{".esp", ".esm", ".omwaddon", ".omwscripts"};
     QSet<QString> enabledSet;
-    const QList<ModEntry> modRows = m_model->all();
+    const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
         const ModEntry &item = modRows.at(i);
         if (!item.isMod()) continue;
@@ -875,7 +875,7 @@ void MainWindow::scanMissingDependencies()
     // and is unit-tested in tests/test_deps_resolver.cpp.
     QList<deps::ModEntry> snap;
     snap.reserve(m_modList->count());
-    const QList<ModEntry> modRows = m_model->all();
+    const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
         const ModEntry &it = modRows.at(i);
         if (!it.isMod()) continue;
@@ -977,7 +977,7 @@ void MainWindow::runMissingMastersScan()
     QSet<QString> availableLower;
 
     static const QStringList contentExts{".esp", ".esm"};
-    const QList<ModEntry> modRows = m_model->all();
+    const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
         const ModEntry &item = modRows.at(i);
         if (!item.isMod()) continue;
@@ -1103,7 +1103,7 @@ void MainWindow::syncOpenMWConfig()
     // their Y mod isn't in the list - OpenMW would otherwise warn / crash
     // loading plugins that reference an absent companion mod.
     const QStringList installedModNames =
-        m_model ? m_model->installedModDisplayNames() : QStringList();
+        m_model.installedModDisplayNames();
     auto normalizeModName = [](const QString &s) {
         QString n;
         n.reserve(s.size());
@@ -1536,8 +1536,7 @@ void MainWindow::loadModList(const QString &path,
 
     // The bridge has tracked every row the load added; this rebuild is a
     // belt-and-braces resync at the one point the whole list is known fresh.
-    if (m_model)
-        modlist::refreshModelFromList(m_model, m_modList);
+    modlist::refreshModelFromList(&m_model, m_modList);
 
     // Warm the data-folder cache for installed mods. Runs on a worker thread
     // so loadModList returns immediately; by the time the user tries to delete

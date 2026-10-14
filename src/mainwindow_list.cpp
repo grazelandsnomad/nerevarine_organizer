@@ -674,7 +674,7 @@ void MainWindow::onRemoveSelected()
     struct RedistEntry { QString name; QString path; };
     QList<RedistEntry> redistEntries;
     redistEntries.reserve(m_modList->count());
-    const QList<ModEntry> modRows = m_model->all();
+    const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
         const ModEntry &other = modRows.at(i);
         if (!other.isMod()) continue;
@@ -1565,7 +1565,7 @@ void MainWindow::onItemDoubleClicked(QListWidgetItem *item)
         // Build url→displayName map for all OTHER installed mods.
         QMap<QString, QString> urlToName;
         const int itemRow = m_modList->row(item);
-        const QList<ModEntry> modRows = m_model->all();
+        const QList<ModEntry> modRows = m_model.all();
         for (int i = 0; i < modRows.size(); ++i) {
             const ModEntry &it = modRows.at(i);
             if (i == itemRow) continue;
@@ -1855,7 +1855,7 @@ void MainWindow::updateSectionCounts()
     // to miss, so now a single update greys the whole scaffolding until
     // the user either installs the update or removes the offending mod.
     bool anyUpdate = false;
-    const QList<ModEntry> modRows = m_model->all();
+    const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
         const ModEntry &it = modRows.at(i);
         if (!it.isMod())
@@ -2324,7 +2324,7 @@ MainWindow::translationProgressStateFor(const QListWidgetItem *item) const
     // translation puts the row back to in-progress, which is then true.
     const QString wanted = translation_mod::nameFor(
         item->text().trimmed(), translationLanguage());
-    const QList<ModEntry> modRows = m_model->all();
+    const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
         const ModEntry &cand = modRows.at(i);
         if (!cand.isMod()) continue;
@@ -2520,7 +2520,7 @@ void MainWindow::onDependencyGraph()
     // The section a mod belongs to is the nearest separator above it - the list
     // has no other notion of grouping - so it is tracked while walking down.
     QString section;
-    const QList<ModEntry> modRows = m_model->all();
+    const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
         const ModEntry &it = modRows.at(i);
         deps::ModEntry e;

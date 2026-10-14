@@ -609,7 +609,7 @@ void MainWindow::onDependenciesScanned(const QUuid &rowKey,
         // it - no fetch, the answer is already in the list.
         const auto installedName = [this](const QString &url) {
             const QString key = deps::urlKey(url);
-            const QList<ModEntry> modRows = m_model->all();
+            const QList<ModEntry> modRows = m_model.all();
             for (int i = 0; i < modRows.size(); ++i) {
                 const ModEntry &it = modRows.at(i);
                 if (!it.isMod())
@@ -923,7 +923,7 @@ void MainWindow::onFileListFetched(const QUuid &rowKey,
         }
         if (hasOaab && hasNoOaab) {
             const bool oaabPresent =
-                m_model && m_model->findInstalledByModId(game, 49042) >= 0;
+                m_model.findInstalledByModId(game, 49042) >= 0;
             const OaabVariant want =
                 oaabPresent ? OaabVariant::NeedsOaab : OaabVariant::NoOaab;
             // Among the wanted variant, keep the engine-best file (handles a
