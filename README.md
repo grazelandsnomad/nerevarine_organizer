@@ -130,7 +130,11 @@ Every suite is one file in `tests/`, linked against the `nerevarine_core`
 library that holds everything but `main()`; a new suite is its file plus one
 line in `tests/CMakeLists.txt`.
 CI runs `ctest -L unit` on Ubuntu 24.04 with GCC 14 / Qt 6 from the
-distro repos. The integration tests need KIO `.protocol` files
+distro repos, with warnings as errors.
+
+Formatting: `.clang-format` describes the house style. Run `git clang-format`
+on your changes before committing - changed lines only, never a whole-file
+reformat. The integration tests need KIO `.protocol` files
 registered and a live Nexus API key, so they only run locally.
 
 ## License

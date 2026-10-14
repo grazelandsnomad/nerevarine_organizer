@@ -15,14 +15,16 @@ cmake -S . -B build
 
 echo ""
 echo -e "${G}-- Building ---${R}"
-cmake --build build -j"$(nproc)"
+# NRV_JOBS, or 8. A bare -j$(nproc) on a 32-core box whose swap is already
+# in use has taken the machine down; eight compiles fit comfortably.
+cmake --build build -j"${NRV_JOBS:-8}"
 
 echo ""
 echo -e "${G}-- Installing to bin/Release_Linux ---${R}"
 # CMake drops the binary + runtime assets into build/.  Mirror them into
-# bin/Release_Linux/ so both launch paths (CMake build dir and the
-# historical Code::Blocks output location) stay in sync - avoids the
-# "I edited code but the old binary still runs" trap.
+# bin/Release_Linux/, which is where the desktop launchers (install_linux.sh)
+# point, so both launch paths stay in sync - avoids the "I edited code but
+# the old binary still runs" trap.
 mkdir -p bin/Release_Linux/translations
 cp -f  build/nerevarine_organizer        bin/Release_Linux/nerevarine_organizer
 # The prefs file is the user's to edit ("Edit this file to customise the

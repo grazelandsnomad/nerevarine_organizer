@@ -1,15 +1,9 @@
 #include "row_caption.h"
 
-#include <QCoreApplication>
+#include "translator.h"
 
 namespace row_caption {
 namespace {
-
-// ModListDelegate::tr, as the texts were written there.
-QString tr(const char *text)
-{
-    return QCoreApplication::translate("ModListDelegate", text);
-}
 
 // "overwrites A +2": the first mod named, the rest counted.
 QString part(const QString &verb, const QStringList &entries)
@@ -27,8 +21,8 @@ Caption choose(const Inputs &in)
 {
     Caption c;
     if (in.conflictNotices) {
-        c.win  = part(tr("overwrites"),     in.overwrites);
-        c.lose = part(tr("overwritten by"), in.overwrittenBy);
+        c.win  = part(T("caption_overwrites"),     in.overwrites);
+        c.lose = part(T("caption_overwritten_by"), in.overwrittenBy);
         if (!c.lose.isEmpty()) c.loseKind = LoseKind::OverwrittenBy;
 
         // A record clash: the mods share no file at all, so there is no
@@ -37,7 +31,7 @@ Caption choose(const Inputs &in)
         // as a translation ships its own filename.
         if (c.win.isEmpty() && c.lose.isEmpty() && !in.sameRecords.isEmpty()) {
             const QStringList f = in.sameRecords.first().split('\t');
-            c.lose = tr("same %1 records as %2").arg(f.value(1), f.value(0));
+            c.lose = T("caption_same_records").arg(f.value(1), f.value(0));
             if (in.sameRecords.size() > 1)
                 c.lose += QStringLiteral(" +%1").arg(in.sameRecords.size() - 1);
             c.loseKind = LoseKind::SameRecords;
@@ -49,7 +43,7 @@ Caption choose(const Inputs &in)
     // translation" is true and unhelpful once they are four hundred strings
     // into translating it themselves; what they want is where they got to.
     if (in.translationInProgress > 0) {
-        c.lose     = tr("Translation in progress…");
+        c.lose     = T("caption_translation_in_progress");
         c.loseKind = LoseKind::InProgress;
         return c;
     }
@@ -57,7 +51,7 @@ Caption choose(const Inputs &in)
     // flagged here is nearly always in a conflict with its own translation,
     // and "no translation" is the actionable way to say it.
     if (in.translationState == 1) {
-        c.lose     = tr("no translation");
+        c.lose     = T("caption_no_translation");
         c.loseKind = LoseKind::NoTranslation;
         return c;
     }
@@ -65,7 +59,7 @@ Caption choose(const Inputs &in)
         // "N of M" rather than a bare count: 40 untranslated strings means
         // something different in a 60-string mod than in a 6000-string one.
         const QStringList head = in.translationDetail.value(0).split('\t');
-        c.lose     = tr("%1 of %2 strings untranslated").arg(head.value(2), head.value(3));
+        c.lose     = T("caption_partly_translated").arg(head.value(2), head.value(3));
         c.loseKind = LoseKind::PartlyTranslated;
         return c;
     }
@@ -73,7 +67,7 @@ Caption choose(const Inputs &in)
     // always overwrites its source's files, and "overwritten by" is the half
     // to act on.
     if (in.isTranslationOfOther && !in.translationPartner.isEmpty() && c.lose.isEmpty()) {
-        c.lose     = tr("translation of %1").arg(in.translationPartner);
+        c.lose     = T("caption_translation_of").arg(in.translationPartner);
         c.loseKind = LoseKind::TranslationOf;
     }
     return c;

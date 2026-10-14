@@ -933,8 +933,8 @@ bool ModListDelegate::helpEvent(QHelpEvent *event, QAbstractItemView *view,
             QRect iconRect = updateIconRect(option, statusX);
             if (iconRect.contains(event->pos())) {
                 QToolTip::showText(event->globalPos(),
-                    superseded.isEmpty() ? tr("Download update")
-                                         : tr("Download update") + QStringLiteral("\n\n") + superseded,
+                    superseded.isEmpty() ? T("tip_download_update")
+                                         : T("tip_download_update") + QStringLiteral("\n\n") + superseded,
                     view);
                 return true;
             }
@@ -973,8 +973,8 @@ bool ModListDelegate::helpEvent(QHelpEvent *event, QAbstractItemView *view,
                 };
                 // Named for what the user has to decide, not for the mechanism:
                 // "my files win" is the thing they came to check.
-                section(tr("Overwrites (this mod's files load):"),      over);
-                section(tr("Overwritten by (their files load instead):"), under);
+                section(T("tip_overwrites"),      over);
+                section(T("tip_overwritten_by"), under);
 
                 // Record clashes list a count, not filenames, and carry the
                 // caveat that the plugin load order settles them - not this
@@ -983,12 +983,11 @@ bool ModListDelegate::helpEvent(QHelpEvent *event, QAbstractItemView *view,
                     index.data(ModRole::ConflictSameRecords).toStringList();
                 if (!same.isEmpty()) {
                     if (!tip.isEmpty()) tip += "\n\n";
-                    tip += tr("Rewrites the same records as (no shared file; the "
-                              "plugin load order decides, not this list):");
+                    tip += T("tip_same_records");
                     for (const QString &entry : same) {
                         const QStringList f = entry.split('\t');
                         tip += "\n\n  " + f.value(0)
-                             + tr("  (%1 shared record(s))").arg(f.value(1));
+                             + QStringLiteral("  ") + T("tip_same_records_count").arg(f.value(1));
                         for (const QString &p : f.mid(2)) tip += "\n    " + p;
                     }
                 }
@@ -1003,7 +1002,7 @@ bool ModListDelegate::helpEvent(QHelpEvent *event, QAbstractItemView *view,
             if (iconRect.contains(event->pos())) {
                 // Entry format: "plugin.esp\tmaster1.esm\tmaster2.esm"
                 QStringList entries = index.data(ModRole::MissingMasters).toStringList();
-                QString tip = tr("Missing masters:");
+                QString tip = T("tip_missing_masters");
                 for (const QString &entry : entries) {
                     QStringList parts = entry.split('\t');
                     QString plugin = parts.value(0);
@@ -1021,7 +1020,7 @@ bool ModListDelegate::helpEvent(QHelpEvent *event, QAbstractItemView *view,
             QRect iconRect = depIconRect(option, statusX);
             if (iconRect.contains(event->pos())) {
                 QStringList entries = index.data(ModRole::MissingDependencies).toStringList();
-                QString tip = tr("Missing dependencies:");
+                QString tip = T("tip_missing_deps");
                 for (const QString &entry : entries)
                     tip += "\n  • " + entry;
                 QToolTip::showText(event->globalPos(), tip, view);
@@ -1037,8 +1036,8 @@ bool ModListDelegate::helpEvent(QHelpEvent *event, QAbstractItemView *view,
                 QRect iconRect = favoriteIconRect(option, statusX);
                 if (iconRect.contains(event->pos())) {
                     QString tip = isFav
-                        ? tr("★ Favourite mod - this one is special to you.\nClick to remove from favourites.")
-                        : tr("☆ Mark as favourite - flag this mod as specially dear to you.\nClick to add to favourites.");
+                        ? T("tip_favourite_on")
+                        : T("tip_favourite_off");
                     QToolTip::showText(event->globalPos(), tip, view);
                     return true;
                 }
@@ -1055,15 +1054,11 @@ bool ModListDelegate::helpEvent(QHelpEvent *event, QAbstractItemView *view,
             // Where they got to comes first: it is the reason the row is
             // orange, and it is the only line here they can act on today.
             if (started > 0) {
-                QString tip = tr("You have answered %1 string(s) of this mod "
-                                 "so far.\n\nRight-click and translate it to "
-                                 "carry on - it opens on the first string "
-                                 "still waiting.").arg(started);
+                QString tip = T("tip_translation_started").arg(started);
                 if (state == 1)
-                    tip += "\n\n" + tr("Nothing in this list translates it yet.");
+                    tip += "\n\n" + T("tip_translation_none_yet");
                 else if (state == 2)
-                    tip += "\n\n" + tr("A translation exists but leaves part "
-                                        "of the text unchanged.");
+                    tip += "\n\n" + T("tip_translation_partial_short");
                 QToolTip::showText(event->globalPos(), tip, view);
                 return true;
             }
@@ -1078,27 +1073,24 @@ bool ModListDelegate::helpEvent(QHelpEvent *event, QAbstractItemView *view,
 
                 QString tip;
                 if (state == 1) {
-                    tip = tr("Nothing in this list translates this mod.\n"
-                             "It carries %1 line(s) of text the player sees.")
-                              .arg(head.value(1));
+                    tip = T("tip_translation_none").arg(head.value(1));
                 } else {
-                    tip = tr("%1 leaves %2 of %3 shared line(s) unchanged.")
+                    tip = T("tip_translation_partial")
                               .arg(head.value(0), head.value(2), head.value(3));
                 }
                 if (!plugins.isEmpty()) {
-                    tip += "\n\n" + tr("Plugin(s):");
+                    tip += "\n\n" + T("tip_plugins");
                     for (const QString &p : plugins) tip += "\n  " + p;
                 }
                 if (!samples.isEmpty()) {
-                    tip += "\n\n" + tr("Still the same in both:");
+                    tip += "\n\n" + T("tip_still_same");
                     for (const QString &s : samples)
                         tip += "\n  " + s.left(60);
                 }
                 // Said plainly, because the count alone invites the wrong
                 // conclusion: names that are the same word in both languages
                 // are supposed to show up here.
-                tip += "\n\n" + tr("Proper nouns are counted too, so a small "
-                                   "number here is normal.");
+                tip += "\n\n" + T("tip_proper_nouns");
                 QToolTip::showText(event->globalPos(), tip, view);
                 return true;
             }

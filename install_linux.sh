@@ -1,6 +1,8 @@
 #!/bin/sh
-# Post-build install helper for the "Release (Linux)" Code::Blocks target.
-# Called by ExtraCommands via: flatpak-spawn --host sh install_linux.sh
+# Installs the in-tree build as a desktop app for this user: the binary into
+# ~/.local/bin, the launcher, the "(Build)" launcher that runs
+# bin/Release_Linux directly, and the icons. Run from the repo root after
+# build.sh.
 set -e
 install -Dm755 bin/Release_Linux/nerevarine_organizer "$HOME/.local/bin/nerevarine_organizer"
 install -Dm644 nerevarine_organizer.desktop "$HOME/.local/share/applications/nerevarine_organizer.desktop"
@@ -31,7 +33,7 @@ rm -rf "$HOME/.local/bin/translations"
 cp -r translations "$HOME/.local/bin/translations"
 install -Dm644 nerevarine_prefs.ini "$HOME/.local/bin/nerevarine_prefs.ini"
 
-# Also refresh the translations next to the Code::Blocks build output so
+# Also refresh the translations next to the in-tree build output so
 # running ./bin/Release_Linux/nerevarine_organizer directly (development
 # flow) picks up the same files without requiring a reinstall.
 rm -rf bin/Release_Linux/translations

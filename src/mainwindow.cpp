@@ -3516,7 +3516,7 @@ void MainWindow::onConflictsScanned(
 
     m_modList->viewport()->update();
     if (conflictCount > 0)
-        statusBar()->showMessage(tr("%1 mod(s) have file conflicts").arg(conflictCount), 4000);
+        statusBar()->showMessage(T("status_conflicts_count").arg(conflictCount), 4000);
 }
 
 // Translation coverage

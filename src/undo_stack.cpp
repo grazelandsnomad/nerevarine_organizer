@@ -6,6 +6,7 @@
 
 #include "mod_row.h"
 #include "modroles.h"
+#include "translator.h"
 
 UndoStack::UndoStack(QListWidget *list, QObject *parent)
     : QObject(parent), m_list(list)
@@ -62,7 +63,7 @@ void UndoStack::performUndo()
     if (m_redoStack.size() > kUndoLimit)
         m_redoStack.removeFirst();
     applyState(m_undoStack.takeLast());
-    emit statusMessage(tr("Undo (%1 left)").arg(m_undoStack.size()), 1500);
+    emit statusMessage(T("status_undo").arg(m_undoStack.size()), 1500);
 }
 
 void UndoStack::performRedo()
@@ -72,7 +73,7 @@ void UndoStack::performRedo()
     if (m_undoStack.size() > kUndoLimit)
         m_undoStack.removeFirst();
     applyState(m_redoStack.takeLast());
-    emit statusMessage(tr("Redo (%1 left)").arg(m_redoStack.size()), 1500);
+    emit statusMessage(T("status_redo").arg(m_redoStack.size()), 1500);
 }
 
 void UndoStack::clear()

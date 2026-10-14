@@ -22,7 +22,8 @@
 // 4. "translation of X" is good news, so it takes the slot only when nothing
 //    else wanted it.
 //
-// Qt Core only. The texts keep ModListDelegate's translation context.
+// Qt Core only. The texts come from translations/*.ini like every other
+// string in the app.
 
 #include <QString>
 #include <QStringList>

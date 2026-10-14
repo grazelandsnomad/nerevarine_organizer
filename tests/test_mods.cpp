@@ -9,6 +9,7 @@
 #include "variant_picker.h"
 #include "mod_row.h"
 #include "placeholder_state.h"
+#include "translator.h"
 #include "row_caption.h"
 #include "modroles.h"
 
@@ -1190,17 +1191,19 @@ static void testRowCaptionPrecedence()
         in.overwrites    = {"Patch A\tmeshes/x.nif", "Patch B\tmeshes/y.nif", "Patch C\tz"};
         in.overwrittenBy = {"Big Overhaul\ttextures/a.dds"};
     });
+    // The texts are the translation keys' values, so the checks say the same
+    // through T(): the composition is what is under test, not the English.
     check("the win half names the first and counts the rest",
-          conflict.win == "overwrites Patch A +2", conflict.win);
+          conflict.win == T("caption_overwrites") + " Patch A +2", conflict.win);
     check("the lose half, the mod that overwrites this one",
-          conflict.lose == "overwritten by Big Overhaul"
+          conflict.lose == T("caption_overwritten_by") + " Big Overhaul"
               && conflict.loseKind == LoseKind::OverwrittenBy, conflict.lose);
 
     const auto records = with([](auto &in) {
         in.sameRecords = {"Translation ES\tDIAL", "Other\tINFO"};
     });
     check("a record clash, with no file conflict to compete with",
-          records.lose == "same DIAL records as Translation ES +1"
+          records.lose == T("caption_same_records").arg("DIAL", "Translation ES") + " +1"
               && records.loseKind == LoseKind::SameRecords, records.lose);
     const auto recordsUnderFiles = with([](auto &in) {
         in.overwrittenBy = {"Big Overhaul\tx"};
@@ -1222,7 +1225,7 @@ static void testRowCaptionPrecedence()
         in.translationPartner   = "Tamriel Rebuilt";
     });
     check("it fills the slot nothing else wanted",
-          ofAlone.lose == "translation of Tamriel Rebuilt"
+          ofAlone.lose == T("caption_translation_of").arg("Tamriel Rebuilt")
               && ofAlone.loseKind == LoseKind::TranslationOf, ofAlone.lose);
 
     const auto none = with([](auto &in) {
@@ -1230,15 +1233,17 @@ static void testRowCaptionPrecedence()
         in.translationState = 1;
     });
     check("\"no translation\" takes the half over a file conflict",
-          none.lose == "no translation" && none.loseKind == LoseKind::NoTranslation);
+          none.lose == T("caption_no_translation")
+              && none.loseKind == LoseKind::NoTranslation);
     check("leaving the win half alone", with([](auto &in) {
-        in.overwrites = {"A\tx"}; in.translationState = 1; }).win == "overwrites A");
+        in.overwrites = {"A\tx"}; in.translationState = 1; }).win
+          == T("caption_overwrites") + " A");
     const auto partial = with([](auto &in) {
         in.translationState  = 2;
         in.translationDetail = {"Mod.esp\tes\t40\t6000"};
     });
     check("a partial one counts against the whole",
-          partial.lose == "40 of 6000 strings untranslated"
+          partial.lose == T("caption_partly_translated").arg("40", "6000")
               && partial.loseKind == LoseKind::PartlyTranslated, partial.lose);
 
     const auto started = with([](auto &in) {
@@ -1247,7 +1252,7 @@ static void testRowCaptionPrecedence()
         in.translationInProgress = 1;
     });
     check("work in progress outranks every verdict",
-          started.lose == "Translation in progress…"
+          started.lose == T("caption_translation_in_progress")
               && started.loseKind == LoseKind::InProgress, started.lose);
 
     const auto quiet = with([](auto &in) {
@@ -1310,6 +1315,10 @@ static void run_placeholder_state()
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
+    // English when the translations are where a build puts them (next to the
+    // app, one directory up from the tests); the row-caption checks compare
+    // through T() either way.
+    Translator::init(QStringLiteral("english"));
 
     run_mod_naming();
     run_mod_cleanup();

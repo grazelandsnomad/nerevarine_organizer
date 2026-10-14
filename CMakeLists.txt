@@ -2,10 +2,6 @@ cmake_minimum_required(VERSION 3.16)
 project(NerevarineOrganizer VERSION 0.73 LANGUAGES CXX)
 
 # C++23 covers everything actually used here (std::expected, std::println).
-# C++26 was tripping Qt's q26numeric.h polyfill on the MSYS2 UCRT64 CI toolchain
-# (`'saturate_cast' has not been declared in 'std'`) - the libstdc++ shipped
-# with the Windows runner doesn't expose `std::saturate_cast` even with
-# `-std=gnu++26`, and Qt's header imports it unconditionally in C++26 mode.
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -303,10 +299,10 @@ set(CORE_SOURCES
     include/settings.h
 )
 
-# Platform-specific executable flags (Linux + Windows only; macOS not supported)
-if(APPLE)
-    message(FATAL_ERROR
-        "macOS is not a supported target. Build on Linux or Windows.")
+# Linux only. A Windows cross build (MXE) was carried for a while, unbuilt
+# and untested, and was dropped; macOS was never supported.
+if(NOT (UNIX AND NOT APPLE))
+    message(FATAL_ERROR "Nerevarine Organizer builds on Linux only.")
 endif()
 
 # Everything but main() in a static library that the app and every test link.
@@ -333,12 +329,7 @@ target_link_libraries(nerevarine_core PUBLIC
     Qt6::Concurrent
 )
 
-if(WIN32)
-    # WIN32 suppresses the console window on Windows
-    add_executable(nerevarine_organizer WIN32 main.cpp resources.qrc)
-else()
-    add_executable(nerevarine_organizer main.cpp resources.qrc)
-endif()
+add_executable(nerevarine_organizer main.cpp resources.qrc)
 nrv_warnings(nerevarine_organizer)
 target_link_libraries(nerevarine_organizer PRIVATE nerevarine_core)
 
@@ -349,14 +340,11 @@ target_link_libraries(nerevarine_organizer PRIVATE nerevarine_core)
 set_property(SOURCE main.cpp APPEND PROPERTY
     COMPILE_DEFINITIONS NR_APP_VERSION="${PROJECT_VERSION}")
 
-# GCC 14 keeps std::print / std::println symbols in libstdc++exp.a;
-# GCC 15 promoted them into libstdc++ on Linux but still keeps the
-# Windows terminal helpers (__open_terminal, __write_to_terminal)
-# in libstdc++exp.a on MinGW. So we link stdc++exp on GCC 14 (Linux
-# CI) and on Windows up through 15.x.
+# GCC 14 keeps std::print / std::println symbols in libstdc++exp.a; GCC 15
+# promoted them into libstdc++. CI builds with GCC 14.
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
         AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "14"
-        AND (WIN32 OR CMAKE_CXX_COMPILER_VERSION VERSION_LESS "15"))
+        AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS "15")
     target_link_libraries(nerevarine_core PUBLIC stdc++exp)
 endif()
 if(Qt6Keychain_FOUND)
@@ -364,19 +352,10 @@ if(Qt6Keychain_FOUND)
     target_compile_definitions(nerevarine_core PUBLIC HAVE_QTKEYCHAIN)
 endif()
 
-if(UNIX AND NOT APPLE)
-    # Keep function names in the dynamic symbol table so the crash handler's
-    # backtrace_symbols_fd() prints them instead of bare offsets. strip keeps
-    # .dynsym, so the AppImage's stripped binary stays readable too.
-    target_link_options(nerevarine_organizer PRIVATE -rdynamic)
-endif()
-
-# Windows: link extra system libraries required by Qt6 static builds (MXE)
-if(WIN32)
-    target_link_libraries(nerevarine_organizer PRIVATE
-        ws2_32 winmm imm32 ole32 oleaut32 uuid dwmapi
-    )
-endif()
+# Keep function names in the dynamic symbol table so the crash handler's
+# backtrace_symbols_fd() prints them instead of bare offsets. strip keeps
+# .dynsym, so the AppImage's stripped binary stays readable too.
+target_link_options(nerevarine_organizer PRIVATE -rdynamic)
 
 # -- Post-build: copy runtime assets next to the binary ---
 
@@ -399,8 +378,7 @@ add_custom_command(TARGET nerevarine_organizer POST_BUILD
 include(GNUInstallDirs)
 
 install(TARGETS nerevarine_organizer
-    BUNDLE  DESTINATION .                      # macOS: install .app at prefix root
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} # Linux/Windows: install binary
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
 install(DIRECTORY translations
@@ -432,22 +410,6 @@ if(UNIX)
             ERROR_QUIET)
     ")
 endif()
-
-# Windows: deploy Qt DLLs alongside the .exe (dynamic builds only)
-# MXE static builds don't need this - the .exe is self-contained.
-if(WIN32 AND NOT DEFINED MXE_TARGET)
-    find_program(WINDEPLOYQT windeployqt6 windeployqt HINTS ${Qt6_DIR}/../../../bin)
-    if(WINDEPLOYQT)
-        install(CODE "
-            execute_process(COMMAND \"${WINDEPLOYQT}\"
-                --no-compiler-runtime
-                \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/nerevarine_organizer.exe\"
-                ERROR_QUIET)
-        ")
-    endif()
-endif()
-
-# macOS is not supported.
 
 # -- Tests -------------------------------------------------------------
 # After the library: each test is one source file linked against it.
