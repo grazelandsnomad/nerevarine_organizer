@@ -12,6 +12,10 @@
 #include "modroles.h"
 
 #include <QApplication>
+#include <QColor>
+#include <QMetaType>
+#include <QUuid>
+#include <QVariant>
 #include <QDateTime>
 #include <QListWidget>
 #include <QListWidgetItem>
@@ -51,6 +55,72 @@ QListWidgetItem *addRow(QListWidget &list, const QString &name)
 }
 
 // -- the model bridge ------------------------------------------------------
+
+// A value of the field's own type for a role, judged from what a blank entry
+// reads back; the view sort's SortAnchor reads as nothing on a blank row.
+QVariant sampleFor(int role, const QVariant &blankRead)
+{
+    if (role == Qt::CheckStateRole) return int(Qt::Checked);
+    switch (blankRead.typeId()) {
+    case QMetaType::QString:     return QStringLiteral("sample");
+    case QMetaType::Int:         return 7;
+    case QMetaType::Bool:        return true;
+    case QMetaType::LongLong:    return QVariant::fromValue<qint64>(12345678901LL);
+    case QMetaType::QStringList: return QStringList{QStringLiteral("a"), QStringLiteral("b")};
+    case QMetaType::QDateTime:   return QDateTime(QDate(2024, 5, 6), QTime(7, 8, 9));
+    case QMetaType::QUuid:       return QUuid::createUuid();
+    case QMetaType::QColor:      return QColor(1, 2, 3);
+    default:
+        return role == ModRole::SortAnchor ? QVariant::fromValue<qint64>(5) : QVariant();
+    }
+}
+
+void testRoleTableRoundTrips()
+{
+    std::cout << "testRoleTableRoundTrips\n";
+    const ModEntry blank;
+    check("the table knows the whole row", ModEntry::roles().size() >= 65,
+          QString::number(ModEntry::roles().size()));
+
+    int wrong = 0;
+    QStringList wrongRoles;
+    for (int role : ModEntry::roles()) {
+        ModEntry e;
+        const QVariant sample = sampleFor(role, blank.roleData(role));
+        const bool took = e.setRoleData(role, sample);
+        const bool back = took && e.roleData(role) == sample;
+        e.setRoleData(role, QVariant());
+        const bool reset = (e == blank);
+        if (!back || !reset) { ++wrong; wrongRoles << QString::number(role - Qt::UserRole); }
+    }
+    check("every role takes its value, gives it back and clears to the default",
+          wrong == 0, QStringLiteral("UserRole+") + wrongRoles.join(QStringLiteral(",")));
+
+    ModEntry m;
+    m.displayName = QStringLiteral("Mod");
+    m.checked = true;
+    check("the display text is the display role",
+          m.roleData(Qt::DisplayRole).toString() == QStringLiteral("Mod")
+          && m.roleData(Qt::EditRole).toString() == QStringLiteral("Mod"));
+    check("a mod's check state is Checked", m.roleData(Qt::CheckStateRole).toInt() == Qt::Checked);
+    m.setRoleData(Qt::CheckStateRole, Qt::Unchecked);
+    check("and unchecking lands in the field", !m.checked);
+
+    ModEntry sep;
+    sep.itemType = QStringLiteral("separator");
+    sep.checked  = true;
+    check("a separator has no check state at all", !sep.roleData(Qt::CheckStateRole).isValid());
+
+    ModEntry a;
+    check("an unstamped row has no sort anchor", !a.roleData(ModRole::SortAnchor).isValid());
+    a.setRoleData(ModRole::SortAnchor, QVariant::fromValue<qint64>(0));
+    check("a stamp of zero is a stamp", a.roleData(ModRole::SortAnchor).isValid()
+                                        && a.sortAnchor == 0);
+
+    const int unknown = Qt::UserRole + 999;
+    check("an unknown role is refused", !a.setRoleData(unknown, 1)
+                                        && !a.roleData(unknown).isValid());
+}
 
 void testBridgeFollowsTheWidgetRowByRow()
 {
@@ -201,6 +271,7 @@ int main(int argc, char **argv)
     qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
     QApplication app(argc, argv);
 
+    testRoleTableRoundTrips();
     testBridgeFollowsTheWidgetRowByRow();
     testDependencySnapshotKeepsRowIndicesAndSections();
     testDateOrderSendsSeparatorsAndDatelessToTheEnd();

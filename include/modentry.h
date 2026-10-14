@@ -13,6 +13,7 @@
 #include <QString>
 #include <QStringList>
 #include <QUuid>
+#include <QVariant>
 
 class QListWidgetItem;
 
@@ -106,6 +107,48 @@ struct ModEntry {
     // overlaid onto. Consumed by MainWindow::prepareMerge; transient, not
     // persisted.
     QString mergeTargetPath;
+
+    // --- Session-only state (never serialized) -------------------------
+    // What the window used to keep on the QListWidgetItem in roles the entry
+    // did not carry. Same meaning as the ModRole comments in modroles.h.
+    QString     pendingArchive;            // ModRole::PendingArchive
+    QString     translationPartner;        // ModRole::TranslationPartner
+    bool        isTranslationOfOther = false;
+    QString     fileSuperseded;            // ModRole::FileSuperseded
+    qint64      pendingFileId = 0;         // ModRole::PendingFileId
+    bool        awaitingUpdateDownload = false;
+    bool        sepHasUpdate = false;      // separator only
+    QString     nexusFileName;             // ModRole::NexusFileName
+    qint64      sortAnchor = -1;           // ModRole::SortAnchor; -1 = never stamped
+    int         translationState = 0;      // ModRole::TranslationState
+    QStringList translationDetail;         // ModRole::TranslationDetail
+    int         translationInProgress = 0; // ModRole::TranslationInProgress
+    bool        runtimeMismatchWarned = false;
+    bool        scriptExtenderStale = false;
+    QString     scriptExtenderDetail;
+
+    // --- Presentation the list used to keep on the item -----------------
+    // QListWidgetItem's default flags minus ItemIsDropEnabled: a drag lands
+    // between rows, never on one, so the view's move path is the only one.
+    static constexpr Qt::ItemFlags kDefaultItemFlags =
+        Qt::ItemIsSelectable | Qt::ItemIsUserCheckable | Qt::ItemIsEnabled
+        | Qt::ItemIsDragEnabled;
+    QString       toolTip;
+    Qt::ItemFlags itemFlags = kDefaultItemFlags;
+    bool          hidden = false;          // filtered out, or under a collapsed separator
+
+    // --- The role table -------------------------------------------------
+    // The one mapping between ModRole / Qt item roles and fields; the list
+    // model answers data() and setData() through it. roleData() of a role the
+    // table does not know is an invalid QVariant, and setRoleData() of one
+    // returns false and changes nothing. A null QVariant resets the field to
+    // its default - the way a cleared QListWidgetItem role read back as empty,
+    // 0 or false. A separator has no check state (an invalid QVariant), so no
+    // check box is painted on a section header.
+    [[nodiscard]] QVariant roleData(int role) const;
+    bool setRoleData(int role, const QVariant &value);
+    // Every role the table maps, for tests and whole-row copies.
+    [[nodiscard]] static const QList<int> &roles();
 
     [[nodiscard]] static ModEntry fromItem(const QListWidgetItem *item);
     void applyToItem(QListWidgetItem *item) const;
