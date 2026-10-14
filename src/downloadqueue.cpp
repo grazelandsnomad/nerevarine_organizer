@@ -210,7 +210,7 @@ void DownloadQueue::fetchDownloadLink(const QString &game, int modId, int fileId
             resetPlaceholder();
             // An update stays installed while the user fetches it by hand
             // (restoreInstalled); remember the link coming back is its own.
-            if (rowAlive(placeholder)
+            if (placeholder && rowAlive(placeholder)
                 && mod_row::isInstalled(placeholder))
                 placeholder->setData(ModRole::AwaitingUpdateDownload, true);
             emit statusMessage(T("manual_dl_status"), 6000);
@@ -288,7 +288,10 @@ void DownloadQueue::enqueueDownload(QListWidgetItem *placeholder,
     if (haveUsableArchive(existing, placeholder)) {
         writeDiag(QStringLiteral("reuse %1 path=%2").arg(filename, existing));
         emit statusMessage(T("status_reusing_archive").arg(filename), 4000);
-        if (rowAlive(placeholder)) placeholder->setData(ModRole::DownloadProgress, -1);
+        // The null test is spelled out for the static analyser, which cannot see
+        // through rowAlive() once a caller-supplied check is installed.
+        if (placeholder && rowAlive(placeholder))
+            placeholder->setData(ModRole::DownloadProgress, -1);
         emit extractionRequested(existing, placeholder);
         return;
     }
@@ -603,7 +606,8 @@ void DownloadQueue::downloadFile(const QUrl    &downloadUrl,
         return;
     }
 
-    if (rowAlive(placeholder)) placeholder->setData(ModRole::DownloadProgress, 0);
+    if (placeholder && rowAlive(placeholder))
+        placeholder->setData(ModRole::DownloadProgress, 0);
 
     // notify: download started
     QProcess::startDetached("notify-send",
