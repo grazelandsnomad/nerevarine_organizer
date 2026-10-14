@@ -19,7 +19,6 @@
 #include "archive_policy.h"
 #include "installcontroller.h"
 #include "modlist_model.h"
-#include "modlist_model_widget_bridge.h"
 #include "mod_sharing.h"
 #include "nexuscontroller.h"
 #include "nxmurl.h"
@@ -135,14 +134,14 @@ using fsutils::sanitizeFolderName;
 #include "mainwindow_internal.h"
 
 // Moved file-statics, forward-declared so intra-TU order is irrelevant.
-static QListWidgetItem *findPendingRowForModId(QListWidget *list, int modId, const QString &gameId);
+static ModRow findPendingRowForModId(ModListView *list, int modId, const QString &gameId);
 static int modIdFromArchiveName(const QString &archiveFileName);
 
 // The archive's fate when an install ends, by archive_policy. Kept, it is
 // remembered on the row, so installing again reuses it (handleNxmUrl) instead
 // of downloading it again; with no row, nothing would, so it goes.
 static void settleArchive(const QString &archivePath,
-                          archive_policy::Outcome outcome, QListWidgetItem *row)
+                          archive_policy::Outcome outcome, ModRow row)
 {
     if (row && archive_policy::onOutcome(outcome) == archive_policy::Action::Keep)
         row->setData(ModRole::PendingArchive, archivePath);
@@ -157,7 +156,7 @@ void MainWindow::onArchiveVerificationFailed(const QString &archivePath,
                                              const QString &expected)
 {
     QString profileKey;
-    QListWidgetItem *placeholder = findPlaceholderByToken(installToken, &profileKey);
+    ModRow placeholder = findPlaceholderByToken(installToken, &profileKey);
     // Not the file Nexus listed, whichever check caught it.
     settleArchive(archivePath, archive_policy::Outcome::VerifyFailed, placeholder);
     // Reset the row to "not installed" so the user can retry. Skip if it was
@@ -205,7 +204,7 @@ void MainWindow::onExtractionFailed(const QString &archivePath,
     // Roll the row back like verification failure does; without this the
     // placeholder kept spinning until the next launch's stale-download sweep.
     QString profileKey;
-    QListWidgetItem *ph = findPlaceholderByToken(installToken, &profileKey);
+    ModRow ph = findPlaceholderByToken(installToken, &profileKey);
     if (ph) {
         if (profileKey.isEmpty()) {
             resetPlaceholderAfterInstallCancel(ph, archivePath);
@@ -263,7 +262,7 @@ void MainWindow::onExtractionCancelled(const QString &archivePath,
     // still delete; success paths still clean up.
 
     QString profileKey;
-    QListWidgetItem *ph = findPlaceholderByToken(installToken, &profileKey);
+    ModRow ph = findPlaceholderByToken(installToken, &profileKey);
     settleArchive(archivePath, archive_policy::Outcome::Cancelled, ph);
     if (ph) {
         if (profileKey.isEmpty()) {
@@ -287,7 +286,7 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
     QString modPath = modPathIn;
 
     QString profileKey;
-    QListWidgetItem *placeholder = findPlaceholderByToken(installToken, &profileKey);
+    ModRow placeholder = findPlaceholderByToken(installToken, &profileKey);
     if (!placeholder) {
         // Row was removed mid-extract (or app was restarted and the
         // placeholder didn't restore for some reason).  The extracted
@@ -333,7 +332,7 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
             if (d.kind == FomodWizard::Decision::Kind::Cancelled) {
                 removeModFoldersAsync({extractDir});
                 QString fkey;
-                QListWidgetItem *fph = findPlaceholderByToken(installToken, &fkey);
+                ModRow fph = findPlaceholderByToken(installToken, &fkey);
                 settleArchive(archivePath, archive_policy::Outcome::Cancelled, fph);
                 if (fph) {
                     if (fkey.isEmpty()) {
@@ -457,7 +456,7 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
             if (chosen.isEmpty()) {
                 removeModFoldersAsync({extractDir});
                 QString fkey;
-                QListWidgetItem *bph = findPlaceholderByToken(installToken, &fkey);
+                ModRow bph = findPlaceholderByToken(installToken, &fkey);
                 settleArchive(archivePath, archive_policy::Outcome::Cancelled, bph);
                 if (bph) {
                     if (fkey.isEmpty()) {
@@ -558,7 +557,7 @@ void deleteSetAsideAsync(const QStringList &setAside)
     });
 }
 
-void MainWindow::prepareMerge(QListWidgetItem *placeholder, install_job::Work &work)
+void MainWindow::prepareMerge(ModRow placeholder, install_job::Work &work)
 {
     if (!placeholder) return;
     const QString target = placeholder->data(ModRole::MergeTargetPath).toString();
@@ -582,7 +581,7 @@ void MainWindow::prepareMerge(QListWidgetItem *placeholder, install_job::Work &w
 
 void MainWindow::startInstallJob(install_job::Work work, InstallFollowUp follow)
 {
-    QListWidgetItem *ph = findPlaceholderByToken(follow.token);
+    ModRow ph = findPlaceholderByToken(follow.token);
     prepareMerge(ph, work);
     follow.mergeTarget = work.mergeTarget;
 
@@ -627,7 +626,7 @@ void MainWindow::finishInstallJob(const InstallFollowUp &follow,
 {
     using Outcome = install_job::Result::Outcome;
     QString key;
-    QListWidgetItem *ph = findPlaceholderByToken(follow.token, &key);
+    ModRow ph = findPlaceholderByToken(follow.token, &key);
 
     // What the job set aside - the rest of the unpack, a copy already merged
     // - is deleted in the background: nothing waits on it.
@@ -696,7 +695,7 @@ void MainWindow::updateInstallProgress()
     // The row's bar: DownloadProgress 0-100, or -1 for the moving stripe the
     // delegate draws when a phase has no count.
     for (const RunningInstall &job : std::as_const(m_runningInstalls)) {
-        QListWidgetItem *ph = findPlaceholderByToken(job.token);
+        ModRow ph = findPlaceholderByToken(job.token);
         if (!ph) continue;
         const int pct = job.progress->percent();
         const QVariant now = ph->data(ModRole::DownloadProgress);
@@ -725,7 +724,7 @@ void MainWindow::updateInstallProgress()
     statusBar()->showMessage(text, 2000);
 }
 
-void MainWindow::onInstallFromNexus(QListWidgetItem *item)
+void MainWindow::onInstallFromNexus(ModRow item)
 {
     if (m_apiKey.isEmpty()) {
         ui::info(this, T("nxm_api_key_required_title"), T("nxm_api_key_required_body"));
@@ -759,7 +758,7 @@ void MainWindow::onInstallFromNexus(QListWidgetItem *item)
     checkModDependencies(game, modId, item);
 }
 
-void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeholder)
+void MainWindow::addModFromPath(const QString &dirPath, ModRow placeholder)
 {
     QElapsedTimer addTimer;
     addTimer.start();
@@ -772,7 +771,7 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
 
     QFileInfo fi(dirPath);
 
-    QListWidgetItem *item;
+    ModRow item;
     if (placeholder) {
         // Re-use the in-list placeholder; restore full drag/select flags.
         // Preserve any custom name the user set on the placeholder (e.g. via
@@ -785,8 +784,7 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
         item->setText(cn.isEmpty() ? fi.fileName() : cn);
         placeholder_state::restoreInteractiveFlags(item);
     } else {
-        item = new QListWidgetItem(fi.fileName());
-        m_modList->insertItem(m_modList->count(), item);
+        item = m_modList->addItem(ModEntry::named(fi.fileName()));
         m_modList->setCurrentItem(item);
         m_modList->scrollToItem(item);
     }
@@ -818,7 +816,7 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
             && QDir::cleanPath(outgoing) != QDir::cleanPath(dirPath)) {
             bool referenced = false;
             for (int r = 0; r < m_modList->count() && !referenced; ++r) {
-                auto *row = m_modList->item(r);
+                ModRow row = m_modList->item(r);
                 if (row == item) continue;
                 if (!mod_row::isMod(row))
                     continue;
@@ -884,13 +882,13 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
                 // leaving them behind would show up as "missing mod"
                 // rows on the next scan.
                 for (int r = m_modList->count() - 1; r >= 0; --r) {
-                    auto *row = m_modList->item(r);
+                    ModRow row = m_modList->item(r);
                     if (row == item) continue;
                     if (!mod_row::isMod(row))
                         continue;
                     const QString rmp = row->data(ModRole::ModPath).toString();
                     if (QDir::cleanPath(rmp) == QDir::cleanPath(oldPath))
-                        delete m_modList->takeItem(r);
+                        m_modList->removeRow(r);
                 }
                 // Keep the files if another profile shares this folder.
                 if (modPathReferencedByOtherProfile(mod_sharing::cleanModPath(oldPath)))
@@ -919,7 +917,7 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
                     // is a DIFFERENT mod: skip it, never purge its row.
                     bool referenced = false;
                     for (int r = 0; r < m_modList->count() && !referenced; ++r) {
-                        auto *row = m_modList->item(r);
+                        ModRow row = m_modList->item(r);
                         if (row == item) continue;
                         if (!mod_row::isMod(row))
                             continue;
@@ -992,7 +990,7 @@ void MainWindow::addModFromPath(const QString &dirPath, QListWidgetItem *placeho
             bool inherited = false;
             if (!nexusUrl.isEmpty()) {
                 for (int i = 0; i < m_modList->count(); ++i) {
-                    auto *sib = m_modList->item(i);
+                    ModRow sib = m_modList->item(i);
                     if (sib == item) continue;
                     if (sib->data(ModRole::NexusUrl).toString() != nexusUrl) continue;
                     QString sibName = sib->data(ModRole::CustomName).toString().trimmed();
@@ -1124,7 +1122,7 @@ void MainWindow::repairEmptyModPaths()
     // not-installed so the user can re-install them cleanly.
     int healed = 0;
     for (int i = 0; i < m_modList->count(); ++i) {
-        auto *item = m_modList->item(i);
+        ModRow item = m_modList->item(i);
         if (!mod_row::isMod(item)) continue;
         QString modPath = item->data(ModRole::ModPath).toString();
         if (modPath.isEmpty() || modsRootAbs.isEmpty()) continue;
@@ -1157,7 +1155,7 @@ void MainWindow::repairEmptyModPaths()
 
     bool changed = (healed > 0);
     for (int i = 0; i < m_modList->count(); ++i) {
-        auto *item = m_modList->item(i);
+        ModRow item = m_modList->item(i);
         if (!mod_row::isMod(item)) continue;
         // InstallStatus 2 = currently installing - leave those alone. We also
         // handle status 0: loadModList() demotes a mod to "not installed" when
@@ -1344,13 +1342,13 @@ static int modIdFromArchiveName(const QString &archiveFileName)
 // profile.  Used by installLocalArchive to route a manual drag-drop back to
 // the row the user clicked Install on (or that came down from a synced
 // modlist), instead of creating a duplicate entry.
-static QListWidgetItem *findPendingRowForModId(QListWidget *list, int modId,
+static ModRow findPendingRowForModId(ModListView *list, int modId,
                                                 const QString &gameId)
 {
     if (!list || modId <= 0) return nullptr;
     const QString gameLc = gameId.toLower();
     for (int i = 0; i < list->count(); ++i) {
-        auto *it = list->item(i);
+        ModRow it = list->item(i);
         if (!it) continue;
         if (!mod_row::isMod(it)) continue;
         if (mod_row::isInstalled(it)) continue;   // already installed - don't clobber
@@ -1410,7 +1408,7 @@ void MainWindow::installLocalArchive(const QString &archivePath,
     // appearing at the bottom of the list.
     const QString gameId = m_profiles->isEmpty() ? QString() : currentProfile().id;
     const int archiveModId = modIdFromArchiveName(srcFi.fileName());
-    QListWidgetItem *placeholder =
+    ModRow placeholder =
         findPendingRowForModId(m_modList, archiveModId, gameId);
 
     if (placeholder) {
@@ -1426,15 +1424,14 @@ void MainWindow::installLocalArchive(const QString &archivePath,
     } else {
         // No matching row - fresh local install, build a placeholder from
         // the archive's base name as we always did.
-        placeholder = new QListWidgetItem(
+        ModEntry ph = ModEntry::named(
             QString("⠋ %1 (%2)").arg(T("status_installing_label"),
                                       srcFi.completeBaseName()));
-        placeholder->setData(ModRole::ItemType,      ItemType::Mod);
-        mod_row::setInstallStatus(placeholder, InstallStatus::Installing);
-        placeholder->setData(ModRole::DateAdded,     QDateTime::currentDateTime());
-        placeholder->setCheckState(Qt::Checked);
-        placeholder_state::setBusyFlags(placeholder);
-        m_modList->addItem(placeholder);
+        ph.installStatus = int(InstallStatus::Installing);
+        ph.dateAdded     = QDateTime::currentDateTime();
+        ph.checked       = true;
+        placeholder_state::setBusyFlags(ph);
+        placeholder = m_modList->addItem(ph);
         m_modList->scrollToItem(placeholder);
     }
     // A hand-downloaded mod keeps its mod page when the caller could work out

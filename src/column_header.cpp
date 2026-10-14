@@ -4,7 +4,7 @@
 #include <QEvent>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QListWidget>
+#include <QAbstractItemView>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPushButton>
@@ -90,7 +90,7 @@ ColumnHeader::ColumnHeader(QWidget *parent)
 
 QWidget *ColumnHeader::widget() const { return m_bar; }
 
-void ColumnHeader::attachListWidget(QListWidget *list)
+void ColumnHeader::attachListWidget(QAbstractItemView *list)
 {
     m_list = list;
     if (m_list) m_list->verticalScrollBar()->installEventFilter(this);

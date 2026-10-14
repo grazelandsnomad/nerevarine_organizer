@@ -8,7 +8,9 @@
 // is a model write the view hears about, and a handle never dangles: a
 // row that is gone reads blank and takes no writes. Handles compare and
 // hash by id, and a null handle is spelled nullptr, like the pointer it
-// replaces.
+// replaces. A handle's constness is its own, not the row's: a const handle
+// still writes, as a const pointer to a non-const item did, so a lambda that
+// captured one by value keeps working.
 
 #include "modentry.h"
 #include "modlist_model.h"
@@ -33,21 +35,22 @@ public:
     [[nodiscard]] QUuid         id() const { return m_id; }
     [[nodiscard]] int           row() const { return m_model ? m_model->findByRowId(m_id) : -1; }
     [[nodiscard]] QModelIndex   index() const;
-    // The row's entry, or a blank one when the row is gone.
+    // The row's entry, or, when the row is gone, a blank one that is
+    // neither a mod nor a separator.
     [[nodiscard]] const ModEntry &entry() const;
 
     [[nodiscard]] QVariant data(int role) const;
-    void setData(int role, const QVariant &value);
+    void setData(int role, const QVariant &value) const;
     [[nodiscard]] QString text() const { return data(Qt::DisplayRole).toString(); }
-    void setText(const QString &text) { setData(Qt::DisplayRole, text); }
+    void setText(const QString &text) const { setData(Qt::DisplayRole, text); }
     [[nodiscard]] Qt::CheckState checkState() const;
-    void setCheckState(Qt::CheckState state) { setData(Qt::CheckStateRole, int(state)); }
+    void setCheckState(Qt::CheckState state) const { setData(Qt::CheckStateRole, int(state)); }
     [[nodiscard]] Qt::ItemFlags flags() const;
-    void setFlags(Qt::ItemFlags flags);
+    void setFlags(Qt::ItemFlags flags) const;
     [[nodiscard]] bool isHidden() const { return entry().hidden; }
-    void setHidden(bool hidden);
+    void setHidden(bool hidden) const;
     [[nodiscard]] QString toolTip() const { return entry().toolTip; }
-    void setToolTip(const QString &tip) { setData(Qt::ToolTipRole, tip); }
+    void setToolTip(const QString &tip) const { setData(Qt::ToolTipRole, tip); }
 
     [[nodiscard]] bool isMod() const { return entry().isMod(); }
     [[nodiscard]] bool isSeparator() const { return entry().isSeparator(); }

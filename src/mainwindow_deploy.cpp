@@ -23,7 +23,6 @@
 #include <functional>
 #include "proton_paths.h"
 #include "dll_overrides.h"
-#include "modlist_model_widget_bridge.h"
 #include "modlist_summary_dialog.h"
 #include "nexuscontroller.h"
 #include "downloadqueue.h"
@@ -159,7 +158,7 @@ static QString bethesdaResolveDataDir(QWidget *parent, const QString &id, const 
 static void bethesdaStatePaths(const QString &modlistFile, QString &manifestPath, QString &backupDir);
 static QString findScriptExtenderLoader(const GameAdapter *adapter, const QString &installDir);
 static bool launchViaProton(QWidget *parent, const QString &appId, const QString &exePath);
-static QList<bethesda_deploy::DeploySource> gatherBethesdaSources(QListWidget *list, const QList<int> &order, const GameAdapter *adapter, const QString &modsDir);
+static QList<bethesda_deploy::DeploySource> gatherBethesdaSources(ModListView *list, const QList<int> &order, const GameAdapter *adapter, const QString &modsDir);
 static bool launchViaGog(const QString &gogExe);
 static QString resolveBethesdaIniDir(const QString &id, const GameAdapter *adapter, const QString &dataDir);
 static QString resolveBethesdaPluginsTxt(const QString &id, const GameAdapter *adapter, const QString &dataDir);
@@ -637,7 +636,7 @@ static void writeSmallFile(const QString &path, const QString &text)
 // SKSE also ships are not the game's business, and a recursive sweep here
 // would additionally re-deploy the mod's own Data/ into the game root.
 static QList<bethesda_deploy::DeploySource> gatherScriptExtenderSources(
-    QListWidget *list, const QList<int> &order, const GameAdapter *adapter,
+    ModListView *list, const QList<int> &order, const GameAdapter *adapter,
     const QString &modsDir)
 {
     QList<bethesda_deploy::DeploySource> out;
@@ -648,7 +647,7 @@ static QList<bethesda_deploy::DeploySource> gatherScriptExtenderSources(
         && routes.extenderPluginsSubdir.isEmpty()) return out;
 
     for (int i : order) {
-        auto *item = list->item(i);
+        ModRow item = list->item(i);
         if (!mod_row::isMod(item)) continue;
         if (item->checkState() != Qt::Checked) continue;
         if (!mod_row::isInstalled(item)) continue;
@@ -806,7 +805,7 @@ static QString bethesdaApplyUndeploy(const QString &id, const GameAdapter *adapt
 // `order` is the persisted row order (MainWindow::rowOrderForPersist): a
 // temporary Size/Date view sort reorders the rows on screen, and deploying in
 // that order would hand every conflict to whichever mod happens to sort last.
-static QList<bethesda_deploy::DeploySource> gatherBethesdaSources(QListWidget *list,
+static QList<bethesda_deploy::DeploySource> gatherBethesdaSources(ModListView *list,
                                                                   const QList<int> &order,
                                                                   const GameAdapter *adapter,
                                                                   const QString &modsDir)
@@ -815,7 +814,7 @@ static QList<bethesda_deploy::DeploySource> gatherBethesdaSources(QListWidget *l
     const bool overlay = adapter && adapter->overlayDeploy();
     QList<bethesda_deploy::DeploySource> sources;
     for (int i : order) {
-        auto *item = list->item(i);
+        ModRow item = list->item(i);
         if (!mod_row::isMod(item)) continue;
         if (item->checkState() != Qt::Checked) continue;
         if (!mod_row::isInstalled(item)) continue;
@@ -1228,7 +1227,7 @@ QString MainWindow::deployFingerprint() const
     // in the same folder.
     QStringList mods;
     for (int i : rowOrderForPersist()) {
-        const auto *it = m_modList->item(i);
+        const ModRow it = m_modList->item(i);
         if (!mod_row::isMod(it)) continue;
         if (it->checkState() != Qt::Checked) continue;
         if (!mod_row::isInstalled(it)) continue;
@@ -1737,7 +1736,7 @@ void MainWindow::refreshScriptExtenderFlags()
     }
 
     for (int i = 0; i < m_modList->count(); ++i) {
-        auto *item = m_modList->item(i);
+        ModRow item = m_modList->item(i);
         if (!mod_row::isMod(item)) continue;
         QString label = item->data(ModRole::CustomName).toString();
         if (label.isEmpty()) label = item->text();
@@ -1781,7 +1780,7 @@ bool MainWindow::confirmLaunchIfWarnings()
 
     const QString gameId =
         m_profiles->isEmpty() ? QString() : currentProfile().id;
-    auto warnings = launch_warnings::scan(modlist::snapshotEntries(m_modList),
+    auto warnings = launch_warnings::scan(m_model.all(),
                                           m_forbidden, gameId);
 
     // Script-extender plugins against the installed game.

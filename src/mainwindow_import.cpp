@@ -10,7 +10,6 @@
 #include "placeholder_state.h"
 #include "fomodwizard.h"
 #include "bainwizard.h"
-#include "modlist_model_widget_bridge.h"
 #include "modlist_serializer.h"
 #include "nexuscontroller.h"
 #include "nxmurl.h"
@@ -245,7 +244,7 @@ void MainWindow::doImportMO2ModList(const QString &path)
         bool isSep   = name.endsWith("_separator");
         if (isSep) name.chop(QString("_separator").size());
 
-        auto *item = new QListWidgetItem(name);
+        ModEntry item = ModEntry::named(name);
         if (isSep) {
             item->setData(ModRole::ItemType, ItemType::Separator);
             item->setData(ModRole::BgColor,  QColor(55, 55, 75));
@@ -621,7 +620,7 @@ void MainWindow::finishWabbajackImport(const QJsonObject &root)
     m_modList->clear();
 
     for (const WJMod &mod : mods) {
-        auto *item = new QListWidgetItem(mod.name);
+        ModEntry item = ModEntry::named(mod.name);
         if (mod.isSep) {
             item->setData(ModRole::ItemType, ItemType::Separator);
             item->setData(ModRole::BgColor,  QColor(55, 55, 75));
@@ -834,7 +833,7 @@ void MainWindow::onImportMO2Profile()
         bool isSep   = name.endsWith(QLatin1String("_separator"));
         if (isSep) name.chop(QStringLiteral("_separator").size());
 
-        auto *item = new QListWidgetItem(name);
+        ModEntry item = ModEntry::named(name);
         if (isSep) {
             item->setData(ModRole::ItemType, ItemType::Separator);
             item->setData(ModRole::BgColor,  QColor(55, 55, 75));

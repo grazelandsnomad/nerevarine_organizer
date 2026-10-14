@@ -16,7 +16,6 @@
 #include "placeholder_state.h"
 #include "fomodwizard.h"
 #include "bainwizard.h"
-#include "modlist_model_widget_bridge.h"
 #include "modlist_serializer.h"
 #include "modlist_summary_dialog.h"
 #include "nexusclient.h"
@@ -143,103 +142,14 @@ using fsutils::sanitizeFolderName;
 // Moved file-static, forward-declared.
 static QString locateOpenMWBinary(const QString &profileHint) ;
 
-class ModListWidget : public QListWidget {
-public:
-    using QListWidget::QListWidget;
-
-protected:
-    // dragEnter/dragMove must acceptProposedAction or the drop never fires.
-    void dragEnterEvent(QDragEnterEvent *event) override
-    {
-        if (event->source() != this && event->mimeData()->hasUrls()) {
-            for (const QUrl &u : event->mimeData()->urls()) {
-                if (u.isLocalFile()) {
-                    event->acceptProposedAction();
-                    return;
-                }
-            }
-        }
-        QListWidget::dragEnterEvent(event);
-    }
-    void dragMoveEvent(QDragMoveEvent *event) override
-    {
-        if (event->source() != this && event->mimeData()->hasUrls()) {
-            event->acceptProposedAction();
-            return;
-        }
-        QListWidget::dragMoveEvent(event);
-    }
-
-    void dropEvent(QDropEvent *event) override
-    {
-        // Handle archive paths here, don't forward the drop up to MainWindow:
-        // Qt re-delivers by cursor position to the deepest widget (this same
-        // ModListWidget), recursing until the stack overflows and SIGSEGVs in
-        // QInternalMimeData::formats (Wayland, TTF-for-OpenMW drop). Accept now,
-        // defer the install one event-loop tick.
-        if (event->source() != this && event->mimeData()->hasUrls()) {
-            QStringList toInstall;
-            QStringList toImport;
-            for (const QUrl &u : event->mimeData()->urls()) {
-                if (!u.isLocalFile()) continue;
-                QString local = u.toLocalFile();
-                if (isInstallableArchiveSuffix(local))
-                    toInstall << local;
-                else if (isImportFileSuffix(local))
-                    toImport << local;
-            }
-            event->acceptProposedAction();
-
-            QPointer<QWidget> topGuard(window());
-            if (!toInstall.isEmpty()) {
-                QMetaObject::invokeMethod(window(), [topGuard, toInstall]{
-                    if (!topGuard) return;
-                    if (auto *mw = qobject_cast<MainWindow *>(topGuard.data()))
-                        for (const QString &p : toInstall)
-                            mw->installLocalArchive(p);
-                }, Qt::QueuedConnection);
-            }
-            for (const QString &p : toImport) {
-                QMetaObject::invokeMethod(window(), [topGuard, p]{
-                    if (!topGuard) return;
-                    if (auto *mw = qobject_cast<MainWindow *>(topGuard.data()))
-                        mw->handleDroppedImportFile(p);
-                }, Qt::QueuedConnection);
-            }
-            return;
-        }
-
-        QPoint pos = event->position().toPoint();
-        QListWidgetItem *target = itemAt(pos);
-        if (event->source() == this && target &&
-            mod_row::isSeparator(target))
-        {
-            int sepRow = row(target);
-            QList<int> rows;
-            for (auto *sel : selectedItems()) {
-                int r = row(sel);
-                if (r != sepRow) rows.append(r);
-            }
-            if (rows.isEmpty()) { event->ignore(); return; }
-            std::sort(rows.begin(), rows.end());
-
-            // Take descending so indices stay stable; reinsert top-to-bottom.
-            QList<QListWidgetItem *> picked;
-            picked.reserve(rows.size());
-            for (int i = rows.size() - 1; i >= 0; --i) {
-                int r = rows[i];
-                picked.prepend(takeItem(r));
-                if (r < sepRow) --sepRow;
-            }
-            for (int i = 0; i < picked.size(); ++i)
-                insertItem(sepRow + 1 + i, picked[i]);
-
-            event->acceptProposedAction();
-            return;
-        }
-        QListWidget::dropEvent(event);
-    }
-};
+void MainWindow::onLocalFilesDropped(const QStringList &paths)
+{
+    // Archives first, then lists, the way the old drop handler queued them.
+    for (const QString &p : paths)
+        if (isInstallableArchiveSuffix(p)) installLocalArchive(p);
+    for (const QString &p : paths)
+        if (isImportFileSuffix(p)) handleDroppedImportFile(p);
+}
 
 void MainWindow::setupMenuBar()
 {
@@ -791,18 +701,18 @@ void MainWindow::restyleToolbarTextButtons()
 
 void MainWindow::setupCentralWidget()
 {
-    m_modList = new ModListWidget(this);
-
-    // Model migration stage 2: m_model tracks m_modList's change signals in
-    // real time (checkbox toggles, drag-reorders, insert/remove). Wired before
-    // any of the window's own connections so its update lands first.
-    modlist::connectAutoSync(&m_model, m_modList);
+    // The list on screen is a view of m_model: the rows live there, the view
+    // paints them through the delegate and reports the user's edits back.
+    m_modList = new ModListView(this);
+    m_modList->setModel(&m_model);
+    connect(m_modList, &ModListView::localFilesDropped,
+            this, &MainWindow::onLocalFilesDropped);
 
     m_zoom = new ZoomController(m_modList, this);
     m_zoom->loadPrefs();
-    m_undoStack = new UndoStack(m_modList, this);
+    m_undoStack = new UndoStack(&m_model, this);
     connect(m_undoStack, &UndoStack::requestCollapse,
-            this, [this](QListWidgetItem *sep) { collapseSection(sep, true); });
+            this, [this](ModRow sep) { collapseSection(sep, true); });
     connect(m_undoStack, &UndoStack::stateApplied,
             this, [this]() {
         // The list was rebuilt from scratch; any queued row is a stale index
@@ -833,16 +743,16 @@ void MainWindow::setupCentralWidget()
     m_modList->setAlternatingRowColors(true);
     m_modList->setUniformItemSizes(false);
 
-    connect(m_modList, &QListWidget::customContextMenuRequested,
+    connect(m_modList, &ModListView::customContextMenuRequested,
             this, &MainWindow::onContextMenu);
-    connect(m_modList, &QListWidget::itemDoubleClicked,
+    connect(m_modList, &ModListView::itemDoubleClicked,
             this, &MainWindow::onItemDoubleClicked);
-    connect(m_modList, &QListWidget::currentItemChanged,
+    connect(m_modList, &ModListView::currentItemChanged,
             this, &MainWindow::onCurrentModChanged);
 
     connect(m_delegate, &ModListDelegate::separatorCollapseToggleClicked, this,
             [this](const QModelIndex &idx){
-        auto *sep = m_modList->item(idx.row());
+        ModRow sep = m_modList->item(idx.row());
         if (!sep) return;
         m_undoStack->pushUndo();
         collapseSection(sep, !sep->data(ModRole::Collapsed).toBool());
@@ -855,7 +765,7 @@ void MainWindow::setupCentralWidget()
     // check and reinstall confirm are also redundant here.
     connect(m_delegate, &ModListDelegate::updateArrowClicked, this,
             [this](const QModelIndex &idx){
-        auto *item = m_modList->item(idx.row());
+        ModRow item = m_modList->item(idx.row());
         if (!item) return;
 
         if (m_apiKey.isEmpty()) {
@@ -885,7 +795,7 @@ void MainWindow::setupCentralWidget()
 
     connect(m_delegate, &ModListDelegate::favoriteToggleClicked, this,
             [this](const QModelIndex &idx){
-        auto *item = m_modList->item(idx.row());
+        ModRow item = m_modList->item(idx.row());
         if (!item) return;
         m_undoStack->pushUndo();
         bool isFav = item->data(ModRole::IsFavorite).toBool();
@@ -910,11 +820,13 @@ void MainWindow::setupCentralWidget()
     m_modList->setMouseTracking(true);
     m_modList->viewport()->setMouseTracking(true);
 
-    // Push undo state before a drag-drop reorder, then save afterwards
-    connect(m_modList->model(), &QAbstractItemModel::rowsAboutToBeMoved,
-            this, [this]() { if (!m_undoStack->isApplyingState()) m_undoStack->pushUndo(); });
-    connect(m_modList->model(), &QAbstractItemModel::rowsMoved,
-            this, [this]() {
+    // Push undo state before a drag-drop reorder, then save afterwards. A
+    // drop onto a separator is one reorder of the model (the view's own
+    // signals); a drag between rows is a model move per row.
+    const auto beforeReorder = [this]() {
+        if (!m_undoStack->isApplyingState()) m_undoStack->pushUndo();
+    };
+    const auto afterReorder = [this]() {
         // A drag-drop reorder commits the current display as the saved order,
         // ending any temporary view sort.
         dropViewSortKeepingOrder();
@@ -922,7 +834,11 @@ void MainWindow::setupCentralWidget()
         // them into one saveModList avoids N redundant writes on the save queue.
         scheduleSaveModList();
         scheduleConflictScan();
-    });
+    };
+    connect(m_modList->model(), &QAbstractItemModel::rowsAboutToBeMoved, this, beforeReorder);
+    connect(m_modList->model(), &QAbstractItemModel::rowsMoved, this, afterReorder);
+    connect(m_modList, &ModListView::aboutToReorderRows, this, beforeReorder);
+    connect(m_modList, &ModListView::rowsReordered, this, afterReorder);
 
     m_modList->viewport()->installEventFilter(this);
     m_modList->installEventFilter(this);
@@ -1003,7 +919,7 @@ void MainWindow::setupCentralWidget()
     statusBar()->addPermanentWidget(m_modCountLabel);
 
     // Update count whenever a checkbox is toggled; also re-scan conflicts (enabled set changed)
-    connect(m_modList, &QListWidget::itemChanged, this, [this](QListWidgetItem *item) {
+    connect(m_modList, &ModListView::itemChanged, this, [this](ModRow item) {
         if (mod_row::isMod(item)) {
             updateModCount();
             updateSectionCounts();
@@ -1736,7 +1652,7 @@ void MainWindow::onInspectOpenMWSetup()
     ui::showMonospaceReport(this, T("openmw_inspect_title"), report, 720, 520, summary);
 }
 
-void MainWindow::onViewChangelog(QListWidgetItem *item)
+void MainWindow::onViewChangelog(ModRow item)
 {
     if (!item) return;
 

@@ -4,6 +4,7 @@
 #include "async_guarded.h"
 #include "download_integrity.h"
 #include "mod_row.h"
+#include "modlistview.h"
 #include "modroles.h"
 #include "placeholder_state.h"
 #include "nexusclient.h"
@@ -49,7 +50,7 @@ static QString dqFmtBytes(qint64 b)
     return QString::number(b / 1024.0, 'f', 0) + " KB";
 }
 
-DownloadQueue::DownloadQueue(QListWidget           *modList,
+DownloadQueue::DownloadQueue(ModListView *modList,
                              QNetworkAccessManager *net,
                              NexusClient           *nexus,
                              QWidget               *parentWidget,
@@ -124,15 +125,11 @@ void DownloadQueue::setRowResolver(RowResolver resolve)
     m_resolve = std::move(resolve);
 }
 
-QListWidgetItem *DownloadQueue::rowFor(const QUuid &row) const
+ModRow DownloadQueue::rowFor(const QUuid &row) const
 {
     if (row.isNull()) return nullptr;
     if (m_resolve) return m_resolve(row);
-    if (!m_modList) return nullptr;
-    for (int i = 0; i < m_modList->count(); ++i)
-        if (m_modList->item(i)->data(ModRole::RowId).toUuid() == row)
-            return m_modList->item(i);
-    return nullptr;
+    return m_modList ? m_modList->rowById(row) : ModRow();
 }
 
 // Resolve a Nexus CDN link, then enqueueDownload.
@@ -151,7 +148,7 @@ void DownloadQueue::fetchDownloadLink(const QString &game, int modId, int fileId
         // or a manual drag-drop both work again. Shared by the premium-fallback
         // and the bad-key (401) paths below.
         auto resetPlaceholder = [&]() {
-            QListWidgetItem *item = rowFor(row);
+            ModRow item = rowFor(row);
             if (!item) return;
             // An update that could not fetch its link is still installed.
             if (placeholder_state::restoreInstalled(item)) {
@@ -211,7 +208,7 @@ void DownloadQueue::fetchDownloadLink(const QString &game, int modId, int fileId
             resetPlaceholder();
             // An update stays installed while the user fetches it by hand
             // (restoreInstalled); remember the link coming back is its own.
-            if (QListWidgetItem *item = rowFor(row); item && mod_row::isInstalled(item))
+            if (ModRow item = rowFor(row); item && mod_row::isInstalled(item))
                 item->setData(ModRole::AwaitingUpdateDownload, true);
             emit statusMessage(T("manual_dl_status"), 6000);
         };
@@ -262,7 +259,7 @@ bool DownloadQueue::haveUsableArchive(const QString &path,
     // Only the size stashed for THIS file counts (applicableExpectations):
     // one left over from another file on the page would call a complete
     // archive short, or vouch for a wrong one.
-    const QListWidgetItem *item = rowFor(row);
+    const ModRow item = rowFor(row);
     const qint64 expected =
         item ? placeholder_state::applicableExpectations(item).size : 0;
     return safefs::isCompleteDownload(path, expected);
@@ -287,7 +284,7 @@ void DownloadQueue::enqueueDownload(const QUuid &row,
     if (haveUsableArchive(existing, row)) {
         writeDiag(QStringLiteral("reuse %1 path=%2").arg(filename, existing));
         emit statusMessage(T("status_reusing_archive").arg(filename), 4000);
-        if (QListWidgetItem *item = rowFor(row))
+        if (ModRow item = rowFor(row))
             item->setData(ModRole::DownloadProgress, -1);
         emit extractionRequested(existing, row);
         return;
@@ -403,7 +400,7 @@ void DownloadQueue::cancelQueued(const QUuid &row)
     // an update's, back to installed where it was.
     removeQueueRow(row);
     m_dlAttempts.remove(row);
-    QListWidgetItem *item = rowFor(row);
+    ModRow item = rowFor(row);
     if (item && placeholder_state::restoreInstalled(item)) {
         emit saveRequested();
     } else if (item) {
@@ -441,7 +438,7 @@ void DownloadQueue::cleanStaleDownloads()
     // overwritten on the next download.
     int healed = 0;
     for (int i = 0; i < m_modList->count(); ++i) {
-        auto *it = m_modList->item(i);
+        const ModRow it = m_modList->item(i);
         if (!mod_row::isMod(it)) continue;
         if (!mod_row::isInstalling(it))           continue;
         if (m_active.contains(mod_row::rowIdIfAny(it)))               continue;
@@ -507,7 +504,7 @@ void DownloadQueue::updateQueueRowProgress(const QUuid &row,
 
 void DownloadQueue::resetPlaceholderToIdle(const QUuid &row)
 {
-    QListWidgetItem *item = rowFor(row);
+    ModRow item = rowFor(row);
     if (!item) return;
     // An update whose download failed is still installed where it was.
     if (placeholder_state::restoreInstalled(item)) {
@@ -602,7 +599,7 @@ void DownloadQueue::downloadFile(const QUrl    &downloadUrl,
         return;
     }
 
-    if (QListWidgetItem *item = rowFor(row))
+    if (ModRow item = rowFor(row))
         item->setData(ModRole::DownloadProgress, 0);
 
     // notify: download started
@@ -625,7 +622,7 @@ void DownloadQueue::downloadFile(const QUrl    &downloadUrl,
 
     connect(reply, &QNetworkReply::downloadProgress, this,
             [this, row, filename](qint64 received, qint64 total) {
-        QListWidgetItem *item = rowFor(row);
+        ModRow item = rowFor(row);
         if (!item) return;
         int pct = (total > 0) ? static_cast<int>(received * 100 / total) : 0;
         item->setData(ModRole::DownloadProgress, pct);
@@ -757,7 +754,7 @@ void DownloadQueue::downloadFile(const QUrl    &downloadUrl,
             : download_integrity::quickProblem(ctype, header, size);
         // Expectations for another file do not count as a check downstream:
         // verification will drop them, so the structural test must run.
-        const QListWidgetItem *item = rowFor(row);
+        const ModRow item = rowFor(row);
         const auto expect = item ? placeholder_state::applicableExpectations(item)
                                  : placeholder_state::Expectations{};
         if (quick.isEmpty()
@@ -784,7 +781,7 @@ void DownloadQueue::testArchiveThenContinue(const QUuid &row,
     // cancelQueued), so removing it mid-test cancels like any queued download
     // instead of leaving the result to land on a deleted row.
     m_testing.insert(row, savePath);
-    if (QListWidgetItem *item = rowFor(row))
+    if (ModRow item = rowFor(row))
         item->setData(ModRole::DownloadProgress, -1);
     emit statusMessage(T("status_download_testing").arg(filename));
     processDownloadQueue();   // the network slot is already free
@@ -854,7 +851,7 @@ void DownloadQueue::afterIntegrityGate(const QUuid &row,
     m_dlAttempts.remove(row);  // clean transfer, reset counter
 
     // extracting phase - indeterminate progress
-    if (QListWidgetItem *item = rowFor(row))
+    if (ModRow item = rowFor(row))
         item->setData(ModRole::DownloadProgress, -1);
 
     emit statusMessage(T("status_downloaded_extracting").arg(filename));

@@ -141,6 +141,33 @@ ModRow ModListView::insertItem(int row, ModEntry e)
     return item(row);
 }
 
+QList<ModRow> ModListView::moveRowsTo(QList<int> rows, int insertAt)
+{
+    QList<ModRow> moved;
+    if (!m_model) return moved;
+    std::sort(rows.begin(), rows.end());
+    rows.erase(std::unique(rows.begin(), rows.end()), rows.end());
+    rows.removeIf([this](int r) { return r < 0 || r >= m_model->count(); });
+    if (rows.isEmpty()) return moved;
+    QList<int> remaining;
+    remaining.reserve(m_model->count() - rows.size());
+    for (int i = 0; i < m_model->count(); ++i)
+        if (!std::binary_search(rows.cbegin(), rows.cend(), i)) remaining.append(i);
+    insertAt = std::clamp(insertAt, 0, int(remaining.size()));
+    QList<int> order;
+    order.reserve(m_model->count());
+    for (int k = 0; k < insertAt; ++k) order.append(remaining.at(k));
+    order += rows;
+    for (int k = insertAt; k < remaining.size(); ++k) order.append(remaining.at(k));
+    QList<QUuid> ids;
+    ids.reserve(rows.size());
+    for (int r : rows) ids.append(m_model->rowId(r));
+    m_model->reorder(order);
+    moved.reserve(ids.size());
+    for (const QUuid &id : ids) moved.append(ModRow(m_model, id));
+    return moved;
+}
+
 ModEntry ModListView::takeItem(int row) { return m_model ? m_model->takeAt(row) : ModEntry(); }
 
 void ModListView::removeRow(int row) { if (m_model) m_model->removeAt(row); }
@@ -205,24 +232,13 @@ void ModListView::dropEvent(QDropEvent *event)
             if (idx.row() != sepRow) rows.append(idx.row());
         if (rows.isEmpty()) { event->ignore(); return; }
         std::sort(rows.begin(), rows.end());
-        // Rows above the header move down past it and shift it up by one
-        // each; rows below move up to right after it. Walk the ones above
-        // bottom-up and the ones below top-down so the numbers stay true.
-        QList<int> above, below;
-        for (int r : rows) (r < sepRow ? above : below).append(r);
-        int placed = 0;   // rows already put under the header, from below
-        for (int i = below.size() - 1; i >= 0; --i) {
-            // Each move lands just after the header, so an earlier (higher)
-            // row ends up above the ones moved before it.
-            m_model->moveRows(QModelIndex(), below.at(i), 1, QModelIndex(), sepRow + 1);
-            ++placed;
-        }
-        for (int i = above.size() - 1; i >= 0; --i) {
-            // Move to just after the header; the header itself shifts up.
-            m_model->moveRows(QModelIndex(), above.at(i), 1, QModelIndex(), sepRow + 1);
-            --sepRow;
-        }
-        Q_UNUSED(placed);
+        // The block lands right under the header, counted in the list
+        // without the rows that are moving.
+        int insertAt = sepRow + 1;
+        for (int r : rows) if (r < sepRow) --insertAt;
+        emit aboutToReorderRows();
+        moveRowsTo(rows, insertAt);
+        emit rowsReordered();
         event->acceptProposedAction();
         return;
     }

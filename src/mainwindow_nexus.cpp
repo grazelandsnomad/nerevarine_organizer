@@ -34,7 +34,6 @@ static constexpr int kKeychainReadTimeoutMs = 10000;
 #include "bainwizard.h"
 #include "install_layout.h"
 #include "modlist_model.h"
-#include "modlist_model_widget_bridge.h"
 #include "modlist_summary_dialog.h"
 #include "nexusclient.h"
 #include "nexuscontroller.h"
@@ -294,7 +293,7 @@ void MainWindow::handleNxmUrl(const QString &url)
     // asking would only repeat the Update click.
     bool awaitedUpdate = false;
     for (int i = 0; i < m_modList->count() && !awaitedUpdate; ++i) {
-        QListWidgetItem *it = m_modList->item(i);
+        ModRow it = m_modList->item(i);
         if (!mod_row::isMod(it)) continue;
         if (!mod_row::isInstalled(it)) continue;
         if (!it->data(ModRole::AwaitingUpdateDownload).toBool()) continue;
@@ -328,10 +327,10 @@ void MainWindow::handleNxmUrl(const QString &url)
     // slot. Installed rows (status=1) qualify only on Replace; Separate forces a
     // fresh placeholder so the download lands beside the existing entry.
     QString nexusPageUrl = nexusModUrl(game, modId);
-    QListWidgetItem *placeholder = nullptr;
-    QListWidgetItem *installedMatch = nullptr;
+    ModRow placeholder = nullptr;
+    ModRow installedMatch = nullptr;
     for (int i = 0; i < m_modList->count(); ++i) {
-        auto *it = m_modList->item(i);
+        ModRow it = m_modList->item(i);
         if (!mod_row::isMod(it)) continue;
         const InstallStatus status = mod_row::installStatusOf(it);
         if (status != InstallStatus::NotInstalled && status != InstallStatus::Installed) continue;
@@ -370,15 +369,14 @@ void MainWindow::handleNxmUrl(const QString &url)
         mod_row::setInstallStatus(placeholder, InstallStatus::Installing);
         placeholder_state::setBusyFlags(placeholder);
     } else {
-        placeholder = new QListWidgetItem(
+        ModEntry ph = ModEntry::named(
             QString("⠋ %1 (mod %2)").arg(T("status_installing_label")).arg(modId));
-        placeholder->setData(ModRole::ItemType,      ItemType::Mod);
-        mod_row::setInstallStatus(placeholder, InstallStatus::Installing);
-        placeholder->setData(ModRole::NexusUrl,      nexusPageUrl);
-        placeholder->setData(ModRole::DateAdded,     QDateTime::currentDateTime());
-        placeholder->setCheckState(Qt::Checked);
-        placeholder_state::setBusyFlags(placeholder);
-        m_modList->addItem(placeholder);
+        ph.installStatus = int(InstallStatus::Installing);
+        ph.nexusUrl      = nexusPageUrl;
+        ph.dateAdded     = QDateTime::currentDateTime();
+        ph.checked       = true;
+        placeholder_state::setBusyFlags(ph);
+        placeholder = m_modList->addItem(ph);
     }
     // Which file this is, committed to the row once the install lands
     // (ModRole::PendingFileId). Not for a Merge: that row still holds the file
@@ -427,7 +425,7 @@ void MainWindow::setupDownloadQueue()
             [this](const QString &archivePath, const QUuid &row) {
                 // The download outlived its row (removed, or the list cleared):
                 // the archive stays on disk, there is nothing to attach it to.
-                if (QListWidgetItem *item = replyRow(row, "download finished"))
+                if (ModRow item = replyRow(row, "download finished"))
                     (void)verifyAndExtract(archivePath, item);
             });
     connect(m_downloadQueue, &DownloadQueue::saveRequested,
@@ -469,7 +467,7 @@ void MainWindow::setupDownloadQueue()
     }
 }
 
-void MainWindow::fetchNexusTitle(const QString &game, int modId, QListWidgetItem *item,
+void MainWindow::fetchNexusTitle(const QString &game, int modId, ModRow item,
                                   bool setAsCustomName)
 {
     // The "also promote the name to CustomName / item text" flag is a
@@ -490,7 +488,7 @@ void MainWindow::onDependenciesScanned(const QUuid &rowKey,
                                        const QList<deps::ClassifiedDep> &classified,
                                        int gameIdNumeric)
 {
-    QListWidgetItem *item = replyRow(rowKey, "dependency scan");
+    ModRow item = replyRow(rowKey, "dependency scan");
     if (!item) return;
     // Cache the Nexus mod-page title for later use (e.g. naming a FOMOD
     // install's output folder something meaningful instead of "fomod_install").
@@ -824,7 +822,7 @@ void MainWindow::onFileListFetched(const QUuid &rowKey,
                                    const QString &game, int modId,
                                    const QList<NexusClient::FileEntry> &allFiles)
 {
-    QListWidgetItem *item = replyRow(rowKey, "file list");
+    ModRow item = replyRow(rowKey, "file list");
     if (!item) return;
     const bool autoPickMain = m_autoPickMainItems.remove(rowKey);
 
@@ -840,7 +838,7 @@ void MainWindow::onFileListFetched(const QUuid &rowKey,
         return;
     }
 
-    auto stashChecksum = [](QListWidgetItem *ph, const NexusClient::FileEntry &f) {
+    auto stashChecksum = [](ModRow ph, const NexusClient::FileEntry &f) {
         if (!f.name.isEmpty()) ph->setData(ModRole::NexusFileName, f.name);
         if (!f.md5.isEmpty())  ph->setData(ModRole::ExpectedMd5,  f.md5);
         if (f.sizeBytes > 0)   ph->setData(ModRole::ExpectedSize, f.sizeBytes);
@@ -1285,7 +1283,7 @@ void MainWindow::onModFileSiblings(const QUuid &row,
                                    const QString &chosenName,
                                    const QStringList &siblingNames)
 {
-    QListWidgetItem *item = replyRow(row, "file siblings");
+    ModRow item = replyRow(row, "file siblings");
     if (!item || m_profiles->isEmpty()) return;
 
     const auto pref = fomod::runtimePreferenceForGame(currentProfile().id,

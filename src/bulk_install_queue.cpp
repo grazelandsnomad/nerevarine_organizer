@@ -1,6 +1,5 @@
 #include "bulk_install_queue.h"
 
-#include <QListWidgetItem>
 #include <QSet>
 #include <QString>
 #include <QTimer>
@@ -48,7 +47,7 @@ void BulkInstallQueue::processTick()
         const QUuid row = m_queue.takeFirst();
         // Row may have been deleted, already installed, or its URL cleared
         // since the user clicked bulk-install - skip and try the next.
-        QListWidgetItem *item = m_resolve ? m_resolve(row) : nullptr;
+        const ModRow item = m_resolve ? m_resolve(row) : ModRow();
         if (!item) continue;
         if (!mod_row::isMod(item)) continue;
         if (mod_row::installStatusOf(item) != InstallStatus::NotInstalled) continue;

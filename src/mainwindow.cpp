@@ -17,7 +17,6 @@
 #include "archive_magic.h"
 #include "installcontroller.h"
 #include "modlist_model.h"
-#include "modlist_model_widget_bridge.h"
 #include "modlist_serializer.h"
 #include "modlist_summary_dialog.h"
 #include "mod_sharing.h"
@@ -219,7 +218,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_nexusCtl = new NexusController(m_nexus, this);
     connect(m_nexusCtl, &NexusController::updateFoundForItem,
             this, [this](const QUuid &row) {
-        QListWidgetItem *item = replyRow(row, "update check");
+        ModRow item = replyRow(row, "update check");
         if (!item) return;
         item->setData(ModRole::UpdateAvailable, true);
         m_modList->update(m_modList->indexFromItem(item));
@@ -229,7 +228,7 @@ MainWindow::MainWindow(QWidget *parent)
     });
     connect(m_nexusCtl, &NexusController::fileSupersededForItem,
             this, [this](const QUuid &row, const file_status::Verdict &v) {
-        QListWidgetItem *item = replyRow(row, "superseded check");
+        ModRow item = replyRow(row, "superseded check");
         if (!item) return;
         item->setData(ModRole::FileSuperseded, supersededText(v));
         m_modList->update(m_modList->indexFromItem(item));
@@ -318,7 +317,7 @@ MainWindow::MainWindow(QWidget *parent)
     setupDownloadQueue();
     // ScanCoordinator must exist before loadModList(), which calls
     // warmDataFoldersCache() on the worker.
-    m_scans = new ScanCoordinator([this] { return modlist::snapshotEntries(m_modList); },
+    m_scans = new ScanCoordinator([this] { return m_model.all(); },
                                   this);
     connect(m_scans, &ScanCoordinator::sizesScanned,
             this, &MainWindow::onModSizesScanned);
@@ -487,7 +486,7 @@ MainWindow::MainWindow(QWidget *parent)
     // the modal file pickers don't pile up.
     m_bulkInstall = new BulkInstallQueue(
         [this](const QUuid &row) { return rowById(row); },
-        [this](QListWidgetItem *item) { onInstallFromNexus(item); }, this);
+        [this](ModRow item) { onInstallFromNexus(item); }, this);
     connect(m_bulkInstall, &BulkInstallQueue::statusMessage,
             this, [this](const QString &msg, int ms) {
         statusBar()->showMessage(msg, ms);
@@ -513,7 +512,7 @@ MainWindow::MainWindow(QWidget *parent)
     auto jumpTo = [this](int row) {
         if (!m_modList || m_modList->count() == 0) return;
         row = qBound(0, row, m_modList->count() - 1);
-        auto *target = m_modList->item(row);
+        ModRow target = m_modList->item(row);
         if (!target) return;
         m_modList->setCurrentItem(target);
         m_modList->scrollToItem(target, QAbstractItemView::PositionAtCenter);
@@ -566,7 +565,7 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
             && event->type() == QEvent::MouseButtonPress) {
         auto *me = static_cast<QMouseEvent*>(event);
         if (me->button() == Qt::LeftButton) {
-            auto *item = m_modList->itemAt(me->pos());
+            ModRow item = m_modList->itemAt(me->pos());
             if (item && mod_row::isMod(item)
                      && (item->flags() & Qt::ItemIsUserCheckable)) {
                 QRect r = m_modList->visualItemRect(item);
@@ -818,7 +817,7 @@ using fsutils::sanitizeFolderName;
 
 
 std::expected<void, QString>
-MainWindow::verifyAndExtract(const QString &archivePath, QListWidgetItem *placeholder)
+MainWindow::verifyAndExtract(const QString &archivePath, ModRow placeholder)
 {
     // Pre-flight the two invariants the controller silently relied on.
     // Previously a null placeholder was a segfault and a missing archive
@@ -878,7 +877,7 @@ void MainWindow::onArchiveVerified(const QString &archivePath, const QUuid &inst
     // Look up by token. May be in m_modList (active profile), m_strandedInstalls
     // (parked across a profile switch), or gone (row removed mid-verify, restart).
     QString profileKey;
-    QListWidgetItem *placeholder = findPlaceholderByToken(installToken, &profileKey);
+    ModRow placeholder = findPlaceholderByToken(installToken, &profileKey);
     if (!placeholder) {
         QFile::remove(archivePath);
         return;
@@ -900,7 +899,7 @@ void MainWindow::onArchiveVerified(const QString &archivePath, const QUuid &inst
 
 
 std::expected<void, QString>
-MainWindow::extractAndAdd(const QString &archivePath, QListWidgetItem *placeholder)
+MainWindow::extractAndAdd(const QString &archivePath, ModRow placeholder)
 {
     // Pre-flight what the controller used to assume. A stale/missing archive
     // reached QProcess and surfaced as "unzip exit code 9"; an unset mods dir
@@ -999,7 +998,7 @@ MainWindow::extractAndAdd(const QString &archivePath, QListWidgetItem *placehold
 
 
 
-void MainWindow::resetPlaceholderAfterInstallCancel(QListWidgetItem *placeholder,
+void MainWindow::resetPlaceholderAfterInstallCancel(ModRow placeholder,
                                                      const QString &archivePath)
 {
     // Row may have been removed mid-install.  Bail silently if so.
@@ -1016,7 +1015,7 @@ void MainWindow::resetPlaceholderAfterInstallCancel(QListWidgetItem *placeholder
     saveModList();
 }
 
-void MainWindow::commitInstalledFileId(QListWidgetItem *item)
+void MainWindow::commitInstalledFileId(ModRow item)
 {
     if (!item) return;
     // The install landed: the file it fetched is now the row's file, and
@@ -1027,7 +1026,7 @@ void MainWindow::commitInstalledFileId(QListWidgetItem *item)
     item->setData(ModRole::FileSuperseded, QVariant());
 }
 
-void MainWindow::prepareItemForInstall(QListWidgetItem *item)
+void MainWindow::prepareItemForInstall(ModRow item)
 {
     QString name = item->data(ModRole::CustomName).toString();
     if (name.isEmpty()) name = item->text();
@@ -1043,7 +1042,7 @@ void MainWindow::prepareItemForInstall(QListWidgetItem *item)
 }
 
 void MainWindow::applyInstalledStateToStrandedPlaceholder(
-    QListWidgetItem *placeholder, const QString &modPath, const QString &profileKey)
+    ModRow placeholder, const QString &modPath, const QString &profileKey)
 {
     // The cross-profile completion case is exactly the "mark installed" role
     // transition - no m_modList iteration / load-order / openmw.cfg sync (those
@@ -1065,7 +1064,7 @@ void MainWindow::onExpectedChecksumFetched(const QUuid &row, int fileId,
                                             const QString &fileName, const QString &md5,
                                             qint64 sizeBytes)
 {
-    QListWidgetItem *item = replyRow(row, "expected checksum");
+    ModRow item = replyRow(row, "expected checksum");
     if (!item) return;
     // Only for the file the row is fetching right now. The reply races the
     // download; one that lands after the install, or after the row moved on
@@ -1086,7 +1085,7 @@ void MainWindow::onExpectedChecksumFetched(const QUuid &row, int fileId,
 // Removes not-installed, path-less placeholders whose NexusUrl or CustomName
 // matches the given installed item.  Called from addModFromPath and again from
 // onTitleFetched to handle the async title-arrives-after-install race.
-void MainWindow::purgeDuplicatePlaceholders(QListWidgetItem *installed)
+void MainWindow::purgeDuplicatePlaceholders(ModRow installed)
 {
     if (!installed) return;
     const QString installedUrl  = installed->data(ModRole::NexusUrl).toString();
@@ -1097,7 +1096,7 @@ void MainWindow::purgeDuplicatePlaceholders(QListWidgetItem *installed)
 
     bool removed = false;
     for (int r = m_modList->count() - 1; r >= 0; --r) {
-        auto *cand = m_modList->item(r);
+        ModRow cand = m_modList->item(r);
         if (cand == installed) continue;
         if (!mod_row::isMod(cand)) continue;
         if (mod_row::installStatusOf(cand) != InstallStatus::NotInstalled) continue;
@@ -1108,7 +1107,7 @@ void MainWindow::purgeDuplicatePlaceholders(QListWidgetItem *installed)
                               && cand->data(ModRole::CustomName).toString().trimmed().toLower()
                                  == installedName;
         if (sameUrl || sameName) {
-            delete m_modList->takeItem(r);
+            m_modList->removeRow(r);
             removed = true;
         }
     }
@@ -1117,7 +1116,7 @@ void MainWindow::purgeDuplicatePlaceholders(QListWidgetItem *installed)
 
 void MainWindow::onTitleFetched(const QUuid &row, const QString &name)
 {
-    QListWidgetItem *item = replyRow(row, "title");
+    ModRow item = replyRow(row, "title");
     if (!item) return;
     item->setData(ModRole::NexusTitle, name);
     if (m_titleSetsCustomName.remove(row)
@@ -1227,7 +1226,7 @@ bool MainWindow::confirmGameForDownload(const QString &game)
 
 MainWindow::ReinstallChoice
 MainWindow::confirmReinstallIfInstalled(const QString &game, int modId,
-                                         QListWidgetItem *except, bool allowMerge)
+                                         ModRow except, bool allowMerge)
 {
     // Find an already-installed row for this mod page through the typed model
     // (Stage 2 of the QListWidget->ModlistModel migration) instead of walking
@@ -1275,7 +1274,7 @@ MainWindow::confirmReinstallIfInstalled(const QString &game, int modId,
     }
 }
 
-void MainWindow::checkModDependencies(const QString &game, int modId, QListWidgetItem *item)
+void MainWindow::checkModDependencies(const QString &game, int modId, ModRow item)
 {
     // Heuristic: Nexus has no structured "requirements" endpoint in the public
     // v1 API, so we fetch the mod info and scan the description for Nexus mod
@@ -1305,7 +1304,7 @@ void MainWindow::checkModDependencies(const QString &game, int modId, QListWidge
 void MainWindow::onDependencyScanFailed(const QUuid &row,
                                         const QString &game, int modId)
 {
-    QListWidgetItem *item = replyRow(row, "dependency scan failure");
+    ModRow item = replyRow(row, "dependency scan failure");
     if (!item) return;
     // Network or API error - don't block install, just continue.
     fetchModFiles(game, modId, item);
@@ -1318,7 +1317,7 @@ void MainWindow::onDependencyScanFailed(const QUuid &row,
 // crash. Rule: MAIN or UPDATE adopts siblings as dependents; anything else
 // becomes a dependent of the shared URL. DependsOn dedups so reinstalls are
 // idempotent.
-void MainWindow::autoLinkSameModpage(QListWidgetItem *item, const QString &categoryHint)
+void MainWindow::autoLinkSameModpage(ModRow item, const QString &categoryHint)
 {
     // Snapshot the list, find the new entry's idx, hand off to
     // deps::autoLinkSameModpage for the decision, apply the returned
@@ -1349,7 +1348,7 @@ void MainWindow::autoLinkSameModpage(QListWidgetItem *item, const QString &categ
     const auto actions = deps::autoLinkSameModpage(newMod, snap, categoryHint);
 
     for (const auto &a : actions) {
-        auto *target = m_modList->item(a.targetIdx);
+        ModRow target = m_modList->item(a.targetIdx);
         if (!target) continue;
         QStringList curr = target->data(ModRole::DependsOn).toStringList();
         if (curr.contains(a.urlToAppend)) continue; // idempotent
@@ -1358,7 +1357,7 @@ void MainWindow::autoLinkSameModpage(QListWidgetItem *item, const QString &categ
     }
 }
 
-void MainWindow::fetchModFiles(const QString &game, int modId, QListWidgetItem *item,
+void MainWindow::fetchModFiles(const QString &game, int modId, ModRow item,
                                 bool autoPickMain)
 {
     statusBar()->showMessage(T("status_fetching_files").arg(modId));
@@ -1370,7 +1369,7 @@ void MainWindow::fetchModFiles(const QString &game, int modId, QListWidgetItem *
 
 void MainWindow::onFileListFetchFailed(const QUuid &row, const QString &reason, int httpStatus)
 {
-    QListWidgetItem *item = replyRow(row, "file list failure");
+    ModRow item = replyRow(row, "file list failure");
     if (!item) return;
     m_autoPickMainItems.remove(row);
     const QString msg =
@@ -1383,7 +1382,7 @@ void MainWindow::onFileListFetchFailed(const QUuid &row, const QString &reason, 
 
 
 
-void MainWindow::runGroundcoverHelper(QListWidgetItem *item, const QString &modRoot)
+void MainWindow::runGroundcoverHelper(ModRow item, const QString &modRoot)
 {
     // If the mod looks like a groundcover/grass mod, ask the user every install
     // whether Nerevarine should manage it as groundcover.  The answer sets OR
@@ -1486,7 +1485,7 @@ void MainWindow::runSplashScreenHelper(const QString &modRoot)
     statusBar()->showMessage(T("splash_deleted_status").arg(removed), 5000);
 }
 
-void MainWindow::offerBundledPatchReenable(QListWidgetItem *item)
+void MainWindow::offerBundledPatchReenable(ModRow item)
 {
     // Offer to re-enable patches for this mod that are bundled in OTHER mods as
     // "<N> ... for <ThisMod>" subfolders.  syncOpenMWConfig auto-skips those
@@ -1566,16 +1565,15 @@ void MainWindow::onAddMod()
 
     m_undoStack->pushUndo();
     QFileInfo fi(path);
-    auto *item = new QListWidgetItem(fi.fileName());
-    item->setData(ModRole::ItemType,      ItemType::Mod);
-    item->setData(ModRole::ModPath,       path);
-    mod_row::setInstallStatus(item, InstallStatus::Installed); // user browsed to it - it exists
-    item->setData(ModRole::DateAdded,     QDateTime::currentDateTime());
-    item->setCheckState(Qt::Checked);
-    item->setToolTip(path);
+    ModEntry e = ModEntry::named(fi.fileName());
+    e.modPath       = path;
+    e.installStatus = int(InstallStatus::Installed);   // user browsed to it - it exists
+    e.dateAdded     = QDateTime::currentDateTime();
+    e.checked       = true;
+    e.toolTip       = path;
 
     int row = m_modList->currentRow();
-    m_modList->insertItem(row < 0 ? m_modList->count() : row + 1, item);
+    const ModRow item = m_modList->insertItem(row < 0 ? m_modList->count() : row + 1, e);
     m_modList->setCurrentItem(item);
     statusBar()->showMessage(T("status_mod_added").arg(fi.fileName()), 2000);
     saveModList();
@@ -1602,8 +1600,7 @@ void MainWindow::onMoveUp()
     if (row <= 0) return;
     dropViewSortKeepingOrder();   // a manual move commits the current display as saved order
     m_undoStack->pushUndo();
-    auto *item = m_modList->takeItem(row);
-    m_modList->insertItem(row - 1, item);
+    m_modList->moveRowsTo({row}, row - 1);
     m_modList->setCurrentRow(row - 1);
     scheduleSaveModList();   // debounced - hold Alt+↑ rapid-fires moves
 }
@@ -1614,8 +1611,7 @@ void MainWindow::onMoveDown()
     if (row < 0 || row >= m_modList->count() - 1) return;
     dropViewSortKeepingOrder();   // a manual move commits the current display as saved order
     m_undoStack->pushUndo();
-    auto *item = m_modList->takeItem(row);
-    m_modList->insertItem(row + 1, item);
+    m_modList->moveRowsTo({row}, row + 1);
     m_modList->setCurrentRow(row + 1);
     scheduleSaveModList();   // debounced - hold Alt+↓ rapid-fires moves
 }
@@ -1658,11 +1654,11 @@ static QString supersededText(const file_status::Verdict &v)
 }
 
 static QList<NexusController::CheckTarget>
-collectUpdateTargets(QListWidget *modList, const QStringList &only)
+collectUpdateTargets(ModListView *modList, const QStringList &only)
 {
     QList<NexusController::CheckTarget> toCheck;
     for (int i = 0; i < modList->count(); ++i) {
-        auto *item = modList->item(i);
+        ModRow item = modList->item(i);
         if (!mod_row::isMod(item)) continue;
         if (!mod_row::isInstalled(item)) continue;
         if (!only.isEmpty()) {
@@ -1709,7 +1705,7 @@ void MainWindow::onCheckUpdates()
 
     statusBar()->showMessage(T("check_updates_checking").arg(toCheck.size()));
     m_nexusCtl->checkForUpdates(toCheck, [this](const QUuid &row) {
-        QListWidgetItem *item = rowById(row);
+        ModRow item = rowById(row);
         return item ? item->data(ModRole::DateAdded).toDateTime() : QDateTime();
     });
 }
@@ -1735,7 +1731,7 @@ int MainWindow::checkUpdatesForMods(const QStringList &labels)
     statusBar()->showMessage(T("check_updates_checking").arg(toCheck.size()));
     m_reviewAfterCheck = true;
     m_nexusCtl->checkForUpdates(toCheck, [this](const QUuid &row) {
-        QListWidgetItem *item = rowById(row);
+        ModRow item = rowById(row);
         return item ? item->data(ModRole::DateAdded).toDateTime() : QDateTime();
     });
     return toCheck.size();
@@ -1800,7 +1796,7 @@ void MainWindow::onReviewUpdates()
     // Snapshot the current UpdateAvailable rows.
     QList<ReviewUpdates::Candidate> candidates;
     for (int i = 0; i < m_modList->count(); ++i) {
-        auto *it = m_modList->item(i);
+        ModRow it = m_modList->item(i);
         if (!mod_row::isMod(it)) continue;
         if (!it->data(ModRole::UpdateAvailable).toBool())            continue;
 
@@ -1827,7 +1823,7 @@ void MainWindow::onReviewUpdates()
     for (const auto &c : picked) {
         // Re-validate: the user could have removed a row between check-updates
         // and the dialog exec.
-        QListWidgetItem *item = rowById(c.row);
+        ModRow item = rowById(c.row);
         if (!item) continue;
         prepareItemForInstall(item);
         fetchModFiles(c.game, c.modId, item, /*autoPickMain=*/true);
@@ -1838,12 +1834,12 @@ void MainWindow::onReviewUpdates()
 
 void MainWindow::openSendToDialog()
 {
-    if (auto *sep = send_to_dialog::pickSeparator(this, m_modList))
+    if (const ModRow sep = send_to_dialog::pickSeparator(this, m_modList))
         sendSelectedToSeparator(sep);
 }
 
 
-void MainWindow::onCurrentModChanged(QListWidgetItem *current, QListWidgetItem * /*previous*/)
+void MainWindow::onCurrentModChanged(ModRow current, ModRow  /*previous*/)
 {
     // Clear all highlights first.
     for (int i = 0; i < m_modList->count(); ++i)
@@ -2322,7 +2318,7 @@ void MainWindow::moveModFolders(const QList<FolderMove> &moves, const QString &d
             const FolderMove &m = moves.at(out.index);
             if (out.ok) {
                 ++tally->movedOk;
-                if (QListWidgetItem *item = rowById(m.row)) {
+                if (ModRow item = rowById(m.row)) {
                     item->setData(ModRole::ModPath, out.newPath);
                     item->setToolTip(out.newPath);
                 }
@@ -2421,7 +2417,7 @@ void MainWindow::onMoveModsDir()
     const QString modsRoot = QFileInfo(m_modsDir).absoluteFilePath();
 
     for (int i = 0; i < m_modList->count(); ++i) {
-        auto *it = m_modList->item(i);
+        ModRow it = m_modList->item(i);
         if (!mod_row::isMod(it)) continue;
         if (!mod_row::isInstalled(it))           continue;
         const QString path = it->data(ModRole::ModPath).toString();
@@ -2543,7 +2539,7 @@ void MainWindow::onConsolidateModsIntoActiveProfile()
     const QString modsRoot = QFileInfo(m_modsDir).absoluteFilePath();
 
     for (int i = 0; i < m_modList->count(); ++i) {
-        auto *it = m_modList->item(i);
+        ModRow it = m_modList->item(i);
         if (!mod_row::isMod(it)) continue;
         if (!mod_row::isInstalled(it))           continue;
         const QString path = it->data(ModRole::ModPath).toString();
@@ -2753,8 +2749,8 @@ QList<ModEntry> MainWindow::snapshotEntriesForPersist() const
     QList<ModEntry> out;
     out.reserve(order.size());
     for (int idx : order)
-        if (const auto *it = m_modList->item(idx))
-            out.append(ModEntry::fromItem(it));
+        if (const ModRow it = m_modList->item(idx))
+            out.append(it->entry());
     return out;
 }
 
@@ -2787,7 +2783,7 @@ void MainWindow::onMissingMastersScanned(
     const QHash<QString, QPair<bool, QStringList>> &byModPath)
 {
     for (int i = 0; i < m_modList->count(); ++i) {
-        auto *item = m_modList->item(i);
+        ModRow item = m_modList->item(i);
         if (!mod_row::isMod(item)) continue;
         const QString path = item->data(ModRole::ModPath).toString();
         auto it = byModPath.constFind(path);
@@ -3015,27 +3011,30 @@ QString MainWindow::modlistPathFor(const QString &profileKey) const
     return {};
 }
 
-QListWidgetItem *MainWindow::findPlaceholderByToken(
+ModRow MainWindow::findPlaceholderByToken(
     const QUuid &installToken, QString *outProfileKey) const
 {
     if (outProfileKey) outProfileKey->clear();
-    if (installToken.isNull() || !m_modList) return nullptr;
+    if (installToken.isNull()) return nullptr;
+    // A handle writes through its model, as the item pointer did; a const
+    // lookup still hands out a usable row.
+    auto *model  = const_cast<ModlistModel *>(&m_model);
+    auto *parked = const_cast<ModlistModel *>(&m_parked);
     // Active list first - covers the common "user stayed on this profile
     // through the install" case in O(N) over the visible rows.
-    for (int i = 0; i < m_modList->count(); ++i) {
-        QListWidgetItem *it = m_modList->item(i);
-        if (!mod_row::isMod(it)) continue;
-        if (it->data(ModRole::InstallToken).toUuid() == installToken)
-            return it;
+    for (int i = 0; i < m_model.count(); ++i) {
+        const ModEntry &e = m_model.at(i);
+        if (e.isMod() && e.installToken == installToken) return ModRow(model, e.rowId);
     }
     // Then the parking lot - rows here belong to other profiles whose
     // modlist file is the persistence target for this completion.
     for (auto it = m_strandedInstalls.constBegin();
          it != m_strandedInstalls.constEnd(); ++it) {
-        for (QListWidgetItem *si : it.value()) {
-            if (si->data(ModRole::InstallToken).toUuid() == installToken) {
+        for (const QUuid &id : it.value()) {
+            const int r = m_parked.findByRowId(id);
+            if (r >= 0 && m_parked.at(r).installToken == installToken) {
                 if (outProfileKey) *outProfileKey = it.key();
-                return si;
+                return ModRow(parked, id);
             }
         }
     }
@@ -3046,7 +3045,7 @@ QListWidgetItem *MainWindow::findPlaceholderByToken(
 void MainWindow::onModSizesScanned(const QHash<QString, qint64> &bytesByPath)
 {
     for (int i = 0; i < m_modList->count(); ++i) {
-        QListWidgetItem *item = m_modList->item(i);
+        ModRow item = m_modList->item(i);
         if (!mod_row::isMod(item)) continue;
         if (!mod_row::isInstalled(item)) {
             item->setData(ModRole::ModSize, QVariant());
@@ -3059,24 +3058,19 @@ void MainWindow::onModSizesScanned(const QHash<QString, qint64> &bytesByPath)
     m_modList->viewport()->update();
 }
 
-QListWidgetItem *MainWindow::rowById(const QUuid &row) const
+ModRow MainWindow::rowById(const QUuid &row) const
 {
     if (row.isNull()) return nullptr;
-    if (m_modList) {
-        for (int i = 0; i < m_modList->count(); ++i) {
-            QListWidgetItem *it = m_modList->item(i);
-            if (it->data(ModRole::RowId).toUuid() == row) return it;
-        }
-    }
-    for (const QList<QListWidgetItem *> &bucket : std::as_const(m_strandedInstalls))
-        for (QListWidgetItem *it : bucket)
-            if (it->data(ModRole::RowId).toUuid() == row) return it;
+    if (m_model.findByRowId(row) >= 0)
+        return ModRow(const_cast<ModlistModel *>(&m_model), row);
+    if (m_parked.findByRowId(row) >= 0)
+        return ModRow(const_cast<ModlistModel *>(&m_parked), row);
     return nullptr;
 }
 
-QListWidgetItem *MainWindow::replyRow(const QUuid &row, const char *what)
+ModRow MainWindow::replyRow(const QUuid &row, const char *what)
 {
-    if (QListWidgetItem *it = rowById(row)) return it;
+    if (ModRow it = rowById(row)) return it;
     m_titleSetsCustomName.remove(row);
     m_autoPickMainItems.remove(row);
     qCInfo(logging::lcNexus) << what << "reply for a row that is gone; dropped";
@@ -3156,20 +3150,20 @@ bool MainWindow::modPathReferencedByOtherProfile(const QString &cleanPath) const
 
 void MainWindow::strandInflightInstalls()
 {
-    if (!m_modList) return;
     const QString key = currentProfileKey();
     if (key.isEmpty()) return;
 
-    // Walk back-to-front so takeItem() index shifts don't break iteration.
-    // Items go into the parking lot in their original visual order (we
-    // prepend) so restoreStrandedInstalls can put them back at matching
-    // rows without sorting them later.
-    QList<QListWidgetItem*> stranded;
-    for (int i = m_modList->count() - 1; i >= 0; --i) {
-        QListWidgetItem *it = m_modList->item(i);
-        if (!mod_row::isMod(it)) continue;
-        if (!mod_row::isInstalling(it))           continue;
-        stranded.prepend(m_modList->takeItem(i));
+    // Walk back-to-front so a removal does not shift the rows still to be
+    // checked. The ids are kept in visual order (prepend), so
+    // restoreStrandedInstalls puts the rows back top to bottom without
+    // sorting them later.
+    QList<QUuid> stranded;
+    for (int i = m_model.count() - 1; i >= 0; --i) {
+        const ModEntry &e = m_model.at(i);
+        if (!e.isMod() || !e.isInstalling()) continue;
+        ModEntry taken = m_model.takeAt(i);
+        stranded.prepend(taken.rowId);
+        m_parked.append(std::move(taken));
     }
     if (!stranded.isEmpty())
         m_strandedInstalls[key] += stranded;
@@ -3179,7 +3173,7 @@ void MainWindow::restoreStrandedInstalls()
 {
     const QString key = currentProfileKey();
     if (key.isEmpty()) return;
-    const QList<QListWidgetItem*> stranded = m_strandedInstalls.take(key);
+    const QList<QUuid> stranded = m_strandedInstalls.take(key);
     if (stranded.isEmpty()) return;
 
     // The newly-loaded modlist usually has a status=2 row mirroring the
@@ -3187,15 +3181,17 @@ void MainWindow::restoreStrandedInstalls()
     // by NexusUrl when present (the most stable identifier across saves)
     // and fall back to display text otherwise. On a match the loaded row is
     // dropped and the stranded one (still holding live in-flight extraction
-    // state) takes its place. No match means the stranded install pre-dated
-    // saveModList; append it so the install isn't lost.
-    for (QListWidgetItem *si : stranded) {
-        const QString sUrl  = si->data(ModRole::NexusUrl).toString();
-        const QString sName = si->text();
+    // state, and its id) takes its place. No match means the stranded
+    // install pre-dated saveModList; append it so the install isn't lost.
+    for (const QUuid &id : stranded) {
+        const int parkedRow = m_parked.findByRowId(id);
+        if (parkedRow < 0) continue;
+        const ModEntry si = m_parked.takeAt(parkedRow);
+        const QString sUrl  = si.nexusUrl;
+        const QString sName = si.displayName;
         int matchRow = -1;
-        const QList<ModEntry> modRows = m_model.all();
-        for (int i = 0; i < modRows.size(); ++i) {
-            const ModEntry &it = modRows.at(i);
+        for (int i = 0; i < m_model.count(); ++i) {
+            const ModEntry &it = m_model.at(i);
             if (!it.isMod()) continue;
             const QString iUrl = it.nexusUrl;
             if (!sUrl.isEmpty() && !iUrl.isEmpty() && sUrl == iUrl) {
@@ -3206,7 +3202,7 @@ void MainWindow::restoreStrandedInstalls()
             }
         }
         if (matchRow >= 0) {
-            delete m_modList->takeItem(matchRow);
+            m_modList->removeRow(matchRow);
             m_modList->insertItem(matchRow, si);
         } else {
             m_modList->addItem(si);
@@ -3470,7 +3466,7 @@ void MainWindow::runConflictScan()
     // flip the arrows for rows it only moved on screen.
     QList<conflict_direction::Mod> mods;
     for (int idx : rowOrderForPersist()) {
-        auto *it = m_modList->item(idx);
+        ModRow it = m_modList->item(idx);
         if (!mod_row::isMod(it)) continue;
         if (it->checkState() != Qt::Checked) continue;
         if (!mod_row::isInstalled(it)) continue;
@@ -3514,7 +3510,7 @@ void MainWindow::onConflictsScanned(
 
     int conflictCount = 0;
     for (int i = 0; i < m_modList->count(); ++i) {
-        auto *it = m_modList->item(i);
+        ModRow it = m_modList->item(i);
         if (!mod_row::isMod(it)) continue;
         const QString path = it->data(ModRole::ModPath).toString();
         const auto found   = res.constFind(path);
@@ -3560,7 +3556,7 @@ void MainWindow::runTranslationScan()
     // two scans different worlds is how they drift apart.
     QList<conflict_direction::Mod> mods;
     for (int idx : rowOrderForPersist()) {
-        auto *it = m_modList->item(idx);
+        ModRow it = m_modList->item(idx);
         if (!mod_row::isMod(it)) continue;
         if (it->checkState() != Qt::Checked) continue;
         if (!mod_row::isInstalled(it)) continue;
@@ -3595,7 +3591,7 @@ void MainWindow::onTranslationsScanned(
 
     int flagged = 0, noTranslation = 0, inProgress = 0;
     for (int i = 0; i < m_modList->count(); ++i) {
-        auto *it = m_modList->item(i);
+        ModRow it = m_modList->item(i);
         if (!mod_row::isMod(it)) continue;
 
         // Work the user has already started on this mod, from its own progress
@@ -3707,7 +3703,7 @@ void MainWindow::applyTranslationPairs(const QHash<QString, QString> &pairs)
     }
 
     for (int i = 0; i < m_modList->count(); ++i) {
-        auto *it = m_modList->item(i);
+        ModRow it = m_modList->item(i);
         if (!mod_row::isMod(it)) continue;
 
         // The user's own answer first, and it is not a hint: a person saying
@@ -3746,7 +3742,7 @@ void MainWindow::clearTranslationMarks()
 // Paint the selected mod's conflict partners in place: the rows it overwrites
 // and the rows that overwrite it, in the two directions' colours. Cleared for a
 // separator or empty selection.
-void MainWindow::applyConflictHighlights(QListWidgetItem *current)
+void MainWindow::applyConflictHighlights(ModRow current)
 {
     const QString selPath =
         (current && mod_row::isMod(current))
@@ -3758,7 +3754,7 @@ void MainWindow::applyConflictHighlights(QListWidgetItem *current)
     for (const auto &c : d.overwrittenBy) wins.insert(c.path);
 
     for (int i = 0; i < m_modList->count(); ++i) {
-        auto *it = m_modList->item(i);
+        ModRow it = m_modList->item(i);
         const QString path = it->data(ModRole::ModPath).toString();
         int v = 0;
         if (!selPath.isEmpty() && !path.isEmpty() && path != selPath) {
@@ -3774,7 +3770,7 @@ void MainWindow::applyConflictHighlights(QListWidgetItem *current)
 // win, and directly above makes it lose. Moving it adjacent (rather than
 // swapping the two rows) leaves the rest of the order untouched, which matters
 // when the counterpart is 200 rows away in a curated list.
-void MainWindow::moveModAdjacentTo(QListWidgetItem *mod, const QString &targetPath,
+void MainWindow::moveModAdjacentTo(ModRow mod, const QString &targetPath,
                                    bool after)
 {
     if (!mod || targetPath.isEmpty()) return;
@@ -3797,12 +3793,12 @@ void MainWindow::moveModAdjacentTo(QListWidgetItem *mod, const QString &targetPa
     // indices above stay valid.
     dropViewSortKeepingOrder();
 
-    QListWidgetItem *taken = m_modList->takeItem(fromRow);
-    if (fromRow < targetRow) --targetRow;          // rows above shifted up
-    m_modList->insertItem(after ? targetRow + 1 : targetRow, taken);
+    if (fromRow < targetRow) --targetRow;          // rows above shift up
+    const ModRow taken =
+        m_modList->moveRowsTo({fromRow}, after ? targetRow + 1 : targetRow).value(0);
 
     m_modList->clearSelection();
-    taken->setSelected(true);
+    m_modList->setRowSelected(taken, true);
     m_modList->setCurrentItem(taken, QItemSelectionModel::NoUpdate);
     m_modList->scrollToItem(taken);
 

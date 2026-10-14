@@ -139,6 +139,13 @@ const QHash<int, const RoleField *> &roleIndex()
 
 } // namespace
 
+ModEntry ModEntry::named(const QString &displayName)
+{
+    ModEntry e;
+    e.displayName = displayName;
+    return e;
+}
+
 QVariant ModEntry::roleData(int role) const
 {
     const RoleField *f = roleIndex().value(role, nullptr);

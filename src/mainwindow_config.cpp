@@ -14,7 +14,6 @@
 #include "fomodwizard.h"
 #include "bainwizard.h"
 #include "modlist_model.h"
-#include "modlist_model_widget_bridge.h"
 #include "modlist_serializer.h"
 #include "modlist_summary_dialog.h"
 #include "mod_sharing.h"
@@ -371,7 +370,7 @@ void MainWindow::reconcileLoadOrder()
     // discovered plugins append in load-order position, never the sorted display.
     const QList<int> loOrder = rowOrderForPersist();
     for (int oi = 0; oi < loOrder.size(); ++oi) {
-        auto *item = m_modList->item(loOrder[oi]);
+        ModRow item = m_modList->item(loOrder[oi]);
         if (!mod_row::isMod(item)) continue;
         if (!placeholder_state::folderInstalled(item)) continue;
         QString modPath = item->data(ModRole::ModPath).toString();
@@ -913,13 +912,13 @@ void MainWindow::scanMissingDependencies()
 
     // idx → QListWidgetItem for writing the result roles back.  `snap` is
     // sparse on purpose (separators are skipped), so a flat QHash is fine.
-    QHash<int, QListWidgetItem*> byIdx;
+    QHash<int, ModRow > byIdx;
     for (const auto &e : snap) byIdx.insert(e.idx, m_modList->item(e.idx));
 
     // Write pruned DependsOn lists back to the items.
     if (pruned) {
         for (const auto &e : snap) {
-            auto *item = byIdx.value(e.idx);
+            const ModRow item = byIdx.value(e.idx);
             if (item) item->setData(ModRole::DependsOn, e.dependsOn);
         }
     }
@@ -940,7 +939,7 @@ void MainWindow::scanMissingDependencies()
 
     for (const deps::ModEntry &target : snap) {
         auto r = deps::resolveDependencies(target, snap);
-        auto *item = byIdx.value(target.idx);
+        const ModRow item = byIdx.value(target.idx);
         if (!item) continue;
 
         // Drop MWSE/MGE XE entries - irrelevant for an OpenMW-only manager.
@@ -963,7 +962,7 @@ void MainWindow::runMissingMastersScan()
     // profiles just clear any previously-flagged icons synchronously and bail.
     if (m_profiles->isEmpty() || currentProfile().id != "morrowind") {
         for (int i = 0; i < m_modList->count(); ++i) {
-            auto *item = m_modList->item(i);
+            ModRow item = m_modList->item(i);
             item->setData(ModRole::HasMissingMaster, false);
             item->setData(ModRole::MissingMasters, QStringList());
         }
@@ -1141,7 +1140,7 @@ void MainWindow::syncOpenMWConfig()
     // not the sorted display.
     const QList<int> cfgOrder = rowOrderForPersist();
     for (int oi = 0; oi < cfgOrder.size(); ++oi) {
-        auto *item = m_modList->item(cfgOrder[oi]);
+        ModRow item = m_modList->item(cfgOrder[oi]);
         if (!mod_row::isMod(item)) continue;
 
         openmw::ConfigMod cm;
@@ -1429,35 +1428,33 @@ void MainWindow::loadModList(const QString &path,
     f.close();
     const QList<ModEntry> entries = modlist_serializer::parseModlist(contents);
 
-    for (ModEntry e : entries) {
+    QList<ModEntry> rows;
+    rows.reserve(entries.size());
+    for (const ModEntry &e : entries) {
         if (e.isSeparator()) {
+            ModEntry sep;
+            sep.itemType    = ItemType::Separator;
+            sep.displayName = e.displayName;
             // Defaults that match the legacy loader for missing colours.
-            if (!e.bgColor.isValid()) e.bgColor = QColor(55, 55, 75);
-            if (!e.fgColor.isValid()) e.fgColor = QColor(Qt::white);
-
-            auto *item = new QListWidgetItem(e.displayName);
-            item->setData(ModRole::ItemType,  ItemType::Separator);
-            item->setData(ModRole::BgColor,   e.bgColor);
-            item->setData(ModRole::FgColor,   e.fgColor);
-            item->setData(ModRole::Collapsed, e.collapsed);
-            item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled);
-            m_modList->addItem(item);
+            sep.bgColor   = e.bgColor.isValid() ? e.bgColor : QColor(55, 55, 75);
+            sep.fgColor   = e.fgColor.isValid() ? e.fgColor : QColor(Qt::white);
+            sep.collapsed = e.collapsed;
+            sep.itemFlags = Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled;
+            rows.append(sep);
             continue;
         }
 
-        // Mid-install placeholder (`installing: true`): rebuild as
-        // status==2 with the spinner-prefixed text the delegate expects.
-        // The InstallController has no live extraction for this row;
-        // the user has to retry or click Install on the Nexus URL.
+        // Mid-install placeholder (`installing: true`): rebuild as a row that
+        // is not installed. The InstallController has no live extraction for
+        // it; the user has to retry or click Install on the Nexus URL.
         if (e.installStatus == 2) {
-            auto *item = new QListWidgetItem(e.displayName);
-            item->setData(ModRole::ItemType,      ItemType::Mod);
-            item->setData(ModRole::CustomName,    e.customName);
-            item->setData(ModRole::NexusUrl,      e.nexusUrl);
-            item->setData(ModRole::DateAdded,     e.dateAdded);
-            mod_row::setInstallStatus(item, InstallStatus::NotInstalled);   // not actually mid-install anymore
-            item->setCheckState(Qt::Unchecked);
-            m_modList->addItem(item);
+            ModEntry ph = ModEntry::named(e.displayName);
+            ph.customName    = e.customName;
+            ph.nexusUrl      = e.nexusUrl;
+            ph.dateAdded     = e.dateAdded;
+            ph.installStatus = int(InstallStatus::NotInstalled);   // not actually mid-install anymore
+            ph.checked       = false;
+            rows.append(ph);
             continue;
         }
 
@@ -1467,37 +1464,23 @@ void MainWindow::loadModList(const QString &path,
             && modPath.startsWith(remapFrom))
             modPath = remapTo + modPath.mid(remapFrom.size());
 
-        const QString displayName = e.customName.isEmpty()
-            ? QFileInfo(modPath).fileName()
-            : e.customName;
-
-        auto *item = new QListWidgetItem(displayName);
-        item->setData(ModRole::ItemType,      ItemType::Mod);
-        item->setData(ModRole::ModPath,       modPath);
-        item->setData(ModRole::CustomName,    e.customName);
-        item->setData(ModRole::Annotation,    e.annotation);
-        item->setData(ModRole::NexusUrl,      e.nexusUrl);
-        item->setData(ModRole::DateAdded,     e.dateAdded);
-        if (e.nexusFileId > 0)
-            item->setData(ModRole::NexusFileId, QVariant::fromValue(e.nexusFileId));
-        if (!e.dependsOn.isEmpty())
-            item->setData(ModRole::DependsOn, e.dependsOn);
-        if (e.updateAvailable)
-            item->setData(ModRole::UpdateAvailable, true);
-        if (e.isUtility)
-            item->setData(ModRole::IsUtility,  true);
-        if (e.isFavorite)
-            item->setData(ModRole::IsFavorite, true);
-        if (!e.fomodChoices.isEmpty())
-            item->setData(ModRole::FomodChoices, e.fomodChoices);
-        if (!e.translationOf.isEmpty())
-            item->setData(ModRole::TranslationOf, e.translationOf);
-        if (!e.bainChoices.isEmpty())
-            item->setData(ModRole::BainChoices, e.bainChoices);
-        if (!e.videoUrl.isEmpty())
-            item->setData(ModRole::VideoUrl,  e.videoUrl);
-        if (!e.sourceUrl.isEmpty())
-            item->setData(ModRole::SourceUrl, e.sourceUrl);
+        ModEntry m = ModEntry::named(e.customName.isEmpty() ? QFileInfo(modPath).fileName()
+                                                            : e.customName);
+        m.modPath         = modPath;
+        m.customName      = e.customName;
+        m.annotation      = e.annotation;
+        m.nexusUrl        = e.nexusUrl;
+        m.dateAdded       = e.dateAdded;
+        m.nexusFileId     = e.nexusFileId;
+        m.dependsOn       = e.dependsOn;
+        m.updateAvailable = e.updateAvailable;
+        m.isUtility       = e.isUtility;
+        m.isFavorite      = e.isFavorite;
+        m.fomodChoices    = e.fomodChoices;
+        m.translationOf   = e.translationOf;
+        m.bainChoices     = e.bainChoices;
+        m.videoUrl        = e.videoUrl;
+        m.sourceUrl       = e.sourceUrl;
 
         // Same install-status probe as before: an empty directory is
         // treated as not-installed so the missing-master scan and the
@@ -1507,10 +1490,10 @@ void MainWindow::loadModList(const QString &path,
             const bool installed = !modPath.isEmpty()
                                 && d.exists()
                                 && !d.isEmpty();
-            mod_row::setInstallStatus(item, installed ? InstallStatus::Installed
-                                              : InstallStatus::NotInstalled);
+            m.installStatus = int(installed ? InstallStatus::Installed
+                                            : InstallStatus::NotInstalled);
         }
-        item->setCheckState(e.checked ? Qt::Checked : Qt::Unchecked);
+        m.checked = e.checked;
         QString tip = e.annotation.isEmpty() ? modPath
                                              : modPath + "\n\n" + e.annotation;
         // Mark a shared install: its folder lives outside this profile's mods
@@ -1519,13 +1502,15 @@ void MainWindow::loadModList(const QString &path,
             && !mod_sharing::cleanModPath(modPath).startsWith(
                    mod_sharing::cleanModPath(m_modsDir) + QLatin1Char('/')))
             tip += QStringLiteral("\n\n") + T("share_external_tooltip");
-        item->setToolTip(tip);
-        m_modList->addItem(item);
+        m.toolTip = tip;
+        rows.append(m);
     }
+    // One reset: nothing hears an itemChanged per row.
+    m_model.replace(rows);
 
     // Apply any collapsed separators (hidden items must be set after all items exist)
     for (int i = 0; i < m_modList->count(); ++i) {
-        auto *sep = m_modList->item(i);
+        ModRow sep = m_modList->item(i);
         if (mod_row::isSeparator(sep)
                 && sep->data(ModRole::Collapsed).toBool())
             collapseSection(sep, true);
@@ -1534,10 +1519,6 @@ void MainWindow::loadModList(const QString &path,
     updateModCount();
     m_modListLoaded = true;
 
-    // The bridge has tracked every row the load added; this rebuild is a
-    // belt-and-braces resync at the one point the whole list is known fresh.
-    modlist::refreshModelFromList(&m_model, m_modList);
-
     // Warm the data-folder cache for installed mods. Runs on a worker thread
     // so loadModList returns immediately; by the time the user tries to delete
     // a mod the cache is ready and cachedDataFolders returns instantly instead
@@ -1545,7 +1526,7 @@ void MainWindow::loadModList(const QString &path,
     {
         QStringList paths;
         for (int i = 0; i < m_modList->count(); ++i) {
-            auto *item = m_modList->item(i);
+            ModRow item = m_modList->item(i);
             if (!mod_row::isMod(item)) continue;
             if (!mod_row::isInstalled(item)) continue;
             paths << item->data(ModRole::ModPath).toString();
@@ -1555,7 +1536,7 @@ void MainWindow::loadModList(const QString &path,
 }
 
 void MainWindow::saveModListFor(const QString &profileKey,
-                                QListWidgetItem *placeholder)
+                                ModRow placeholder)
 {
     if (!placeholder) return;
     const QUuid token = placeholder->data(ModRole::InstallToken).toUuid();
@@ -1576,7 +1557,7 @@ void MainWindow::saveModListFor(const QString &profileKey,
         // Missing file is fine - we'll write a fresh one with this row.
     }
 
-    const ModEntry updated = ModEntry::fromItem(placeholder);
+    const ModEntry updated = placeholder->entry();
 
     bool replaced = false;
     if (!token.isNull()) {

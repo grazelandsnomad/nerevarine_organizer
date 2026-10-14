@@ -1,30 +1,43 @@
 #include "placeholder_state.h"
 
 #include "download_integrity.h"
-#include "mod_row.h"
+#include "modlist_model.h"
 #include "modroles.h"
 
 #include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
-#include <QListWidgetItem>
 #include <QString>
-#include <QVariant>
 
 namespace placeholder_state {
 
-void restoreInteractiveFlags(QListWidgetItem *item)
+namespace {
+
+// Run an entry transition on a live row: one read, one write-back, one
+// change notice for the whole row.
+template <typename Fn>
+void onRow(ModRow row, Fn fn)
 {
-    if (!item) return;
-    item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
-                   Qt::ItemIsDragEnabled | Qt::ItemIsUserCheckable);
+    if (!row) return;
+    ModEntry e = row.entry();
+    fn(e);
+    row.model()->update(row.row(), std::move(e));
 }
 
-void setBusyFlags(QListWidgetItem *item)
+} // namespace
+
+void restoreInteractiveFlags(ModEntry &e)
 {
-    if (!item) return;
-    item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+    e.itemFlags = Qt::ItemIsEnabled | Qt::ItemIsSelectable
+                | Qt::ItemIsDragEnabled | Qt::ItemIsUserCheckable;
 }
+void restoreInteractiveFlags(ModRow row) { onRow(row, [](ModEntry &e) { restoreInteractiveFlags(e); }); }
+
+void setBusyFlags(ModEntry &e)
+{
+    e.itemFlags = Qt::ItemIsEnabled | Qt::ItemIsSelectable;
+}
+void setBusyFlags(ModRow row) { onRow(row, [](ModEntry &e) { setBusyFlags(e); }); }
 
 bool folderInstalled(int installStatus, const QString &modPath)
 {
@@ -32,113 +45,120 @@ bool folderInstalled(int installStatus, const QString &modPath)
     return installStatus == 2 && !modPath.isEmpty() && QFileInfo(modPath).isDir();
 }
 
-bool folderInstalled(const QListWidgetItem *item)
+bool folderInstalled(const ModEntry &e) { return folderInstalled(e.installStatus, e.modPath); }
+bool folderInstalled(const ModRow &row) { return row && folderInstalled(row.entry()); }
+
+void clearInstallTransients(ModEntry &e)
 {
-    return item
-        && folderInstalled(item->data(ModRole::InstallStatus).toInt(),
-                           item->data(ModRole::ModPath).toString());
+    e.intendedModPath.clear();
+    e.prevModPath.clear();
+    e.mergeTargetPath.clear();
+    e.installToken = QUuid();
+    e.pendingFileId = 0;
+    e.awaitingUpdateDownload = false;
+}
+void clearInstallTransients(ModRow row) { onRow(row, [](ModEntry &e) { clearInstallTransients(e); }); }
+
+Expectations applicableExpectations(const ModEntry &e)
+{
+    Expectations x;
+    if (!download_integrity::expectationsApply(e.expectedFileId, e.pendingFileId)) return x;
+    x.md5  = e.expectedMd5.trimmed().toLower();
+    x.size = e.expectedSize;
+    return x;
+}
+Expectations applicableExpectations(const ModRow &row)
+{
+    return row ? applicableExpectations(row.entry()) : Expectations{};
 }
 
-void clearInstallTransients(QListWidgetItem *item)
+void clearExpectations(ModEntry &e)
 {
-    if (!item) return;
-    item->setData(ModRole::IntendedModPath, QVariant());
-    item->setData(ModRole::PrevModPath,     QVariant());
-    item->setData(ModRole::MergeTargetPath, QVariant());
-    item->setData(ModRole::InstallToken,    QVariant());
-    item->setData(ModRole::PendingFileId,   QVariant());
-    item->setData(ModRole::AwaitingUpdateDownload, QVariant());
+    e.expectedMd5.clear();
+    e.expectedSize = 0;
+    e.expectedFileId = 0;
+    e.nexusFileName.clear();
 }
+void clearExpectations(ModRow row) { onRow(row, [](ModEntry &e) { clearExpectations(e); }); }
 
-Expectations applicableExpectations(const QListWidgetItem *item)
+bool restoreInstalled(ModEntry &e)
 {
-    Expectations e;
-    if (!item) return e;
-    const qint64 forFile  = item->data(ModRole::ExpectedFileId).toLongLong();
-    const qint64 inFlight = item->data(ModRole::PendingFileId).toLongLong();
-    if (!download_integrity::expectationsApply(forFile, inFlight)) return e;
-    e.md5  = item->data(ModRole::ExpectedMd5).toString().trimmed().toLower();
-    e.size = item->data(ModRole::ExpectedSize).toLongLong();
-    return e;
-}
-
-void clearExpectations(QListWidgetItem *item)
-{
-    if (!item) return;
-    item->setData(ModRole::ExpectedMd5,    QVariant());
-    item->setData(ModRole::ExpectedSize,   QVariant());
-    item->setData(ModRole::ExpectedFileId, QVariant());
-    item->setData(ModRole::NexusFileName,  QVariant());
-}
-
-bool restoreInstalled(QListWidgetItem *item)
-{
-    if (!item) return false;
     // A Merge's target, else the row's own folder: an update keeps it in
-    // ModPath, a Replace too (with PrevModPath stashed).
+    // modPath, a Replace too (with prevModPath stashed).
     // An empty folder is not an install, as loadModList reads it.
     auto installedAt = [](const QString &f) {
         return !f.isEmpty() && QFileInfo(f).isDir() && !QDir(f).isEmpty();
     };
-    QString folder = item->data(ModRole::MergeTargetPath).toString();
-    if (!installedAt(folder))
-        folder = item->data(ModRole::ModPath).toString();
+    QString folder = e.mergeTargetPath;
+    if (!installedAt(folder)) folder = e.modPath;
     if (!installedAt(folder)) return false;
 
-    item->setData(ModRole::ItemType,         ItemType::Mod);
-    item->setData(ModRole::ModPath,          folder);
-    mod_row::setInstallStatus(item, InstallStatus::Installed);
-    item->setData(ModRole::DownloadProgress, QVariant());
-    item->setData(ModRole::PrevModPath,      QVariant());
-    item->setData(ModRole::MergeTargetPath,  QVariant());
-    item->setData(ModRole::InstallToken,     QVariant());
-    item->setData(ModRole::PendingFileId,    QVariant());
-    restoreInteractiveFlags(item);
-    const QString cn = item->data(ModRole::CustomName).toString();
-    item->setText(cn.isEmpty() ? QFileInfo(folder).fileName() : cn);
-    item->setToolTip(folder);
+    e.itemType = ItemType::Mod;
+    e.modPath = folder;
+    e.installStatus = int(InstallStatus::Installed);
+    e.downloadProgress = 0;
+    e.prevModPath.clear();
+    e.mergeTargetPath.clear();
+    e.installToken = QUuid();
+    e.pendingFileId = 0;
+    restoreInteractiveFlags(e);
+    e.displayName = e.customName.isEmpty() ? QFileInfo(folder).fileName() : e.customName;
+    e.toolTip = folder;
+    return true;
+}
+bool restoreInstalled(ModRow row)
+{
+    if (!row) return false;
+    ModEntry e = row.entry();
+    if (!restoreInstalled(e)) return false;
+    row.model()->update(row.row(), std::move(e));
     return true;
 }
 
-void resetToNotInstalled(QListWidgetItem *item, const QString &fallbackName)
+void resetToNotInstalled(ModEntry &e, const QString &fallbackName)
 {
-    if (!item) return;
-    mod_row::setInstallStatus(item, InstallStatus::NotInstalled);
-    item->setData(ModRole::DownloadProgress, QVariant());
+    e.installStatus = int(InstallStatus::NotInstalled);
+    e.downloadProgress = 0;
     // The extracted folder was deleted - clear its path so the modlist doesn't
     // store a reference to a non-existent dir.
-    item->setData(ModRole::ModPath,          QVariant());
+    e.modPath.clear();
     // Drop the per-install token: no more InstallController signals will arrive
     // for an aborted install, and status-0 rows never persist it anyway.
-    item->setData(ModRole::InstallToken,     QVariant());
-    restoreInteractiveFlags(item);
-    // Recover the display name into CustomName so it survives a save/reload
-    // cycle (loadModList rebuilds the display name from CustomName, not text()).
-    QString name = item->data(ModRole::CustomName).toString();
+    e.installToken = QUuid();
+    restoreInteractiveFlags(e);
+    // Recover the display name into customName so it survives a save/reload
+    // cycle (loadModList rebuilds the display name from customName, not text).
+    QString name = e.customName;
     if (name.isEmpty()) name = fallbackName;
     if (!name.isEmpty()) {
-        item->setText(name);
-        item->setData(ModRole::CustomName, name);
+        e.displayName = name;
+        e.customName  = name;
     }
 }
-
-void markInstalled(QListWidgetItem *item, const QString &modPath)
+void resetToNotInstalled(ModRow row, const QString &fallbackName)
 {
-    if (!item) return;
-    const bool wasUpdate = item->data(ModRole::UpdateAvailable).toBool();
-    QString cn = item->data(ModRole::CustomName).toString();
-    item->setText(cn.isEmpty() ? QFileInfo(modPath).fileName() : cn);
-    restoreInteractiveFlags(item);
-    item->setData(ModRole::ItemType,         ItemType::Mod);
-    item->setData(ModRole::ModPath,          modPath);
-    mod_row::setInstallStatus(item, InstallStatus::Installed);
-    item->setData(ModRole::DownloadProgress, QVariant());
-    item->setData(ModRole::UpdateAvailable,  false);
-    clearInstallTransients(item);
-    if (wasUpdate || !item->data(ModRole::DateAdded).toDateTime().isValid())
-        item->setData(ModRole::DateAdded, QDateTime::currentDateTime());
-    item->setCheckState(Qt::Checked);
-    item->setToolTip(modPath);
+    onRow(row, [&](ModEntry &e) { resetToNotInstalled(e, fallbackName); });
+}
+
+void markInstalled(ModEntry &e, const QString &modPath)
+{
+    const bool wasUpdate = e.updateAvailable;
+    e.displayName = e.customName.isEmpty() ? QFileInfo(modPath).fileName() : e.customName;
+    restoreInteractiveFlags(e);
+    e.itemType = ItemType::Mod;
+    e.modPath = modPath;
+    e.installStatus = int(InstallStatus::Installed);
+    e.downloadProgress = 0;
+    e.updateAvailable = false;
+    clearInstallTransients(e);
+    if (wasUpdate || !e.dateAdded.isValid())
+        e.dateAdded = QDateTime::currentDateTime();
+    e.checked = true;
+    e.toolTip = modPath;
+}
+void markInstalled(ModRow row, const QString &modPath)
+{
+    onRow(row, [&](ModEntry &e) { markInstalled(e, modPath); });
 }
 
 } // namespace placeholder_state

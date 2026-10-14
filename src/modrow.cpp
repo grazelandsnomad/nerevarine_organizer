@@ -8,9 +8,15 @@ QModelIndex ModRow::index() const
 
 const ModEntry &ModRow::entry() const
 {
-    static const ModEntry blank;
+    // A gone row is neither a mod nor a separator, the way a null item
+    // answered no to everything: its blank has no row type at all.
+    static const ModEntry gone = [] {
+        ModEntry e;
+        e.itemType.clear();
+        return e;
+    }();
     const int r = row();
-    return r < 0 ? blank : m_model->at(r);
+    return r < 0 ? gone : m_model->at(r);
 }
 
 QVariant ModRow::data(int role) const
@@ -19,7 +25,7 @@ QVariant ModRow::data(int role) const
     return r < 0 ? QVariant() : m_model->role(r, role);
 }
 
-void ModRow::setData(int role, const QVariant &value)
+void ModRow::setData(int role, const QVariant &value) const
 {
     const int r = row();
     if (r >= 0) m_model->setRole(r, role, value);
@@ -37,13 +43,13 @@ Qt::ItemFlags ModRow::flags() const
     return r < 0 ? Qt::ItemFlags() : m_model->flags(m_model->index(r));
 }
 
-void ModRow::setFlags(Qt::ItemFlags flags)
+void ModRow::setFlags(Qt::ItemFlags flags) const
 {
     const int r = row();
     if (r >= 0) m_model->setFlags(r, flags);
 }
 
-void ModRow::setHidden(bool hidden)
+void ModRow::setHidden(bool hidden) const
 {
     const int r = row();
     if (r >= 0) m_model->setHidden(r, hidden);

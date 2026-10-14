@@ -1,10 +1,9 @@
 #ifndef MODENTRY_H
 #define MODENTRY_H
 
-// Value type for one mod-list row. Same payload as the QListWidgetItem in
-// MainWindow::m_modList, split across Qt::UserRole slots (ModRole in
-// modroles.h). fromItem/applyToItem cross the widget boundary; prefer
-// ModEntry in logic so it stays QtCore-only.
+// Value type for one mod-list row: what ModlistModel holds, what the
+// modlist file serializes, what the view paints through the role table.
+// QtCore (plus QColor) only, so logic over rows links without widgets.
 
 #include "modroles.h"
 
@@ -14,8 +13,6 @@
 #include <QStringList>
 #include <QUuid>
 #include <QVariant>
-
-class QListWidgetItem;
 
 struct ModEntry {
     // "mod" or "separator". Default "mod" so a blank ModEntry isn't a separator.
@@ -150,8 +147,22 @@ struct ModEntry {
     // Every role the table maps, for tests and whole-row copies.
     [[nodiscard]] static const QList<int> &roles();
 
-    [[nodiscard]] static ModEntry fromItem(const QListWidgetItem *item);
-    void applyToItem(QListWidgetItem *item) const;
+    // --- The item-shaped spelling ----------------------------------------
+    // The role table under QListWidgetItem's names, so a row is built before
+    // insertion the way the window always built one (through an arrow), and
+    // the placeholder-state helpers run on an entry or on a live row alike.
+    [[nodiscard]] static ModEntry named(const QString &displayName);
+    [[nodiscard]] QVariant data(int role) const { return roleData(role); }
+    void setData(int role, const QVariant &value) { setRoleData(role, value); }
+    [[nodiscard]] QString text() const { return displayName; }
+    void setText(const QString &t) { displayName = t; }
+    [[nodiscard]] Qt::CheckState checkState() const { return checked ? Qt::Checked : Qt::Unchecked; }
+    void setCheckState(Qt::CheckState s) { checked = (s == Qt::Checked); }
+    [[nodiscard]] Qt::ItemFlags flags() const { return itemFlags; }
+    void setFlags(Qt::ItemFlags f) { itemFlags = f; }
+    void setToolTip(const QString &t) { toolTip = t; }
+    ModEntry       *operator->() { return this; }
+    const ModEntry *operator->() const { return this; }
 
     [[nodiscard]] bool    isSeparator()   const { return itemType == QStringLiteral("separator"); }
     [[nodiscard]] bool    isMod()         const { return itemType == QStringLiteral("mod"); }

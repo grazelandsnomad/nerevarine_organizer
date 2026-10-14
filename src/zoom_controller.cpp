@@ -5,8 +5,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFont>
-#include <QListWidget>
-#include <QListWidgetItem>
+#include <QListView>
 #include <QSettings>
 #include <QSize>
 #include <QStandardPaths>
@@ -15,7 +14,7 @@
 
 #include "settings.h"
 
-ZoomController::ZoomController(QListWidget *list, QObject *parent)
+ZoomController::ZoomController(QListView *list, QObject *parent)
     : QObject(parent), m_list(list)
 {
 }
@@ -88,7 +87,5 @@ void ZoomController::applyZoom(int pt)
     QFont f = m_list->font();
     f.setPointSize(m_pt);
     m_list->setFont(f);
-    for (int i = 0; i < m_list->count(); ++i)
-        m_list->item(i)->setSizeHint(QSize());
     m_list->update();
 }

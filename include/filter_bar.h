@@ -5,12 +5,12 @@
 
 class QAction;
 class QLineEdit;
-class QListWidget;
+class ModListView;
 
 class FilterBar : public QObject {
     Q_OBJECT
 public:
-    FilterBar(QListWidget *list, QObject *parent = nullptr);
+    FilterBar(ModListView *list, QObject *parent = nullptr);
 
     QLineEdit *widget() const { return m_edit; }
 
@@ -21,7 +21,7 @@ public:
 private:
     void apply();
 
-    QListWidget *m_list = nullptr;
+    ModListView *m_list = nullptr;
     QLineEdit   *m_edit = nullptr;
     QAction     *m_favOnlyAction = nullptr;
 };

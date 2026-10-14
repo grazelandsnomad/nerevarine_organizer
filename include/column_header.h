@@ -8,7 +8,7 @@
 class QAction;
 class QHBoxLayout;
 class QLabel;
-class QListWidget;
+class QAbstractItemView;
 class QPushButton;
 class QWidget;
 
@@ -22,7 +22,7 @@ public:
     // Late-bound: populates the m_list pointer + installs the scrollbar
     // visibility filter. Call once from setupCentralWidget after m_modList
     // exists.
-    void attachListWidget(QListWidget *list);
+    void attachListWidget(QAbstractItemView *list);
 
     // The two sort buttons live in MainWindow because their clicked signals
     // route to MainWindow sort slots and their text is updated by MainWindow
@@ -65,7 +65,7 @@ private:
     void saveWidthsForCurrentState();
     int  separatorAt(int x) const;
 
-    QListWidget *m_list = nullptr;
+    QAbstractItemView *m_list = nullptr;
     QWidget     *m_bar  = nullptr;
     QHBoxLayout *m_layout = nullptr;
     QLabel      *m_nameHeader = nullptr;

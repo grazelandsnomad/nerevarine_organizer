@@ -1,15 +1,16 @@
 #ifndef SEND_TO_DIALOG_H
 #define SEND_TO_DIALOG_H
 
-class QListWidget;
-class QListWidgetItem;
+#include "modrow.h"
+
+class ModListView;
 class QWidget;
 
 namespace send_to_dialog {
 
 // Modal "Send to separator" picker with a live-filter search box; Enter on a
-// match accepts. Returns the chosen item (borrowed from `list`), null on cancel.
-QListWidgetItem *pickSeparator(QWidget *parent, QListWidget *list);
+// match accepts. Returns the chosen separator row of `list`, null on cancel.
+ModRow pickSeparator(QWidget *parent, ModListView *list);
 
 } // namespace send_to_dialog
 

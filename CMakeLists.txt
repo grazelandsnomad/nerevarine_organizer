@@ -110,11 +110,9 @@ set(CORE_SOURCES
     src/bainwizard.cpp
     src/load_order_merge.cpp
     src/modentry.cpp
-    src/modentry_item.cpp
     src/modlist_model.cpp
     src/modlistview.cpp
     src/modrow.cpp
-    src/modlist_model_widget_bridge.cpp
     src/modlist_serializer.cpp
     src/modlist_summary.cpp
     src/modlist_summary_dialog.cpp
@@ -281,7 +279,6 @@ set(CORE_SOURCES
     include/load_order_merge.h
     include/modlist_model.h
     include/modlistview.h
-    include/modlist_model_widget_bridge.h
     include/modlist_serializer.h
     include/modlist_summary.h
     include/modlist_summary_dialog.h

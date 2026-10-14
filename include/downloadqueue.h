@@ -37,6 +37,8 @@ class QDockWidget;
 class QLabel;
 class QListWidget;
 class QListWidgetItem;
+class ModListView;
+#include "modrow.h"
 class QMainWindow;
 class QModelIndex;
 class QNetworkAccessManager;
@@ -54,7 +56,7 @@ public:
     // net: shared QNetworkAccessManager.
     // nexus: Nexus API client for CDN-link requests.
     // parentWidget: parent for any QMessageBox dialogs.
-    explicit DownloadQueue(QListWidget           *modList,
+    explicit DownloadQueue(ModListView           *modList,
                            QNetworkAccessManager *net,
                            NexusClient           *nexus,
                            QWidget               *parentWidget,
@@ -77,7 +79,7 @@ public:
     // a profile switch, which leave the list but are still being installed.
     // A row removed - or the list cleared by a profile switch or an import -
     // while its download runs resolves to nullptr from then on.
-    using RowResolver = std::function<QListWidgetItem *(const QUuid &)>;
+    using RowResolver = std::function<ModRow(const QUuid &)>;
     void setRowResolver(RowResolver resolve);
 
     // -- Entry points called by MainWindow ---
@@ -198,11 +200,11 @@ private:
     void resetPlaceholderToIdle(const QUuid &row);
 
     // The live row for an id, or nullptr. See setRowResolver.
-    QListWidgetItem *rowFor(const QUuid &row) const;
+    ModRow rowFor(const QUuid &row) const;
     RowResolver m_resolve;
 
     // -- Injected (owned by MainWindow, outlive us) ---
-    QListWidget           *m_modList;
+    ModListView           *m_modList;
     QNetworkAccessManager *m_net;
     NexusClient           *m_nexus;
     QWidget               *m_parentWidget;

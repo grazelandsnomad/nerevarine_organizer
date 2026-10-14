@@ -53,6 +53,12 @@ public:
     [[nodiscard]] ModRow      itemFromIndex(const QModelIndex &index) const;
     void scrollToItem(const ModRow &row, ScrollHint hint = EnsureVisible);
 
+    // Move `rows` (any order, duplicates ignored) to sit together at
+    // `insertAt`, counted in the list without them, keeping their own
+    // top-to-bottom order. One reorder, so the selection and the hidden rows
+    // follow; returns the handles of the moved rows, top to bottom.
+    QList<ModRow> moveRowsTo(QList<int> rows, int insertAt);
+
     // The rows. addItem/insertItem return the handle of the new row.
     ModRow   addItem(ModEntry e);
     ModRow   insertItem(int row, ModEntry e);
@@ -66,6 +72,10 @@ signals:
     void itemDoubleClicked(const ModRow &row);
     // Local files dropped from outside, one tick after the drop.
     void localFilesDropped(const QStringList &paths);
+    // Around a selection dropped onto a separator: one reorder of the model,
+    // so the window takes one undo step and one save, as for a drag.
+    void aboutToReorderRows();
+    void rowsReordered();
 
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override;

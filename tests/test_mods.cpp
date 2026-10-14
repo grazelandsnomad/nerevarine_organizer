@@ -14,7 +14,8 @@
 #include "modroles.h"
 
 #include <QCoreApplication>
-#include <QListWidgetItem>
+#include "modlist_model.h"
+#include "modrow.h"
 #include <QUuid>
 #include <QDateTime>
 #include <QDir>
@@ -1063,17 +1064,22 @@ static void testFolderInstalled()
     check("nor a reinstall whose folder has gone", !folderInstalled(2, tmp.filePath("gone")));
     check("nor a row waiting to download", !folderInstalled(0, old));
 
-    QListWidgetItem row;
-    row.setData(ModRole::ItemType,      ItemType::Mod);
+    ModEntry row;
     row.setData(ModRole::InstallStatus, 2);
     row.setData(ModRole::ModPath,       old);
     row.setData(ModRole::PrevModPath,   old);   // a Replace
-    check("the row form reads the same roles", folderInstalled(&row));
+    check("the entry form reads the same fields", folderInstalled(row));
     row.setData(ModRole::PrevModPath, QVariant());   // an update sets none
-    check("an update, which stashes nothing, too", folderInstalled(&row));
+    check("an update, which stashes nothing, too", folderInstalled(row));
     row.setData(ModRole::ModPath, QVariant());
-    check("the row form of a fresh install", !folderInstalled(&row));
-    check("and no row at all", !folderInstalled(static_cast<const QListWidgetItem *>(nullptr)));
+    check("the entry form of a fresh install", !folderInstalled(row));
+    check("and no row at all", !folderInstalled(ModRow(nullptr)));
+    ModlistModel model;
+    ModEntry live;
+    live.installStatus = 2;
+    live.modPath = old;
+    check("and a live row answers for its entry",
+          folderInstalled(ModRow(&model, model.rowId(model.append(live)))));
 }
 
 // Cancelling the package picker of a Tamriel Data update called the mod "not
@@ -1091,8 +1097,7 @@ static void testRestoreInstalled()
     esm.close();
     const QDateTime installed = QDateTime::fromString("2026-08-27T10:31:02", Qt::ISODate);
 
-    QListWidgetItem row;
-    row.setData(ModRole::ItemType,        ItemType::Mod);
+    ModEntry row;
     row.setData(ModRole::InstallStatus,   2);
     row.setData(ModRole::ModPath,         folder);
     row.setData(ModRole::CustomName,      "Tamriel Data (HD)");
@@ -1106,47 +1111,55 @@ static void testRestoreInstalled()
     row.setText("⠋ Installing (mod 59927)");
     row.setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);   // busy
 
-    check("restored", placeholder_state::restoreInstalled(&row));
-    check("installed again", row.data(ModRole::InstallStatus).toInt() == 1);
-    check("at the folder it had", row.data(ModRole::ModPath).toString() == folder);
-    check("still marked as having an update - none was installed",
-          row.data(ModRole::UpdateAvailable).toBool());
-    check("installed when it was", row.data(ModRole::DateAdded).toDateTime() == installed);
-    check("from the file it was",
-          row.data(ModRole::NexusFileId).toLongLong() == 1000045000
-              && !row.data(ModRole::PendingFileId).isValid());
-    check("no install left in flight",
-          row.data(ModRole::InstallToken).toUuid().isNull()
-              && !row.data(ModRole::DownloadProgress).isValid());
+    check("restored", placeholder_state::restoreInstalled(row));
+    check("installed again", row.installStatus == 1);
+    check("at the folder it had", row.modPath == folder);
+    check("still marked as having an update - none was installed", row.updateAvailable);
+    check("installed when it was", row.dateAdded == installed);
+    check("from the file it was", row.nexusFileId == 1000045000 && row.pendingFileId == 0);
+    check("no install left in flight", row.installToken.isNull() && row.downloadProgress == 0);
     check("named as before", row.text() == "Tamriel Data (HD)", row.text());
     check("still enabled", row.checkState() == Qt::Checked);
     check("checkable and draggable again",
           (row.flags() & Qt::ItemIsUserCheckable) && (row.flags() & Qt::ItemIsDragEnabled));
 
+    // The same transition on a live row of a model, as one update.
+    ModlistModel model;
+    ModEntry liveEntry;
+    liveEntry.installStatus = 2;
+    liveEntry.modPath = folder;
+    liveEntry.customName = QStringLiteral("Live");
+    const ModRow live(&model, model.rowId(model.append(liveEntry)));
+    int changes = 0;
+    QObject::connect(&model, &ModlistModel::dataChanged, &model,
+                     [&](const QModelIndex &, const QModelIndex &, const QList<int> &) { ++changes; });
+    check("a live row is restored too", placeholder_state::restoreInstalled(live)
+                                        && live->isInstalled() && live->text() == QStringLiteral("Live"));
+    check("in one change", changes == 1, QString::number(changes));
+
     // A Replace stashes the same folder in PrevModPath; a Merge names it.
-    QListWidgetItem replace;
+    ModEntry replace;
     replace.setData(ModRole::InstallStatus, 2);
     replace.setData(ModRole::ModPath,       folder);
     replace.setData(ModRole::PrevModPath,   folder);
-    check("a Replace too", placeholder_state::restoreInstalled(&replace)
-          && !replace.data(ModRole::PrevModPath).isValid());
-    QListWidgetItem merge;
+    check("a Replace too", placeholder_state::restoreInstalled(replace) && replace.prevModPath.isEmpty());
+    ModEntry merge;
     merge.setData(ModRole::InstallStatus,   2);
     merge.setData(ModRole::MergeTargetPath, folder);
-    check("a Merge, at its target", placeholder_state::restoreInstalled(&merge)
-          && merge.data(ModRole::ModPath).toString() == folder);
+    check("a Merge, at its target", placeholder_state::restoreInstalled(merge) && merge.modPath == folder);
 
     // Nothing to go back to: the caller resets it as before.
-    QListWidgetItem fresh;
+    ModEntry fresh;
     fresh.setData(ModRole::InstallStatus, 2);
-    check("a fresh install is not restored", !placeholder_state::restoreInstalled(&fresh)
-          && fresh.data(ModRole::InstallStatus).toInt() == 2);
+    check("a fresh install is not restored", !placeholder_state::restoreInstalled(fresh)
+          && fresh.installStatus == 2);
     QDir().mkpath(tmp.filePath("empty"));
-    QListWidgetItem hollow;
+    ModEntry hollow;
     hollow.setData(ModRole::InstallStatus, 2);
     hollow.setData(ModRole::ModPath,       tmp.filePath("empty"));
     check("nor one whose folder is empty, as loadModList reads it",
-          !placeholder_state::restoreInstalled(&hollow));
+          !placeholder_state::restoreInstalled(hollow));
+    check("nor a null row", !placeholder_state::restoreInstalled(ModRow(nullptr)));
 }
 
 // A free account's update: the link is refused, the row goes back to
@@ -1163,14 +1176,14 @@ static void testAwaitingUpdateDownloadLifetime()
     if (f.open(QIODevice::WriteOnly)) f.write("TES3");
     f.close();
 
-    QListWidgetItem row;
+    ModEntry row;
     row.setData(ModRole::InstallStatus, 2);
     row.setData(ModRole::ModPath,       folder);
     row.setData(ModRole::AwaitingUpdateDownload, true);
-    check("restored", placeholder_state::restoreInstalled(&row));
-    check("still awaiting its update", row.data(ModRole::AwaitingUpdateDownload).toBool());
-    placeholder_state::clearInstallTransients(&row);
-    check("cleared once an install lands", !row.data(ModRole::AwaitingUpdateDownload).isValid());
+    check("restored", placeholder_state::restoreInstalled(row));
+    check("still awaiting its update", row.awaitingUpdateDownload);
+    placeholder_state::clearInstallTransients(row);
+    check("cleared once an install lands", !row.awaitingUpdateDownload);
 }
 
 // === row_caption ===
@@ -1270,32 +1283,34 @@ static void testRowCaptionPrecedence()
 static void testModRowAnswersFromTheTwoRoles()
 {
     std::cout << "testModRowAnswersFromTheTwoRoles\n";
-    QListWidgetItem fresh;
-    check("a blank item is neither kind of row",
-          !mod_row::isMod(&fresh) && !mod_row::isSeparator(&fresh));
-    check("a blank item is not installed",
-          mod_row::installStatusOf(&fresh) == InstallStatus::NotInstalled
-          && !mod_row::isInstalled(&fresh) && !mod_row::isInstalling(&fresh));
+    ModlistModel model;
+    ModEntry fresh;
+    check("a blank entry is a mod, not a separator",
+          mod_row::isMod(fresh) && !mod_row::isSeparator(fresh));
+    check("a blank entry is not installed",
+          mod_row::installStatusOf(fresh) == InstallStatus::NotInstalled
+          && !mod_row::isInstalled(fresh) && !mod_row::isInstalling(fresh));
 
-    QListWidgetItem mod;
-    mod.setData(ModRole::ItemType, ItemType::Mod);
-    check("a mod row reads as one", mod_row::isMod(&mod) && !mod_row::isSeparator(&mod));
-    QListWidgetItem sep;
-    sep.setData(ModRole::ItemType, ItemType::Separator);
-    check("a separator row reads as one", mod_row::isSeparator(&sep) && !mod_row::isMod(&sep));
+    const ModRow mod(&model, model.rowId(model.append(ModEntry::named(QStringLiteral("Mod")))));
+    check("a mod row reads as one", mod_row::isMod(mod) && !mod_row::isSeparator(mod));
+    ModEntry sepEntry = ModEntry::named(QStringLiteral("Sep"));
+    sepEntry.itemType = ItemType::Separator;
+    const ModRow sep(&model, model.rowId(model.append(sepEntry)));
+    check("a separator row reads as one", mod_row::isSeparator(sep) && !mod_row::isMod(sep));
 
-    mod_row::setInstallStatus(&mod, InstallStatus::Installing);
+    mod_row::setInstallStatus(mod, InstallStatus::Installing);
     check("the status is stored as the int the modlist file holds",
-          mod.data(ModRole::InstallStatus).toInt() == 2);
-    check("and read back typed", mod_row::isInstalling(&mod) && !mod_row::isInstalled(&mod));
-    mod.setData(ModRole::InstallStatus, 1);
-    check("an int written the old way reads back typed", mod_row::isInstalled(&mod));
+          mod->data(ModRole::InstallStatus).toInt() == 2 && model.at(0).installStatus == 2);
+    check("and read back typed", mod_row::isInstalling(mod) && !mod_row::isInstalled(mod));
+    mod->setData(ModRole::InstallStatus, 1);
+    check("an int written the old way reads back typed", mod_row::isInstalled(mod));
 
-    check("a null item answers no to everything",
+    check("a null row answers no to everything",
           !mod_row::isMod(nullptr) && !mod_row::isSeparator(nullptr)
-          && !mod_row::isInstalled(nullptr)
-          && mod_row::installStatusOf(nullptr) == InstallStatus::NotInstalled);
-    mod_row::setInstallStatus(nullptr, InstallStatus::Installed);   // must not crash
+          && !mod_row::isInstalled(nullptr) && !mod_row::isInstalling(nullptr)
+          && mod_row::installStatusOf(ModRow(nullptr)) == InstallStatus::NotInstalled);
+    model.removeAt(0);
+    check("and so does a row that is gone", !mod_row::isMod(mod) && !mod_row::isInstalled(mod));
 }
 
 static void run_mod_row()

@@ -5,17 +5,16 @@
 #include <QFont>
 #include <QIcon>
 #include <QLineEdit>
-#include <QListWidget>
-#include <QListWidgetItem>
 #include <QPainter>
 #include <QPixmap>
 #include <Qt>
 
 #include "mod_row.h"
+#include "modlistview.h"
 #include "modroles.h"
 #include "translator.h"
 
-FilterBar::FilterBar(QListWidget *list, QObject *parent)
+FilterBar::FilterBar(ModListView *list, QObject *parent)
     : QObject(parent), m_list(list)
 {
     m_edit = new QLineEdit;
@@ -83,9 +82,9 @@ void FilterBar::apply()
 
     if (q.isEmpty() && !favOnly) {
         // No filter: hidden iff under a collapsed separator.
-        QListWidgetItem *curSep = nullptr;
+        ModRow curSep = nullptr;
         for (int i = 0; i < m_list->count(); ++i) {
-            auto *it = m_list->item(i);
+            ModRow it = m_list->item(i);
             if (mod_row::isSeparator(it)) {
                 curSep = it;
                 it->setHidden(false);
@@ -99,12 +98,12 @@ void FilterBar::apply()
 
     // Active filter: show mods matching the text AND (if the star toggle is on)
     // flagged favourite. A separator shows iff a mod beneath it survives.
-    QList<QListWidgetItem *> sections;
+    QList<ModRow> sections;
     QList<bool> sectionHasMatch;
     int currentSepIdx = -1;
 
     for (int i = 0; i < m_list->count(); ++i) {
-        auto *it = m_list->item(i);
+        ModRow it = m_list->item(i);
         if (mod_row::isSeparator(it)) {
             currentSepIdx = sections.size();
             sections.append(it);

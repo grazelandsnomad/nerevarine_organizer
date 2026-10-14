@@ -19,7 +19,8 @@
 #include <algorithm>
 
 #include "mod_row.h"
-#include "modlist_model_widget_bridge.h"
+#include "modlist_model.h"
+#include "modlistview.h"
 #include "modroles.h"
 #include "translator.h"
 #include "prompts.h"
@@ -75,42 +76,32 @@ QList<int> orderBySize(const QList<ModEntry> &rows, bool ascending)
 
 namespace {
 
-// Re-add the list's items in `order` (indices into the current order).
-void applyOrder(QListWidget *list, const QList<int> &order)
-{
-    QList<QListWidgetItem *> items;
-    items.reserve(list->count());
-    while (list->count() > 0) items << list->takeItem(0);
-    for (int i : order) list->addItem(items.at(i));
-}
-
 } // namespace
 
-void byDate(QListWidget *list, bool ascending)
+void byDate(ModlistModel *model, bool ascending)
 {
-    applyOrder(list, orderByDate(modlist::snapshotEntries(list), ascending));
+    model->reorder(orderByDate(model->all(), ascending));
 }
 
-void bySize(QListWidget *list, bool ascending)
+void bySize(ModlistModel *model, bool ascending)
 {
-    if (list->count() == 0) return;
-    applyOrder(list, orderBySize(modlist::snapshotEntries(list), ascending));
+    if (model->count() == 0) return;
+    model->reorder(orderBySize(model->all(), ascending));
 }
 
-QList<QListWidgetItem *> showReorderSeparatorsDialog(QWidget *parent,
-                                                      QListWidget *list)
+QList<ModRow> showReorderSeparatorsDialog(QWidget *parent, ModListView *list)
 {
     // Split into sections:
     //   [0]  = orphans (mods before the first separator; stay put)
     //   [1+] = one section per separator
     struct Section {
-        QListWidgetItem *sep = nullptr;
-        QList<QListWidgetItem *> mods;
+        ModRow sep;
+        QList<ModRow> mods;
     };
     QList<Section> sections;
     sections.append(Section{});                       // orphans
     for (int i = 0; i < list->count(); ++i) {
-        auto *it = list->item(i);
+        const ModRow it = list->item(i);
         if (mod_row::isSeparator(it)) {
             sections.append(Section{ it, {} });
         } else {
@@ -147,7 +138,7 @@ QList<QListWidgetItem *> showReorderSeparatorsDialog(QWidget *parent,
     // One row per separator (orphans at index 0 are skipped).
     // UserRole holds the original index into `sections`.
     for (int i = 1; i < sections.size(); ++i) {
-        auto *sep = sections[i].sep;
+        const ModRow sep = sections[i].sep;
         int mods  = sections[i].mods.size();
         auto *row = new QListWidgetItem(
             QString("%1   (%2)").arg(sep->text()).arg(mods), uiList);
@@ -192,13 +183,13 @@ QList<QListWidgetItem *> showReorderSeparatorsDialog(QWidget *parent,
     if (dlg.exec() != QDialog::Accepted) return {};
 
     // Rebuild order; orphans stay on top.
-    QList<QListWidgetItem *> newOrder = sections[0].mods;
+    QList<ModRow> newOrder = sections[0].mods;
     for (int i = 0; i < uiList->count(); ++i) {
         int origIdx = uiList->item(i)->data(Qt::UserRole).toInt();
         if (origIdx < 1 || origIdx >= sections.size()) continue;
         const Section &s = sections[origIdx];
         newOrder.append(s.sep);
-        for (auto *m : s.mods) newOrder.append(m);
+        for (const ModRow &m : s.mods) newOrder.append(m);
     }
     return newOrder;
 }

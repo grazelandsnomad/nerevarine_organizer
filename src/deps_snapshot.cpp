@@ -1,5 +1,4 @@
 #include "deps_snapshot.h"
-#include "modlist_model_widget_bridge.h"
 #include "modroles.h"
 
 #include <QListWidget>
@@ -32,11 +31,6 @@ QList<ModEntry> snapshot(const QList<::ModEntry> &rows)
         out.append(e);
     }
     return out;
-}
-
-QList<ModEntry> snapshot(const QListWidget *list)
-{
-    return snapshot(modlist::snapshotEntries(list));
 }
 
 } // namespace deps

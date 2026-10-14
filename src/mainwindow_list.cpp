@@ -30,7 +30,6 @@
 #include "placeholder_state.h"
 #include "fomodwizard.h"
 #include "bainwizard.h"
-#include "modlist_model_widget_bridge.h"
 #include "modlist_serializer.h"
 #include "modlist_summary_dialog.h"
 #include "mod_sharing.h"
@@ -232,12 +231,12 @@ void MainWindow::onToggleTheme()
         m_modList->viewport()->update();
 }
 
-void MainWindow::collapseSection(QListWidgetItem *sep, bool collapse)
+void MainWindow::collapseSection(ModRow sep, bool collapse)
 {
     sep->setData(ModRole::Collapsed, collapse);
     int row = m_modList->row(sep);
     for (int i = row + 1; i < m_modList->count(); ++i) {
-        auto *it = m_modList->item(i);
+        ModRow it = m_modList->item(i);
         if (mod_row::isSeparator(it)) break;
         it->setHidden(collapse);
     }
@@ -245,7 +244,7 @@ void MainWindow::collapseSection(QListWidgetItem *sep, bool collapse)
     updateModCount();
 }
 
-void MainWindow::onEditSeparator(QListWidgetItem *item)
+void MainWindow::onEditSeparator(ModRow item)
 {
     SeparatorDialog dlg(this);
     dlg.prefill(item->text(),
@@ -283,13 +282,14 @@ void MainWindow::addSeparatorAtRow(int targetRow)
     if (name.isEmpty()) return;
 
     m_undoStack->pushUndo();
-    auto *item = new QListWidgetItem(name);
-    item->setData(ModRole::ItemType, ItemType::Separator);
-    item->setData(ModRole::BgColor,  dlg.backgroundColor());
-    item->setData(ModRole::FgColor,  dlg.fontColor());
-    item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled);
+    ModEntry sep;
+    sep.itemType    = ItemType::Separator;
+    sep.displayName = name;
+    sep.bgColor     = dlg.backgroundColor();
+    sep.fgColor     = dlg.fontColor();
+    sep.itemFlags   = Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled;
 
-    m_modList->insertItem(qBound(0, targetRow, m_modList->count()), item);
+    const ModRow item = m_modList->insertItem(qBound(0, targetRow, m_modList->count()), sep);
     m_modList->setCurrentItem(item);
     m_modList->scrollToItem(item);
     statusBar()->showMessage(T("status_separator_added").arg(name), 2000);
@@ -372,7 +372,7 @@ void MainWindow::checkPendingDisables()
     QList<int> rows;
     for (const QPersistentModelIndex &pi : pending) {
         if (!pi.isValid()) continue;
-        auto *it = m_modList->item(pi.row());
+        ModRow it = m_modList->item(pi.row());
         if (!it) continue;
         if (!mod_row::isMod(it)) continue;
         if (it->checkState() != Qt::Unchecked) continue;
@@ -382,7 +382,7 @@ void MainWindow::checkPendingDisables()
 
     // `after` is the list as it stands; `before` is that with these rows still
     // ticked. The diff is what the user just did.
-    const QList<deps::ModEntry> after = deps::snapshot(m_modList);
+    const QList<deps::ModEntry> after = deps::snapshot(m_model.all());
     QList<deps::ModEntry> before = after;
     for (int r : rows)
         if (r >= 0 && r < before.size()) before[r].enabled = true;
@@ -404,10 +404,10 @@ void MainWindow::checkPendingDisables()
         const QSignalBlocker blocker(m_modList);
         if (choice == DepBreak::Cancel) {
             for (int r : rows)
-                if (auto *it = m_modList->item(r)) it->setCheckState(Qt::Checked);
+                if (ModRow it = m_modList->item(r)) it->setCheckState(Qt::Checked);
         } else {
             for (int r : cascade)
-                if (auto *it = m_modList->item(r)) it->setCheckState(Qt::Unchecked);
+                if (ModRow it = m_modList->item(r)) it->setCheckState(Qt::Unchecked);
         }
     }
     m_depWarnSuspended = false;
@@ -441,22 +441,22 @@ void MainWindow::onRemoveSelected()
     // page all carry it - so removing the PATCH row of a library breaks
     // nothing while its MAIN row stays. The URL scan this replaces named every
     // dependent anyway, which on a 26-dependent library was a false alarm.
-    QSet<QListWidgetItem*> selectedSet;
-    for (auto *item : selected) selectedSet.insert(item);
+    QSet<ModRow > selectedSet;
+    for (ModRow item : selected) selectedSet.insert(item);
 
-    const QList<deps::ModEntry> before = deps::snapshot(m_modList);
+    const QList<deps::ModEntry> before = deps::snapshot(m_model.all());
     QList<deps::ModEntry> after = before;
-    for (auto *item : selected) {
+    for (ModRow item : selected) {
         const int row = m_modList->row(item);
         if (row >= 0 && row < after.size()) after[row] = deps::ModEntry{};
     }
 
-    QList<QListWidgetItem*> dependents;
+    QList<ModRow > dependents;
     // includeDisabled: a row leaving the list matters to whoever declared it
     // whether or not that dependent happens to be ticked right now.
     for (const deps::Breakage &b :
              deps::findNewlyBroken(before, after, /*includeDisabled=*/true)) {
-        auto *cand = m_modList->item(b.idx);
+        ModRow cand = m_modList->item(b.idx);
         if (cand && !selectedSet.contains(cand)) dependents.append(cand);
     }
 
@@ -465,22 +465,22 @@ void MainWindow::onRemoveSelected()
     // surviving row still carries it, so removing the PATCH row of a mod page
     // does not delete a dependent's still-valid declaration of it.
     QSet<QString> goingAway;
-    for (auto *item : selected) {
+    for (ModRow item : selected) {
         const QString u = item->data(ModRole::NexusUrl).toString();
         if (u.isEmpty()) continue;
         bool survives = false;
         for (int i = 0; i < m_modList->count() && !survives; ++i) {
-            auto *cand = m_modList->item(i);
+            ModRow cand = m_modList->item(i);
             if (selectedSet.contains(cand)) continue;
             if (cand->data(ModRole::NexusUrl).toString() == u) survives = true;
         }
         if (!survives) goingAway.insert(u);
     }
 
-    QList<QListWidgetItem*> toRemove = selected;
+    QList<ModRow > toRemove = selected;
     if (!dependents.isEmpty()) {
         QStringList names;
-        for (auto *d : dependents) {
+        for (ModRow d : dependents) {
             QString n = d->data(ModRole::CustomName).toString();
             if (n.isEmpty()) n = d->text();
             names << "  • " + n;
@@ -509,7 +509,7 @@ void MainWindow::onRemoveSelected()
     // dependencies" warning even though the user explicitly removed the mod.
     if (!goingAway.isEmpty()) {
         for (int i = 0; i < m_modList->count(); ++i) {
-            auto *cand = m_modList->item(i);
+            ModRow cand = m_modList->item(i);
             if (!mod_row::isMod(cand)) continue;
             if (selectedSet.contains(cand)) continue;
             QStringList deps = cand->data(ModRole::DependsOn).toStringList();
@@ -531,7 +531,7 @@ void MainWindow::onRemoveSelected()
     // after a previous remove.
     {
         bool gcChanged = false;
-        for (auto *item : toRemove) {
+        for (ModRow item : toRemove) {
             const QString mp = item->data(ModRole::ModPath).toString();
             if (!mp.isEmpty() && m_groundcoverApproved.remove(mp))
                 gcChanged = true;
@@ -557,7 +557,7 @@ void MainWindow::onRemoveSelected()
     static const QStringList kContentExts{".esp", ".esm", ".omwaddon"};
     QSet<QString> removedPluginFilenames;
     QStringList installedPaths;
-    for (auto *it : toRemove) {
+    for (ModRow it : toRemove) {
         if (!mod_row::isMod(it)) continue;
         const QString mp = it->data(ModRole::ModPath).toString();
         if (mp.isEmpty()) continue;
@@ -583,7 +583,7 @@ void MainWindow::onRemoveSelected()
 
     // Invalidate cache for paths we're about to remove so stale entries don't
     // linger (a future re-install of the same folder should re-scan).
-    for (auto *item : toRemove) {
+    for (ModRow item : toRemove) {
         const QString mp = item->data(ModRole::ModPath).toString();
         if (!mp.isEmpty()) m_scans->invalidateDataFoldersCache(mp);
     }
@@ -591,14 +591,14 @@ void MainWindow::onRemoveSelected()
     // A row still in the download queue leaves it first, or its reply would
     // land on freed memory. A queued entry is dropped on the spot; an active
     // transfer aborts and cleans up when its reply finishes.
-    for (auto *item : toRemove) {
+    for (ModRow item : toRemove) {
         const QUuid rowKey = mod_row::rowIdIfAny(item);
         if (!rowKey.isNull() && m_downloadQueue->isQueued(rowKey))
             m_downloadQueue->cancelQueued(rowKey);
     }
 
-    for (auto *item : toRemove)
-        delete m_modList->takeItem(m_modList->row(item));
+    for (ModRow item : toRemove)
+        m_modList->removeRow(m_modList->row(item));
 
     if (deleteDisk) {
         const QString modsRootAbs = m_modsDir.isEmpty()
@@ -652,7 +652,7 @@ void MainWindow::onRemoveSelected()
     if (m_filterBar && m_filterBar->hasText()) {
         bool anyVisibleMod = false;
         for (int i = 0; i < m_modList->count(); ++i) {
-            auto *it = m_modList->item(i);
+            ModRow it = m_modList->item(i);
             if (!mod_row::isMod(it)) continue;
             if (!it->isHidden()) { anyVisibleMod = true; break; }
         }
@@ -763,7 +763,7 @@ void MainWindow::onRemoveSelected()
         }));
 }
 
-void MainWindow::sendSelectedToSeparator(QListWidgetItem *sep)
+void MainWindow::sendSelectedToSeparator(ModRow sep)
 {
     if (!sep) return;
     const auto selected = m_modList->selectedItems();
@@ -771,7 +771,7 @@ void MainWindow::sendSelectedToSeparator(QListWidgetItem *sep)
 
     int sepRow = m_modList->row(sep);
     QList<int> rows;
-    for (auto *sel : selected) {
+    for (ModRow sel : selected) {
         if (!mod_row::isMod(sel)) continue;
         int r = m_modList->row(sel);
         if (r != sepRow) rows.append(r);
@@ -781,28 +781,20 @@ void MainWindow::sendSelectedToSeparator(QListWidgetItem *sep)
 
     m_undoStack->pushUndo();
 
-    // Take in descending order so earlier indices stay valid; prepend so the
-    // destination order matches the original top-to-bottom selection order.
-    QList<QListWidgetItem *> picked;
-    picked.reserve(rows.size());
-    for (int k = rows.size() - 1; k >= 0; --k) {
-        int r = rows[k];
-        picked.prepend(m_modList->takeItem(r));
-        if (r < sepRow) --sepRow;
-    }
-
-    // Insert at the *end* of the target section - i.e. just before the next
-    // separator, or at the end of the list if this is the last section.
-    int insertAt = sepRow + 1;
-    while (insertAt < m_modList->count() &&
-           !mod_row::isSeparator(m_modList->item(insertAt))) {
+    // The block lands at the *end* of the target section - just before the
+    // next separator, or at the end of the list - counted in the list without
+    // the rows that are moving.
+    QList<int> remaining;
+    for (int i = 0; i < m_modList->count(); ++i)
+        if (!rows.contains(i)) remaining.append(i);
+    int insertAt = remaining.indexOf(sepRow) + 1;
+    while (insertAt < remaining.size()
+           && !mod_row::isSeparator(m_modList->item(remaining.at(insertAt))))
         ++insertAt;
-    }
-    for (int k = 0; k < picked.size(); ++k)
-        m_modList->insertItem(insertAt + k, picked[k]);
+    const QList<ModRow> picked = m_modList->moveRowsTo(rows, insertAt);
 
     m_modList->clearSelection();
-    for (auto *it : picked) it->setSelected(true);
+    for (const ModRow &it : picked) m_modList->setRowSelected(it, true);
     if (!picked.isEmpty())
         m_modList->setCurrentItem(picked.first(), QItemSelectionModel::NoUpdate);
 
@@ -816,7 +808,7 @@ void MainWindow::sendSelectedToEdge(bool toBeginning)
     if (selected.isEmpty()) return;
 
     QList<int> rows;
-    for (auto *sel : selected) {
+    for (ModRow sel : selected) {
         if (!mod_row::isMod(sel)) continue;
         rows.append(m_modList->row(sel));
     }
@@ -825,22 +817,13 @@ void MainWindow::sendSelectedToEdge(bool toBeginning)
 
     m_undoStack->pushUndo();
 
-    // Take in descending order so earlier indices stay valid, then prepend
-    // so the reinserted block keeps the original top-to-bottom order.
-    QList<QListWidgetItem *> picked;
-    picked.reserve(rows.size());
-    for (int k = rows.size() - 1; k >= 0; --k)
-        picked.prepend(m_modList->takeItem(rows[k]));
-
     // "Beginning" = row 0 (ahead of every separator too).  "End" = past the
-    // last row.  The loop inserts in forward order starting at insertAt so
-    // the block's internal order is preserved.
-    int insertAt = toBeginning ? 0 : m_modList->count();
-    for (int k = 0; k < picked.size(); ++k)
-        m_modList->insertItem(insertAt + k, picked[k]);
+    // last row. The block keeps its own top-to-bottom order.
+    const QList<ModRow> picked =
+        m_modList->moveRowsTo(rows, toBeginning ? 0 : m_modList->count());
 
     m_modList->clearSelection();
-    for (auto *it : picked) it->setSelected(true);
+    for (const ModRow &it : picked) m_modList->setRowSelected(it, true);
     if (!picked.isEmpty())
         m_modList->setCurrentItem(picked.first(), QItemSelectionModel::NoUpdate);
 
@@ -852,7 +835,7 @@ void MainWindow::sendSelectedToEdge(bool toBeginning)
 // what the click does rather than by the mechanism. The list shows who wins;
 // this is how it gets changed without hunting for a row that may be hundreds
 // of positions away.
-void MainWindow::buildConflictMenu(QMenu *menu, QListWidgetItem *item)
+void MainWindow::buildConflictMenu(QMenu *menu, ModRow item)
 {
     if (!menu || !item) return;
     const QString path = item->data(ModRole::ModPath).toString();
@@ -889,7 +872,7 @@ void MainWindow::buildConflictMenu(QMenu *menu, QListWidgetItem *item)
                        [this, target = c.modPath] {
             m_undoStack->pushUndo();
             for (int i = 0; i < m_modList->count(); ++i) {
-                auto *row = m_modList->item(i);
+                ModRow row = m_modList->item(i);
                 if (row->data(ModRole::ModPath).toString() != target) continue;
                 row->setCheckState(Qt::Unchecked);
                 break;
@@ -908,10 +891,10 @@ void MainWindow::buildConflictMenu(QMenu *menu, QListWidgetItem *item)
         sub->addAction(T("ctx_conflict_reveal").arg(c.first), this,
                        [this, target] {
             for (int i = 0; i < m_modList->count(); ++i) {
-                auto *row = m_modList->item(i);
+                ModRow row = m_modList->item(i);
                 if (row->data(ModRole::ModPath).toString() != target) continue;
                 m_modList->clearSelection();
-                row->setSelected(true);
+                m_modList->setRowSelected(row, true);
                 m_modList->setCurrentItem(row);
                 m_modList->scrollToItem(row, QAbstractItemView::PositionAtCenter);
                 break;
@@ -923,7 +906,7 @@ void MainWindow::buildConflictMenu(QMenu *menu, QListWidgetItem *item)
 
 void MainWindow::onContextMenu(const QPoint &pos)
 {
-    QListWidgetItem *item = m_modList->itemAt(pos);
+    ModRow item = m_modList->itemAt(pos);
     QMenu menu(this);
 
     if (item) {
@@ -944,7 +927,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                 m_undoStack->pushUndo();
                 int start = m_modList->row(item) + 1;
                 for (int i = start; i < m_modList->count(); ++i) {
-                    auto *it = m_modList->item(i);
+                    ModRow it = m_modList->item(i);
                     if (mod_row::isSeparator(it))
                         break;
                     if (it->flags() & Qt::ItemIsUserCheckable)
@@ -1024,7 +1007,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                 // The way back in is the SOURCE mod's editor: that is where
                 // the answers live, and building from there updates this very
                 // folder rather than making a second one.
-                if (auto *src = translationSourceRowFor(item)) {
+                if (ModRow src = translationSourceRowFor(item)) {
                     QAction *act = menu.addAction(
                         T("translate_review_source").arg(src->text().trimmed()),
                         this, [this, src]{ onTranslateMod(src); });
@@ -1090,7 +1073,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                     const QString selfPath = item->data(ModRole::ModPath).toString();
                     int offered = 0;
                     for (int r = 0; r < m_modList->count() && offered < 200; ++r) {
-                        auto *cand = m_modList->item(r);
+                        ModRow cand = m_modList->item(r);
                         if (cand == item) continue;
                         if (!mod_row::isMod(cand))
                             continue;
@@ -1197,7 +1180,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                     // hypothetical is the same shape: this row, gone.
                     {
                         const QList<deps::ModEntry> before =
-                            deps::snapshot(m_modList);
+                            deps::snapshot(m_model.all());
                         QList<deps::ModEntry> after = before;
                         const int row = m_modList->row(item);
                         if (row >= 0 && row < after.size())
@@ -1214,7 +1197,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                         // rows stay in the list where the user can act on them.
                         if (choice == DepBreak::ProceedAndCascade) {
                             for (int r : cascade)
-                                if (auto *dep = m_modList->item(r))
+                                if (ModRow dep = m_modList->item(r))
                                     dep->setCheckState(Qt::Unchecked);
                         }
                     }
@@ -1229,7 +1212,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                         // a restored row would claim "installed" while pointing
                         // at nothing.
                         m_undoStack->pushUndo();
-                        delete m_modList->takeItem(m_modList->row(item));
+                        m_modList->removeRow(m_modList->row(item));
                         saveModList();
                         ui::info(this, T("ctx_uninstall"), T("share_uninstall_kept_shared"));
                         return;
@@ -1241,7 +1224,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                             return;
                         }
                     }
-                    delete m_modList->takeItem(m_modList->row(item));
+                    m_modList->removeRow(m_modList->row(item));
                     saveModList();
                 });
 
@@ -1275,7 +1258,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                             box.exec();
                             if (box.clickedButton() != copyBtn
                                 && box.clickedButton() != defBtn) return;
-                            shareModIntoProfile(ModEntry::fromItem(item), targetKey,
+                            shareModIntoProfile(item->entry(), targetKey,
                                                 box.clickedButton() == copyBtn);
                         });
                     }
@@ -1290,8 +1273,8 @@ void MainWindow::onContextMenu(const QPoint &pos)
                     // the selection (matches Qt's usual right-click-on-unselected
                     // behaviour of treating the clicked row as the target).
                     QList<QUuid>            bulk;      // rows by id
-                    QSet<QListWidgetItem*>  bulkSet;
-                    auto addIfEligible = [&](QListWidgetItem *it) {
+                    QSet<ModRow >  bulkSet;
+                    auto addIfEligible = [&](ModRow it) {
                         if (!it || bulkSet.contains(it)) return;
                         if (!mod_row::isMod(it)) return;
                         if (mod_row::installStatusOf(it) != InstallStatus::NotInstalled) return;
@@ -1300,7 +1283,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                         bulkSet.insert(it);
                     };
                     addIfEligible(item);
-                    for (auto *sel : m_modList->selectedItems()) addIfEligible(sel);
+                    for (ModRow sel : m_modList->selectedItems()) addIfEligible(sel);
 
                     if (bulk.size() > 1) {
                         menu.addAction(T("ctx_install_bulk").arg(bulk.size()), this,
@@ -1392,9 +1375,9 @@ void MainWindow::onContextMenu(const QPoint &pos)
                 // silent. With a multi-selection, all items follow the right-
                 // clicked item's state.
                 const bool isUtil = item->data(ModRole::IsUtility).toBool();
-                const QList<QListWidgetItem *> utilTargets = [&]{
-                    QList<QListWidgetItem *> sel;
-                    for (auto *it : m_modList->selectedItems())
+                const QList<ModRow > utilTargets = [&]{
+                    QList<ModRow > sel;
+                    for (ModRow it : m_modList->selectedItems())
                         if (mod_row::isMod(it))
                             sel << it;
                     if (!sel.contains(item)) sel.prepend(item);
@@ -1420,7 +1403,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                         }
                     }
                     m_undoStack->pushUndo();
-                    for (auto *it : utilTargets) {
+                    for (ModRow it : utilTargets) {
                         it->setData(ModRole::IsUtility, !isUtil);
                         m_modList->update(m_modList->indexFromItem(it));
                     }
@@ -1430,9 +1413,9 @@ void MainWindow::onContextMenu(const QPoint &pos)
                 // Favourite toggle: same as the hovering ★ icon, for users who
                 // don't find the icon. No explainer - the gold star is obvious.
                 const bool isFav = item->data(ModRole::IsFavorite).toBool();
-                const QList<QListWidgetItem *> favTargets = [&]{
-                    QList<QListWidgetItem *> sel;
-                    for (auto *it : m_modList->selectedItems())
+                const QList<ModRow > favTargets = [&]{
+                    QList<ModRow > sel;
+                    for (ModRow it : m_modList->selectedItems())
                         if (mod_row::isMod(it))
                             sel << it;
                     if (!sel.contains(item)) sel.prepend(item);
@@ -1442,7 +1425,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                     isFav ? T("ctx_unmark_favorite") : T("ctx_mark_favorite"),
                     this, [this, favTargets, isFav]{
                     m_undoStack->pushUndo();
-                    for (auto *it : favTargets) {
+                    for (ModRow it : favTargets) {
                         it->setData(ModRole::IsFavorite, !isFav);
                         m_modList->update(m_modList->indexFromItem(it));
                     }
@@ -1467,7 +1450,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
     menu.exec(m_modList->viewport()->mapToGlobal(pos));
 }
 
-void MainWindow::onItemDoubleClicked(QListWidgetItem *item)
+void MainWindow::onItemDoubleClicked(ModRow item)
 {
     if (!item) return;
 
@@ -1505,7 +1488,7 @@ void MainWindow::onItemDoubleClicked(QListWidgetItem *item)
         // Same question the context menu asks, same answer. On a translation
         // row the button reviews what it translates rather than offering to
         // translate a Spanish mod into Spanish.
-        QListWidgetItem *const transSource = translationSourceRowFor(item);
+        ModRow const transSource = translationSourceRowFor(item);
         const auto tpHere =
             (!transSource && mod_row::isInstalled(item))
                 ? translationProgressStateFor(item)
@@ -1661,10 +1644,10 @@ void MainWindow::onItemDoubleClicked(QListWidgetItem *item)
         // same mod page, which the raw string compare here used to miss.
         QStringList usedBy;
         {
-            const QList<deps::ModEntry> snap = deps::snapshot(m_modList);
+            const QList<deps::ModEntry> snap = deps::snapshot(m_model.all());
             for (int idx : deps::findDeclaredDependents(
                      snap, {m_modList->row(item)})) {
-                auto *dep = m_modList->item(idx);
+                ModRow dep = m_modList->item(idx);
                 if (dep) usedBy << dep->text();
             }
         }
@@ -1738,9 +1721,11 @@ void MainWindow::onSortSeparators()
     dropViewSortKeepingOrder();
     m_undoStack->pushUndo();
 
-    // Detach all items, then re-add in the new order. Pointers stay valid.
-    while (m_modList->count() > 0) m_modList->takeItem(0);
-    for (auto *it : newOrder) m_modList->addItem(it);
+    // The dialog's order, as a permutation of the current rows.
+    QList<int> order;
+    order.reserve(newOrder.size());
+    for (const ModRow &it : newOrder) order.append(m_modList->row(it));
+    m_model.reorder(order);
 
     saveModList();
     updateSectionCounts();
@@ -1792,27 +1777,21 @@ void MainWindow::resetToSavedOrder()
 {
     if (!m_viewSortActive) return;
 
-    // Reorder the display back to the stamped saved order. Same item pointers,
-    // so no data is lost; unstamped rows (added mid-sort) trail.
+    // Reorder the rows back to the stamped saved order; unstamped rows (added
+    // mid-sort) trail. The stamps go with it.
     const QList<int> order = rowOrderForPersist();
-    QList<QListWidgetItem *> items;
-    items.reserve(order.size());
-    for (int idx : order) items.append(m_modList->item(idx));
-
     {
         const QSignalBlocker blocker(m_modList);
-        while (m_modList->count() > 0) m_modList->takeItem(0);
-        for (auto *it : items) {
-            it->setData(ModRole::SortAnchor, QVariant());
-            m_modList->addItem(it);   // re-added items default to visible
-        }
+        m_model.reorder(order);
+        for (int i = 0; i < m_modList->count(); ++i)
+            m_modList->item(i)->setData(ModRole::SortAnchor, QVariant());
     }
     m_viewSortActive = false;
 
-    // Hidden state is lost across takeItem/addItem, so re-collapse the sections
-    // that were collapsed (mirrors loadModList's post-build pass).
+    // Re-collapse the sections that were collapsed (mirrors loadModList's
+    // post-build pass), in case a hidden row was left showing.
     for (int i = 0; i < m_modList->count(); ++i) {
-        auto *sep = m_modList->item(i);
+        ModRow sep = m_modList->item(i);
         if (mod_row::isSeparator(sep)
                 && sep->data(ModRole::Collapsed).toBool())
             collapseSection(sep, true);
@@ -1837,7 +1816,7 @@ void MainWindow::onSortBySize()
     // saved load order is emitted by rowOrderForPersist() on the next save, so
     // there is deliberately no saveModList() here.
     enterViewSort();
-    modlist_sort::bySize(m_modList, m_sizeSortAsc);
+    modlist_sort::bySize(&m_model, m_sizeSortAsc);
     updateSectionCounts();
 
     if (m_notify) m_notify->showSticky(T("viewsort_banner"), QStringLiteral("#7a5c17"));
@@ -1866,7 +1845,7 @@ void MainWindow::updateSectionCounts()
         }
     }
 
-    QListWidgetItem *currentSep = nullptr;
+    ModRow currentSep = nullptr;
     int active = 0, total = 0;
     auto flush = [&]() {
         if (!currentSep) return;
@@ -1875,7 +1854,7 @@ void MainWindow::updateSectionCounts()
         currentSep->setData(ModRole::SepHasUpdate, anyUpdate);
     };
     for (int i = 0; i < m_modList->count(); ++i) {
-        auto *it = m_modList->item(i);
+        ModRow it = m_modList->item(i);
         if (mod_row::isSeparator(it)) {
             flush();
             currentSep = it;
@@ -1902,7 +1881,7 @@ void MainWindow::onSortByDate()
     // View-only sort (see onSortBySize): reorders the display, never the saved
     // order. No saveModList() - rowOrderForPersist() keeps disk canonical.
     enterViewSort();
-    modlist_sort::byDate(m_modList, m_dateSortAsc);
+    modlist_sort::byDate(&m_model, m_dateSortAsc);
     updateSectionCounts();
 
     if (m_notify) m_notify->showSticky(T("viewsort_banner"), QStringLiteral("#7a5c17"));
@@ -2074,7 +2053,7 @@ QString MainWindow::vanillaDataFolderPath() const
     return vanillaDataFolder();
 }
 
-void MainWindow::onTranslateMod(QListWidgetItem *item)
+void MainWindow::onTranslateMod(ModRow item)
 {
     if (!item) return;
     // Handed a translation mod, work on what it translates. Checked here as
@@ -2086,7 +2065,7 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
     // everything else right for free: the progress file, the dialog title,
     // build()'s output folder and the insert-below-the-source row all stay
     // keyed on the source mod.
-    if (auto *src = translationSourceRowFor(item)) item = src;
+    if (ModRow src = translationSourceRowFor(item)) item = src;
 
     const QString modPath = item->data(ModRole::ModPath).toString();
     const QString modName = item->text().trimmed();
@@ -2197,9 +2176,9 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
     // first, which is the identity that matters, then on the name nameFor()
     // would have given it.
     const QString wanted = translation_mod::nameFor(modName, language);
-    QListWidgetItem *existing = nullptr;
+    ModRow existing = nullptr;
     for (int i = 0; i < m_modList->count() && !existing; ++i) {
-        auto *cand = m_modList->item(i);
+        ModRow cand = m_modList->item(i);
         if (!mod_row::isMod(cand)) continue;
         if (cand->data(ModRole::ModPath).toString() == built.modPath
             || cand->text().trimmed() == wanted)
@@ -2221,18 +2200,17 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
         // game.
         m_undoStack->pushUndo();
         dropViewSortKeepingOrder();
-        auto *tr = new QListWidgetItem(built.modName);
-        tr->setData(ModRole::ItemType,      ItemType::Mod);
-        tr->setData(ModRole::ModPath,       built.modPath);
-        mod_row::setInstallStatus(tr, InstallStatus::Installed);
-        tr->setData(ModRole::DateAdded,     QDateTime::currentDateTime());
+        ModEntry tr = ModEntry::named(built.modName);
+        tr.modPath       = built.modPath;
+        tr.installStatus = int(InstallStatus::Installed);
+        tr.dateAdded     = QDateTime::currentDateTime();
         // Marks this as ours, which is what makes "package as archive" appear
         // on it and nowhere else.
-        tr->setData(ModRole::IsGeneratedTranslation, true);
-        tr->setCheckState(Qt::Checked);
-        tr->setToolTip(built.modPath);
-        m_modList->insertItem(m_modList->row(item) + 1, tr);
-        m_modList->setCurrentItem(tr);
+        tr.isGeneratedTranslation = true;
+        tr.checked = true;
+        tr.toolTip = built.modPath;
+        const ModRow trRow = m_modList->insertItem(m_modList->row(item) + 1, tr);
+        m_modList->setCurrentItem(trRow);
     }
 
     saveModList();
@@ -2248,7 +2226,7 @@ void MainWindow::onTranslateMod(QListWidgetItem *item)
     ui::info(this, T("translate_title").arg(modName), body);
 }
 
-QString MainWindow::translationProgressPathFor(const QListWidgetItem *item) const
+QString MainWindow::translationProgressPathFor(const ModRow item) const
 {
     if (!item) return {};
     const QString name = item->text().trimmed();
@@ -2272,8 +2250,8 @@ QString MainWindow::translationProgressPathFor(const QListWidgetItem *item) cons
     return stable;
 }
 
-QListWidgetItem *
-MainWindow::translationSourceRowFor(const QListWidgetItem *item) const
+ModRow 
+MainWindow::translationSourceRowFor(const ModRow item) const
 {
     if (!item) return nullptr;
     if (!mod_row::isMod(item)) return nullptr;
@@ -2288,7 +2266,7 @@ MainWindow::translationSourceRowFor(const QListWidgetItem *item) const
     if (source.isEmpty()) return nullptr;   // flagged, but unparseable: say nothing
 
     for (int i = 0; i < m_modList->count(); ++i) {
-        auto *cand = m_modList->item(i);
+        ModRow cand = m_modList->item(i);
         if (cand == item) continue;
         if (!mod_row::isMod(cand)) continue;
         if (cand->text().trimmed() == source) return cand;
@@ -2297,7 +2275,7 @@ MainWindow::translationSourceRowFor(const QListWidgetItem *item) const
 }
 
 MainWindow::TranslationProgressState
-MainWindow::translationProgressStateFor(const QListWidgetItem *item) const
+MainWindow::translationProgressStateFor(const ModRow item) const
 {
     TranslationProgressState st;
     const QString path = translationProgressPathFor(item);
@@ -2440,7 +2418,7 @@ void MainWindow::setProfileTranslationLanguage(const QString &token)
                             : target_language::displayName(token)), 4000);
 }
 
-void MainWindow::onPackageMod(QListWidgetItem *item)
+void MainWindow::onPackageMod(ModRow item)
 {
     if (!item) return;
     // Checked here as well as in the menu: a gate that lives only in the UI

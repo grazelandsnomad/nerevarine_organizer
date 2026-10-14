@@ -11,12 +11,13 @@
 #include <Qt>
 
 #include "mod_row.h"
+#include "modlistview.h"
 #include "modroles.h"
 #include "translator.h"
 
 namespace send_to_dialog {
 
-QListWidgetItem *pickSeparator(QWidget *parent, QListWidget *list)
+ModRow pickSeparator(QWidget *parent, ModListView *list)
 {
     QDialog dlg(parent);
     dlg.setWindowTitle(T("send_to_dialog_title"));
@@ -35,7 +36,7 @@ QListWidgetItem *pickSeparator(QWidget *parent, QListWidget *list)
     // Stash the source-list row index in UserRole so Accept can resolve back
     // to the real separator.
     for (int i = 0; i < list->count(); ++i) {
-        auto *cand = list->item(i);
+        const ModRow cand = list->item(i);
         if (!mod_row::isSeparator(cand)) continue;
         auto *row = new QListWidgetItem(cand->text(), uiList);
         row->setData(Qt::UserRole, i);
@@ -80,7 +81,7 @@ QListWidgetItem *pickSeparator(QWidget *parent, QListWidget *list)
     if (!picked || picked->isHidden()) return nullptr;
     int origRow = picked->data(Qt::UserRole).toInt();
     if (origRow < 0 || origRow >= list->count()) return nullptr;
-    QListWidgetItem *sep = list->item(origRow);
+    const ModRow sep = list->item(origRow);
     if (!sep || !mod_row::isSeparator(sep))
         return nullptr;
     return sep;

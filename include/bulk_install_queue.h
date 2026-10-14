@@ -7,7 +7,8 @@
 
 #include <functional>
 
-class QListWidgetItem;
+#include "modrow.h"
+
 class QTimer;
 
 // Drip-feed throttle for "Install N selected mods". Kicking off N
@@ -15,7 +16,7 @@ class QTimer;
 // and stacks up modal pickers. We append rows to a queue and pop one
 // every interval until the queue drains.
 //
-// Rows are held by id (mod_row::rowId), never as items: a row removed
+// Rows are held by id (mod_row::rowId), never as rows: a row removed
 // between the click and its tick resolves to nothing and is skipped, and so
 // is one that an undo rebuilt without carrying the id.
 class BulkInstallQueue : public QObject {
@@ -24,8 +25,8 @@ public:
     // resolve turns a row id into the live row, or nullptr when it is gone
     // (MainWindow::rowById in practice). installFn is the actual per-row
     // kick-off (MainWindow::onInstallFromNexus), given the resolved row.
-    using RowResolver = std::function<QListWidgetItem *(const QUuid &)>;
-    using InstallFn   = std::function<void(QListWidgetItem *)>;
+    using RowResolver = std::function<ModRow(const QUuid &)>;
+    using InstallFn   = std::function<void(const ModRow &)>;
 
     BulkInstallQueue(RowResolver resolve, InstallFn installFn,
                      QObject *parent = nullptr);

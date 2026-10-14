@@ -21,6 +21,8 @@
 #include "plugin_records.h"      // RecordClash likewise
 #include "loadordercontroller.h" // TranslationCoverage likewise
 #include "modlist_model.h"
+#include "modlistview.h"
+#include "modrow.h"
 #include "downloadqueue.h"
 #include "installcontroller.h"   // for InstallController::VerifyFailKind in slot
 #include "save_queue.h"          // serialized off-thread save writes (by-value member)
@@ -38,7 +40,6 @@ class QCloseEvent;
 class QLabel;
 class QLineEdit;
 class QListWidget;
-class QListWidgetItem;
 class QNetworkAccessManager;
 class QNetworkReply;
 class QPushButton;
@@ -76,6 +77,8 @@ public slots:
     void installLocalArchive(const QString &archivePath,
                              const QString &nexusUrlHint = {});
     void handleDroppedImportFile(const QString &path);
+    // Files dropped on the list from outside: archives install, lists import.
+    void onLocalFilesDropped(const QStringList &paths);
 
 private slots:
     void onAddSeparator();
@@ -138,7 +141,7 @@ private slots:
                                const QUuid &installToken);
     void onReviewUpdates();
     void onContextMenu(const QPoint &pos);
-    void onItemDoubleClicked(QListWidgetItem *item);
+    void onItemDoubleClicked(ModRow item);
     void onSetApiKey();
     void onSetTranslateProvider();
     void onSetModsDir();
@@ -250,7 +253,7 @@ private slots:
     // The tail of addAndDetectGame: mods dir + profile creation, once the game
     // has been located (by .exe, or by folder for OpenGothic).
     void createGameProfile(const QString &gameId, const QString &displayName);
-    void onCurrentModChanged(QListWidgetItem *current, QListWidgetItem *previous);
+    void onCurrentModChanged(ModRow current, ModRow previous);
 
     bool eventFilter(QObject *obj, QEvent *event) override;
 
@@ -314,7 +317,7 @@ private:
     // installToken. Touches nothing else (not m_modList, load order, openmw.cfg,
     // or saveModList's side effects). No-op when the token is null or the path
     // won't resolve.
-    void saveModListFor(const QString &profileKey, QListWidgetItem *placeholder);
+    void saveModListFor(const QString &profileKey, ModRow placeholder);
     // Absolute modlist path for a profile key (the <gameId>__<profileName> form
     // currentProfileKey emits). Empty when no profile matches.
     QString modlistPathFor(const QString &profileKey) const;
@@ -337,7 +340,7 @@ private:
     // m_strandedInstalls (parked across profile switches). When found in a
     // stranded bucket, `outProfileKey` (if non-null) gets the bucket key for
     // saveModListFor. nullptr on no match.
-    QListWidgetItem *findPlaceholderByToken(const QUuid &installToken,
+    ModRow findPlaceholderByToken(const QUuid &installToken,
                                             QString *outProfileKey = nullptr) const;
     // The row with this identity (mod_row::rowId) in the active list or the
     // stranded-install buckets, or nullptr when it is gone. Everything that
@@ -346,10 +349,10 @@ private:
     // row, a cleared list or an undo that rebuilt every item turns into a
     // null here instead of a freed pointer. Resolve again after any modal
     // dialog inside a slot: rows can be removed while one is open.
-    QListWidgetItem *rowById(const QUuid &row) const;
+    ModRow rowById(const QUuid &row) const;
     // rowById for a controller reply: a miss is logged and the row is dropped
     // from the id-keyed side tables.
-    QListWidgetItem *replyRow(const QUuid &row, const char *what);
+    ModRow replyRow(const QUuid &row, const char *what);
     void loadModList(const QString &path = QString(),
                      const QString &remapFrom = QString(),
                      const QString &remapTo   = QString());
@@ -375,7 +378,7 @@ private:
     void doImportNerevarineModList(const QString &path);
     static QString detectModsBaseFromFile(const QString &path);
     bool confirmReplaceModList();
-    void onViewChangelog(QListWidgetItem *item);
+    void onViewChangelog(ModRow item);
     void onNewModList();
     // savePath fires when the resolved path changes (auto-detected via PATH or
     // picked in the dialog); the call site owns the persisted-key choice via its
@@ -386,19 +389,19 @@ private:
                        bool monitored = false);
     void checkNxmHandlerRegistration();
     void checkDesktopShortcut();
-    void collapseSection(QListWidgetItem *sep, bool collapse);
-    void onEditSeparator(QListWidgetItem *item);
+    void collapseSection(ModRow sep, bool collapse);
+    void onEditSeparator(ModRow item);
 
     // (installLocalArchive is public: so the inline ModListWidget drop handler
     // can queue-dispatch to it without a friend.)
-    void sendSelectedToSeparator(QListWidgetItem *sep);
+    void sendSelectedToSeparator(ModRow sep);
     void openSendToDialog();
     // Bulk-move selection to row 0 or past the last row, keeping relative order.
     // "Send to -> Top / Bottom".
     void sendSelectedToEdge(bool toBeginning);
     void updateModCount();
-    void addModFromPath(const QString &dirPath, QListWidgetItem *placeholder = nullptr);
-    void purgeDuplicatePlaceholders(QListWidgetItem *installed);
+    void addModFromPath(const QString &dirPath, ModRow placeholder = nullptr);
+    void purgeDuplicatePlaceholders(ModRow installed);
 
     // Optional prompts addModFromPath fires once a mod is registered. Each is
     // self-guarding (no-op when N/A) so the call site stays three plain calls;
@@ -408,9 +411,9 @@ private:
     //   splash:        offer to clear the base-game splash so the mod's shows.
     //   bundled-patch: re-enable "<N> ... for <ThisMod>" subfolders in other
     //                  mods that were auto-skipped while this mod was absent.
-    void runGroundcoverHelper(QListWidgetItem *item, const QString &modRoot);
+    void runGroundcoverHelper(ModRow item, const QString &modRoot);
     void runSplashScreenHelper(const QString &modRoot);
-    void offerBundledPatchReenable(QListWidgetItem *item);
+    void offerBundledPatchReenable(ModRow item);
 
     // Kick off extraction. Returns immediately - the extract runs in
     // InstallController::extractArchive (QProcess) and reports back via
@@ -422,7 +425,7 @@ private:
     //   "archive-missing"  - archivePath missing or empty
     //   "mods-dir-unset"   - m_modsDir empty (first run misconfigured)
     [[nodiscard]] std::expected<void, QString>
-    extractAndAdd(const QString &archivePath, QListWidgetItem *placeholder);
+    extractAndAdd(const QString &archivePath, ModRow placeholder);
 
     // Verify the finished archive's size & md5 against Nexus's declared values
     // before extracting. Size check is synchronous; md5 runs on a QtConcurrent
@@ -433,16 +436,16 @@ private:
     //   "null-placeholder" - placeholder was nullptr
     //   "archive-missing"  - archivePath missing or empty
     [[nodiscard]] std::expected<void, QString>
-    verifyAndExtract(const QString &archivePath, QListWidgetItem *placeholder);
+    verifyAndExtract(const QString &archivePath, ModRow placeholder);
 
     // Thin wrapper; real logic in DownloadQueue.
     void setupDownloadQueue();
-    void onInstallFromNexus(QListWidgetItem *item);
+    void onInstallFromNexus(ModRow item);
     // Fetch the Nexus mod page `name` and cache it as ModRole::NexusTitle.
     // Silent - network/API errors leave the role unset. setAsCustomName also
     // writes it to CustomName + updates display text (for when the installed
     // folder has a generic name like "scripts").
-    void fetchNexusTitle(const QString &game, int modId, QListWidgetItem *item,
+    void fetchNexusTitle(const QString &game, int modId, ModRow item,
                          bool setAsCustomName = false);
     // Outcome of the "this mod page is already installed" prompt before a new
     // download. Distinct intents share one trigger (modId already installed):
@@ -469,7 +472,7 @@ private:
     // installed). allowMerge=false hides Merge for callers that can't honour it
     // (Search-on-Nexus installs into `item` itself - no folder to overlay).
     ReinstallChoice confirmReinstallIfInstalled(const QString &game, int modId,
-                                                 QListWidgetItem *except = nullptr,
+                                                 ModRow except = nullptr,
                                                  bool allowMerge = true);
     // Hard block for forbidden mods. True when (game, modId) is clear; false
     // (after the "forbidden" dialog, with a shortcut to the manager) when
@@ -522,12 +525,12 @@ private:
     // separate translation mod inserted directly below this one. The original
     // mod folder is never written to - see translation_mod.h for why that
     // shape was chosen over patching the plugin in place.
-    void onTranslateMod(QListWidgetItem *item);
+    void onTranslateMod(ModRow item);
     // "Package as archive...": zips the mod's folder contents ready for a mod
     // page. Offered ONLY on translations this app generated
     // (ModRole::IsGeneratedTranslation) - it exists to publish your own work,
     // not to repackage someone else's mod. Runs off the UI thread.
-    void onPackageMod(QListWidgetItem *item);
+    void onPackageMod(ModRow item);
     // The language mods should be in for the ACTIVE modlist profile: its own
     // override when it has one, else the shared default. Empty means the user
     // has never been asked - callers must not read that as English, which is
@@ -549,7 +552,7 @@ private:
     //
     // Keyed on the Nexus mod page, so a rename or a reinstall does not orphan
     // the file. A name-keyed file from before that change is still found.
-    QString translationProgressPathFor(const QListWidgetItem *item) const;
+    QString translationProgressPathFor(const ModRow item) const;
     // What a mod's saved translation work amounts to: how many answers are
     // stored, how many of those a human has actually vouched for, how big the
     // job is, and whether it has already been built into a translation mod.
@@ -570,7 +573,7 @@ private:
         bool built = false;
     };
     TranslationProgressState translationProgressStateFor(
-        const QListWidgetItem *item) const;
+        const ModRow item) const;
     // The row a translation mod translates, or nullptr when this row is not a
     // translation - or when its source is no longer in the list.
     //
@@ -579,7 +582,7 @@ private:
     // before that flag existed. One helper for all three readers - the context
     // menu, the Edit Mod button and onTranslateMod itself - so a gate that
     // lives only in the UI that draws it cannot be walked around.
-    QListWidgetItem *translationSourceRowFor(const QListWidgetItem *item) const;
+    ModRow translationSourceRowFor(const ModRow item) const;
     // Builds the vanilla-text table on a worker so the translate editor's
     // first open is a cache hit instead of a 94 MB walk on the UI thread.
     // Defined in mainwindow_list.cpp, where the table's cache lives.
@@ -598,17 +601,17 @@ private:
     // Sets (or clears, on empty) the ACTIVE profile's override, persists it,
     // and re-runs the scan when the notices are on.
     void setProfileTranslationLanguage(const QString &token);
-    void checkModDependencies(const QString &game, int modId, QListWidgetItem *item);
+    void checkModDependencies(const QString &game, int modId, ModRow item);
     // Fetch the Nexus file list for (game, modId). autoPickMain=true skips the
     // per-mod picker and takes the first MAIN/UPDATE file; used by batch update,
     // where 10+ stacked pickers are worse than letting the user cancel the few
     // that need it.
-    void fetchModFiles(const QString &game, int modId, QListWidgetItem *item,
+    void fetchModFiles(const QString &game, int modId, ModRow item,
                        bool autoPickMain = false);
-    void prepareItemForInstall(QListWidgetItem *item);
+    void prepareItemForInstall(ModRow item);
     // Roll a placeholder back to not-installed after a mid-install cancel (FOMOD
     // cancel today). Tolerates a null/removed placeholder.
-    void resetPlaceholderAfterInstallCancel(QListWidgetItem *placeholder,
+    void resetPlaceholderAfterInstallCancel(ModRow placeholder,
                                             const QString &archivePath);
     // Cross-profile counterpart of addModFromPath: applies the "install
     // completed" role updates to a stranded placeholder (parked in
@@ -616,8 +619,8 @@ private:
     // m_modList, load order, or openmw.cfg - those belong to the active profile
     // and would corrupt the wrong list. Caller persists via saveModListFor.
     // Move ModRole::PendingFileId to NexusFileId once an install has landed.
-    void commitInstalledFileId(QListWidgetItem *item);
-    void applyInstalledStateToStrandedPlaceholder(QListWidgetItem *placeholder,
+    void commitInstalledFileId(ModRow item);
+    void applyInstalledStateToStrandedPlaceholder(ModRow placeholder,
                                                   const QString &modPath,
                                                   const QString &profileKey);
     // The file work of an install - staging an installer's picks, moving the
@@ -641,7 +644,7 @@ private:
     // destination under m_modsDir too: the job copies it and merges into the
     // copy, so the other profile's files stay put. Download-based mutations
     // (reinstall/update) extract fresh and just repoint the row - no fork.
-    void prepareMerge(QListWidgetItem *placeholder, install_job::Work &work);
+    void prepareMerge(ModRow placeholder, install_job::Work &work);
     void updateInstallProgress();
     struct RunningInstall {
         QUuid                       token;
@@ -657,7 +660,7 @@ private:
     // When a new install shares a Nexus mod page with an existing entry, point
     // their DependsOn lists at each other so missing-dep warnings fire when the
     // patch is enabled but the base isn't.
-    void autoLinkSameModpage(QListWidgetItem *item, const QString &categoryHint);
+    void autoLinkSameModpage(ModRow item, const QString &categoryHint);
 
     // Conflict detection (run by LoadOrderController). schedule() arms the
     // debounce; the timer slot snapshots the modlist and hands it to the
@@ -669,15 +672,15 @@ private:
         const QHash<QString, QList<plugin_records::RecordClash>> &recordClashes);
     // Stamps ModRole::ConflictHighlight on every row from `current`'s conflict
     // partners. Called on selection change and after each scan lands.
-    void applyConflictHighlights(QListWidgetItem *current);
+    void applyConflictHighlights(ModRow current);
     // Move `mod` to sit directly below (after=true) or above the row whose
     // ModPath is `targetPath`, which is how a conflict gets flipped: the lower
     // mod wins. No-op if either row is gone.
-    void moveModAdjacentTo(QListWidgetItem *mod, const QString &targetPath,
+    void moveModAdjacentTo(ModRow mod, const QString &targetPath,
                            bool after);
     // Conflict entries for the row's context menu: jump to each counterpart,
     // or flip which one overwrites the other.
-    void buildConflictMenu(QMenu *menu, QListWidgetItem *item);
+    void buildConflictMenu(QMenu *menu, ModRow item);
 
     // Translation coverage. Unlike the conflict scan this is opt-in: it reads
     // and decompresses record bodies, so it only runs while the toolbar toggle
@@ -783,7 +786,7 @@ private:
     // mirror members and poke m_downloadQueue when ready.
     void applyCurrentProfileToMirrors();
 
-    QListWidget                      *m_modList      = nullptr;
+    ModListView                      *m_modList      = nullptr;
     ModListDelegate                  *m_delegate     = nullptr;
     QNetworkAccessManager            *m_net          = nullptr;
     NexusClient                      *m_nexus        = nullptr;
@@ -840,7 +843,13 @@ private:
     // Key = "<gameId>__<profileName>"; value = items removed from m_modList in
     // stable order (so restoreStrandedInstalls restores row positions). Owned
     // here once m_modList drops them, so clear()ing m_modList won't delete them.
-    QHash<QString, QList<QListWidgetItem*>> m_strandedInstalls;
+    // Rows of other profiles whose install is still running, parked here
+    // across a profile switch: the ids per profile key, the rows themselves in
+    // m_parked, a second model nothing paints. rowById and
+    // findPlaceholderByToken look there too, so a download or an extraction
+    // that finishes after the switch still finds its row.
+    QHash<QString, QList<QUuid>> m_strandedInstalls;
+    ModlistModel                 m_parked;
 
     // QListWidget->model decoupling: a typed-ModEntry copy of m_modList that
     // the widget bridge (modlist::connectAutoSync) keeps current through every

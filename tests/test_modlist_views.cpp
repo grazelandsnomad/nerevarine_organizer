@@ -1,5 +1,5 @@
 // test_modlist_views - the typed views of the modlist, widget-free: the
-// ModlistModel bridge that follows the QListWidget, the dependency snapshot
+// ModlistModel, the row handle and the view over it, the dependency snapshot
 // built from rows, and the row orders behind Sort by Date / Size. The
 // widget appears only where the bridge is the thing under test.
 
@@ -7,7 +7,6 @@
 #include "mod_row.h"
 #include "modentry.h"
 #include "modlist_model.h"
-#include "modlist_model_widget_bridge.h"
 #include "modlistview.h"
 #include "modrow.h"
 #include "modlist_sort.h"
@@ -22,9 +21,6 @@
 #include <QUuid>
 #include <QVariant>
 #include <QDateTime>
-#include <QListWidget>
-#include <QListWidgetItem>
-#include <QSignalBlocker>
 #include <QStringList>
 
 #include <iostream>
@@ -51,13 +47,6 @@ ModEntry sep(const QString &name)
     return e;
 }
 
-QListWidgetItem *addRow(QListWidget &list, const QString &name)
-{
-    auto *it = new QListWidgetItem(name, &list);
-    it->setData(ModRole::ItemType, ItemType::Mod);
-    it->setCheckState(Qt::Checked);
-    return it;
-}
 
 // -- the model bridge ------------------------------------------------------
 
@@ -295,90 +284,34 @@ void testRowHandlesAndTheView()
     check("rowById resolves a live id and refuses a dead one",
           view.rowById(b.id()) == b && view.rowById(QUuid::createUuid()) == nullptr);
 
-    view.removeRow(0);
-    check("removeRow drops the row", m.count() == 2 && !a);
+    // A block move: rows named in any order land together, in their own
+    // order, at a position counted in the list without them.
+    view.addItem(mkMod(QStringLiteral("C")));
+    view.addItem(mkMod(QStringLiteral("D")));          // A S B C D
+    const QList<ModRow> moved = view.moveRowsTo({3, 0}, 2);
+    check("moveRowsTo lands the block, in order, where asked",
+          moved.size() == 2 && moved.at(0) == a
+          && m.at(0).displayName == QStringLiteral("S")
+          && m.at(1).displayName == QStringLiteral("B")
+          && m.at(2).displayName == QStringLiteral("A")
+          && m.at(3).displayName == QStringLiteral("C")
+          && m.at(4).displayName == QStringLiteral("D"));
+    view.moveRowsTo({2, 3}, 0);                        // A C S B D
+    check("and to the front", m.at(0).displayName == QStringLiteral("A")
+                              && m.at(1).displayName == QStringLiteral("C")
+                              && m.at(2).displayName == QStringLiteral("S"));
+    view.moveRowsTo({0}, 99);                          // C S B D A
+    check("past the end is the end", m.at(4).displayName == QStringLiteral("A"));
+    view.removeRow(4);                                 // A goes
+    view.removeRow(3);                                 // D goes
+    view.removeRow(1);                                 // S goes
+    view.removeRow(0);                                 // C goes; B is left
+    check("removeRow drops the row", m.count() == 1 && !a
+                                     && m.at(0).displayName == QStringLiteral("B"));
     view.clear();
     check("clear empties everything", view.count() == 0 && !b);
 }
 
-void testBridgeFollowsTheWidgetRowByRow()
-{
-    std::cout << "testBridgeFollowsTheWidgetRowByRow\n";
-    QListWidget list;
-    ModlistModel model;
-    modlist::connectAutoSync(&model, &list);
-
-    auto *a = addRow(list, QStringLiteral("A"));
-    auto *b = addRow(list, QStringLiteral("B"));
-    check("rows added reach the model", model.count() == 2
-                                        && model.at(1).displayName == QStringLiteral("B"));
-
-    int changedRow = -1, changes = 0, resets = 0;
-    QObject::connect(&model, &ModlistModel::dataChanged, &model,
-                     [&](const QModelIndex &tl, const QModelIndex &, const QList<int> &) {
-        changedRow = tl.row(); ++changes;
-    });
-    QObject::connect(&model, &ModlistModel::modelReset, &model, [&] { ++resets; });
-
-    b->setData(ModRole::Annotation, QStringLiteral("note"));
-    check("a role write updates that row only", changes == 1 && changedRow == 1
-          && resets == 0, QStringLiteral("changes=%1 row=%2 resets=%3")
-                             .arg(changes).arg(changedRow).arg(resets));
-    check("with the new value", model.at(1).annotation == QStringLiteral("note"));
-    check("and the other row untouched", model.at(0).annotation.isEmpty());
-
-    a->setCheckState(Qt::Unchecked);
-    check("a checkbox toggle too", !model.at(0).checked && model.at(1).checked);
-
-    // The window's own itemChanged slots read the model, and they are
-    // connected after the bridge, so the row must already be updated when
-    // they run - and updated once, not once per path the bridge listens on.
-    bool seenInTime = false;
-    QObject::connect(&list, &QListWidget::itemChanged, &model,
-                     [&](QListWidgetItem *item) {
-        seenInTime = model.at(list.row(item)).checked;
-    });
-    changes = 0;
-    a->setCheckState(Qt::Checked);
-    check("an itemChanged slot wired after the bridge sees the new value", seenInTime);
-    check("and the model reports the change once", changes == 1,
-          QString::number(changes));
-
-    const QUuid id = mod_row::rowId(b);
-    check("a minted row id is visible through the model",
-          model.findByRowId(id) == 1 && model.findByRowId(QUuid()) == -1);
-
-    delete list.takeItem(0);
-    check("a removed row leaves the model", model.count() == 1
-          && model.at(0).displayName == QStringLiteral("B")
-          && model.findByRowId(id) == 0);
-
-    // The window edits rows in bulk with the widget's signals blocked. The
-    // bridge listens to the widget's item model, which the blocker does not
-    // silence, so the model keeps up anyway.
-    {
-        const QSignalBlocker blocker(&list);
-        b->setData(ModRole::Annotation, QStringLiteral("blocked edit"));
-        auto *c = new QListWidgetItem(QStringLiteral("C"));
-        c->setData(ModRole::ItemType, ItemType::Mod);
-        list.insertItem(0, c);
-        delete list.takeItem(1);   // B
-    }
-    check("an edit under a signal blocker still reaches the model",
-          model.count() == 1 && model.at(0).displayName == QStringLiteral("C"),
-          QStringLiteral("count=%1 first=%2").arg(model.count())
-              .arg(model.count() ? model.at(0).displayName : QStringLiteral("-")));
-
-    // A wiring that arrives late, or a drift, is repaired on the next change
-    // rather than applied as a delta to the wrong shape.
-    ModlistModel late;
-    addRow(list, QStringLiteral("D"));
-    modlist::connectAutoSync(&late, &list);
-    check("a model connected late is empty until something changes", late.count() == 0);
-    addRow(list, QStringLiteral("E"));
-    check("and whole after the first change", late.count() == 3
-          && late.at(2).displayName == QStringLiteral("E"), QString::number(late.count()));
-}
 
 // -- deps::snapshot from rows ---------------------------------------------
 
@@ -455,7 +388,6 @@ int main(int argc, char **argv)
     testRoleTableRoundTrips();
     testModelIsAWellBehavedItemModel();
     testRowHandlesAndTheView();
-    testBridgeFollowsTheWidgetRowByRow();
     testDependencySnapshotKeepsRowIndicesAndSections();
     testDateOrderSendsSeparatorsAndDatelessToTheEnd();
     testSizeOrderKeepsSeparatorsAsDividers();

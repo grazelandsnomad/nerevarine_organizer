@@ -12,7 +12,6 @@
 #include "deps_resolver.h"
 #include "modentry.h"
 
-class QListWidget;
 
 namespace deps {
 
@@ -29,7 +28,5 @@ QList<ModEntry> snapshot(const QList<::ModEntry> &rows);
 // question the resolver asks.
 //
 // displayName is CustomName when set, else the row's text, matching what
-// ModEntry::displayName is documented to hold.
-QList<ModEntry> snapshot(const QListWidget *list);
 
 } // namespace deps

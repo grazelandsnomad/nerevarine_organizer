@@ -1,47 +1,31 @@
 #include "undo_stack.h"
 
-#include <QListWidget>
-#include <QListWidgetItem>
-#include <QObject>
-
-#include "mod_row.h"
-#include "modroles.h"
+#include "modlist_model.h"
 #include "translator.h"
 
-UndoStack::UndoStack(QListWidget *list, QObject *parent)
-    : QObject(parent), m_list(list)
+UndoStack::UndoStack(ModlistModel *model, QObject *parent)
+    : QObject(parent), m_model(model)
 {
 }
 
 QList<ModEntry> UndoStack::captureState() const
 {
-    QList<ModEntry> state;
-    state.reserve(m_list->count());
-    for (int i = 0; i < m_list->count(); ++i)
-        state.append(ModEntry::fromItem(m_list->item(i)));
-    return state;
+    return m_model->all();
 }
 
 void UndoStack::applyState(const QList<ModEntry> &state)
 {
     m_applyingState = true;
-    m_list->clear();
-    for (const ModEntry &e : state) {
-        auto *it = new QListWidgetItem;
-        // applyToItem writes the text, the check state (mods only) and every
-        // role. Note it runs BEFORE addItem: an item with no view emits no
-        // itemChanged, which is what keeps an undo from tripping the
-        // disable-warning seam and the conflict scan once per row.
-        e.applyToItem(it);
-        m_list->addItem(it);
-    }
-    // Re-collapse sections once every item exists. MainWindow does the actual
+    // One reset, not a row at a time: nothing hears an itemChanged per row,
+    // which is what keeps an undo from tripping the disable-warning seam and
+    // the conflict scan once per row.
+    m_model->replace(state);
+    // Re-collapse sections once every row exists. MainWindow does the actual
     // hide/show in collapseSection(); we just signal which separators need it.
-    for (int i = 0; i < m_list->count(); ++i) {
-        auto *sep = m_list->item(i);
-        if (mod_row::isSeparator(sep)
-                && sep->data(ModRole::Collapsed).toBool())
-            emit requestCollapse(sep);
+    for (int i = 0; i < m_model->count(); ++i) {
+        const ModEntry &e = m_model->at(i);
+        if (e.isSeparator() && e.collapsed)
+            emit requestCollapse(ModRow(m_model, e.rowId));
     }
     m_applyingState = false;
     emit stateApplied();
