@@ -129,7 +129,10 @@ fi
 # AUTOMOC outputs and the generated translation header have to exist
 # before clang-tidy parses the TUs that include them.
 cmake --build "$BUILD_DIR" --target translation_keys_header
-cmake --build "$BUILD_DIR" --target nerevarine_core_autogen nerevarine_organizer_autogen
+# Only the library's: the app's autogen target inherits the app's dependency
+# on nerevarine_core (CMAKE_AUTOGEN_ORIGIN_DEPENDS), so asking for it builds
+# the whole library under clang before a single TU is analysed.
+cmake --build "$BUILD_DIR" --target nerevarine_core_autogen
 
 # clang-tidy analyses a file once per compile_commands.json entry, and CMake
 # emits one entry per (source, target) pair.  Every src/*.cpp is compiled
