@@ -498,6 +498,31 @@ private:
     // Those paths take their game from a row that is already in this profile,
     // so there is nothing for them to mismatch against anyway.
     bool confirmGameForDownload(const QString &game);
+
+    // -- Moving mod folders: Move Mod Library and Consolidate ----------
+    //
+    // One folder to move: the row it belongs to, where it is now, and what
+    // it will be called under the destination root.
+    struct FolderMove {
+        QListWidgetItem *item = nullptr;
+        QString          oldPath;
+        QString          folderName;
+        qint64           sizeBytes = 0;
+    };
+    // The checks both moves share before asking: enough free space under
+    // destRoot (10% headroom, since a cross-filesystem move copies first) and
+    // no folder of the same name already there. Tells the user and returns
+    // false when either fails.
+    bool preflightFolderMoves(const QList<FolderMove> &moves, const QString &destRoot,
+                              qint64 totalBytes, const QString &title);
+    // Move each folder under destRoot on a worker (safefs::moveTreeVerified)
+    // behind a cancellable progress dialog. Every folder that lands has its
+    // row repointed and the list saved at once, so a crash midway loses
+    // nothing. `done(movedOk)` runs on the UI thread after the last one, before
+    // the tail both moves share (config sync, rescans, undo cleared) and the
+    // summary dialog.
+    void moveModFolders(const QList<FolderMove> &moves, const QString &destRoot,
+                        const QString &title, std::function<void(int movedOk)> done);
     // "Translate mod...": collects every player-visible string the mod's
     // plugins carry, opens the editor, and turns what the user types into a
     // separate translation mod inserted directly below this one. The original

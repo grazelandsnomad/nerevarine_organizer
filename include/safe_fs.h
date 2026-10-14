@@ -78,6 +78,16 @@ std::expected<void, QString>
 copyTreeVerified(const QString &src, const QString &dst,
                  std::function<bool()> isCancelled = {});
 
+// Move a directory: a plain rename when the OS allows one (same filesystem,
+// destination parent present), else copyTreeVerified followed by removing
+// `src`. A copy that verified but whose original could not be removed is
+// rolled back, so there are never two live copies of a mod. On any failure
+// `src` is untouched. `isCancelled` is polled by the copy fallback only; a
+// rename is atomic.
+std::expected<void, QString>
+moveTreeVerified(const QString &src, const QString &dst,
+                 std::function<bool()> isCancelled = {});
+
 // QDir::removeRecursively returns EACCES unlinking children of a dir with the
 // owner-write bit clear. Zip-extracted mods carry such dirs (Windows ACLs land
 // as POSIX `dr-xr-xr-x`), so a partial removeRecursively mid "Move Mod Library"

@@ -234,4 +234,22 @@ copyTreeVerified(const QString &src, const QString &dst,
     return {};
 }
 
+std::expected<void, QString>
+moveTreeVerified(const QString &src, const QString &dst,
+                 std::function<bool()> isCancelled)
+{
+    if (!QFileInfo(src).isDir())
+        return std::unexpected(QStringLiteral("source is not a directory"));
+    // Fast path: an atomic rename. Across filesystems it fails with EXDEV and
+    // the streaming copy below takes over.
+    if (QDir().rename(src, dst)) return {};
+    const auto copied = copyTreeVerified(src, dst, std::move(isCancelled));
+    if (!copied) return std::unexpected(copied.error());
+    if (forceRemoveRecursively(src)) return {};
+    // Destination is a verified copy, but the source cannot be removed (a
+    // locked file, permissions). Roll the copy back rather than leave two.
+    forceRemoveRecursively(dst);
+    return std::unexpected(QStringLiteral("copied ok, but could not remove original"));
+}
+
 } // namespace safefs

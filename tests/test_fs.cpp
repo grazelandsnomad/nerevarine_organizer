@@ -430,6 +430,60 @@ static void testCopyCollidingFileFails()
 
 // -- forceRemoveRecursively ---
 
+// -- moveTreeVerified --
+
+// A small tree to move: two files, one in a subfolder.
+static QString makeMoveSource(const QDir &dir, const QString &name)
+{
+    const QString src = dir.filePath(name);
+    QDir().mkpath(src + "/sub");
+    { QFile f(src + "/a.txt");     if (f.open(QIODevice::WriteOnly)) f.write("alpha"); }
+    { QFile f(src + "/sub/b.txt"); if (f.open(QIODevice::WriteOnly)) f.write("beta"); }
+    return src;
+}
+
+static void testMoveTreeRenames()
+{
+    std::cout << "testMoveTreeRenames\n";
+    QTemporaryDir tmp;
+    const QDir dir(tmp.path());
+    const QString src = makeMoveSource(dir, "src");
+    const QString dst = dir.filePath("dst");
+    const auto res = safefs::moveTreeVerified(src, dst);
+    check("a sibling destination moves", res.has_value(),
+          res ? QString() : res.error());
+    check("the source is gone", !QFileInfo::exists(src));
+    check("the files arrived", QFile::exists(dst + "/a.txt")
+                               && QFile::exists(dst + "/sub/b.txt"));
+}
+
+static void testMoveTreeCopiesWhenRenameCannot()
+{
+    std::cout << "testMoveTreeCopiesWhenRenameCannot\n";
+    QTemporaryDir tmp;
+    const QDir dir(tmp.path());
+    const QString src = makeMoveSource(dir, "src");
+    // A destination whose parent does not exist: rename fails, as it does
+    // across filesystems, and the copy-verify-remove fallback runs.
+    const QString dst = dir.filePath("deeper/still/dst");
+    const auto res = safefs::moveTreeVerified(src, dst);
+    check("the fallback moves it", res.has_value(), res ? QString() : res.error());
+    check("the source is gone", !QFileInfo::exists(src));
+    QFile b(dst + "/sub/b.txt");
+    check("the bytes arrived intact",
+          b.open(QIODevice::ReadOnly) && b.readAll() == QByteArray("beta"));
+}
+
+static void testMoveTreeRefusesAMissingSource()
+{
+    std::cout << "testMoveTreeRefusesAMissingSource\n";
+    QTemporaryDir tmp;
+    const QDir dir(tmp.path());
+    const auto res = safefs::moveTreeVerified(dir.filePath("nope"), dir.filePath("dst"));
+    check("a missing source fails", !res.has_value());
+    check("nothing was created", !QFileInfo::exists(dir.filePath("dst")));
+}
+
 static void testForceRemoveMissingPath()
 {
     std::cout << "testForceRemoveMissingPath\n";
@@ -654,6 +708,9 @@ static void run_safe_fs()
     testCopyDestinationParentMissing();
     testCopyIdempotentDstAlreadyExists();
     testCopyCollidingFileFails();
+    testMoveTreeRenames();
+    testMoveTreeCopiesWhenRenameCannot();
+    testMoveTreeRefusesAMissingSource();
 }
 
 // -- fs_utils section --
