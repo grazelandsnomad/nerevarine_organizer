@@ -218,8 +218,9 @@ MainWindow::MainWindow(QWidget *parent)
 
     m_nexusCtl = new NexusController(m_nexus, this);
     connect(m_nexusCtl, &NexusController::updateFoundForItem,
-            this, [this](QListWidgetItem *item) {
-        if (!liveRow(item, "update check")) return;
+            this, [this](const QUuid &row) {
+        QListWidgetItem *item = replyRow(row, "update check");
+        if (!item) return;
         item->setData(ModRole::UpdateAvailable, true);
         m_modList->update(m_modList->indexFromItem(item));
         // Tint the parent separator grey to nudge update-or-delete; clears once
@@ -227,8 +228,9 @@ MainWindow::MainWindow(QWidget *parent)
         updateSectionCounts();
     });
     connect(m_nexusCtl, &NexusController::fileSupersededForItem,
-            this, [this](QListWidgetItem *item, const file_status::Verdict &v) {
-        if (!liveRow(item, "superseded check")) return;
+            this, [this](const QUuid &row, const file_status::Verdict &v) {
+        QListWidgetItem *item = replyRow(row, "superseded check");
+        if (!item) return;
         item->setData(ModRole::FileSuperseded, supersededText(v));
         m_modList->update(m_modList->indexFromItem(item));
     });
@@ -1081,11 +1083,12 @@ void MainWindow::applyInstalledStateToStrandedPlaceholder(
 
 
 
-void MainWindow::onExpectedChecksumFetched(QListWidgetItem *item, int fileId,
+void MainWindow::onExpectedChecksumFetched(const QUuid &row, int fileId,
                                             const QString &fileName, const QString &md5,
                                             qint64 sizeBytes)
 {
-    if (!liveRow(item, "expected checksum")) return;
+    QListWidgetItem *item = replyRow(row, "expected checksum");
+    if (!item) return;
     // Only for the file the row is fetching right now. The reply races the
     // download; one that lands after the install, or after the row moved on
     // to another file, would sit on the row and judge the next archive.
@@ -1134,11 +1137,12 @@ void MainWindow::purgeDuplicatePlaceholders(QListWidgetItem *installed)
     if (removed) saveModList();
 }
 
-void MainWindow::onTitleFetched(QListWidgetItem *item, const QString &name)
+void MainWindow::onTitleFetched(const QUuid &row, const QString &name)
 {
-    if (!liveRow(item, "title")) return;
+    QListWidgetItem *item = replyRow(row, "title");
+    if (!item) return;
     item->setData(ModRole::NexusTitle, name);
-    if (m_titleSetsCustomName.remove(item)
+    if (m_titleSetsCustomName.remove(row)
         && item->data(ModRole::CustomName).toString().isEmpty()) {
         item->setData(ModRole::CustomName, name);
         item->setText(name);
@@ -1317,13 +1321,14 @@ void MainWindow::checkModDependencies(const QString &game, int modId, QListWidge
         if (!ref || ref->game != game) continue;
         idToUrl[ref->modId] = u;
     }
-    m_nexusCtl->scanDependencies(item, game, modId, idToUrl);
+    m_nexusCtl->scanDependencies(mod_row::rowId(item), game, modId, idToUrl);
 }
 
-void MainWindow::onDependencyScanFailed(QListWidgetItem *item,
+void MainWindow::onDependencyScanFailed(const QUuid &row,
                                         const QString &game, int modId)
 {
-    if (!liveRow(item, "dependency scan failure")) return;
+    QListWidgetItem *item = replyRow(row, "dependency scan failure");
+    if (!item) return;
     // Network or API error - don't block install, just continue.
     fetchModFiles(game, modId, item);
 }
@@ -1377,15 +1382,17 @@ void MainWindow::fetchModFiles(const QString &game, int modId, QListWidgetItem *
                                 bool autoPickMain)
 {
     statusBar()->showMessage(T("status_fetching_files").arg(modId));
+    const QUuid row = mod_row::rowId(item);
     if (autoPickMain)
-        m_autoPickMainItems.insert(item);
-    m_nexusCtl->fetchFileList(item, game, modId);
+        m_autoPickMainItems.insert(row);
+    m_nexusCtl->fetchFileList(row, game, modId);
 }
 
-void MainWindow::onFileListFetchFailed(QListWidgetItem *item, const QString &reason, int httpStatus)
+void MainWindow::onFileListFetchFailed(const QUuid &row, const QString &reason, int httpStatus)
 {
-    if (!liveRow(item, "file list failure")) return;
-    m_autoPickMainItems.remove(item);
+    QListWidgetItem *item = replyRow(row, "file list failure");
+    if (!item) return;
+    m_autoPickMainItems.remove(row);
     const QString msg =
           (httpStatus == 401) ? T("nexus_api_error_link_401")
         : (httpStatus == 403) ? T("nexus_api_error_link_403")
@@ -1698,7 +1705,7 @@ collectUpdateTargets(QListWidget *modList, const QStringList &only)
             item->setData(ModRole::UpdateAvailable, false);
         if (!item->data(ModRole::FileSuperseded).toString().isEmpty())
             item->setData(ModRole::FileSuperseded, QVariant());
-        toCheck.append({item, ref->game, ref->modId,
+        toCheck.append({mod_row::rowId(item), ref->game, ref->modId,
                         item->data(ModRole::NexusFileId).toLongLong()});
     }
     return toCheck;
@@ -1719,8 +1726,9 @@ void MainWindow::onCheckUpdates()
     }
 
     statusBar()->showMessage(T("check_updates_checking").arg(toCheck.size()));
-    m_nexusCtl->checkForUpdates(toCheck, [](QListWidgetItem *item) {
-        return item->data(ModRole::DateAdded).toDateTime();
+    m_nexusCtl->checkForUpdates(toCheck, [this](const QUuid &row) {
+        QListWidgetItem *item = rowById(row);
+        return item ? item->data(ModRole::DateAdded).toDateTime() : QDateTime();
     });
 }
 
@@ -1744,8 +1752,9 @@ int MainWindow::checkUpdatesForMods(const QStringList &labels)
     // something to claim was looked at.
     statusBar()->showMessage(T("check_updates_checking").arg(toCheck.size()));
     m_reviewAfterCheck = true;
-    m_nexusCtl->checkForUpdates(toCheck, [](QListWidgetItem *item) {
-        return item->data(ModRole::DateAdded).toDateTime();
+    m_nexusCtl->checkForUpdates(toCheck, [this](const QUuid &row) {
+        QListWidgetItem *item = rowById(row);
+        return item ? item->data(ModRole::DateAdded).toDateTime() : QDateTime();
     });
     return toCheck.size();
 }
@@ -3045,6 +3054,30 @@ QListWidgetItem *MainWindow::findPlaceholderByToken(
 }
 
 
+QListWidgetItem *MainWindow::rowById(const QUuid &row) const
+{
+    if (row.isNull()) return nullptr;
+    if (m_modList) {
+        for (int i = 0; i < m_modList->count(); ++i) {
+            QListWidgetItem *it = m_modList->item(i);
+            if (it->data(ModRole::RowId).toUuid() == row) return it;
+        }
+    }
+    for (const QList<QListWidgetItem *> &bucket : std::as_const(m_strandedInstalls))
+        for (QListWidgetItem *it : bucket)
+            if (it->data(ModRole::RowId).toUuid() == row) return it;
+    return nullptr;
+}
+
+QListWidgetItem *MainWindow::replyRow(const QUuid &row, const char *what)
+{
+    if (QListWidgetItem *it = rowById(row)) return it;
+    m_titleSetsCustomName.remove(row);
+    m_autoPickMainItems.remove(row);
+    qCInfo(logging::lcNexus) << what << "reply for a row that is gone; dropped";
+    return nullptr;
+}
+
 QListWidgetItem *MainWindow::liveRow(QListWidgetItem *item, const char *what)
 {
     if (!item) return nullptr;
@@ -3057,9 +3090,7 @@ QListWidgetItem *MainWindow::liveRow(QListWidgetItem *item, const char *what)
     }
     for (const QList<QListWidgetItem *> &bucket : std::as_const(m_strandedInstalls))
         if (bucket.contains(item)) return item;
-    m_titleSetsCustomName.remove(item);
-    m_autoPickMainItems.remove(item);
-    qCInfo(logging::lcNexus) << what << "reply for a row that is gone; dropped";
+    qCInfo(logging::lcNexus) << what << "for a row that is gone; dropped";
     return nullptr;
 }
 

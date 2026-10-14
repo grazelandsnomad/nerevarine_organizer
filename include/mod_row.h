@@ -12,6 +12,7 @@
 #include <QLatin1String>
 #include <QListWidgetItem>
 #include <QModelIndex>
+#include <QUuid>
 #include <QVariant>
 
 namespace mod_row {
@@ -46,6 +47,31 @@ inline bool isInstalled(const QListWidgetItem *item)
 inline bool isInstalling(const QListWidgetItem *item)
 {
     return installStatusOf(item) == InstallStatus::Installing;
+}
+
+// The row's identity (ModRole::RowId) for anything that answers later - a
+// Nexus reply, a download, a queued install. Minted on first use and kept for
+// the session; carried through undo snapshots (ModEntry::rowId) but never
+// written to disk, so a row rebuilt from the modlist file is a new row.
+// Controllers and queues hold this, never the item, and MainWindow::rowById
+// turns it back into a row at the moment of use - or into nothing, when the
+// row is gone. A freed pointer can be reused by a new row; an id cannot.
+inline QUuid rowId(QListWidgetItem *item)
+{
+    if (!item) return {};
+    QUuid id = item->data(ModRole::RowId).toUuid();
+    if (id.isNull()) {
+        id = QUuid::createUuid();
+        item->setData(ModRole::RowId, id);
+    }
+    return id;
+}
+
+// The identity a row already has, or a null id when nothing has asked for
+// one yet - for lookups that must not mint.
+inline QUuid rowIdIfAny(const QListWidgetItem *item)
+{
+    return item ? item->data(ModRole::RowId).toUuid() : QUuid();
 }
 
 // The same questions asked of a model index, for the delegate, which paints

@@ -50,6 +50,7 @@ ModEntry ModEntry::fromItem(const QListWidgetItem *item)
     e.expectedSize     = item->data(ModRole::ExpectedSize).toLongLong();
     e.expectedFileId   = item->data(ModRole::ExpectedFileId).toLongLong();
     e.installToken     = item->data(ModRole::InstallToken).toUuid();
+    e.rowId            = item->data(ModRole::RowId).toUuid();
 
     e.dependsOn            = item->data(ModRole::DependsOn).toStringList();
     e.highlightRole        = item->data(ModRole::HighlightRole).toInt();
@@ -128,6 +129,8 @@ void ModEntry::applyToItem(QListWidgetItem *item) const
     item->setData(ModRole::ExpectedFileId,   QVariant::fromValue(expectedFileId));
     item->setData(ModRole::InstallToken,
                   installToken.isNull() ? QVariant() : QVariant(installToken));
+    // Only when known: a null here must not erase an id the item already has.
+    if (!rowId.isNull()) item->setData(ModRole::RowId, rowId);
 
     item->setData(ModRole::DependsOn,            dependsOn);
     item->setData(ModRole::HighlightRole,        highlightRole);

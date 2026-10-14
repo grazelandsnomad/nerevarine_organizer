@@ -394,7 +394,7 @@ void MainWindow::handleNxmUrl(const QString &url)
 
     // Pull md5 + size_in_bytes from files.json for post-download verification.
     // Runs alongside fetchDownloadLink; only consulted at finish-time.
-    m_nexusCtl->fetchExpectedChecksum(placeholder, game, modId, fileId);
+    m_nexusCtl->fetchExpectedChecksum(mod_row::rowId(placeholder), game, modId, fileId);
 
     // A cancelled install leaves its archive on disk (mainwindow_install.cpp).
     // Catching it HERE rather than in the download queue is what saves a free
@@ -471,15 +471,16 @@ void MainWindow::fetchNexusTitle(const QString &game, int modId, QListWidgetItem
                                   bool setAsCustomName)
 {
     // The "also promote the name to CustomName / item text" flag is a
-    // UI-policy decision at call time.  Record the intent for this item
-    // and let the controller emit back with just (item, name); the
+    // UI-policy decision at call time.  Record the intent for this row
+    // and let the controller emit back with just (row, name); the
     // titleFetched slot consults the set.
+    const QUuid row = mod_row::rowId(item);
     if (setAsCustomName)
-        m_titleSetsCustomName.insert(item);
-    m_nexusCtl->fetchModTitle(item, game, modId);
+        m_titleSetsCustomName.insert(row);
+    m_nexusCtl->fetchModTitle(row, game, modId);
 }
 
-void MainWindow::onDependenciesScanned(QListWidgetItem *item,
+void MainWindow::onDependenciesScanned(const QUuid &rowKey,
                                        const QString &game, int modId,
                                        const QString &title,
                                        const QStringList &presentDeps,
@@ -487,7 +488,8 @@ void MainWindow::onDependenciesScanned(QListWidgetItem *item,
                                        const QList<deps::ClassifiedDep> &classified,
                                        int gameIdNumeric)
 {
-    if (!liveRow(item, "dependency scan")) return;
+    QListWidgetItem *item = replyRow(rowKey, "dependency scan");
+    if (!item) return;
     // Cache the Nexus mod-page title for later use (e.g. naming a FOMOD
     // install's output folder something meaningful instead of "fomod_install").
     if (!title.isEmpty())
@@ -739,7 +741,8 @@ void MainWindow::onDependenciesScanned(QListWidgetItem *item,
     v->addWidget(btns);
 
     const bool install = (box.exec() == QDialog::Accepted);
-    if (!liveRow(item, "dependency dialog")) return;
+    item = replyRow(rowKey, "dependency dialog");
+    if (!item) return;
     if (install)
         fetchModFiles(game, modId, item);
 }
@@ -816,12 +819,13 @@ static QString filePickDetail(const file_pick::Note &n, game_store::Store instal
     return {};
 }
 
-void MainWindow::onFileListFetched(QListWidgetItem *item,
+void MainWindow::onFileListFetched(const QUuid &rowKey,
                                    const QString &game, int modId,
                                    const QList<NexusClient::FileEntry> &allFiles)
 {
-    if (!liveRow(item, "file list")) return;
-    const bool autoPickMain = m_autoPickMainItems.remove(item);
+    QListWidgetItem *item = replyRow(rowKey, "file list");
+    if (!item) return;
+    const bool autoPickMain = m_autoPickMainItems.remove(rowKey);
 
     // Prefer MAIN + UPDATE files; fall back to everything if none found.
     QList<NexusClient::FileEntry> files;
@@ -1073,7 +1077,8 @@ void MainWindow::onFileListFetched(QListWidgetItem *item,
 
     auto *sel = fileList->currentItem();
     if (!sel) return;
-    if (!liveRow(item, "file picker")) return;
+    item = replyRow(rowKey, "file picker");
+    if (!item) return;
     const int     fileId = sel->data(Qt::UserRole).toInt();
     const QString md5    = sel->data(Qt::UserRole + 1).toString();
     const qint64  sz     = sel->data(Qt::UserRole + 2).toLongLong();
@@ -1275,11 +1280,12 @@ void MainWindow::validateApiKeyAndReport()
     });
 }
 
-void MainWindow::onModFileSiblings(QListWidgetItem *item,
+void MainWindow::onModFileSiblings(const QUuid &row,
                                    const QString &chosenName,
                                    const QStringList &siblingNames)
 {
-    if (!liveRow(item, "file siblings") || m_profiles->isEmpty()) return;
+    QListWidgetItem *item = replyRow(row, "file siblings");
+    if (!item || m_profiles->isEmpty()) return;
 
     const auto pref = fomod::runtimePreferenceForGame(currentProfile().id,
                                                      gameRuntimeProbe().game);

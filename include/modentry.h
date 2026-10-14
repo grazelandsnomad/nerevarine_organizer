@@ -68,6 +68,10 @@ struct ModEntry {
     // installStatus == 2; serialized so an interrupted install can be matched
     // back up after relaunch. Null QUuid otherwise.
     QUuid   installToken;
+    // The row's session identity (ModRole::RowId, mod_row::rowId): carried so
+    // an undo that rebuilds every item keeps the rows a reply in flight was
+    // addressed to. Null until something asked for one. Never serialized.
+    QUuid   rowId;
 
     // Dependencies.
     QStringList dependsOn;             // list of Nexus URLs

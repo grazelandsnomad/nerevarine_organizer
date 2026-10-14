@@ -1776,10 +1776,10 @@ void MainWindow::onViewChangelog(QListWidgetItem *item)
 
     // The connection is scoped to the dialog lifetime (dlg as context object),
     // so it is automatically disconnected when the user closes the dialog.
-    // Filter by game+modId (not the item pointer) so the check is safe even
-    // if the row is deleted while the reply is in flight.
+    // Filter by game+modId (not the row) so the check is safe even if the
+    // row is deleted while the reply is in flight.
     connect(m_nexusCtl, &NexusController::changelogFetched, dlg,
-            [browser, game, modId](QListWidgetItem *,
+            [browser, game, modId](const QUuid &,
                                    const QString &srcGame, int srcModId,
                                    const QList<NexusClient::ChangelogEntry> &entries) {
         if (srcGame != game || srcModId != modId) return;
@@ -1805,7 +1805,7 @@ void MainWindow::onViewChangelog(QListWidgetItem *item)
     });
 
     dlg->show();
-    m_nexusCtl->fetchChangelog(item, game, modId);
+    m_nexusCtl->fetchChangelog(mod_row::rowId(item), game, modId);
 }
 
 void MainWindow::applyCurrentProfileToMirrors()

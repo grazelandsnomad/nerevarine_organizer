@@ -71,6 +71,11 @@ namespace ModRole {
     // Honoured only when it equals PendingFileId; see
     // placeholder_state::applicableExpectations.
     constexpr int ExpectedFileId       = Qt::UserRole + 62; // qint64
+    // The row's identity for everything that answers later - a Nexus reply,
+    // a download, a queued install. QUuid, minted on first use (mod_row::rowId)
+    // and kept for the session; carried through undo snapshots, never written
+    // to disk. Controllers hold this, never the item.
+    constexpr int RowId                = Qt::UserRole + 63; // QUuid
     // An update whose download a free account has to fetch by hand: the API
     // refused the link, the row went back to installed, and the Nexus page
     // was opened. The nxm:// link that comes back is that update, so it

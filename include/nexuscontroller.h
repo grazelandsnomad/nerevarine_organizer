@@ -8,11 +8,10 @@
 #include <QObject>
 #include <QString>
 #include <QStringList>
+#include <QUuid>
 
 #include <functional>
 #include <memory>
-
-class QListWidgetItem;
 
 // Orchestration layer between MainWindow and NexusClient.
 //
@@ -21,8 +20,10 @@ class QListWidgetItem;
 // "check every installed mod for a newer version".
 //
 // Never touches widgets: it signals out (updateFoundForItem,
-// checkUpdatesFinished) and MainWindow's slots do the QListWidget work. The
-// QListWidgetItem* is an opaque token; the controller never reads it.
+// checkUpdatesFinished) and MainWindow's slots do the QListWidget work. A row
+// is named by its id (mod_row::rowId), echoed back unchanged; the window
+// resolves it to a row when the reply lands, and a row that is gone by then
+// resolves to nothing. The controller never holds an item.
 
 class NexusController : public QObject
 {
@@ -31,7 +32,7 @@ public:
     explicit NexusController(NexusClient *client, QObject *parent = nullptr);
 
     struct CheckTarget {
-        QListWidgetItem *item;   // opaque token, echoed back in signals
+        QUuid            row;    // mod_row::rowId, echoed back in signals
         QString          game;
         int              modId;
         // The file the row was installed from (ModRole::NexusFileId), or 0.
@@ -43,79 +44,79 @@ public:
     // when a target's Nexus "updated" timestamp beats dateAddedFor(item).
     // checkUpdatesFinished(foundCount) fires once after the last reply. Safe
     // to call while a previous run is in flight; each run has its own counter.
-    // dateAddedFor keeps ModRole lookups on the UI side.
+    // dateAddedFor keeps ModRole lookups on the UI side, by row id.
     void checkForUpdates(const QList<CheckTarget> &targets,
-                         std::function<QDateTime(QListWidgetItem *)> dateAddedFor);
+                         std::function<QDateTime(const QUuid &)> dateAddedFor);
 
     // Fire-and-forget title fetch. Success -> titleFetched(item, name);
     // parse/network errors swallowed (a missing title is non-fatal).
     // No-op without an API key.
-    void fetchModTitle(QListWidgetItem *item, const QString &game, int modId);
+    void fetchModTitle(const QUuid &row, const QString &game, int modId);
 
     // Pre-fetch the file's name + md5 + size_in_bytes so post-download verify
     // has something to compare and the staged file can be given its real name.
     // Runs alongside the download. Success ->
     // expectedChecksumFetched(item, fileId, fileName, md5, sizeBytes); errors/
     // missing fields silent (download still completes, verify just checks less).
-    void fetchExpectedChecksum(QListWidgetItem *item, const QString &game,
+    void fetchExpectedChecksum(const QUuid &row, const QString &game,
                                int modId, int fileId);
 
     // List a mod's downloadable files. Success ->
     // fileListFetched(item, game, modId, files); failure ->
     // fileListFetchFailed(item, errorString). game/modId echo back so the
     // slot can hand them to the download queue without re-capturing.
-    void fetchFileList(QListWidgetItem *item, const QString &game, int modId);
+    void fetchFileList(const QUuid &row, const QString &game, int modId);
 
     // Fetch mod-info and split deps into present/missing in one shot.
     // installedIdToUrl is a caller-built snapshot of same-game mods already in
     // the list. Success -> dependenciesScanned(item, game, modId, title,
     // presentDeps, missingIds); network error -> dependencyScanFailed (the slot
     // usually just proceeds with the install).
-    void scanDependencies(QListWidgetItem *item, const QString &game, int modId,
+    void scanDependencies(const QUuid &row, const QString &game, int modId,
                           const QMap<int, QString> &installedIdToUrl);
 
     // Fetch a mod's version changelog. changelogFetched fires on completion
     // either way; empty list means no changelog or the request failed.
     // No-op without an API key.
-    void fetchChangelog(QListWidgetItem *item, const QString &game, int modId);
+    void fetchChangelog(const QUuid &row, const QString &game, int modId);
 
 signals:
-    void updateFoundForItem(QListWidgetItem *item);
+    void updateFoundForItem(const QUuid &row);
     // The row's installed file is archived, an old version or gone from its
     // page (file_status). Separate from updateFoundForItem: the newer file may
     // be on another page, so this is information, not a one-click update.
-    void fileSupersededForItem(QListWidgetItem *item,
+    void fileSupersededForItem(const QUuid &row,
                                const file_status::Verdict &verdict);
     void checkUpdatesFinished(int foundCount, int supersededCount);
-    void titleFetched(QListWidgetItem *item, const QString &name);
+    void titleFetched(const QUuid &row, const QString &name);
     // Every file on the same mod page as the one being downloaded. Emitted
     // from the checksum fetch, which already parses the whole list, so the
     // window can notice a wrong-runtime download without a second API call.
-    void modFileSiblings(QListWidgetItem *item, const QString &chosenName,
+    void modFileSiblings(const QUuid &row, const QString &chosenName,
                          const QStringList &siblingNames);
     // fileId echoes the request: the slot checks it against the file the row
     // is installing by then, so a reply that lands late stamps nothing.
-    void expectedChecksumFetched(QListWidgetItem *item, int fileId,
+    void expectedChecksumFetched(const QUuid &row, int fileId,
                                  const QString &fileName, const QString &md5,
                                  qint64 sizeBytes);
-    void fileListFetched(QListWidgetItem *item, const QString &game, int modId,
+    void fileListFetched(const QUuid &row, const QString &game, int modId,
                          const QList<NexusClient::FileEntry> &files);
-    void fileListFetchFailed(QListWidgetItem *item, const QString &reason, int httpStatus);
+    void fileListFetchFailed(const QUuid &row, const QString &reason, int httpStatus);
     // `gameIdNumeric` is Nexus's own numeric id for `game` (fallout4 = 1151),
     // read off the same reply this scan already parsed. The v2 endpoint is
     // addressed by number, and re-deriving it from the domain would mean
     // keeping a second table in step with theirs.
-    void dependenciesScanned(QListWidgetItem *item, const QString &game, int modId,
+    void dependenciesScanned(const QUuid &row, const QString &game, int modId,
                              const QString &title,
                              const QStringList &presentDeps,
                              const QList<int> &missingModIds,
                              const QList<deps::ClassifiedDep> &classified,
                              int gameIdNumeric);
-    void dependencyScanFailed(QListWidgetItem *item, const QString &game, int modId);
+    void dependencyScanFailed(const QUuid &row, const QString &game, int modId);
     // From fetchChangelog; entries empty on failure or no changelog. game +
     // modId echo back so the receiver can filter without touching the
-    // (possibly-deleted) item pointer.
-    void changelogFetched(QListWidgetItem *item,
+    // row by id.
+    void changelogFetched(const QUuid &row,
                           const QString &game, int modId,
                           const QList<NexusClient::ChangelogEntry> &entries);
 

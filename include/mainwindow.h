@@ -96,26 +96,26 @@ private slots:
     // for: a label with no matching row is skipped rather than counted.
     int  checkUpdatesForMods(const QStringList &labels);
     void onCheckUpdatesFinished(int foundCount, int supersededCount);
-    void onTitleFetched(QListWidgetItem *item, const QString &name);
+    void onTitleFetched(const QUuid &row, const QString &name);
     // A download is under way for a file whose name says it is built for the
     // other Skyrim runtime. Warns and names the file that fits this profile.
-    void onModFileSiblings(QListWidgetItem *item, const QString &chosenName,
+    void onModFileSiblings(const QUuid &row, const QString &chosenName,
                            const QStringList &siblingNames);
-    void onExpectedChecksumFetched(QListWidgetItem *item, int fileId,
+    void onExpectedChecksumFetched(const QUuid &row, int fileId,
                                    const QString &fileName, const QString &md5,
                                    qint64 sizeBytes);
-    void onFileListFetched(QListWidgetItem *item,
+    void onFileListFetched(const QUuid &row,
                            const QString &game, int modId,
                            const QList<NexusClient::FileEntry> &files);
-    void onFileListFetchFailed(QListWidgetItem *item, const QString &reason, int httpStatus);
-    void onDependenciesScanned(QListWidgetItem *item,
+    void onFileListFetchFailed(const QUuid &row, const QString &reason, int httpStatus);
+    void onDependenciesScanned(const QUuid &row,
                                const QString &game, int modId,
                                const QString &title,
                                const QStringList &presentDeps,
                                const QList<int> &missing,
                                const QList<deps::ClassifiedDep> &classified,
                                int gameIdNumeric);
-    void onDependencyScanFailed(QListWidgetItem *item,
+    void onDependencyScanFailed(const QUuid &row,
                                 const QString &game, int modId);
     void onVerificationStarted(const QString &archivePath);
     void onArchiveVerified(const QString &archivePath, const QUuid &installToken);
@@ -339,20 +339,20 @@ private:
     // saveModListFor. nullptr on no match.
     QListWidgetItem *findPlaceholderByToken(const QUuid &installToken,
                                             QString *outProfileKey = nullptr) const;
-    // The row an async reply names, or nullptr when that row is gone. The
-    // controllers echo the QListWidgetItem* they were handed; by the time the
-    // reply lands the row may have been removed, or the whole list cleared by
-    // a profile switch or an import, and the pointer dangles. Only the active
-    // list and the stranded-install buckets can vouch for it, and both are
-    // searched by address: a dangling pointer is never read through (which
-    // rules out QListWidget::indexFromItem, which reads the item). A miss also
-    // drops the row from the pointer-keyed side tables and logs `what`.
-    // Call it again after any modal dialog inside the slot: rows can be
-    // removed while one is open.
-    //
-    // An address is not an identity: a new row allocated where a freed one
-    // was passes this check. Closing that gap means keying replies by a
-    // stable row id rather than by pointer.
+    // The row with this identity (mod_row::rowId) in the active list or the
+    // stranded-install buckets, or nullptr when it is gone. Everything that
+    // answers later - the Nexus controller, the download queue, the bulk
+    // install queue - names rows this way and holds no item, so a removed
+    // row, a cleared list or an undo that rebuilt every item turns into a
+    // null here instead of a freed pointer. Resolve again after any modal
+    // dialog inside a slot: rows can be removed while one is open.
+    QListWidgetItem *rowById(const QUuid &row) const;
+    // rowById for a controller reply: a miss is logged and the row is dropped
+    // from the id-keyed side tables.
+    QListWidgetItem *replyRow(const QUuid &row, const char *what);
+    // Same job, by address, for the few paths that still hand a row pointer
+    // across an event-loop turn. Searched by address only - a dangling pointer
+    // is never read through - and an address is not an identity.
     QListWidgetItem *liveRow(QListWidgetItem *item, const char *what);
     void loadModList(const QString &path = QString(),
                      const QString &remapFrom = QString(),
@@ -795,14 +795,14 @@ private:
     NexusClient                      *m_nexus        = nullptr;
     NexusController                  *m_nexusCtl     = nullptr;
     InstallController                *m_installCtl   = nullptr;
-    // Items whose pending title fetch should also promote the name into
+    // Rows (by id) whose pending title fetch should also promote the name into
     // CustomName/display text on arrival. Set by fetchNexusTitle(...,
     // setAsCustomName=true), consumed by onTitleFetched. Keeps the controller
     // from needing to know about ModRole::CustomName.
-    QSet<QListWidgetItem *>           m_titleSetsCustomName;
-    // Items whose fetchFileList asked to auto-pick the first MAIN/UPDATE file
+    QSet<QUuid>                       m_titleSetsCustomName;
+    // Rows (by id) whose fetchFileList asked to auto-pick the first MAIN/UPDATE file
     // (batch update). Consumed by onFileListFetched; same idea as above.
-    QSet<QListWidgetItem *>           m_autoPickMainItems;
+    QSet<QUuid>                       m_autoPickMainItems;
     DownloadQueue                    *m_downloadQueue = nullptr;
     // Bulk-install throttle: drip-feeds onInstallFromNexus to avoid hammering
     // the Nexus rate-limiter and stacking modal pickers.

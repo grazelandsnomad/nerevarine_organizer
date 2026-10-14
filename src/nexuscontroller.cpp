@@ -5,6 +5,7 @@
 
 #include <QDateTime>
 #include <QNetworkReply>
+#include <QUuid>
 
 #include <functional>
 #include <memory>
@@ -12,37 +13,37 @@
 NexusController::NexusController(NexusClient *client, QObject *parent)
     : QObject(parent), m_client(client) {}
 
-void NexusController::fetchModTitle(QListWidgetItem *item,
+void NexusController::fetchModTitle(const QUuid &row,
                                     const QString &game, int modId)
 {
-    if (!m_client->hasApiKey() || !item) return;
+    if (!m_client->hasApiKey() || row.isNull()) return;
     QNetworkReply *reply = m_client->requestModInfo(game, modId);
     connect(reply, &QNetworkReply::finished, this,
-            [this, reply, item]() {
+            [this, reply, row]() {
         reply->deleteLater();
         if (reply->error() != QNetworkReply::NoError) return;
         const auto info = NexusClient::parseModInfo(reply->readAll());
         if (!info || info->name.isEmpty()) return;
-        emit titleFetched(item, info->name);
+        emit titleFetched(row, info->name);
     });
 }
 
-void NexusController::scanDependencies(QListWidgetItem *item,
+void NexusController::scanDependencies(const QUuid &row,
                                        const QString &game, int modId,
                                        const QMap<int, QString> &installedIdToUrl)
 {
-    if (!item) return;
+    if (row.isNull()) return;
     QNetworkReply *reply = m_client->requestModInfo(game, modId);
     connect(reply, &QNetworkReply::finished, this,
-            [this, reply, item, game, modId, installedIdToUrl]() {
+            [this, reply, row, game, modId, installedIdToUrl]() {
         reply->deleteLater();
         if (reply->error() != QNetworkReply::NoError) {
-            emit dependencyScanFailed(item, game, modId);
+            emit dependencyScanFailed(row, game, modId);
             return;
         }
         const auto info = NexusClient::parseModInfo(reply->readAll());
         if (!info) {
-            emit dependencyScanFailed(item, game, modId);
+            emit dependencyScanFailed(row, game, modId);
             return;
         }
         const auto parsed = deps::parseDescriptionDeps(
@@ -55,7 +56,7 @@ void NexusController::scanDependencies(QListWidgetItem *item,
         // description alone would build it.
         const QString title = info->name;
         const int gameNum   = info->gameIdNumeric;
-        const auto finish = [this, item, game, modId, title, parsed,
+        const auto finish = [this, row, game, modId, title, parsed,
                              installedIdToUrl, gameNum](
                                 const QList<deps::TableRequirement> &table) {
             const auto merged = deps::mergeRequirements(
@@ -67,7 +68,7 @@ void NexusController::scanDependencies(QListWidgetItem *item,
             for (const auto &d : merged)
                 if (!d.installed && !missing.contains(d.modId))
                     missing.append(d.modId);
-            emit dependenciesScanned(item, game, modId, title,
+            emit dependenciesScanned(row, game, modId, title,
                                      parsed.presentUrls, missing, merged,
                                      gameNum);
         };
@@ -79,37 +80,37 @@ void NexusController::scanDependencies(QListWidgetItem *item,
     });
 }
 
-void NexusController::fetchFileList(QListWidgetItem *item,
+void NexusController::fetchFileList(const QUuid &row,
                                     const QString &game, int modId)
 {
-    if (!item) return;
+    if (row.isNull()) return;
     QNetworkReply *reply = m_client->requestModFiles(game, modId);
     connect(reply, &QNetworkReply::finished, this,
-            [this, reply, item, game, modId]() {
+            [this, reply, row, game, modId]() {
         reply->deleteLater();
         if (reply->error() != QNetworkReply::NoError) {
             const int status = reply->attribute(
                 QNetworkRequest::HttpStatusCodeAttribute).toInt();
-            emit fileListFetchFailed(item, reply->errorString(), status);
+            emit fileListFetchFailed(row, reply->errorString(), status);
             return;
         }
         auto files = NexusClient::parseFilesList(reply->readAll());
         if (!files) {
-            emit fileListFetchFailed(item, files.error().toString(), 200);
+            emit fileListFetchFailed(row, files.error().toString(), 200);
             return;
         }
-        emit fileListFetched(item, game, modId, *files);
+        emit fileListFetched(row, game, modId, *files);
     });
 }
 
-void NexusController::fetchExpectedChecksum(QListWidgetItem *item,
+void NexusController::fetchExpectedChecksum(const QUuid &row,
                                             const QString &game,
                                             int modId, int fileId)
 {
-    if (!m_client->hasApiKey() || !item) return;
+    if (!m_client->hasApiKey() || row.isNull()) return;
     QNetworkReply *reply = m_client->requestModFiles(game, modId);
     connect(reply, &QNetworkReply::finished, this,
-            [this, reply, item, fileId]() {
+            [this, reply, row, fileId]() {
         reply->deleteLater();
         if (reply->error() != QNetworkReply::NoError) return;
         const auto files = NexusClient::parseFilesList(reply->readAll());
@@ -119,34 +120,34 @@ void NexusController::fetchExpectedChecksum(QListWidgetItem *item,
             QStringList siblings;
             siblings.reserve(int(files->size()));
             for (const auto &other : *files) siblings << other.name;
-            emit modFileSiblings(item, f.name, siblings);
-            emit expectedChecksumFetched(item, fileId, f.name, f.md5, f.sizeBytes);
+            emit modFileSiblings(row, f.name, siblings);
+            emit expectedChecksumFetched(row, fileId, f.name, f.md5, f.sizeBytes);
             return;
         }
     });
 }
 
-void NexusController::fetchChangelog(QListWidgetItem *item,
+void NexusController::fetchChangelog(const QUuid &row,
                                      const QString &game, int modId)
 {
-    if (!m_client->hasApiKey() || !item) return;
+    if (!m_client->hasApiKey() || row.isNull()) return;
     QNetworkReply *reply = m_client->requestChangelog(game, modId);
     connect(reply, &QNetworkReply::finished, this,
-            [this, reply, item, game, modId]() {
+            [this, reply, row, game, modId]() {
         reply->deleteLater();
         // Empty list on failure so the dialog leaves its loading state.
         if (reply->error() != QNetworkReply::NoError) {
-            emit changelogFetched(item, game, modId, {});
+            emit changelogFetched(row, game, modId, {});
             return;
         }
-        emit changelogFetched(item, game, modId,
+        emit changelogFetched(row, game, modId,
                               NexusClient::parseChangelog(reply->readAll()));
     });
 }
 
 void NexusController::checkForUpdates(
     const QList<CheckTarget> &targets,
-    std::function<QDateTime(QListWidgetItem *)> dateAddedFor)
+    std::function<QDateTime(const QUuid &)> dateAddedFor)
 {
     if (targets.isEmpty()) {
         emit checkUpdatesFinished(0, 0);
@@ -163,7 +164,7 @@ void NexusController::checkForUpdates(
     for (const auto &t : targets) {
         QNetworkReply *reply = m_client->requestModInfo(t.game, t.modId);
         connect(reply, &QNetworkReply::finished, this,
-                [this, reply, item = t.item, modId = t.modId, fileId = t.fileId,
+                [this, reply, row = t.row, modId = t.modId, fileId = t.fileId,
                  state, dateAddedFor]() {
             reply->deleteLater();
             if (reply->error() == QNetworkReply::NoError) {
@@ -171,9 +172,9 @@ void NexusController::checkForUpdates(
                 if (info && info->updatedTimestamp > 0) {
                     const QDateTime modUpdated =
                         QDateTime::fromSecsSinceEpoch(info->updatedTimestamp);
-                    const QDateTime dateAdded  = dateAddedFor(item);
+                    const QDateTime dateAdded  = dateAddedFor(row);
                     if (dateAdded.isValid() && modUpdated > dateAdded) {
-                        emit updateFoundForItem(item);
+                        emit updateFoundForItem(row);
                         ++state->found;
                     }
                 }
@@ -187,14 +188,14 @@ void NexusController::checkForUpdates(
                     QNetworkReply *files =
                         m_client->requestModFilesV2(info->gameIdNumeric, modId);
                     connect(files, &QNetworkReply::finished, this,
-                            [this, files, item, fileId, state]() {
+                            [this, files, row, fileId, state]() {
                         files->deleteLater();
                         if (files->error() == QNetworkReply::NoError) {
                             const auto list = NexusClient::parseModFilesV2(files->readAll());
                             if (list) {
                                 const auto v = file_status::judge(fileId, *list);
                                 if (v.state == file_status::Verdict::State::Superseded) {
-                                    emit fileSupersededForItem(item, v);
+                                    emit fileSupersededForItem(row, v);
                                     ++state->superseded;
                                 }
                             }

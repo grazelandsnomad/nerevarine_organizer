@@ -5,6 +5,8 @@
 // through it is what fails, so these cases carry weight there.
 
 #include "bulk_install_queue.h"
+#include "mod_row.h"
+#include "modentry.h"
 #include "modroles.h"
 
 #include <QApplication>
@@ -61,6 +63,36 @@ void testBulkQueueSkipsARowDeletedBeforeItsTurn()
           started.join(QLatin1Char(',')));
 }
 
+// -- row identity (mod_row::rowId) --------------------------------------
+
+void testRowIdIsMintedOnceAndTravelsThroughSnapshots()
+{
+    std::cout << "testRowIdIsMintedOnceAndTravelsThroughSnapshots\n";
+    QListWidgetItem item;
+    check("a fresh row has no id until asked", mod_row::rowIdIfAny(&item).isNull());
+    const QUuid id = mod_row::rowId(&item);
+    check("asking mints one", !id.isNull());
+    check("asking again returns the same one", mod_row::rowId(&item) == id);
+    check("it is now the row's id", mod_row::rowIdIfAny(&item) == id);
+    check("a null item has none", mod_row::rowId(nullptr).isNull()
+                                  && mod_row::rowIdIfAny(nullptr).isNull());
+
+    // An undo rebuilds every item from ModEntry snapshots; the id goes along.
+    item.setData(ModRole::ItemType, ItemType::Mod);
+    const ModEntry snap = ModEntry::fromItem(&item);
+    check("the snapshot carries the id", snap.rowId == id);
+    QListWidgetItem rebuilt;
+    snap.applyToItem(&rebuilt);
+    check("the rebuilt row has the same id", mod_row::rowIdIfAny(&rebuilt) == id);
+
+    // A snapshot without one leaves a row's existing id alone.
+    ModEntry blank;
+    blank.itemType = QStringLiteral("mod");
+    blank.applyToItem(&rebuilt);
+    check("a null id in a snapshot does not erase the row's",
+          mod_row::rowIdIfAny(&rebuilt) == id);
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -69,6 +101,7 @@ int main(int argc, char **argv)
     QApplication app(argc, argv);
 
     testBulkQueueSkipsARowDeletedBeforeItsTurn();
+    testRowIdIsMintedOnceAndTravelsThroughSnapshots();
 
     std::cout << "\n" << s_passed << " passed, " << s_failed << " failed\n";
     return s_failed == 0 ? 0 : 1;
