@@ -8,12 +8,15 @@
 #include "modentry.h"
 #include "modlist_model.h"
 #include "modlist_model_widget_bridge.h"
+#include "modlistview.h"
+#include "modrow.h"
 #include "modlist_sort.h"
 #include "modroles.h"
 
 #include <QAbstractItemModelTester>
 #include <QApplication>
 #include <QPersistentModelIndex>
+#include <QSet>
 #include <QColor>
 #include <QMetaType>
 #include <QUuid>
@@ -217,6 +220,87 @@ void testModelIsAWellBehavedItemModel()
     check("clear empties the model", m.count() == 0 && m.findByRowId(idA) == -1);
 }
 
+void testRowHandlesAndTheView()
+{
+    std::cout << "testRowHandlesAndTheView\n";
+    ModlistModel m;
+    ModListView view;
+    view.setModel(&m);
+    view.setSelectionMode(QAbstractItemView::ExtendedSelection);
+
+    ModRow none;
+    check("a default handle is null", !none && none == nullptr);
+    ModRow a = view.addItem(mkMod(QStringLiteral("A")));
+    ModRow b = view.addItem(mkMod(QStringLiteral("B")));
+    ModRow s = view.insertItem(1, mkSep(QStringLiteral("S")));   // A S B
+    check("the view counts the model's rows", view.count() == 3 && m.count() == 3);
+    check("a handle knows its row", a.row() == 0 && s.row() == 1 && b.row() == 2
+                                    && view.row(b) == 2 && view.item(2) == b);
+    check("reads go through the role table",
+          a->text() == QStringLiteral("A") && a->checkState() == Qt::Checked
+          && s->checkState() == Qt::Unchecked && s->isSeparator() && a->isMod());
+
+    int changed = 0;
+    ModRow changedRow;
+    QObject::connect(&view, &ModListView::itemChanged, &view,
+                     [&](const ModRow &r) { ++changed; changedRow = r; });
+    a->setData(ModRole::Annotation, QStringLiteral("note"));
+    check("a write lands in the model and the view says which row",
+          m.at(0).annotation == QStringLiteral("note") && changed == 1 && changedRow == a);
+    a->setCheckState(Qt::Unchecked);
+    check("so does a check state", !m.at(0).checked && a->checkState() == Qt::Unchecked);
+    a->setToolTip(QStringLiteral("tip"));
+    a->setFlags(Qt::ItemIsEnabled);
+    check("tool tip and flags too", a->toolTip() == QStringLiteral("tip")
+                                    && a->flags() == Qt::ItemIsEnabled
+                                    && m.index(0).data(Qt::ToolTipRole).toString() == QStringLiteral("tip"));
+
+    a->setHidden(true);
+    check("hidden reaches the view", view.isRowHidden(0) && a->isHidden());
+    m.replace(m.all());
+    check("and survives a reset", view.isRowHidden(0));
+
+    a->setFlags(ModEntry::kDefaultItemFlags);   // selectable again
+    ModRow current, previous;
+    QObject::connect(&view, &ModListView::currentItemChanged, &view,
+                     [&](const ModRow &c, const ModRow &p) { current = c; previous = p; });
+    view.setCurrentItem(b);
+    check("the current row is a handle", view.currentItem() == b && view.currentRow() == 2
+                                         && current == b && previous == nullptr);
+    view.setCurrentItem(a);
+    // QListWidget's SelectCurrent: the selection made by the previous
+    // setCurrentItem is replaced, not added to.
+    check("moving the current row moves its selection, like QListWidget",
+          view.selectedItems().size() == 1 && view.selectedItems().first() == a
+          && previous == b,
+          QStringLiteral("n=%1 firstIsA=%2 prevIsB=%3")
+              .arg(view.selectedItems().size())
+              .arg(!view.selectedItems().isEmpty() && view.selectedItems().first() == a)
+              .arg(previous == b));
+    view.clearSelection();
+    view.setRowSelected(s, true);
+    check("selecting by handle", view.selectedItems().size() == 1 && view.selectedItems().first() == s);
+
+    const ModEntry taken = view.takeItem(0);
+    check("a taken row keeps its id and the handle goes blank",
+          taken.rowId == a.id() && !a && a == nullptr && a->text().isEmpty()
+          && m.count() == 2);
+    a->setData(ModRole::Annotation, QStringLiteral("lost"));
+    check("a write to a gone row is dropped", m.count() == 2 && taken.annotation == QStringLiteral("note"));
+    ModRow back = view.insertItem(0, taken);
+    check("re-inserting revives the same identity", back == a && a && a.row() == 0);
+
+    QSet<ModRow> set{a, b, a};
+    check("handles hash by id", set.size() == 2 && set.contains(view.item(0)));
+    check("rowById resolves a live id and refuses a dead one",
+          view.rowById(b.id()) == b && view.rowById(QUuid::createUuid()) == nullptr);
+
+    view.removeRow(0);
+    check("removeRow drops the row", m.count() == 2 && !a);
+    view.clear();
+    check("clear empties everything", view.count() == 0 && !b);
+}
+
 void testBridgeFollowsTheWidgetRowByRow()
 {
     std::cout << "testBridgeFollowsTheWidgetRowByRow\n";
@@ -370,6 +454,7 @@ int main(int argc, char **argv)
 
     testRoleTableRoundTrips();
     testModelIsAWellBehavedItemModel();
+    testRowHandlesAndTheView();
     testBridgeFollowsTheWidgetRowByRow();
     testDependencySnapshotKeepsRowIndicesAndSections();
     testDateOrderSendsSeparatorsAndDatelessToTheEnd();
