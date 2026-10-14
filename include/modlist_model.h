@@ -1,58 +1,94 @@
 #pragma once
 
-// Typed, QtCore-only collection of ModEntry rows with observation signals.
-// Stage 1 of decoupling MainWindow's modlist from QListWidget: model lands
-// alongside m_modList (widget still the source of truth), then readers migrate
-// to the model, then mutation flips so the model owns the data.
+// ModlistModel - the mod list. A QAbstractListModel over QList<ModEntry>,
+// the one copy of the rows: the view paints from it through the role table
+// (ModEntry::roleData), the window reads and writes it through ModRow
+// handles or by row number, and everything that answers later (a Nexus
+// reply, a download, a queued install) names a row by its rowId, minted
+// here on insertion and kept for the session.
 //
-// A class, not QList<ModEntry>, because:
-//   · insert/remove/update signals let controllers react without the widget;
-//   · invariants (row in [0,count)) live in one place;
-//   · QObject can cross threads via QueuedConnection for long scans.
+// Structural changes go through begin/end* so a view follows them: moveRows
+// is what QListView's InternalMove drag calls, reorder() is a whole
+// permutation under layoutChanged (selection survives), replace() is a reset.
+// dropMimeData is refused: the only drop path is the move, never Qt's
+// encode/decode fallback, which would drop every ModRole on the floor.
 //
-// QtCore-only so tests link without QtWidgets (ModEntry's widget bridge is in
-// modentry_item.cpp). The QListWidget snapshot helpers (snapshotModEntries /
-// applyModEntries) live in modlist_model_widget_bridge.h to keep this header
-// free of widget includes.
+// QtCore-only, so logic over the list links without QtWidgets.
 
 #include "modentry.h"
 
+#include <QAbstractListModel>
+#include <QHash>
 #include <QList>
-#include <QObject>
 #include <QUuid>
 
-class ModlistModel : public QObject {
+class ModlistModel : public QAbstractListModel {
     Q_OBJECT
 public:
     explicit ModlistModel(QObject *parent = nullptr);
 
-    // Reference into internal storage; valid until the next mutation.
-    // Out-of-range returns a static blank entry instead of asserting, like
-    // the existing QListWidget bad-row handling.
+    // --- QAbstractItemModel ---------------------------------------------
+    int      rowCount(const QModelIndex &parent = QModelIndex()) const override;
+    QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
+    bool     setData(const QModelIndex &index, const QVariant &value,
+                     int role = Qt::EditRole) override;
+    // The entry's flags; a separator is never user-checkable; the root (an
+    // invalid index) accepts drops so a drag can land between rows.
+    Qt::ItemFlags   flags(const QModelIndex &index) const override;
+    Qt::DropActions supportedDropActions() const override;
+    Qt::DropActions supportedDragActions() const override;
+    bool moveRows(const QModelIndex &sourceParent, int sourceRow, int count,
+                  const QModelIndex &destinationParent, int destinationChild) override;
+    bool removeRows(int row, int count, const QModelIndex &parent = QModelIndex()) override;
+    bool dropMimeData(const QMimeData *data, Qt::DropAction action, int row, int column,
+                      const QModelIndex &parent) override;
+
+    // --- Rows --------------------------------------------------------------
     int  count() const;
     bool isEmpty() const;
-    const ModEntry& at(int row) const;
-
+    // Reference into internal storage; valid until the next mutation.
+    // Out-of-range returns a static blank entry instead of asserting.
+    const ModEntry &at(int row) const;
     // Copy of every row in order; use when iterating across a mutation.
     QList<ModEntry> all() const;
 
-    // Whole-list replacement. Emits modelReset (not N row signals) so
-    // subscribers re-render in one pass. Used by refreshFromList() and load.
+    // Whole-list replacement (a model reset). Entries keep the row ids they
+    // carry, so an undo snapshot restores the rows a reply in flight was
+    // addressed to; entries without one get one.
     void replace(QList<ModEntry> entries);
+    void clear();
 
-    // Mutators - each emits its signal AFTER the change lands.
-    int  append(ModEntry e);                 // returns the new row index
-    void insertAt(int row, ModEntry e);
-    void removeAt(int row);
-    void move(int from, int to);
-    void update(int row, ModEntry e);
+    // Each returns after the change landed and the view heard about it.
+    int      append(ModEntry e);                  // the new row
+    void     insertAt(int row, ModEntry e);       // clamped into [0, count]
+    void     removeAt(int row);
+    ModEntry takeAt(int row);                     // the entry, with its id, or blank
+    // Row `from` ends up at row `to` (QList::move semantics).
+    void     move(int from, int to);
+    // `order[newRow]` = the current row that moves there. Ignored unless it
+    // is a permutation of every row. One layoutChanged, not N moves.
+    void     reorder(const QList<int> &order);
+    // Whole-row replacement. A null rowId on `e` keeps the row's identity.
+    // An identical entry is not a change and emits nothing.
+    void     update(int row, ModEntry e);
+    // One role; false (and nothing emitted) when the row or role is unknown.
+    bool     setRole(int row, int role, const QVariant &value);
+    QVariant role(int row, int role) const;
+    // Presentation that is not a role: the item flags and the hidden state.
+    void     setFlags(int row, Qt::ItemFlags flags);
+    void     setHidden(int row, bool hidden);
 
-    // Look up a row by identity instead of position. Linear scan; the modlist
-    // is small (typically < 2000) so a hash isn't worth it. -1 if not found.
+    // --- Identity ------------------------------------------------------------
+    // The row's session id; null only for a row that does not exist.
+    QUuid rowId(int row) const;
+    // Row with this id, -1 if none. Constant time.
+    int   findByRowId(const QUuid &row) const;
+    QModelIndex indexOfRowId(const QUuid &row) const;
+
+    // --- Lookups ------------------------------------------------------------
+    // Linear scans; the modlist is small (typically < 2000). -1 if not found.
     int findByNexusUrl(const QString &url) const;
     int findByModPath(const QString &path) const;
-    // Row with this session identity (ModEntry::rowId), -1 if none.
-    int findByRowId(const QUuid &row) const;
 
     // Row of an INSTALLED mod (installStatus == 1) whose NexusUrl parses to
     // (game, modId). game matched case-insensitively (slugs stored lowercase).
@@ -79,12 +115,16 @@ public:
     [[nodiscard]] ModCounts modCounts() const;
 
 signals:
-    void modelReset();
-    void rowsInserted(int row, int count);
-    void rowsRemoved(int row, int count);
-    void rowsMoved(int from, int to);
-    void rowChanged(int row);
+    // The hidden state is not a role, so it has its own notice for the view.
+    void rowHiddenChanged(int row, bool hidden);
 
 private:
-    QList<ModEntry> m_entries;
+    bool validRow(int row) const { return row >= 0 && row < m_entries.size(); }
+    static void ensureRowId(ModEntry &e);
+    void touchIndex() { m_indexDirty = true; }
+    void reindex() const;
+
+    QList<ModEntry>             m_entries;
+    mutable QHash<QUuid, int>   m_rowOfId;
+    mutable bool                m_indexDirty = true;
 };

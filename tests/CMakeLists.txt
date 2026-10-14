@@ -79,6 +79,7 @@ foreach(t IN LISTS UNIT_TESTS)
     set_tests_properties(${t} PROPERTIES LABELS "unit")
 endforeach()
 target_link_libraries(test_profiles PRIVATE Qt6::Test)
+target_link_libraries(test_modlist_views PRIVATE Qt6::Test)   # QAbstractItemModelTester
 set_tests_properties(test_nxm PROPERTIES
     ENVIRONMENT "NEREVARINE_SKIP_INTEGRATION=1")
 

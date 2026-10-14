@@ -110,15 +110,15 @@ static void mm_testMoveReorders()
 
 static void mm_testUpdateEmitsRowChanged()
 {
-    std::cout << "\n[update emits rowChanged]\n";
+    std::cout << "\n[update emits dataChanged]\n";
     ModlistModel m;
     m.append(mm_mod("A"));
 
-    QSignalSpy spy(&m, &ModlistModel::rowChanged);
+    QSignalSpy spy(&m, &ModlistModel::dataChanged);
 
     m.update(0, mm_mod("A renamed"));
     check("displayName updated",  m.at(0).displayName == "A renamed");
-    check("rowChanged fired",     spy.count() == 1);
+    check("dataChanged fired",    spy.count() == 1);
 
     m.update(99, mm_mod("ignored"));
     check("invalid row is no-op", spy.count() == 1);

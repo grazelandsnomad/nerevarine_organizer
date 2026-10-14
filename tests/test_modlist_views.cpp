@@ -11,7 +11,9 @@
 #include "modlist_sort.h"
 #include "modroles.h"
 
+#include <QAbstractItemModelTester>
 #include <QApplication>
+#include <QPersistentModelIndex>
 #include <QColor>
 #include <QMetaType>
 #include <QUuid>
@@ -122,6 +124,99 @@ void testRoleTableRoundTrips()
                                         && !a.roleData(unknown).isValid());
 }
 
+ModEntry mkMod(const QString &name)
+{
+    ModEntry e;
+    e.displayName = name;
+    e.checked = true;
+    return e;
+}
+
+ModEntry mkSep(const QString &name)
+{
+    ModEntry e;
+    e.itemType = QStringLiteral("separator");
+    e.displayName = name;
+    return e;
+}
+
+void testModelIsAWellBehavedItemModel()
+{
+    std::cout << "testModelIsAWellBehavedItemModel\n";
+    ModlistModel m;
+    // Qt's own conformance checker; a protocol slip (a begin without its end,
+    // a bad index) aborts the test.
+    QAbstractItemModelTester tester(&m, QAbstractItemModelTester::FailureReportingMode::Fatal);
+
+    m.append(mkMod(QStringLiteral("A")));
+    m.append(mkMod(QStringLiteral("B")));
+    m.append(mkSep(QStringLiteral("S")));
+    m.append(mkMod(QStringLiteral("C")));
+    check("ids are minted on insertion", !m.rowId(0).isNull() && m.rowId(0) != m.rowId(1));
+    const QUuid idA = m.rowId(0), idC = m.rowId(3);
+    check("a row is found by its id", m.findByRowId(idC) == 3 && m.findByRowId(QUuid()) == -1
+                                       && m.indexOfRowId(idC).row() == 3);
+
+    // moveRows as the view's drag calls it: A (row 0) to past the end.
+    check("moveRows past the end", m.moveRows(QModelIndex(), 0, 1, QModelIndex(), 4));
+    check("A is last now", m.at(3).displayName == QStringLiteral("A") && m.findByRowId(idA) == 3);
+    check("a move onto itself is refused",
+          !m.moveRows(QModelIndex(), 1, 1, QModelIndex(), 1)
+          && !m.moveRows(QModelIndex(), 1, 1, QModelIndex(), 2));
+    m.move(3, 0);   // QList semantics: A back to row 0 -> A B S C
+    check("move(from, to) lands the row at to",
+          m.at(0).displayName == QStringLiteral("A") && m.at(3).displayName == QStringLiteral("C"));
+
+    QPersistentModelIndex pc = m.index(3);   // C
+    m.reorder({3, 2, 1, 0});                 // C S B A
+    check("reorder applies the permutation",
+          m.at(0).displayName == QStringLiteral("C") && m.at(3).displayName == QStringLiteral("A"));
+    check("a persistent index follows its row", pc.row() == 0);
+    m.reorder({0, 0, 1, 2});
+    check("a non-permutation is ignored", m.at(0).displayName == QStringLiteral("C")
+                                          && m.at(3).displayName == QStringLiteral("A"));
+
+    const QUuid idS = m.rowId(1);
+    const ModEntry s = m.takeAt(1);
+    check("takeAt returns the entry with its id",
+          s.rowId == idS && m.count() == 3 && m.findByRowId(idS) == -1);
+    m.insertAt(1, s);
+    check("and re-inserting keeps it", m.findByRowId(idS) == 1);
+
+    const QModelIndex iA = m.index(3);
+    check("data goes through the role table",
+          m.data(iA, Qt::DisplayRole).toString() == QStringLiteral("A"));
+    check("setData too", m.setData(iA, QStringLiteral("note"), ModRole::Annotation)
+                         && m.at(3).annotation == QStringLiteral("note"));
+    check("an unknown role is refused", !m.setData(iA, 1, Qt::UserRole + 999));
+
+    check("a separator is not checkable", !(m.flags(m.index(1)) & Qt::ItemIsUserCheckable));
+    check("a mod is", bool(m.flags(iA) & Qt::ItemIsUserCheckable));
+    check("the root takes drops", bool(m.flags(QModelIndex()) & Qt::ItemIsDropEnabled));
+    check("a row does not", !(m.flags(iA) & Qt::ItemIsDropEnabled));
+    check("the mime fallback is refused",
+          !m.dropMimeData(nullptr, Qt::MoveAction, 0, 0, QModelIndex()));
+
+    ModEntry a2 = m.at(3);
+    a2.rowId = QUuid();
+    a2.displayName = QStringLiteral("A2");
+    m.update(3, a2);
+    check("update with a null id keeps the row's id",
+          m.rowId(3) == idA && m.at(3).displayName == QStringLiteral("A2"));
+
+    m.replace(m.all());
+    check("replace keeps the ids it is given", m.findByRowId(idA) == 3 && m.count() == 4);
+
+    int hiddenRow = -1;
+    bool hiddenVal = false;
+    QObject::connect(&m, &ModlistModel::rowHiddenChanged, &m,
+                     [&](int r, bool h) { hiddenRow = r; hiddenVal = h; });
+    m.setHidden(2, true);
+    check("hidden has its own notice", hiddenRow == 2 && hiddenVal && m.at(2).hidden);
+    m.clear();
+    check("clear empties the model", m.count() == 0 && m.findByRowId(idA) == -1);
+}
+
 void testBridgeFollowsTheWidgetRowByRow()
 {
     std::cout << "testBridgeFollowsTheWidgetRowByRow\n";
@@ -135,8 +230,10 @@ void testBridgeFollowsTheWidgetRowByRow()
                                         && model.at(1).displayName == QStringLiteral("B"));
 
     int changedRow = -1, changes = 0, resets = 0;
-    QObject::connect(&model, &ModlistModel::rowChanged, &model,
-                     [&](int row) { changedRow = row; ++changes; });
+    QObject::connect(&model, &ModlistModel::dataChanged, &model,
+                     [&](const QModelIndex &tl, const QModelIndex &, const QList<int> &) {
+        changedRow = tl.row(); ++changes;
+    });
     QObject::connect(&model, &ModlistModel::modelReset, &model, [&] { ++resets; });
 
     b->setData(ModRole::Annotation, QStringLiteral("note"));
@@ -272,6 +369,7 @@ int main(int argc, char **argv)
     QApplication app(argc, argv);
 
     testRoleTableRoundTrips();
+    testModelIsAWellBehavedItemModel();
     testBridgeFollowsTheWidgetRowByRow();
     testDependencySnapshotKeepsRowIndicesAndSections();
     testDateOrderSendsSeparatorsAndDatelessToTheEnd();
