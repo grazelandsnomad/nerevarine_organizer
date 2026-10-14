@@ -63,6 +63,10 @@ void ModlistModel::move(int from, int to)
 void ModlistModel::update(int row, ModEntry e)
 {
     if (row < 0 || row >= m_entries.size()) return;
+    // An identical entry is not a change: the widget bridge may deliver the
+    // same row twice (once ahead of the window's slots, once from the item
+    // model), and listeners should hear about it once.
+    if (m_entries[row] == e) return;
     m_entries[row] = std::move(e);
     emit rowChanged(row);
 }

@@ -15,6 +15,7 @@
 #include <QDateTime>
 #include <QListWidget>
 #include <QListWidgetItem>
+#include <QSignalBlocker>
 #include <QStringList>
 
 #include <iostream>
@@ -78,6 +79,20 @@ void testBridgeFollowsTheWidgetRowByRow()
     a->setCheckState(Qt::Unchecked);
     check("a checkbox toggle too", !model.at(0).checked && model.at(1).checked);
 
+    // The window's own itemChanged slots read the model, and they are
+    // connected after the bridge, so the row must already be updated when
+    // they run - and updated once, not once per path the bridge listens on.
+    bool seenInTime = false;
+    QObject::connect(&list, &QListWidget::itemChanged, &model,
+                     [&](QListWidgetItem *item) {
+        seenInTime = model.at(list.row(item)).checked;
+    });
+    changes = 0;
+    a->setCheckState(Qt::Checked);
+    check("an itemChanged slot wired after the bridge sees the new value", seenInTime);
+    check("and the model reports the change once", changes == 1,
+          QString::number(changes));
+
     const QUuid id = mod_row::rowId(b);
     check("a minted row id is visible through the model",
           model.findByRowId(id) == 1 && model.findByRowId(QUuid()) == -1);
@@ -86,6 +101,32 @@ void testBridgeFollowsTheWidgetRowByRow()
     check("a removed row leaves the model", model.count() == 1
           && model.at(0).displayName == QStringLiteral("B")
           && model.findByRowId(id) == 0);
+
+    // The window edits rows in bulk with the widget's signals blocked. The
+    // bridge listens to the widget's item model, which the blocker does not
+    // silence, so the model keeps up anyway.
+    {
+        const QSignalBlocker blocker(&list);
+        b->setData(ModRole::Annotation, QStringLiteral("blocked edit"));
+        auto *c = new QListWidgetItem(QStringLiteral("C"));
+        c->setData(ModRole::ItemType, ItemType::Mod);
+        list.insertItem(0, c);
+        delete list.takeItem(1);   // B
+    }
+    check("an edit under a signal blocker still reaches the model",
+          model.count() == 1 && model.at(0).displayName == QStringLiteral("C"),
+          QStringLiteral("count=%1 first=%2").arg(model.count())
+              .arg(model.count() ? model.at(0).displayName : QStringLiteral("-")));
+
+    // A wiring that arrives late, or a drift, is repaired on the next change
+    // rather than applied as a delta to the wrong shape.
+    ModlistModel late;
+    addRow(list, QStringLiteral("D"));
+    modlist::connectAutoSync(&late, &list);
+    check("a model connected late is empty until something changes", late.count() == 0);
+    addRow(list, QStringLiteral("E"));
+    check("and whole after the first change", late.count() == 3
+          && late.at(2).displayName == QStringLiteral("E"), QString::number(late.count()));
 }
 
 // -- deps::snapshot from rows ---------------------------------------------
