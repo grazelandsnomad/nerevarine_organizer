@@ -100,6 +100,19 @@ void qtMessageHandler(QtMsgType type, const QMessageLogContext &ctx,
 }
 
 #ifdef Q_OS_UNIX
+// write(2) in full, result looked at: glibc marks it warn_unused_result under
+// _FORTIFY_SOURCE (Ubuntu's default), and a crash handler has nowhere to
+// report a short write anyway. Async-signal-safe, like write itself.
+void writeAll(int fd, const char *s, size_t n)
+{
+    while (n > 0) {
+        const ssize_t w = ::write(fd, s, n);
+        if (w <= 0) return;
+        s += size_t(w);
+        n -= size_t(w);
+    }
+}
+
 // Signal-safe: no Qt inside a signal handler. Write straight to the log fd via
 // backtrace_symbols_fd, then re-raise.
 void crashSignalHandler(int sig)
@@ -116,9 +129,9 @@ void crashSignalHandler(int sig)
     int fd = ::open(path.constData(), O_WRONLY | O_APPEND | O_CREAT, 0644);
     if (fd >= 0) {
         const char hdr1[] = "\n==== CRASH: ";
-        ::write(fd, hdr1, sizeof(hdr1) - 1);
-        ::write(fd, name, std::strlen(name));
-        ::write(fd, " ====\n", 6);
+        writeAll(fd, hdr1, sizeof(hdr1) - 1);
+        writeAll(fd, name, std::strlen(name));
+        writeAll(fd, " ====\n", 6);
         void *frames[64];
         int n = backtrace(frames, 64);
         backtrace_symbols_fd(frames, n, fd);

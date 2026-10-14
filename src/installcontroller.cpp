@@ -248,7 +248,7 @@ void InstallController::extractArchive(const QString &archivePath,
     const archive_magic::Format fmt = archive_magic::sniff(header);
 
     // Launch a process; false if it couldn't start.
-    auto launch = [this](QProcess *p, const QString &prog,
+    auto launch = [](QProcess *p, const QString &prog,
                          const QStringList &a) -> bool {
         p->start(prog, a);
         return p->waitForStarted(3000);
