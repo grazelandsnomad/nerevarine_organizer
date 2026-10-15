@@ -384,7 +384,9 @@ MainWindow::MainWindow(QWidget *parent)
                                   this);
     connect(m_scans, &ScanCoordinator::sizesScanned,
             this, &MainWindow::onModSizesScanned);
-    loadModList();
+    // Qualified: these are WindowShell overrides, and a constructor calls its own
+    // class's version anyway; saying so keeps the analyzer's virtual-call check quiet.
+    MainWindow::loadModList();
     // The translate editor's first open builds the vanilla-text table - a walk
     // of Morrowind's masters, ~94 MB. Start it on a worker now, in the shadow
     // of the modlist load, so that first open finds it already built.
@@ -393,10 +395,10 @@ MainWindow::MainWindow(QWidget *parent)
     absorbExternalLoadOrder(); // respect reorders done in OpenMW Launcher
     m_downloadQueue->cleanStaleDownloads();
     repairEmptyModPaths();
-    reconcileLoadOrder();  // bring m_loadOrder up-to-date with installed mods
-    syncGameConfig();
-    scanMissingMasters();
-    updateSectionCounts();
+    MainWindow::reconcileLoadOrder();  // bring m_loadOrder up-to-date with installed mods
+    MainWindow::syncGameConfig();
+    MainWindow::scanMissingMasters();
+    MainWindow::updateSectionCounts();
     m_mastersScanTimer = new QTimer(this);
     m_mastersScanTimer->setSingleShot(true);
     m_mastersScanTimer->setInterval(200);
@@ -531,7 +533,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_conflictTimer->setSingleShot(true);
     m_conflictTimer->setInterval(400);
     connect(m_conflictTimer, &QTimer::timeout, this, &MainWindow::runConflictScan);
-    scheduleConflictScan();
+    MainWindow::scheduleConflictScan();
 
     // Disable-warning batching. Zero-shot rather than immediate on purpose:
     // itemChanged is emitted from inside QListModel::setData, so a dialog
