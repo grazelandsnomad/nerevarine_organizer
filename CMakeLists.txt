@@ -78,7 +78,6 @@ set(CORE_SOURCES
     src/theme.cpp
     src/mainwindow.cpp
     src/mainwindow_deploy.cpp
-    src/mainwindow_import.cpp
     src/mainwindow_install.cpp
     src/mainwindow_nexus.cpp
     src/mainwindow_config.cpp
@@ -110,6 +109,8 @@ set(CORE_SOURCES
     src/bainwizard.cpp
     src/load_order_merge.cpp
     src/modentry.cpp
+    src/import_flow.cpp
+    src/import_formats.cpp
     src/modlist_model.cpp
     src/modlistview.cpp
     src/modrow.cpp
@@ -277,6 +278,7 @@ set(CORE_SOURCES
     include/bain.h
     include/bainwizard.h
     include/load_order_merge.h
+    include/import_flow.h
     include/modlist_model.h
     include/modlistview.h
     include/modlist_serializer.h

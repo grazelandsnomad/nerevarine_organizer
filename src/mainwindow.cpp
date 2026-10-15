@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "import_flow.h"
 #include "mainwindow_internal.h"
 #include "async_guarded.h"
 #include "user_state_paths.h"
@@ -164,6 +165,63 @@ static QList<firstrun::GameChoice> builtinGameChoices();
 
 static QString supersededText(const file_status::Verdict &v);   // below
 
+// --- WindowShell: what the flows may ask of the window -------------------
+
+bool MainWindow::hasProfile() const { return m_profiles && !m_profiles->isEmpty(); }
+
+QString MainWindow::currentGameId() const
+{
+    return hasProfile() ? currentProfile().id : QString();
+}
+
+QString MainWindow::currentGameName() const
+{
+    return hasProfile() ? currentProfile().displayName : QString();
+}
+
+void MainWindow::setModsDir(const QString &dir)
+{
+    m_modsDir = dir;
+    if (m_downloadQueue) m_downloadQueue->setModsDir(m_modsDir);
+    if (m_profiles) m_profiles->setActiveModsDir(dir);
+}
+
+void MainWindow::setOpenmwPath(const QString &path)
+{
+    m_openmwPath = path;
+    if (hasProfile()) currentProfile().openmwPath = path;
+}
+
+void MainWindow::setOpenmwLauncherPath(const QString &path)
+{
+    m_openmwLauncherPath = path;
+    if (hasProfile()) currentProfile().openmwLauncherPath = path;
+}
+
+void MainWindow::scheduleSizeScan() { if (m_scans) m_scans->scheduleSizeScan(); }
+
+void MainWindow::repaintList()
+{
+    if (m_modList && m_modList->viewport()) m_modList->viewport()->update();
+}
+
+void MainWindow::installFolderAsMod(const QString &dirPath) { addModFromPath(dirPath, nullptr); }
+
+bool MainWindow::downloadsIdle() const { return !m_downloadQueue || m_downloadQueue->isEmpty(); }
+
+void MainWindow::showStatus(const QString &msg, int ms) { statusBar()->showMessage(msg, ms); }
+
+void MainWindow::triageOpenMWLog() { onTriageOpenMWLog(); }
+
+void MainWindow::reportResult(const QString &title, const QString &body, bool warning)
+{
+    QMessageBox summary(this);
+    summary.setWindowTitle(title);
+    summary.setIcon(warning ? QMessageBox::Warning : QMessageBox::Information);
+    summary.setText(body);
+    summary.exec();
+}
+
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
@@ -311,6 +369,7 @@ MainWindow::MainWindow(QWidget *parent)
     // widget is parented into the central layout in setupCentralWidget().
     m_columnHeader = new ColumnHeader(this);
     m_tbCustom     = new ToolbarCustomization(this);
+    m_importFlow   = new ImportFlow(*this, this);
     setupMenuBar();
     setupToolbar();
     setupCentralWidget();
@@ -2184,7 +2243,7 @@ void MainWindow::dropEvent(QDropEvent *event)
     for (const QString &p : toImport) {
         QMetaObject::invokeMethod(this, [self, p]{
             if (!self) return;
-            self->handleDroppedImportFile(p);
+            self->m_importFlow->handleDroppedImportFile(p);
         }, Qt::QueuedConnection);
     }
 }
@@ -2874,44 +2933,6 @@ bool MainWindow::confirmReplaceModList()
 // Returns the common parent directory stored in a Nerevarine modlist.txt, or an
 // empty string if the paths already exist on this machine (no remap needed) or
 // if they are inconsistent (can't determine a single base).
-QString MainWindow::detectModsBaseFromFile(const QString &path)
-{
-    QFile f(path);
-    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return {};
-    QTextStream in(&f);
-    QString detectedBase;
-    bool allMissing = true;
-    while (!in.atEnd()) {
-        const QString line = in.readLine();
-        if (line.size() < 2) continue;
-        if (line[0] != '+' && line[0] != '-') continue;
-        const QStringList parts = line.mid(2).split('\t');
-        if (parts.isEmpty()) continue;
-        const QString modPath = parts[0];
-        if (!modPath.startsWith('/')) continue; // not an absolute path
-
-        if (QDir(modPath).exists()) {
-            allMissing = false;
-            continue; // this path works locally, don't count it as foreign
-        }
-
-        const QString parent = QFileInfo(modPath).absolutePath();
-        if (detectedBase.isEmpty()) {
-            detectedBase = parent;
-        } else if (detectedBase != parent) {
-            // Paths have different parents - fall back to longest common prefix
-            int i = 0;
-            while (i < detectedBase.size() && i < parent.size()
-                   && detectedBase[i] == parent[i])
-                ++i;
-            detectedBase = detectedBase.left(i);
-            if (detectedBase.isEmpty()) return {};
-        }
-    }
-    // If every path exists locally, no remap is needed.
-    if (!allMissing && detectedBase.isEmpty()) return {};
-    return detectedBase;
-}
 
 
 

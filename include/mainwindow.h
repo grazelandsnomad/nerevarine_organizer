@@ -23,6 +23,7 @@
 #include "modlist_model.h"
 #include "modlistview.h"
 #include "modrow.h"
+#include "window_shell.h"
 #include "downloadqueue.h"
 #include "installcontroller.h"   // for InstallController::VerifyFailKind in slot
 #include "save_queue.h"          // serialized off-thread save writes (by-value member)
@@ -60,12 +61,44 @@ class ToolbarCustomization;
 class ScanCoordinator;
 class BackupManager;
 class BulkInstallQueue;
+class ImportFlow;
 
-class MainWindow : public QMainWindow {
+class MainWindow : public QMainWindow, public WindowShell {
     Q_OBJECT
 public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow() = default;
+
+    // --- WindowShell: what the flows may ask of the window ---------------
+    // The one-liners live in mainwindow.cpp; the methods the window already
+    // had are the overrides themselves (declared below with `override`).
+    ModlistModel &model() override { return m_model; }
+    GameProfileRegistry *profiles() override { return m_profiles; }
+    bool    hasProfile() const override;
+    QString currentGameId() const override;
+    QString currentGameName() const override;
+    QString modsDir() const override { return m_modsDir; }
+    void    setModsDir(const QString &dir) override;
+    QStringList loadOrder() const override { return m_loadOrder; }
+    void        setLoadOrder(const QStringList &order) override { m_loadOrder = order; }
+    UndoStack             *undo() override { return m_undoStack; }
+    ForbiddenModsRegistry *forbidden() override { return m_forbidden; }
+    QString openmwPath() const override { return m_openmwPath; }
+    void    setOpenmwPath(const QString &path) override;
+    QString openmwLauncherPath() const override { return m_openmwLauncherPath; }
+    void    setOpenmwLauncherPath(const QString &path) override;
+    void scheduleSizeScan() override;
+    void repaintList() override;
+    void installFolderAsMod(const QString &dirPath) override;
+    bool downloadsIdle() const override;
+    QWidget *dialogParent() override { return this; }
+    void showStatus(const QString &msg, int ms) override;
+    NotifyBanner *notify() override { return m_notify; }
+    StickyKind stickyKind() const override { return m_stickyKind; }
+    void setStickyKind(StickyKind kind) override { m_stickyKind = kind; }
+    ScanOverlay *deployOverlay() override { return m_deployOverlay; }
+    void triageOpenMWLog() override;
+    void reportResult(const QString &title, const QString &body, bool warning) override;
 
 public slots:
     void handleNxmUrl(const QString &url);
@@ -76,7 +109,6 @@ public slots:
     // carries its mod id), so a hand-installed mod still gets update checks.
     void installLocalArchive(const QString &archivePath,
                              const QString &nexusUrlHint = {});
-    void handleDroppedImportFile(const QString &path);
     // Files dropped on the list from outside: archives install, lists import.
     void onLocalFilesDropped(const QStringList &paths);
 
@@ -97,7 +129,7 @@ private slots:
     // which is what the deploy manifest recorded them as. Returns how many
     // rows were actually checked, which is not always how many were asked
     // for: a label with no matching row is skipped rather than counted.
-    int  checkUpdatesForMods(const QStringList &labels);
+    int  checkUpdatesForMods(const QStringList &labels) override;
     void onCheckUpdatesFinished(int foundCount, int supersededCount);
     void onTitleFetched(const QUuid &row, const QString &name);
     // A download is under way for a file whose name says it is built for the
@@ -181,8 +213,8 @@ private slots:
     void resetToSavedOrder();
     void dropViewSortKeepingOrder();
     void clearViewSortState();   // cosmetic reset on list rebuild (banner + flag)
-    QList<int> rowOrderForPersist() const;
-    QList<ModEntry> snapshotEntriesForPersist() const;
+    QList<int> rowOrderForPersist() const override;
+    QList<ModEntry> snapshotEntriesForPersist() const override;
     // Rotation-proof good-state checkpoint of the current saved order, taken
     // right before any sort so a scrambling sort is always recoverable. Cheap
     // on purpose (no syncGameConfig/scans, unlike saveModList): call before the
@@ -205,23 +237,23 @@ private slots:
 
     // Cheap entry points: just (re)arm a debounce timer. Real work runs on a
     // QtConcurrent worker and posts results back to the UI.
-    void scanMissingMasters();   // schedule a missing-master rescan
+    void scanMissingMasters() override;   // schedule a missing-master rescan
     void scanMissingDependencies(); // in-memory DependsOn -> warning-icon sweep
 
     void switchToGame(int idx);
     // Switch modlist profile within the current game: save current modlist +
     // load order to the OLD profile, flip the active index, point m_modsDir at
     // the new modsDir, reload from the NEW profile, re-sync openmw.cfg.
-    void switchToModlistProfile(int idx);
+    void switchToModlistProfile(int idx) override;
     // Create/clone/rename/delete dialog for the current game.
     void onManageModlistProfiles();
     // New empty profile (profile menu, Wabbajack-into-new-profile flow).
     // Returns the new index, or -1 if cancelled / bad name. Does NOT switch.
-    int  createNewModlistProfile(const QString &suggestedName = QString());
+    int  createNewModlistProfile(const QString &suggestedName = QString()) override;
     // Make sure the active profile has a modsDir before installing into it;
     // fires the "where to store this profile's mods?" prompt when empty. True if
     // a dir exists after, false on cancel. No-op when set.
-    bool ensureModsDirForActiveProfile();
+    bool ensureModsDirForActiveProfile() override;
     // Profile/game switches used to destroy in-flight install placeholders
     // (status==2 items) with the rest of the rows, leaving InstallController's
     // handlers with a dangling pointer and an "aborted" mod. These park the
@@ -297,7 +329,7 @@ private:
     void setupToolbar();
     void setupCentralWidget();
 
-    void saveModList();
+    void saveModList() override;
     // Debounced save (150ms) for high-traffic mutation sites (drag reorder,
     // hold-to-repeat move, rapid favorite/collapse toggles); calls within the
     // window collapse to one saveModList(). Sync saveModList() stops this timer
@@ -335,7 +367,7 @@ private:
     // Parse the on-disk modlist of every profile except the active one. The
     // active profile is excluded because callers hold it live in m_modList,
     // where it may already differ from the file.
-    QList<QPair<QString, QList<ModEntry>>> otherProfileModlists() const;
+    QList<QPair<QString, QList<ModEntry>>> otherProfileModlists() const override;
     // Find an in-flight placeholder by InstallToken: m_modList first, then
     // m_strandedInstalls (parked across profile switches). When found in a
     // stranded bucket, `outProfileKey` (if non-null) gets the bucket key for
@@ -349,35 +381,15 @@ private:
     // row, a cleared list or an undo that rebuilt every item turns into a
     // null here instead of a freed pointer. Resolve again after any modal
     // dialog inside a slot: rows can be removed while one is open.
-    ModRow rowById(const QUuid &row) const;
+    ModRow rowById(const QUuid &row) const override;
     // rowById for a controller reply: a miss is logged and the row is dropped
     // from the id-keyed side tables.
     ModRow replyRow(const QUuid &row, const char *what);
     void loadModList(const QString &path = QString(),
                      const QString &remapFrom = QString(),
-                     const QString &remapTo   = QString());
+                     const QString &remapTo   = QString()) override;
     void syncOpenMWConfig();
-    void exportModList();
-    void onImportModList();
-    void onImportMO2ModList();
-    void onImportMO2Profile();
-    void onImportWabbajack();
-    // Seed the modlist from an existing openmw.cfg, for users coming from plain
-    // openmw-launcher who'd otherwise re-add every mod by hand. Reads data=/
-    // content=/groundcover=, skips the vanilla Data Files folder, one managed
-    // row per remaining data= path, load order from content=/groundcover= in
-    // file order.
-    void onImportFromOpenMWConfig();
-    // Helpers for menu slots and the drop handler.
-    void doImportMO2ModList(const QString &path);
-    // onImportFromOpenMWConfig body taking the cfg path - split out so future
-    // drag-drop / CLI entry points can skip the file picker.
-    void doImportOpenMWConfig(const QString &cfgPath);
-    void doImportWabbajack(const QString &path);
-    void finishWabbajackImport(const QJsonObject &root);
-    void doImportNerevarineModList(const QString &path);
-    static QString detectModsBaseFromFile(const QString &path);
-    bool confirmReplaceModList();
+    bool confirmReplaceModList() override;
     void onViewChangelog(ModRow item);
     void onNewModList();
     // savePath fires when the resolved path changes (auto-detected via PATH or
@@ -399,7 +411,7 @@ private:
     // Bulk-move selection to row 0 or past the last row, keeping relative order.
     // "Send to -> Top / Bottom".
     void sendSelectedToEdge(bool toBeginning);
-    void updateModCount();
+    void updateModCount() override;
     void addModFromPath(const QString &dirPath, ModRow placeholder = nullptr);
     void purgeDuplicatePlaceholders(ModRow installed);
 
@@ -665,7 +677,7 @@ private:
     // Conflict detection (run by LoadOrderController). schedule() arms the
     // debounce; the timer slot snapshots the modlist and hands it to the
     // controller; onConflictsScanned writes ModRole results back on finish.
-    void scheduleConflictScan();
+    void scheduleConflictScan() override;
     void runConflictScan();
     void onConflictsScanned(
         const QHash<QString, conflict_direction::Directions> &byModPath,
@@ -733,8 +745,8 @@ private:
     QSet<QString> m_suppressedPlugins;
     QString     loadOrderPath() const;
     void        loadLoadOrder();
-    void        saveLoadOrder();
-    void        reconcileLoadOrder();
+    void        saveLoadOrder() override;
+    void        reconcileLoadOrder() override;
     // Pull plugin order from openmw.cfg if it changed externally since our last
     // save (e.g. reordered in the OpenMW Launcher).
     void        absorbExternalLoadOrder();
@@ -743,7 +755,7 @@ private:
 
     // Per-game config sync, called on every modlist change. Dispatches to
     // engine-specific writers (only OpenMW/Morrowind today; rest stubbed).
-    void syncGameConfig();
+    void syncGameConfig() override;
 
     // Self-heal crash-interrupted installs: wipe any placeholder stuck at
     // status=2 with no active network reply.
@@ -754,7 +766,7 @@ private:
     void repairEmptyModPaths();
 
     // Per-section active/total counts on separators.
-    void updateSectionCounts();
+    void updateSectionCounts() override;
 
     // Game profile management
     void updateGameButton();
@@ -776,7 +788,7 @@ private:
     // Re-bake text colours into the transparent toolbar buttons (Profile, theme
     // toggle) from the live palette after a theme swap.
     void restyleToolbarTextButtons();
-    QString modlistPath() const;
+    QString modlistPath() const override;
     QString forbiddenModsPath() const;
     // Rebind m_forbidden to the current game's forbidden-mods file.
     void    reloadForbiddenMods();
@@ -785,6 +797,9 @@ private:
     // Pull the current profile's modsDir/openmwPath/openmwLauncherPath into the
     // mirror members and poke m_downloadQueue when ready.
     void applyCurrentProfileToMirrors();
+
+    // The flows: one concern each, over the WindowShell the window is.
+    ImportFlow                       *m_importFlow   = nullptr;
 
     ModListView                      *m_modList      = nullptr;
     ModListDelegate                  *m_delegate     = nullptr;
@@ -967,7 +982,6 @@ private:
     // right action. Was a bool for the deploy hint; a third kind arrived and a
     // second bool would have made "which one is up" a question with two
     // answers.
-    enum class StickyKind { ViewSort, DeployHint, CaughtDownload };
     StickyKind     m_stickyKind = StickyKind::ViewSort;
     // The file the CaughtDownload banner is offering.
     QString        m_caughtDownload;

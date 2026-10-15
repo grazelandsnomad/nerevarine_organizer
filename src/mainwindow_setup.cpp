@@ -4,6 +4,7 @@
 // QListWidget subclass (used only when building the central widget) lives here.
 
 #include "mainwindow.h"
+#include "import_flow.h"
 #include "mainwindow_internal.h"
 #include "modlist_model.h"
 #include "settings.h"
@@ -148,20 +149,20 @@ void MainWindow::onLocalFilesDropped(const QStringList &paths)
     for (const QString &p : paths)
         if (isInstallableArchiveSuffix(p)) installLocalArchive(p);
     for (const QString &p : paths)
-        if (isImportFileSuffix(p)) handleDroppedImportFile(p);
+        if (isImportFileSuffix(p)) m_importFlow->handleDroppedImportFile(p);
 }
 
 void MainWindow::setupMenuBar()
 {
     auto *fileMenu = menuBar()->addMenu(T("menu_file"));
     fileMenu->addAction(T("menu_new_modlist"), this, &MainWindow::onNewModList);
-    fileMenu->addAction(T("menu_export"), this, &MainWindow::exportModList);
-    fileMenu->addAction(T("menu_import"), this, &MainWindow::onImportModList);
-    fileMenu->addAction(T("menu_import_openmw_cfg"), this,
-                        &MainWindow::onImportFromOpenMWConfig);
-    fileMenu->addAction(T("menu_import_mo2_profile"), this, &MainWindow::onImportMO2Profile);
-    fileMenu->addAction(T("menu_import_mo2"), this, &MainWindow::onImportMO2ModList);
-    fileMenu->addAction(T("menu_import_wabbajack"), this, &MainWindow::onImportWabbajack);
+    fileMenu->addAction(T("menu_export"), m_importFlow, &ImportFlow::exportModList);
+    fileMenu->addAction(T("menu_import"), m_importFlow, &ImportFlow::onImportModList);
+    fileMenu->addAction(T("menu_import_openmw_cfg"), m_importFlow,
+                        &ImportFlow::onImportFromOpenMWConfig);
+    fileMenu->addAction(T("menu_import_mo2_profile"), m_importFlow, &ImportFlow::onImportMO2Profile);
+    fileMenu->addAction(T("menu_import_mo2"), m_importFlow, &ImportFlow::onImportMO2ModList);
+    fileMenu->addAction(T("menu_import_wabbajack"), m_importFlow, &ImportFlow::onImportWabbajack);
     fileMenu->addSeparator();
     fileMenu->addAction(T("menu_quit"), QKeySequence::Quit, qApp, &QApplication::quit);
 
@@ -458,8 +459,8 @@ void MainWindow::setupToolbar()
 
     auto *actRemove = tb->addAction(T("toolbar_remove"),        this, &MainWindow::onRemoveSelected);
     auto *actReview = tb->addAction(T("toolbar_review_updates"), this, &MainWindow::onReviewUpdates);
-    auto *actExport = tb->addAction(T("toolbar_export"), this, &MainWindow::exportModList);
-    auto *actImport = tb->addAction(T("toolbar_import"), this, &MainWindow::onImportModList);
+    auto *actExport = tb->addAction(T("toolbar_export"), m_importFlow, &ImportFlow::exportModList);
+    auto *actImport = tb->addAction(T("toolbar_import"), m_importFlow, &ImportFlow::onImportModList);
 
     // -- Featured Modlists button ---
     // On hold pending scope. For now opens a "Work in progress" dialog instead
