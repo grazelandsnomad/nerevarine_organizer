@@ -2,6 +2,7 @@
 // view-sorts, section counts. Split for parallel compilation; same class.
 
 #include "mainwindow.h"
+#include "deploy_flow.h"
 #include "variant_picker.h"
 #include "plugin_strings.h"
 #include "vanilla_text.h"
@@ -1124,7 +1125,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                             // did not, so a previous deployment is stale and
                             // nothing in the list can show it.
                             saveModList();
-                            markDeployStale(modlistPath());
+                            m_deployFlow->markDeployStale(modlistPath());
                         });
                     }
                 }

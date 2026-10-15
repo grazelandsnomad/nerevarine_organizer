@@ -1,4 +1,6 @@
 #include "mainwindow.h"
+#include "deploy_flow.h"
+#include "library_flow.h"
 #include "import_flow.h"
 #include "mainwindow_internal.h"
 #include "async_guarded.h"
@@ -370,6 +372,8 @@ MainWindow::MainWindow(QWidget *parent)
     m_columnHeader = new ColumnHeader(this);
     m_tbCustom     = new ToolbarCustomization(this);
     m_importFlow   = new ImportFlow(*this, this);
+    m_deployFlow   = new DeployFlow(*this, this);
+    m_libraryFlow  = new LibraryFlow(*this, this);
     setupMenuBar();
     setupToolbar();
     setupCentralWidget();
@@ -412,11 +416,11 @@ MainWindow::MainWindow(QWidget *parent)
     // And tell a Bethesda profile straight away if its list has never reached
     // the game - that is true from the moment the window opens, not only once
     // something is edited.
-    updateDeployHint();
+    m_deployFlow->updateDeployHint();
     // Same reasoning for a mod whose DLL the installed game cannot load: it
     // is behind from the moment the window opens, and waiting for the user to
     // press Start to say so is how they find out from the game instead.
-    refreshScriptExtenderFlags();
+    m_deployFlow->refreshScriptExtenderFlags();
 
     // saveModList debounce (see scheduleSaveModList()). closeEvent stops it
     // before the synchronous flush.
@@ -1118,7 +1122,7 @@ void MainWindow::applyInstalledStateToStrandedPlaceholder(
     placeholder_state::markInstalled(placeholder, modPath);
     // Files landed for a profile that is not on screen, so its deployment is
     // out of date the same way addModFromPath says for the active one.
-    markDeployStale(modlistPathFor(profileKey));
+    m_deployFlow->markDeployStale(modlistPathFor(profileKey));
 }
 
 
@@ -2274,396 +2278,11 @@ void MainWindow::dropEvent(QDropEvent *event)
 // thread with processEvents() in the loop, so a multi-gigabyte move across
 // drives left the window grey; it runs on a worker now.
 
-namespace {
 
-QString fmtGb(qint64 b)
-{
-    const double GB = 1024.0 * 1024.0 * 1024.0;
-    return QString::number(b / GB, 'f', 2) + " GB";
-}
 
-QString fmtMbGb(qint64 b)
-{
-    const double MB = 1024.0 * 1024.0;
-    const double GB = MB * 1024.0;
-    if (b >= GB) return QString::number(b / GB, 'f', 2) + " GB";
-    return QString::number(b / MB, 'f', 1) + " MB";
-}
 
-// What became of one folder, as the worker reports it. Paths only: the
-// worker never touches a row.
-struct FolderMoveOutcome {
-    int     index = -1;
-    bool    ok    = false;
-    QString newPath;
-    QString error;        // empty when ok
-};
 
-// One run, shared between the worker and the UI thread. The worker appends
-// each outcome under the mutex as the folder lands and the UI thread drains
-// the list, so a folder that moved always reaches its row: cancelled or not,
-// an outcome the worker recorded is never dropped.
-struct FolderMoveRun {
-    QList<QPair<QString, QString>> jobs;      // oldPath -> newPath, in order
-    std::atomic<bool>              cancelled{false};
-    QMutex                         mu;
-    QList<FolderMoveOutcome>       outcomes;
-};
 
-} // namespace
-
-bool MainWindow::preflightFolderMoves(const QList<FolderMove> &moves,
-                                      const QString &destRoot, qint64 totalBytes,
-                                      const QString &title)
-{
-    // Free space with 10% headroom: a cross-filesystem move copies first.
-    const QStorageInfo dstStorage(destRoot);
-    const qint64 required = qint64(double(totalBytes) * 1.10);
-    if (dstStorage.bytesAvailable() < required) {
-        ui::warn(this, title, T("move_mods_err_no_space")
-                                  .arg(fmtGb(dstStorage.bytesAvailable()))
-                                  .arg(fmtGb(required)));
-        return false;
-    }
-
-    // A folder of the same name already under the destination: bail rather
-    // than pick a winner.
-    QStringList collisions;
-    for (const FolderMove &m : moves)
-        if (QFileInfo::exists(QDir(destRoot).filePath(m.folderName)))
-            collisions << m.folderName;
-    if (!collisions.isEmpty()) {
-        QString list = collisions.mid(0, 10).join("\n  • ");
-        if (collisions.size() > 10)
-            list += "\n  … (+" + QString::number(collisions.size() - 10) + ")";
-        ui::warn(this, title, T("move_mods_err_collision").arg(list));
-        return false;
-    }
-    return true;
-}
-
-void MainWindow::moveModFolders(const QList<FolderMove> &moves, const QString &destRoot,
-                                const QString &title,
-                                std::function<void(int movedOk)> done)
-{
-    if (moves.isEmpty()) return;
-
-    auto run = std::make_shared<FolderMoveRun>();
-    for (const FolderMove &m : moves)
-        run->jobs.append({m.oldPath, QDir(destRoot).filePath(m.folderName)});
-
-    // Modal to the window, so the list cannot change under the move. Cancel
-    // stops the worker after the folder it is on; the dialog hides itself and
-    // the summary names what moved.
-    auto *progress = new QProgressDialog(T("move_mods_progress").arg(moves.size()),
-                                         T("move_mods_cancel"), 0, moves.size(), this);
-    progress->setWindowModality(Qt::WindowModal);
-    progress->setMinimumDuration(0);
-    progress->setAutoClose(false);
-    progress->setAutoReset(false);
-    const auto labelFor = [moves](int i) {
-        return T("move_mods_progress_detail")
-            .arg(i + 1).arg(moves.size()).arg(moves.at(i).folderName);
-    };
-    progress->setLabelText(labelFor(0));
-    progress->setValue(0);
-    connect(progress, &QProgressDialog::canceled, this, [run] { run->cancelled = true; });
-    const QPointer<QProgressDialog> dlg(progress);
-
-    // UI-thread bookkeeping: rows repointed and the list saved as each folder
-    // lands, so a crash midway loses nothing; the tally feeds the summary.
-    struct Tally { int applied = 0; int movedOk = 0; QStringList failures; };
-    auto tally = std::make_shared<Tally>();
-    const auto drain = [this, run, moves, tally, dlg, labelFor] {
-        QList<FolderMoveOutcome> landed;
-        {
-            QMutexLocker lock(&run->mu);
-            landed.swap(run->outcomes);
-        }
-        for (const FolderMoveOutcome &out : landed) {
-            const FolderMove &m = moves.at(out.index);
-            if (out.ok) {
-                ++tally->movedOk;
-                if (ModRow item = rowById(m.row)) {
-                    item->setData(ModRole::ModPath, out.newPath);
-                    item->setToolTip(out.newPath);
-                }
-                saveModList();
-            } else {
-                tally->failures.append(
-                    m.folderName
-                    + (out.error.isEmpty() ? QString()
-                                           : QStringLiteral(" - ") + out.error));
-            }
-            ++tally->applied;
-            if (dlg) {
-                dlg->setValue(tally->applied);
-                if (tally->applied < moves.size())
-                    dlg->setLabelText(labelFor(tally->applied));
-            }
-        }
-    };
-
-    const QPointer<MainWindow> guard(this);
-    async::guarded(this,
-        [run, guard, drain](MainWindow *) {
-            for (int i = 0; i < run->jobs.size(); ++i) {
-                if (run->cancelled) return;
-                FolderMoveOutcome out;
-                out.index   = i;
-                out.newPath = run->jobs.at(i).second;
-                const auto res = safefs::moveTreeVerified(
-                    run->jobs.at(i).first, out.newPath,
-                    [run] { return run->cancelled.load(); });
-                out.ok = res.has_value();
-                if (!res) out.error = res.error();
-                {
-                    QMutexLocker lock(&run->mu);
-                    run->outcomes.append(std::move(out));
-                }
-                // Let the row land while the next folder moves. The window
-                // may be gone by then; the queued call checks first.
-                if (guard)
-                    QMetaObject::invokeMethod(guard.data(), [guard, drain] {
-                        if (guard) drain();
-                    }, Qt::QueuedConnection);
-            }
-        },
-        [this, drain, dlg, tally, title, done](MainWindow *) {
-            drain();   // whatever the last hop had not delivered yet
-            if (dlg) {
-                dlg->hide();
-                dlg->deleteLater();
-            }
-
-            if (tally->movedOk > 0) {
-                if (done) done(tally->movedOk);
-                saveModList();
-                syncGameConfig();
-                scanMissingMasters();
-                m_scans->scheduleSizeScan();
-                // File moves can't be undone via the snapshot stack; clear it
-                // so the user isn't tempted into a half-reverted state.
-                m_undoStack->clear();
-            }
-
-            // -- Report ---
-            QMessageBox summary(this);
-            summary.setWindowTitle(title);
-            summary.setIcon(tally->failures.isEmpty() ? QMessageBox::Information
-                                                      : QMessageBox::Warning);
-            QString body = T("move_mods_done_ok").arg(tally->movedOk);
-            if (!tally->failures.isEmpty()) {
-                QString flist = tally->failures.mid(0, 15).join("\n  • ");
-                if (tally->failures.size() > 15)
-                    flist += "\n  … (+" + QString::number(tally->failures.size() - 15) + ")";
-                body += "\n\n" + T("move_mods_done_failures")
-                                    .arg(tally->failures.size()) + "\n  • " + flist;
-            }
-            summary.setText(body);
-            summary.exec();
-        });
-}
-
-void MainWindow::onMoveModsDir()
-{
-    // -- Pre-flight: downloads must be idle ---
-    if (!m_downloadQueue->isEmpty()) {
-        ui::warn(this, T("move_mods_title"), T("move_mods_err_downloads"));
-        return;
-    }
-
-    // Refresh sizes so the "X GB will be moved" figure is honest.
-    m_scans->scheduleSizeScan();
-
-    // -- Gather the set of mod folders to move ---
-    QList<FolderMove> moves;
-    qint64 totalBytes = 0;
-
-    const QString modsRoot = QFileInfo(m_modsDir).absoluteFilePath();
-
-    for (int i = 0; i < m_modList->count(); ++i) {
-        ModRow it = m_modList->item(i);
-        if (!mod_row::isMod(it)) continue;
-        if (!mod_row::isInstalled(it))           continue;
-        const QString path = it->data(ModRole::ModPath).toString();
-        if (path.isEmpty() || !QFileInfo(path).isDir())              continue;
-
-        const QString abs = QFileInfo(path).absoluteFilePath();
-        // Only move entries that actually live under the active mods dir.
-        // Mods pointing somewhere else (user symlinked, manually added from
-        // /opt/…, etc.) are left alone to avoid surprises.
-        if (!abs.startsWith(modsRoot + "/") && abs != modsRoot)      continue;
-
-        const QString folderName = QDir(modsRoot).relativeFilePath(abs);
-        // We only know how to move direct children of modsRoot; anything
-        // nested (moved via repair, for instance) is left where it is.
-        if (folderName.contains('/')) continue;
-
-        FolderMove m;
-        m.row        = mod_row::rowId(it);
-        m.oldPath    = abs;
-        m.folderName = folderName;
-        m.sizeBytes  = it->data(ModRole::ModSize).toLongLong();
-        if (m.sizeBytes < 0) m.sizeBytes = 0;
-        moves.append(m);
-        totalBytes += m.sizeBytes;
-    }
-
-    if (moves.isEmpty()) {
-        ui::info(this, T("move_mods_title"), T("move_mods_err_nothing"));
-        return;
-    }
-
-    // -- Ask for the destination ---
-    QString dest = QFileDialog::getExistingDirectory(
-        this, T("move_mods_pick_dir"),
-        QFileInfo(m_modsDir).absolutePath());
-    if (dest.isEmpty()) return;
-    dest = QFileInfo(dest).absoluteFilePath();
-
-    // -- Destination validation ---
-    if (!QFileInfo(dest).isDir()) {
-        ui::warn(this, T("move_mods_title"), T("move_mods_err_dest_not_dir").arg(dest));
-        return;
-    }
-    if (dest == modsRoot) {
-        ui::warn(this, T("move_mods_title"), T("move_mods_err_dest_same"));
-        return;
-    }
-    // Reject nesting in either direction - catching someone picking a sub
-    // folder of the current mods dir (or accidentally a parent that contains
-    // the current mods dir).
-    if (dest.startsWith(modsRoot + "/") || modsRoot.startsWith(dest + "/")) {
-        ui::warn(this, T("move_mods_title"), T("move_mods_err_dest_nested"));
-        return;
-    }
-
-    // Writable test: create + delete a stamp file.
-    {
-        QString stamp = QDir(dest).filePath(".nerev_write_test");
-        QFile probe(stamp);
-        if (!probe.open(QIODevice::WriteOnly)) {
-            ui::warn(this, T("move_mods_title"), T("move_mods_err_dest_not_writable").arg(dest));
-            return;
-        }
-        probe.close();
-        QFile::remove(stamp);
-    }
-
-    if (!preflightFolderMoves(moves, dest, totalBytes, T("move_mods_title"))) return;
-
-    // -- Final confirmation ---
-    QMessageBox confirm(this);
-    confirm.setWindowTitle(T("move_mods_title"));
-    confirm.setIcon(QMessageBox::Warning);
-    confirm.setText(T("move_mods_confirm_text")
-                        .arg(moves.size())
-                        .arg(fmtMbGb(totalBytes))
-                        .arg(dest));
-    confirm.setInformativeText(T("move_mods_confirm_info"));
-    auto *yes = confirm.addButton(T("move_mods_confirm_yes"),
-                                   QMessageBox::DestructiveRole);
-    confirm.addButton(QMessageBox::Cancel);
-    confirm.setDefaultButton(QMessageBox::Cancel);
-    confirm.exec();
-    if (confirm.clickedButton() != yes) return;
-
-    moveModFolders(moves, dest, T("move_mods_title"), [this, dest](int) {
-        // Whatever moved now lives under dest: point the profile there.
-        m_modsDir = dest;
-        if (m_downloadQueue) m_downloadQueue->setModsDir(m_modsDir);
-        m_profiles->setActiveModsDir(dest);
-    });
-}
-
-// Consolidate any mods physically living OUTSIDE the active profile's
-// modsDir into it.  Runs after a clone (the cloned profile inherits the
-// source's mod paths, so its mods sit in the SOURCE profile's modsDir
-// until consolidated).  The destination is forced to m_modsDir so two
-// profiles can never end up sharing the same physical mod folder; the
-// user already chose this dir via ensureModsDirForActiveProfile().
-//
-// Same flow as onMoveModsDir with one inverted filter (outside-of instead of
-// inside-of) and no destination picker; the gates and the move itself are
-// preflightFolderMoves and moveModFolders on both paths.
-void MainWindow::onConsolidateModsIntoActiveProfile()
-{
-    if (!m_downloadQueue->isEmpty()) {
-        ui::warn(this, T("consolidate_mods_title"), T("move_mods_err_downloads"));
-        return;
-    }
-
-    if (!ensureModsDirForActiveProfile()) return;
-    if (m_modsDir.isEmpty()) return;
-
-    m_scans->scheduleSizeScan();
-
-    QList<FolderMove> moves;
-    qint64 totalBytes = 0;
-
-    const QString modsRoot = QFileInfo(m_modsDir).absoluteFilePath();
-
-    for (int i = 0; i < m_modList->count(); ++i) {
-        ModRow it = m_modList->item(i);
-        if (!mod_row::isMod(it)) continue;
-        if (!mod_row::isInstalled(it))           continue;
-        const QString path = it->data(ModRole::ModPath).toString();
-        if (path.isEmpty() || !QFileInfo(path).isDir())              continue;
-
-        const QString abs = QFileInfo(path).absoluteFilePath();
-        // Skip mods that are already inside the active profile's modsDir
-        // (or AT modsRoot, though that's an unusual layout).
-        if (abs == modsRoot || abs.startsWith(modsRoot + "/"))       continue;
-
-        FolderMove m;
-        m.row        = mod_row::rowId(it);
-        m.oldPath    = abs;
-        m.folderName = QFileInfo(abs).fileName();
-        m.sizeBytes  = it->data(ModRole::ModSize).toLongLong();
-        if (m.sizeBytes < 0) m.sizeBytes = 0;
-        moves.append(m);
-        totalBytes += m.sizeBytes;
-    }
-
-    if (moves.isEmpty()) {
-        ui::info(this, T("consolidate_mods_title"), T("consolidate_mods_nothing"));
-        return;
-    }
-
-    if (!preflightFolderMoves(moves, modsRoot, totalBytes, T("consolidate_mods_title")))
-        return;
-
-    // Confirmation: list the source roots so the user sees WHICH external
-    // dirs are about to be drained.  Showing the source tells them what
-    // "the other profile's modsDir will keep working" looks like.
-    QSet<QString> sourceRoots;
-    for (const FolderMove &m : moves)
-        sourceRoots.insert(QFileInfo(m.oldPath).absolutePath());
-    QStringList rootsList(sourceRoots.begin(), sourceRoots.end());
-    rootsList.sort();
-    const QString rootsText = rootsList.mid(0, 5).join("\n  • ")
-        + (rootsList.size() > 5
-              ? QStringLiteral("\n  … (+%1)").arg(rootsList.size() - 5)
-              : QString());
-
-    QMessageBox confirm(this);
-    confirm.setWindowTitle(T("consolidate_mods_title"));
-    confirm.setIcon(QMessageBox::Warning);
-    confirm.setText(T("consolidate_mods_confirm_text")
-                        .arg(moves.size())
-                        .arg(fmtMbGb(totalBytes))
-                        .arg(QDir::toNativeSeparators(modsRoot)));
-    confirm.setInformativeText(T("consolidate_mods_confirm_info").arg(rootsText));
-    auto *yes = confirm.addButton(T("move_mods_confirm_yes"),
-                                   QMessageBox::DestructiveRole);
-    confirm.addButton(QMessageBox::Cancel);
-    confirm.setDefaultButton(QMessageBox::Cancel);
-    confirm.exec();
-    if (confirm.clickedButton() != yes) return;
-
-    moveModFolders(moves, modsRoot, T("consolidate_mods_title"), {});
-}
 
 
 // File Conflict Inspector - MO2-style overwrite view for OpenMW's VFS.
@@ -2870,10 +2489,6 @@ void MainWindow::onMissingMastersScanned(
 
 
 
-bool MainWindow::refuseLaunchIfRebootPending()
-{
-    return launch_warnings::refuseIfRebootPending(this);
-}
 
 
 
@@ -3278,8 +2893,8 @@ void MainWindow::switchToModlistProfile(int idx)
     // is showing leaves nothing able to take it down.
     if (m_notify) m_notify->dismiss();
     m_stickyKind = StickyKind::ViewSort;
-    updateDeployHint();
-    refreshScriptExtenderFlags();
+    m_deployFlow->updateDeployHint();
+    m_deployFlow->refreshScriptExtenderFlags();
     resetUntranslatedNotices();
 
     statusBar()->showMessage(
@@ -3474,13 +3089,7 @@ void MainWindow::scheduleConflictScan()
     // touched) before the new one is loaded, and an immediate check there
     // put the OLD game's "changed since it was last deployed" over the new
     // game's empty list.
-    if (!m_deployHintTimer) {
-        m_deployHintTimer = new QTimer(this);
-        m_deployHintTimer->setSingleShot(true);
-        m_deployHintTimer->setInterval(0);
-        connect(m_deployHintTimer, &QTimer::timeout, this, &MainWindow::updateDeployHint);
-    }
-    m_deployHintTimer->start();
+    m_deployFlow->scheduleDeployHint();
 }
 
 void MainWindow::runConflictScan()

@@ -4,6 +4,8 @@
 // QListWidget subclass (used only when building the central widget) lives here.
 
 #include "mainwindow.h"
+#include "deploy_flow.h"
+#include "library_flow.h"
 #include "import_flow.h"
 #include "mainwindow_internal.h"
 #include "modlist_model.h"
@@ -197,12 +199,12 @@ void MainWindow::setupMenuBar()
     // adding it there would add a null action.
     m_actTuneSkyrimIni = new QAction(T("toolbar_tune_skyrim_ini"), this);
     connect(m_actTuneSkyrimIni, &QAction::triggered,
-            this, &MainWindow::onTuneSkyrimIni);
+            m_deployFlow, &DeployFlow::onTuneSkyrimIni);
     modsMenu->addAction(m_actTuneSkyrimIni);
     modsMenu->addAction(T("menu_conflict_inspector"), this, &MainWindow::onInspectConflicts);
-    m_actDeployBethesda = modsMenu->addAction(T("menu_deploy_bethesda"), this, &MainWindow::onDeployBethesda);
-    m_actUndeployBethesda = modsMenu->addAction(T("menu_undeploy_bethesda"), this, &MainWindow::onUndeployBethesda);
-    m_actInspectDeployment = modsMenu->addAction(T("menu_inspect_deployment"), this, &MainWindow::onInspectDeployment);
+    m_actDeployBethesda = modsMenu->addAction(T("menu_deploy_bethesda"), m_deployFlow, &DeployFlow::onDeployBethesda);
+    m_actUndeployBethesda = modsMenu->addAction(T("menu_undeploy_bethesda"), m_deployFlow, &DeployFlow::onUndeployBethesda);
+    m_actInspectDeployment = modsMenu->addAction(T("menu_inspect_deployment"), m_deployFlow, &DeployFlow::onInspectDeployment);
     {   // initial gate (the profile-UI refresh keeps these in sync afterwards)
         const GameAdapter *a = GameAdapterRegistry::find(currentProfile().id);
         const bool deployable = a && !a->dataSubdir().isEmpty();
@@ -210,7 +212,7 @@ void MainWindow::setupMenuBar()
         m_actUndeployBethesda->setVisible(deployable);
         m_actInspectDeployment->setVisible(deployable);
     }
-    modsMenu->addAction(T("menu_cleanup_folders"), this, &MainWindow::onCleanUpModFolders);
+    modsMenu->addAction(T("menu_cleanup_folders"), m_libraryFlow, &LibraryFlow::onCleanUpModFolders);
     modsMenu->addAction(T("menu_log_triage"),      this, &MainWindow::onTriageOpenMWLog);
     modsMenu->addAction(T("menu_diag_bundle"),     this, &MainWindow::onCreateDiagnosticBundle);
     modsMenu->addAction(T("menu_edit_load_order"), this, &MainWindow::onEditLoadOrder);
@@ -412,10 +414,10 @@ void MainWindow::setupToolbar()
     tb->addSeparator();
 
     // Generic launch buttons for non-Morrowind Steam games
-    m_actLaunchGame = tb->addAction(T("toolbar_launch_game"), this, &MainWindow::onLaunchGame);
+    m_actLaunchGame = tb->addAction(T("toolbar_launch_game"), m_deployFlow, &DeployFlow::onLaunchGame);
     if (auto *btn = qobject_cast<QToolButton *>(tb->widgetForAction(m_actLaunchGame)))
         btn->setStyleSheet("color: #1a8a1a; font-weight: bold;");
-    m_actLaunchSteamLauncher = tb->addAction(T("toolbar_launch_launcher"), this, &MainWindow::onLaunchSteamLauncher);
+    m_actLaunchSteamLauncher = tb->addAction(T("toolbar_launch_launcher"), m_deployFlow, &DeployFlow::onLaunchSteamLauncher);
 
     // Dependency canvas. Takes the slot "Tune INI" had, as asked - Tune INI
     // itself moves to the Mods menu below rather than being deleted, since it
@@ -430,10 +432,10 @@ void MainWindow::setupToolbar()
     // setupMenuBar(), which runs before this.
 
     // Launch buttons (OpenMW-specific - shown only for Morrowind)
-    m_actLaunchOpenMW = tb->addAction(T("toolbar_launch_openmw"), this, &MainWindow::onLaunchOpenMW);
+    m_actLaunchOpenMW = tb->addAction(T("toolbar_launch_openmw"), m_deployFlow, &DeployFlow::onLaunchOpenMW);
     if (auto *btn = qobject_cast<QToolButton *>(tb->widgetForAction(m_actLaunchOpenMW)))
         btn->setStyleSheet("color: #1a8a1a; font-weight: bold;");
-    m_actLaunchLauncher = tb->addAction(T("toolbar_launch_launcher"), this, &MainWindow::onLaunchOpenMWLauncher);
+    m_actLaunchLauncher = tb->addAction(T("toolbar_launch_launcher"), m_deployFlow, &DeployFlow::onLaunchOpenMWLauncher);
 
     // Sort with LOOT - on-demand; visibility toggled per-profile in
     // updateGameButton() (only shown when lootGameFor() returns non-empty).
@@ -883,8 +885,8 @@ void MainWindow::setupCentralWidget()
         switch (m_stickyKind) {
         case StickyKind::DeployHint:
             m_stickyKind = StickyKind::ViewSort;
-            onDeployBethesda();
-            updateDeployHint();      // clears the banner once it has landed
+            m_deployFlow->onDeployBethesda();
+            m_deployFlow->updateDeployHint();      // clears the banner once it has landed
             return;
         case StickyKind::CaughtDownload: {
             const QString path = m_caughtDownload;
@@ -1090,156 +1092,11 @@ void MainWindow::onModlistSummary()
                                              : openmwPath;
 
     modlist_summary::showDialog(this, view,
-        [this] { onMoveModsDir(); },
-        [this] { onConsolidateModsIntoActiveProfile(); });
+        [this] { m_libraryFlow->onMoveModsDir(); },
+        [this] { m_libraryFlow->onConsolidateModsIntoActiveProfile(); });
 }
 
-namespace {
 
-// Recursive byte size of a folder. Used only to show the user what they are
-// about to reclaim, so a stat failure just contributes 0 rather than aborting.
-qint64 folderSizeBytes(const QString &path)
-{
-    qint64 total = 0;
-    QDirIterator it(path, QDir::Files | QDir::Hidden | QDir::System,
-                    QDirIterator::Subdirectories);
-    while (it.hasNext()) {
-        it.next();
-        total += it.fileInfo().size();
-    }
-    return total;
-}
-
-QString cleanupFmtBytes(qint64 b)
-{
-    const double MB = 1024.0 * 1024.0;
-    const double GB = MB * 1024.0;
-    if (b >= GB) return QString::number(b / GB, 'f', 2) + QStringLiteral(" GB");
-    if (b >= MB) return QString::number(b / MB, 'f', 1) + QStringLiteral(" MB");
-    return QString::number(b / 1024.0, 'f', 0) + QStringLiteral(" KB");
-}
-
-} // namespace
-
-// Clean Up Mod Folders. Upgrades used to leave every previous build on disk
-// (mod_naming::findStaleSiblings only matched a literal re-download of the same
-// file), so libraries accumulated folders nothing points at - one real one had
-// 96 of them holding 8.6 GiB. The install path no longer creates them; this
-// reclaims what already piled up.
-//
-// Deliberately manual and preview-first: it is a recursive delete over the
-// user's mod library, so it never runs on its own and never deletes without an
-// explicit confirm.
-void MainWindow::onCleanUpModFolders()
-{
-    // An in-flight download's extract dir is not in the modlist yet, so it would
-    // read as an orphan. Same for an extraction still running behind a
-    // still-spinning row.
-    if (!m_downloadQueue->isEmpty()) {
-        ui::warn(this, T("cleanup_folders_title"), T("move_mods_err_downloads"));
-        return;
-    }
-    const QList<ModEntry> modRows = m_model.all();
-    for (int i = 0; i < modRows.size(); ++i) {
-        if (modRows.at(i).isInstalling()) {
-            ui::warn(this, T("cleanup_folders_title"), T("move_mods_err_downloads"));
-            return;
-        }
-    }
-    if (m_modsDir.isEmpty() || !QDir(m_modsDir).exists()) {
-        ui::warn(this, T("cleanup_folders_title"), T("cleanup_folders_no_dir"));
-        return;
-    }
-
-    const QString modsRoot = QFileInfo(m_modsDir).absoluteFilePath();
-
-    // Three independent reference sources, so one unreadable file cannot make
-    // the sweep think the library is empty.
-    QStringList referenced;
-    for (const ModEntry &e : m_model.all()) {
-        if (!e.isMod()) continue;
-        for (const QString &p : {e.modPath, e.intendedModPath,
-                                 e.mergeTargetPath, e.prevModPath})
-            if (!p.isEmpty()) referenced << p;
-    }
-    for (const auto &prof : otherProfileModlists())
-        for (const ModEntry &e : prof.second)
-            if (!e.modPath.isEmpty()) referenced << e.modPath;
-    {   // data= lines the game config still points at
-        QFile cfg(QDir::homePath() + QStringLiteral("/.config/openmw/openmw.cfg"));
-        if (cfg.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            QTextStream in(&cfg);
-            while (!in.atEnd()) {
-                const QString line = in.readLine().trimmed();
-                if (!line.startsWith(QStringLiteral("data="))) continue;
-                QString p = line.mid(5).trimmed();
-                if (p.startsWith('"') && p.endsWith('"') && p.size() >= 2)
-                    p = p.mid(1, p.size() - 2);
-                if (!p.isEmpty()) referenced << p;
-            }
-        }
-    }
-
-    QStringList onDisk;
-    {
-        const QDir root(modsRoot);
-        for (const QFileInfo &fi : root.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot)) {
-            if (fi.isSymLink()) continue;   // never recurse out of the mods dir
-            // Already staged for deletion by removeFoldersAsync.
-            if (fi.fileName().contains(QStringLiteral(".__deleting__"))) continue;
-            onDisk << fi.fileName();
-        }
-    }
-
-    const QStringList orphans =
-        mod_cleanup::unreferencedFolders(modsRoot, onDisk, referenced);
-    if (orphans.isEmpty()) {
-        ui::info(this, T("cleanup_folders_title"), T("cleanup_folders_none"));
-        return;
-    }
-    // A modlist that failed to parse looks exactly like a huge pile-up. Refuse
-    // rather than act on it. (Calibration: the observed real case was 26%.)
-    if (!onDisk.isEmpty() && orphans.size() * 100 / onDisk.size() > 60) {
-        ui::warn(this, T("cleanup_folders_title"),
-                 T("cleanup_folders_suspicious")
-                     .arg(orphans.size()).arg(onDisk.size()));
-        return;
-    }
-
-    QList<QPair<qint64, QString>> sized;
-    qint64 totalBytes = 0;
-    for (const QString &name : orphans) {
-        const qint64 b = folderSizeBytes(QDir(modsRoot).filePath(name));
-        sized.append({ b, name });
-        totalBytes += b;
-    }
-    std::sort(sized.begin(), sized.end(),
-              [](const auto &a, const auto &b) { return a.first > b.first; });
-
-    QString body;
-    for (const auto &e : sized)
-        body += QStringLiteral("%1  %2\n")
-                    .arg(cleanupFmtBytes(e.first), 10).arg(e.second);
-
-    const QString summary = T("cleanup_folders_summary")
-                                .arg(orphans.size())
-                                .arg(cleanupFmtBytes(totalBytes));
-    if (!ui::confirmMonospaceReport(this, T("cleanup_folders_title"), body,
-                                    720, 480, summary,
-                                    T("cleanup_folders_accept").arg(orphans.size())))
-        return;
-
-    QStringList toDelete;
-    for (const auto &e : sized)
-        toDelete << QDir(modsRoot).filePath(e.second);
-    removeModFoldersAsync(toDelete);
-
-    m_scans->scheduleSizeScan();
-    statusBar()->showMessage(
-        T("cleanup_folders_done").arg(QString::number(orphans.size()),
-                                      cleanupFmtBytes(totalBytes)),
-        8000);
-}
 
 // Diagnostic bundle. Zips the modlist + load-order files, openmw.cfg, the tail
 // of OpenMW.log, and a system summary into one nerev_diagnostics_<timestamp>.zip
@@ -1896,7 +1753,7 @@ void MainWindow::switchToGame(int idx)
     // was last deployed" sat over the new game's empty list.
     if (m_notify) m_notify->dismiss();
     m_stickyKind = StickyKind::ViewSort;
-    updateDeployHint();
+    m_deployFlow->updateDeployHint();
     resetUntranslatedNotices();
 
     statusBar()->showMessage(

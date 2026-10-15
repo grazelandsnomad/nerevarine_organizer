@@ -2,6 +2,7 @@
 // Split out of mainwindow.cpp for parallel compilation; same class, own TU.
 
 #include "mainwindow.h"
+#include "deploy_flow.h"
 #include "mainwindow_internal.h"
 #include "separatordialog.h"
 #include "mod_row.h"
@@ -375,7 +376,7 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
         // What the installed game says about itself, so a runtime-pair group
         // ("OG" / "AE") can be answered from the executable rather than left
         // on the installer's default.
-        gameRuntimeProbe());
+        m_deployFlow->gameRuntimeProbe());
         return; // wizard is now shown; callback drives the rest
     }
 
@@ -839,7 +840,7 @@ void MainWindow::addModFromPath(const QString &dirPath, ModRow placeholder)
     // Files were just (re)written. A reinstall into the same folder keeps the
     // path and the install date, so the deploy fingerprint cannot tell - say
     // it outright, or Data/ keeps the old files with nothing on screen.
-    markDeployStale(modlistPath());
+    m_deployFlow->markDeployStale(modlistPath());
     item->setData(ModRole::UpdateAvailable, false);
     // A real install invalidates any silent-rebind patch repairEmptyModPaths
     // may have left on the row - the mod is now genuinely installed at

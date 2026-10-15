@@ -2,6 +2,7 @@
 // Split out of mainwindow.cpp for parallel compilation; same class, own TU.
 
 #include "mainwindow.h"
+#include "deploy_flow.h"
 #include "mainwindow_internal.h"
 #include "user_state_paths.h"
 
@@ -951,7 +952,7 @@ void MainWindow::onFileListFetched(const QUuid &rowKey,
         const QString gid =
             m_profiles->isEmpty() ? QString() : currentProfile().id;
         const auto pref = fomod::runtimePreferenceForGame(
-            gid, gameRuntimeProbe().game);
+            gid, m_deployFlow->gameRuntimeProbe().game);
         if (pref != fomod::Runtime::None) {
             bool haveAe = false, haveSe = false;
             int  wantIdx = -1;
@@ -1287,7 +1288,7 @@ void MainWindow::onModFileSiblings(const QUuid &row,
     if (!item || m_profiles->isEmpty()) return;
 
     const auto pref = fomod::runtimePreferenceForGame(currentProfile().id,
-                                                     gameRuntimeProbe().game);
+                                                     m_deployFlow->gameRuntimeProbe().game);
     const QString better =
         fomod::betterRuntimeFile(chosenName, siblingNames, pref);
     if (better.isEmpty()) return;   // matches, or nothing to say

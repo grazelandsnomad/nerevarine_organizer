@@ -1,9 +1,11 @@
-// mainwindow_deploy - Bethesda deploy/undeploy + game-launch slots, split out
-// of mainwindow.cpp so this ~800-line cluster compiles in parallel with the
-// rest of MainWindow. Same class, different TU: every definition here is still
-// MainWindow::. The Bethesda path-resolution file-statics travel with it.
+// deploy_flow - Bethesda deploy/undeploy, the deploy hint, the script-
+// extender check and the game launches, over the WindowShell. The Bethesda
+// path-resolution file-statics live here with the flow that uses them.
 
-#include "mainwindow.h"
+#include "deploy_flow.h"
+#include "window_shell.h"
+#include "modlist_model.h"
+#include "modrow.h"
 #include "settings.h"
 #include "separatordialog.h"
 #include "mod_row.h"
@@ -158,21 +160,21 @@ static QString bethesdaResolveDataDir(QWidget *parent, const QString &id, const 
 static void bethesdaStatePaths(const QString &modlistFile, QString &manifestPath, QString &backupDir);
 static QString findScriptExtenderLoader(const GameAdapter *adapter, const QString &installDir);
 static bool launchViaProton(QWidget *parent, const QString &appId, const QString &exePath);
-static QList<bethesda_deploy::DeploySource> gatherBethesdaSources(ModListView *list, const QList<int> &order, const GameAdapter *adapter, const QString &modsDir);
+static QList<bethesda_deploy::DeploySource> gatherBethesdaSources(const ModlistModel &model, const QList<int> &order, const GameAdapter *adapter, const QString &modsDir);
 static bool launchViaGog(const QString &gogExe);
 static QString resolveBethesdaIniDir(const QString &id, const GameAdapter *adapter, const QString &dataDir);
 static QString resolveBethesdaPluginsTxt(const QString &id, const GameAdapter *adapter, const QString &dataDir);
 static void restoreNerevarineBak(const QString &path);
 
 
-void MainWindow::onTuneSkyrimIni()
+void DeployFlow::onTuneSkyrimIni()
 {
     // Which game's prefs ini, and where it lives, are adapter data - this used
     // to hardcode Skyrim SE's id, app id and My-Games folder, so a second
     // profile on the same engine (Skyrim AE) had no way to reach the dialog and
     // would have written into SE's ini dir if it had.
-    if (m_profiles->isEmpty()) return;
-    const QString id = currentProfile().id;
+    if (!m_shell.hasProfile()) return;
+    const QString id = m_shell.currentGameId();
     const GameAdapter *adapter = GameAdapterRegistry::find(id);
     // Same shape as the deploy guards below: bail on no adapter OR no tuner,
     // rather than deriving one from the other (the action is hidden for both).
@@ -202,12 +204,12 @@ void MainWindow::onTuneSkyrimIni()
     }
 
     if (!hasIni(iniDir)) {
-        ui::info(this, T("skyini_locate_title"), T("skyini_locate_body"));
+        ui::info(m_shell.dialogParent(), T("skyini_locate_title"), T("skyini_locate_body"));
         QString picked = QFileDialog::getExistingDirectory(
-            this, T("skyini_locate_dialog"), QDir::homePath());
+            m_shell.dialogParent(), T("skyini_locate_dialog"), QDir::homePath());
         if (picked.isEmpty()) return;
         if (!hasIni(picked)) {
-            ui::warn(this, T("skyini_locate_title"), T("skyini_locate_missing"));
+            ui::warn(m_shell.dialogParent(), T("skyini_locate_title"), T("skyini_locate_missing"));
             return;
         }
         iniDir = picked;
@@ -218,12 +220,12 @@ void MainWindow::onTuneSkyrimIni()
 
     IniDoc prefs;
     if (!prefs.load(prefsPath)) {
-        ui::warn(this, T("skyini_error_title"), T("skyini_read_error").arg(prefsPath));
+        ui::warn(m_shell.dialogParent(), T("skyini_error_title"), T("skyini_read_error").arg(prefsPath));
         return;
     }
 
     // -- Build dialog ---
-    QDialog dlg(this);
+    QDialog dlg(m_shell.dialogParent());
     dlg.setWindowTitle(T("skyini_dialog_title"));
     dlg.setMinimumWidth(460);
     auto *layout = new QVBoxLayout(&dlg);
@@ -339,11 +341,11 @@ void MainWindow::onTuneSkyrimIni()
     QFile::remove(prefsPath + ".nerevarine.bak");
     QFile::copy(prefsPath, prefsPath + ".nerevarine.bak");
     if (!prefs.save(prefsPath)) {
-        ui::warn(this, T("skyini_error_title"), T("skyini_write_error").arg(prefsPath));
+        ui::warn(m_shell.dialogParent(), T("skyini_error_title"), T("skyini_write_error").arg(prefsPath));
         return;
     }
 
-    statusBar()->showMessage(T("skyini_status_saved"), 4000);
+    m_shell.showStatus(T("skyini_status_saved"), 4000);
 }
 
 // Candidate compatdata roots holding this game's Proton prefix, best guess
@@ -636,7 +638,7 @@ static void writeSmallFile(const QString &path, const QString &text)
 // SKSE also ships are not the game's business, and a recursive sweep here
 // would additionally re-deploy the mod's own Data/ into the game root.
 static QList<bethesda_deploy::DeploySource> gatherScriptExtenderSources(
-    ModListView *list, const QList<int> &order, const GameAdapter *adapter,
+    const ModlistModel &model, const QList<int> &order, const GameAdapter *adapter,
     const QString &modsDir)
 {
     QList<bethesda_deploy::DeploySource> out;
@@ -647,11 +649,9 @@ static QList<bethesda_deploy::DeploySource> gatherScriptExtenderSources(
         && routes.extenderPluginsSubdir.isEmpty()) return out;
 
     for (int i : order) {
-        ModRow item = list->item(i);
-        if (!mod_row::isMod(item)) continue;
-        if (item->checkState() != Qt::Checked) continue;
-        if (!mod_row::isInstalled(item)) continue;
-        QString modPath = item->data(ModRole::ModPath).toString();
+        const ModEntry &item = model.at(i);
+        if (!item.isMod() || !item.checked || !item.isInstalled()) continue;
+        QString modPath = item.modPath;
         if (modPath.isEmpty() || !QDir(modPath).exists()) continue;
 
         // Same data-root repair as the Data/ gather: a mod installed one level
@@ -802,10 +802,10 @@ static QString bethesdaApplyUndeploy(const QString &id, const GameAdapter *adapt
 // that happens to contain, say, shader/shaders/ would be deployed from the
 // inner folder: everything at the wrong depth, and the wrapper .dll sitting
 // beside it dropped on the floor.
-// `order` is the persisted row order (MainWindow::rowOrderForPersist): a
+// `order` is the persisted row order (DeployFlow::rowOrderForPersist): a
 // temporary Size/Date view sort reorders the rows on screen, and deploying in
 // that order would hand every conflict to whichever mod happens to sort last.
-static QList<bethesda_deploy::DeploySource> gatherBethesdaSources(ModListView *list,
+static QList<bethesda_deploy::DeploySource> gatherBethesdaSources(const ModlistModel &model,
                                                                   const QList<int> &order,
                                                                   const GameAdapter *adapter,
                                                                   const QString &modsDir)
@@ -814,16 +814,13 @@ static QList<bethesda_deploy::DeploySource> gatherBethesdaSources(ModListView *l
     const bool overlay = adapter && adapter->overlayDeploy();
     QList<bethesda_deploy::DeploySource> sources;
     for (int i : order) {
-        ModRow item = list->item(i);
-        if (!mod_row::isMod(item)) continue;
-        if (item->checkState() != Qt::Checked) continue;
-        if (!mod_row::isInstalled(item)) continue;
-        const QString modPath = item->data(ModRole::ModPath).toString();
+        const ModEntry &item = model.at(i);
+        if (!item.isMod() || !item.checked || !item.isInstalled()) continue;
+        const QString modPath = item.modPath;
         if (modPath.isEmpty() || !QDir(modPath).exists()) continue;
 
         if (overlay) {
-            QString label = item->data(ModRole::CustomName).toString();
-            if (label.isEmpty()) label = item->text();
+            const QString label = item.effectiveName();
             // Gothic mods come in two shapes: the game's own layout (Data/,
             // system/), which overlays unchanged, and a bare archive with
             // nothing around it, which has to be routed into Data/ or the
@@ -1219,27 +1216,44 @@ static QString bethesdaApplyDeploy(const QString &id, const GameAdapter *adapter
     return summary;
 }
 
-QString MainWindow::deployFingerprint() const
+DeployFlow::DeployFlow(WindowShell &shell, QObject *parent)
+    : QObject(parent), m_shell(shell)
+{
+}
+
+void DeployFlow::scheduleDeployHint()
+{
+    // Coalesced: it rides every "list changed" edge, and a save fires one
+    // per row through itemChanged; evaluated once per turn of the event loop
+    // instead, and - which is what matters - after a game switch has
+    // finished rather than halfway through it.
+    if (!m_deployHintTimer) {
+        m_deployHintTimer = new QTimer(this);
+        m_deployHintTimer->setSingleShot(true);
+        m_deployHintTimer->setInterval(0);
+        connect(m_deployHintTimer, &QTimer::timeout, this, &DeployFlow::updateDeployHint);
+    }
+    m_deployHintTimer->start();
+}
+
+QString DeployFlow::deployFingerprint() const
 {
     // Same rows, same filter and same order as gatherBethesdaSources - enabled,
     // installed mods, persisted order - so it describes what a deploy uses.
     // Path AND install date: an update refreshes the date even when it lands
     // in the same folder.
     QStringList mods;
-    for (int i : rowOrderForPersist()) {
-        const ModRow it = m_modList->item(i);
-        if (!mod_row::isMod(it)) continue;
-        if (it->checkState() != Qt::Checked) continue;
-        if (!mod_row::isInstalled(it)) continue;
-        const QString path = it->data(ModRole::ModPath).toString();
-        if (path.isEmpty()) continue;
-        mods << path + QLatin1Char('\t')
-                + it->data(ModRole::DateAdded).toDateTime().toString(Qt::ISODate);
+    const ModlistModel &model = const_cast<WindowShell &>(m_shell).model();
+    for (int i : m_shell.rowOrderForPersist()) {
+        const ModEntry &it = model.at(i);
+        if (!it.isMod() || !it.checked || !it.isInstalled()) continue;
+        if (it.modPath.isEmpty()) continue;
+        mods << it.modPath + QLatin1Char('\t') + it.dateAdded.toString(Qt::ISODate);
     }
-    return bethesda_deploy::sourceFingerprint(mods, m_loadOrder);
+    return bethesda_deploy::sourceFingerprint(mods, m_shell.loadOrder());
 }
 
-void MainWindow::markDeployStale(const QString &modlistFile)
+void DeployFlow::markDeployStale(const QString &modlistFile)
 {
     // Only a recorded fingerprint can be contradicted. With none, either
     // nothing was deployed or it predates the record, and the mtime rule the
@@ -1265,23 +1279,24 @@ void MainWindow::markDeployStale(const QString &modlistFile)
 // deploy-capable, has something to deploy, and has never been deployed at all;
 // once a manifest exists the deploy-on-launch sync keeps it current and the
 // banner would be noise.
-void MainWindow::updateDeployHint()
+void DeployFlow::updateDeployHint()
 {
-    if (!m_notify || m_profiles->isEmpty()) return;
+    NotifyBanner *notify = m_shell.notify();
+    if (!notify || !m_shell.hasProfile()) return;
 
-    auto clear = [this] {
-        if (m_stickyKind == StickyKind::DeployHint) {
-            m_stickyKind = StickyKind::ViewSort;
-            m_notify->hideSticky();
+    auto clear = [this, notify] {
+        if (m_shell.stickyKind() == StickyKind::DeployHint) {
+            m_shell.setStickyKind(StickyKind::ViewSort);
+            notify->hideSticky();
         }
     };
 
-    const QString id = currentProfile().id;
+    const QString id = m_shell.currentGameId();
     const GameAdapter *adapter = GameAdapterRegistry::find(id);
     if (!adapter || adapter->dataSubdir().isEmpty()) { clear(); return; }
 
     int pending = 0;
-    const QList<ModEntry> modRows = m_model.all();
+    const QList<ModEntry> modRows = m_shell.model().all();
     for (int i = 0; i < modRows.size(); ++i) {
         const ModEntry &it = modRows.at(i);
         if (!it.isMod()) continue;
@@ -1311,14 +1326,14 @@ void MainWindow::updateDeployHint()
     // next deploy writes one. A false positive still costs one redeploy and a
     // false negative a broken game, so where this cannot tell, it says stale.
     QString manifestPath, backupDir;
-    bethesdaStatePaths(modlistPath(), manifestPath, backupDir);
+    bethesdaStatePaths(m_shell.modlistPath(), manifestPath, backupDir);
     const QFileInfo manifest(manifestPath);
     const bool deployed = manifest.exists();
     bool stale = false;
     if (deployed) {
-        const QString recorded = readSmallFile(bethesdaFingerprintPath(modlistPath()));
+        const QString recorded = readSmallFile(bethesdaFingerprintPath(m_shell.modlistPath()));
         if (recorded.isEmpty()) {
-            const QFileInfo modlist(modlistPath());
+            const QFileInfo modlist(m_shell.modlistPath());
             stale = modlist.exists() && modlist.lastModified() > manifest.lastModified();
         } else {
             stale = recorded != deployFingerprint();
@@ -1326,10 +1341,10 @@ void MainWindow::updateDeployHint()
     }
     if (deployed && !stale) { clear(); return; }
 
-    m_stickyKind = StickyKind::DeployHint;
-    m_notify->showSticky(stale ? T("deploy_hint_stale")
-                               : T("deploy_hint_banner").arg(pending),
-                         QStringLiteral("#8a4a12"));
+    m_shell.setStickyKind(StickyKind::DeployHint);
+    notify->showSticky(stale ? T("deploy_hint_stale")
+                             : T("deploy_hint_banner").arg(pending),
+                       QStringLiteral("#8a4a12"));
 }
 
 // Experimental: deploy the enabled mods of a Bethesda profile into the game's
@@ -1340,30 +1355,30 @@ void MainWindow::updateDeployHint()
 // resolves the paths, gathers the load-ordered mod roots, and reports the
 // outcome.  Activation (Plugins.txt + load order) is a later phase; this only
 // places the files.
-void MainWindow::onDeployBethesda()
+void DeployFlow::onDeployBethesda()
 {
-    if (m_profiles->isEmpty()) return;
-    const QString id = currentProfile().id;
+    if (!m_shell.hasProfile()) return;
+    const QString id = m_shell.currentGameId();
     const GameAdapter *adapter = GameAdapterRegistry::find(id);
     if (!adapter || adapter->dataSubdir().isEmpty()) {
-        ui::info(this, T("deploy_title"), T("deploy_not_supported"));
+        ui::info(m_shell.dialogParent(), T("deploy_title"), T("deploy_not_supported"));
         return;
     }
 
-    const QString dataDir = bethesdaResolveDataDir(this, id, adapter, /*allowPrompt=*/true);
+    const QString dataDir = bethesdaResolveDataDir(m_shell.dialogParent(), id, adapter, /*allowPrompt=*/true);
     if (dataDir.isEmpty()) return;
 
     // Deploy the load order the list implies now, as a save would write it.
-    // m_loadOrder is only brought up to date by saveModList, so straight after
+    // the load order is only brought up to date by saveModList, so straight after
     // a switch or a launch it can still lack plugins the list has - and the
     // deploy would write Plugins.txt from that, then be stale by its own
     // record the moment the next save caught up.
-    reconcileLoadOrder();
-    saveLoadOrder();
-    const QList<int> order = rowOrderForPersist();
-    const auto sources = gatherBethesdaSources(m_modList, order, adapter, m_modsDir);
+    m_shell.reconcileLoadOrder();
+    m_shell.saveLoadOrder();
+    const QList<int> order = m_shell.rowOrderForPersist();
+    const auto sources = gatherBethesdaSources(m_shell.model(), order, adapter, m_shell.modsDir());
     if (sources.isEmpty()) {
-        ui::info(this, T("deploy_title"), T("deploy_none"));
+        ui::info(m_shell.dialogParent(), T("deploy_title"), T("deploy_none"));
         return;
     }
 
@@ -1371,14 +1386,14 @@ void MainWindow::onDeployBethesda()
     // warn before the fact rather than leave the user to discover it at
     // undeploy time.  Typically Skyrim SE and AE both auto-detected to the
     // same install because the user only has one copy of the game.
-    const QStringList shared = gamesSharingDataDir(m_profiles->games(), id, dataDir);
+    const QStringList shared = gamesSharingDataDir(m_shell.profiles()->games(), id, dataDir);
     if (!shared.isEmpty()
-        && !ui::confirm(this, T("deploy_title"),
+        && !ui::confirm(m_shell.dialogParent(), T("deploy_title"),
                         T("deploy_shared_data_dir")
                             .arg(shared.join(QStringLiteral(", ")), dataDir)))
         return;
 
-    if (!ui::confirm(this, T("deploy_title"),
+    if (!ui::confirm(m_shell.dialogParent(), T("deploy_title"),
                      deployText(adapter, "deploy_confirm")
                          .arg(sources.size()).arg(dataDir)))
         return;
@@ -1398,7 +1413,7 @@ void MainWindow::onDeployBethesda()
     // shared_ptr outlives whichever side goes first. Same shape as the
     // translation scan's atomic + poll.
     auto progressCell = std::make_shared<std::atomic<qint64>>(0);
-    m_deployOverlay->begin(T("deploy_progress"));
+    if (ScanOverlay *overlay = m_shell.deployOverlay()) overlay->begin(T("deploy_progress"));
     if (!m_deployProgressTimer) {
         m_deployProgressTimer = new QTimer(this);
         m_deployProgressTimer->setInterval(100);
@@ -1411,22 +1426,22 @@ void MainWindow::onDeployBethesda()
         const qint64 packed = progressCell->load(std::memory_order_relaxed);
         const int done  = int(packed >> 32);
         const int total = int(packed & 0xffffffff);
-        if (total > 0 && m_deployOverlay)
-            m_deployOverlay->setPercent(int(100LL * done / total));
+        if (ScanOverlay *overlay = m_shell.deployOverlay(); total > 0 && overlay)
+            overlay->setPercent(int(100LL * done / total));
     });
     m_deployProgressTimer->start();
 
-    const QString modlistFile = modlistPath();
-    const QStringList loadOrder = m_loadOrder;
-    // Gathered on the UI thread with everything else - it reads m_modList.
-    const auto rootSources = gatherScriptExtenderSources(m_modList, order, adapter, m_modsDir);
+    const QString modlistFile = m_shell.modlistPath();
+    const QStringList loadOrder = m_shell.loadOrder();
+    // Gathered on the UI thread with everything else - it reads the rows.
+    const auto rootSources = gatherScriptExtenderSources(m_shell.model(), order, adapter, m_shell.modsDir());
     // Taken with the sources, on the same thread and from the same rows, so it
     // describes exactly what this deploy is about to place.
     const QString fingerprint = deployFingerprint();
     async::guarded(this,
         [id, adapter, dataDir, sources, rootSources, modlistFile, loadOrder, fingerprint,
          progressCell]
-        (MainWindow *) -> QString {
+        (DeployFlow *) -> QString {
             return bethesdaApplyDeploy(
                 id, adapter, dataDir, sources, rootSources, modlistFile, loadOrder,
                 fingerprint,
@@ -1435,10 +1450,10 @@ void MainWindow::onDeployBethesda()
                                   std::memory_order_relaxed);
                 });
         },
-        [](MainWindow *self, QString summary) {
+        [](DeployFlow *self, QString summary) {
             if (self->m_deployProgressTimer) self->m_deployProgressTimer->stop();
-            self->m_deployOverlay->finish();
-            ui::info(self, T("deploy_title"), summary);
+            if (ScanOverlay *overlay = self->m_shell.deployOverlay()) overlay->finish();
+            ui::info(self->m_shell.dialogParent(), T("deploy_title"), summary);
             self->updateDeployHint();  // a manifest exists now; banner comes down
             // Data/ just changed, so which plugins can load may have too.
             self->refreshScriptExtenderFlags();
@@ -1449,28 +1464,28 @@ void MainWindow::onDeployBethesda()
 // restore the original game files (including Plugins.txt / Oblivion.ini), and
 // forget the deployment.  bethesda_deploy's reversible manifest is what makes
 // this safe: only files we actually placed are touched.
-void MainWindow::onUndeployBethesda()
+void DeployFlow::onUndeployBethesda()
 {
-    if (m_profiles->isEmpty()) return;
-    const QString id = currentProfile().id;
+    if (!m_shell.hasProfile()) return;
+    const QString id = m_shell.currentGameId();
     const GameAdapter *adapter = GameAdapterRegistry::find(id);
     if (!adapter || adapter->dataSubdir().isEmpty()) {
-        ui::info(this, T("undeploy_title"), T("deploy_not_supported"));
+        ui::info(m_shell.dialogParent(), T("undeploy_title"), T("deploy_not_supported"));
         return;
     }
     QString manifestPath, backupDir;
-    bethesdaStatePaths(modlistPath(), manifestPath, backupDir);
+    bethesdaStatePaths(m_shell.modlistPath(), manifestPath, backupDir);
     if (!QFileInfo::exists(manifestPath)) {
-        ui::info(this, T("undeploy_title"), T("undeploy_none"));
+        ui::info(m_shell.dialogParent(), T("undeploy_title"), T("undeploy_none"));
         return;
     }
-    const QString dataDir = bethesdaResolveDataDir(this, id, adapter, /*allowPrompt=*/true);
+    const QString dataDir = bethesdaResolveDataDir(m_shell.dialogParent(), id, adapter, /*allowPrompt=*/true);
     if (dataDir.isEmpty()) return;
-    if (!ui::confirm(this, T("undeploy_title"),
+    if (!ui::confirm(m_shell.dialogParent(), T("undeploy_title"),
                      deployText(adapter, "undeploy_confirm").arg(dataDir)))
         return;
-    const QString summary = bethesdaApplyUndeploy(id, adapter, dataDir, modlistPath());
-    ui::info(this, T("undeploy_title"), summary);
+    const QString summary = bethesdaApplyUndeploy(id, adapter, dataDir, m_shell.modlistPath());
+    ui::info(m_shell.dialogParent(), T("undeploy_title"), summary);
     updateDeployHint();   // manifest is gone, so the banner comes back
 }
 
@@ -1479,28 +1494,28 @@ void MainWindow::onUndeployBethesda()
 // the game starts.  Best-effort and silent - it must never block a launch, and
 // only fires when a manifest exists so it never surprises a user who hasn't
 // opted into deployment.
-void MainWindow::maybeDeployBeforeLaunch(const QString &id)
+void DeployFlow::maybeDeployBeforeLaunch(const QString &id)
 {
     const GameAdapter *adapter = GameAdapterRegistry::find(id);
     if (!adapter || adapter->dataSubdir().isEmpty()) return;
     QString manifestPath, backupDir;
-    bethesdaStatePaths(modlistPath(), manifestPath, backupDir);
+    bethesdaStatePaths(m_shell.modlistPath(), manifestPath, backupDir);
     if (!QFileInfo::exists(manifestPath)) return;
-    const QString dataDir = bethesdaResolveDataDir(this, id, adapter, /*allowPrompt=*/false);
+    const QString dataDir = bethesdaResolveDataDir(m_shell.dialogParent(), id, adapter, /*allowPrompt=*/false);
     if (dataDir.isEmpty()) return;
-    reconcileLoadOrder();   // see onDeployBethesda
-    saveLoadOrder();
-    const QList<int> order = rowOrderForPersist();
-    const auto sources = gatherBethesdaSources(m_modList, order, adapter, m_modsDir);
+    m_shell.reconcileLoadOrder();   // see onDeployBethesda
+    m_shell.saveLoadOrder();
+    const QList<int> order = m_shell.rowOrderForPersist();
+    const auto sources = gatherBethesdaSources(m_shell.model(), order, adapter, m_shell.modsDir());
     if (sources.isEmpty()) return;
     // No progress panel here: this is the pre-launch re-sync, it only runs when
     // a deployment already exists, and the user is on their way into the game
     // rather than watching the window.
     bethesdaApplyDeploy(id, adapter, dataDir, sources,
-                        gatherScriptExtenderSources(m_modList, order, adapter, m_modsDir),
-                        modlistPath(), m_loadOrder, deployFingerprint(), {});
+                        gatherScriptExtenderSources(m_shell.model(), order, adapter, m_shell.modsDir()),
+                        m_shell.modlistPath(), m_shell.loadOrder(), deployFingerprint(), {});
     updateDeployHint();
-    if (statusBar()) statusBar()->showMessage(T("deploy_relaunch_synced"), 3000);
+    m_shell.showStatus(T("deploy_relaunch_synced"), 3000);
     refreshScriptExtenderFlags();
 }
 
@@ -1508,13 +1523,13 @@ void MainWindow::maybeDeployBeforeLaunch(const QString &id)
 // resolved path (Data/, Plugins.txt, Oblivion.ini) and whether it exists, the
 // manifest state, what would be deployed, and the Proton-prefix candidates
 // probed - so a failed path resolution is obvious when testing.  Copyable.
-void MainWindow::onInspectDeployment()
+void DeployFlow::onInspectDeployment()
 {
-    if (m_profiles->isEmpty()) return;
-    const QString id = currentProfile().id;
+    if (!m_shell.hasProfile()) return;
+    const QString id = m_shell.currentGameId();
     const GameAdapter *adapter = GameAdapterRegistry::find(id);
     if (!adapter || adapter->dataSubdir().isEmpty()) {
-        ui::info(this, T("deploy_inspect_title"), T("deploy_not_supported"));
+        ui::info(m_shell.dialogParent(), T("deploy_inspect_title"), T("deploy_not_supported"));
         return;
     }
 
@@ -1522,7 +1537,7 @@ void MainWindow::onInspectDeployment()
     // uses, gather into a plain Facts, then let deployment_report format it and
     // report_dialog show it - the two testable/reusable halves.
     deployment_report::Facts f;
-    f.gameName   = currentProfile().displayName;
+    f.gameName   = m_shell.currentGameName();
     f.gameId     = id;
     f.steamAppId = adapter->steamAppId();
     switch (adapter->loadOrderStyle()) {
@@ -1533,7 +1548,7 @@ void MainWindow::onInspectDeployment()
     default:                                  f.loadOrderStyle = "unknown"; break;
     }
 
-    const QString dataDir = bethesdaResolveDataDir(this, id, adapter, /*allowPrompt=*/false);
+    const QString dataDir = bethesdaResolveDataDir(m_shell.dialogParent(), id, adapter, /*allowPrompt=*/false);
     f.dataFolder = { dataDir, !dataDir.isEmpty() && QDir(dataDir).exists() };
 
     const QString installDir = bethesdaGameRoot(adapter, dataDir);
@@ -1555,7 +1570,7 @@ void MainWindow::onInspectDeployment()
     }
 
     QString manifestPath, backupDir;
-    bethesdaStatePaths(modlistPath(), manifestPath, backupDir);
+    bethesdaStatePaths(m_shell.modlistPath(), manifestPath, backupDir);
     f.manifestPath  = manifestPath;
     f.backupDir     = backupDir;
     f.haveManifest  = QFileInfo::exists(manifestPath);
@@ -1568,7 +1583,7 @@ void MainWindow::onInspectDeployment()
         }
     }
 
-    const QList<ModEntry> modRows = m_model.all();
+    const QList<ModEntry> modRows = m_shell.model().all();
     for (int i = 0; i < modRows.size(); ++i) {
         const ModEntry &it = modRows.at(i);
         if (it.isMod()
@@ -1576,19 +1591,19 @@ void MainWindow::onInspectDeployment()
             && it.isInstalled())
             ++f.enabledInstalledMods;
     }
-    f.dataRootCount = int(gatherBethesdaSources(m_modList, rowOrderForPersist(),
-                                                adapter, m_modsDir).size());
+    f.dataRootCount = int(gatherBethesdaSources(m_shell.model(), m_shell.rowOrderForPersist(),
+                                                adapter, m_shell.modsDir()).size());
 
     f.prefixCandidates = bethesdaPrefixUserDirs(adapter, dataDir);
     for (const QString &p : f.prefixCandidates)
         f.prefixExists << (QDir(p).exists() ? QStringLiteral("  [found]")
                                             : QStringLiteral("  [MISSING]"));
 
-    ui::showMonospaceReport(this, T("deploy_inspect_title"),
+    ui::showMonospaceReport(m_shell.dialogParent(), T("deploy_inspect_title"),
                             deployment_report::format(f), 760, 520);
 }
 
-void MainWindow::launchProgram(QString &storedPath,
+void DeployFlow::launchProgram(QString &storedPath,
                                 std::function<void(const QString&)> savePath,
                                 const QString &execName, const QString &locateTitle,
                                 bool monitored)
@@ -1603,7 +1618,7 @@ void MainWindow::launchProgram(QString &storedPath,
     // Still not found - ask user
     if (storedPath.isEmpty() || !QFile::exists(storedPath)) {
         storedPath = QFileDialog::getOpenFileName(
-            this, locateTitle, "/usr/bin");
+            m_shell.dialogParent(), locateTitle, "/usr/bin");
         if (storedPath.isEmpty()) return;
         if (savePath) savePath(storedPath);
     }
@@ -1615,16 +1630,16 @@ void MainWindow::launchProgram(QString &storedPath,
                 [this, proc](int code, QProcess::ExitStatus) {
             proc->deleteLater();
             if (code != 0)
-                QTimer::singleShot(0, this, &MainWindow::onTriageOpenMWLog);
+                QTimer::singleShot(0, this, [this] { m_shell.triageOpenMWLog(); });
         });
         proc->start(storedPath, {});
         if (!proc->waitForStarted(3000)) {
             proc->deleteLater();
-            ui::warn(this, T("launch_error_title"), T("launch_error_body").arg(storedPath));
+            ui::warn(m_shell.dialogParent(), T("launch_error_title"), T("launch_error_body").arg(storedPath));
         }
     } else {
         if (!subprocess::startDetached(storedPath, {}))
-            ui::warn(this, T("launch_error_title"), T("launch_error_body").arg(storedPath));
+            ui::warn(m_shell.dialogParent(), T("launch_error_title"), T("launch_error_body").arg(storedPath));
     }
 }
 
@@ -1638,10 +1653,9 @@ void MainWindow::launchProgram(QString &storedPath,
 // scanMissingDependencies + an on-the-fly `collectDataFolders` call -
 // no background work, no fresh scans.  If every bucket is empty the
 // dialog isn't shown at all.
-const game_runtime::Probe &MainWindow::gameRuntimeProbe()
+const game_runtime::Probe &DeployFlow::gameRuntimeProbe()
 {
-    const QString id = m_profiles && !m_profiles->isEmpty()
-        ? currentProfile().id : QString();
+    const QString id = m_shell.currentGameId();
     if (id == m_gameRuntimeFor) return m_gameRuntime;   // cached per profile
 
     m_gameRuntimeFor = id;
@@ -1717,10 +1731,11 @@ static skse_check::Findings skseFindingsFor(QWidget *parent, const QString &game
 // Stamp the rows whose script-extender DLL cannot load against the installed
 // game, so the list says it without being asked. Runs when Data/ changes, not
 // from a paint path: it reads every plugin DLL in the game folder.
-void MainWindow::refreshScriptExtenderFlags()
+void DeployFlow::refreshScriptExtenderFlags()
 {
-    if (m_profiles->isEmpty() || !m_modList) return;
-    const auto findings = skseFindingsFor(this, currentProfile().id, modlistPath());
+    if (!m_shell.hasProfile()) return;
+    const auto findings = skseFindingsFor(m_shell.dialogParent(), m_shell.currentGameId(),
+                                          m_shell.modlistPath());
 
     QHash<QString, QString> stale;   // mod label -> tooltip detail
     for (const skse_check::Stale &st : findings.stale) {
@@ -1735,8 +1750,9 @@ void MainWindow::refreshScriptExtenderFlags()
                                                     findings.game.shortString()));
     }
 
-    for (int i = 0; i < m_modList->count(); ++i) {
-        ModRow item = m_modList->item(i);
+    ModlistModel &model = m_shell.model();
+    for (int i = 0; i < model.count(); ++i) {
+        const ModRow item(&model, model.rowId(i));
         if (!mod_row::isMod(item)) continue;
         QString label = item->data(ModRole::CustomName).toString();
         if (label.isEmpty()) label = item->text();
@@ -1759,7 +1775,7 @@ void MainWindow::refreshScriptExtenderFlags()
         item->setToolTip(tip.join(QStringLiteral("\n\n")));
     }
 
-    if (m_modList->viewport()) m_modList->viewport()->update();
+    m_shell.repaintList();
 
     // Logged because the report this feature exists for is "my mod is not
     // marked" or "why is this one on the list", and the answer is which game
@@ -1774,51 +1790,57 @@ void MainWindow::refreshScriptExtenderFlags()
             << " marked=" << stale.size();
 }
 
-bool MainWindow::confirmLaunchIfWarnings()
+bool DeployFlow::confirmLaunchIfWarnings()
 {
     if (m_suppressLaunchSanityCheck) return true;
 
-    const QString gameId =
-        m_profiles->isEmpty() ? QString() : currentProfile().id;
-    auto warnings = launch_warnings::scan(m_model.all(),
-                                          m_forbidden, gameId);
+    const QString gameId = m_shell.currentGameId();
+    auto warnings = launch_warnings::scan(m_shell.model().all(),
+                                          m_shell.forbidden(), gameId);
 
     // Script-extender plugins against the installed game.
     launch_warnings::addScriptExtender(
-        warnings, skseFindingsFor(this, gameId, modlistPath()));
+        warnings, skseFindingsFor(m_shell.dialogParent(), gameId, m_shell.modlistPath()));
 
     if (warnings.total() == 0) return true;
 
-    const auto choice = launch_warnings::showDialog(this, warnings);
+    const auto choice = launch_warnings::showDialog(m_shell.dialogParent(), warnings);
     if (choice.suppress) m_suppressLaunchSanityCheck = true;
     // Not a launch, and not a plain cancel either: the user asked whether the
     // mods holding the game back have newer builds. Answering that is the
     // point of the button, so it runs and the launch does not.
-    if (choice.checkUpdates) checkUpdatesForMods(warnings.scriptExtenderMods);
+    if (choice.checkUpdates) m_shell.checkUpdatesForMods(warnings.scriptExtenderMods);
     return choice.proceed;
 }
 
-void MainWindow::onLaunchOpenMW()
+bool DeployFlow::refuseLaunchIfRebootPending()
+{
+    return launch_warnings::refuseIfRebootPending(m_shell.dialogParent());
+}
+
+void DeployFlow::onLaunchOpenMW()
 {
     if (refuseLaunchIfRebootPending()) return;
     if (!confirmLaunchIfWarnings()) return;
-    const QString id = currentProfile().id;
-    launchProgram(m_openmwPath,
+    const QString id = m_shell.currentGameId();
+    QString path = m_shell.openmwPath();
+    launchProgram(path,
                   [id](const QString &p) { Settings::setOpenmwPath(id, p); },
                   "openmw", T("launch_locate_openmw"),
                   /*monitored=*/true);
-    currentProfile().openmwPath = m_openmwPath;
+    m_shell.setOpenmwPath(path);
 }
 
-void MainWindow::onLaunchOpenMWLauncher()
+void DeployFlow::onLaunchOpenMWLauncher()
 {
     if (refuseLaunchIfRebootPending()) return;
     if (!confirmLaunchIfWarnings()) return;
-    const QString id = currentProfile().id;
-    launchProgram(m_openmwLauncherPath,
+    const QString id = m_shell.currentGameId();
+    QString path = m_shell.openmwLauncherPath();
+    launchProgram(path,
                   [id](const QString &p) { Settings::setOpenmwLauncherPath(id, p); },
                   "openmw-launcher", T("launch_locate_launcher"));
-    currentProfile().openmwLauncherPath = m_openmwLauncherPath;
+    m_shell.setOpenmwLauncherPath(path);
 }
 
 // Helper used by both launch functions: tries Heroic URL → Heroic binary →
@@ -1973,9 +1995,9 @@ static bool launchViaProton(QWidget *parent, const QString &appId,
     return ok;
 }
 
-void MainWindow::onLaunchSteamLauncher()
+void DeployFlow::onLaunchSteamLauncher()
 {
-    const QString &id    = currentProfile().id;
+    const QString id     = m_shell.currentGameId();
     const QString appId  = GameProfileRegistry::steamAppId(id);
     qCInfo(logging::lcLaunch).nospace()
         << "launch launcher: game=" << id << " appId=" << appId;
@@ -1984,7 +2006,7 @@ void MainWindow::onLaunchSteamLauncher()
     const QString gogExe = GameProfileRegistry::findGogGameExe(id, /*wantLauncher=*/true);
     if (!gogExe.isEmpty() && QFile::exists(gogExe)) {
         if (!launchViaGog(gogExe))
-            ui::warn(this, T("launch_error_title"), T("launch_error_body").arg(gogExe));
+            ui::warn(m_shell.dialogParent(), T("launch_error_title"), T("launch_error_body").arg(gogExe));
         return;
     }
 
@@ -2003,7 +2025,7 @@ void MainWindow::onLaunchSteamLauncher()
     const bool    steamPresent = (!launcherPath.isEmpty() && QFile::exists(launcherPath))
                               || (!steamExe.isEmpty()     && QFile::exists(steamExe));
     if (!appId.isEmpty() && steamPresent) {
-        dispatchSteamUrl(this, "steam://launch/" + appId);
+        dispatchSteamUrl(m_shell.dialogParent(), "steam://launch/" + appId);
         return;
     }
 
@@ -2013,7 +2035,7 @@ void MainWindow::onLaunchSteamLauncher()
     if (!appId.isEmpty()) {
         qCInfo(logging::lcLaunch) << "launch launcher: no local install confirmed,"
                                   << "opening the Steam page for" << appId;
-        dispatchSteamUrl(this, "steam://launch/" + appId);
+        dispatchSteamUrl(m_shell.dialogParent(), "steam://launch/" + appId);
         return;
     }
 
@@ -2021,12 +2043,12 @@ void MainWindow::onLaunchSteamLauncher()
     qCInfo(logging::lcLaunch) << "launch launcher: nothing resolved for" << id
                               << "- asking the user for a path";
     QString path = QFileDialog::getOpenFileName(
-        this, T("launch_locate_game").arg(currentProfile().displayName),
+        m_shell.dialogParent(), T("launch_locate_game").arg(m_shell.currentGameName()),
         QDir::homePath());
     if (path.isEmpty()) return;
     Settings::setLauncherExePath(id, path);
     if (!subprocess::startDetached(path, {}))
-        ui::warn(this, T("launch_error_title"), T("launch_error_body").arg(path));
+        ui::warn(m_shell.dialogParent(), T("launch_error_title"), T("launch_error_body").arg(path));
 }
 
 // Resolve the two paths an OpenGothic launch needs, asking only for what is
@@ -2131,9 +2153,9 @@ bool opengothicResolvePaths(QWidget *parent, const QString &id,
     return true;
 }
 
-void MainWindow::onLaunchGame()
+void DeployFlow::onLaunchGame()
 {
-    const QString &id   = currentProfile().id;
+    const QString id    = m_shell.currentGameId();
     const QString appId = GameProfileRegistry::steamAppId(id);
     const GameAdapter *adapter = GameAdapterRegistry::find(id);
     qCInfo(logging::lcLaunch).nospace()
@@ -2160,7 +2182,7 @@ void MainWindow::onLaunchGame()
     // manages and would ignore everything deployed.
     if (adapter && adapter->isOpenGothic()) {
         QString engine, root;
-        if (!opengothicResolvePaths(this, id, engine, root)) return;
+        if (!opengothicResolvePaths(m_shell.dialogParent(), id, engine, root)) return;
         // Only pass -game: when the ini is actually there. Passing a missing
         // one makes the engine log "no file in path" and fall back to vanilla,
         // which looks exactly like the mods not working.
@@ -2170,7 +2192,7 @@ void MainWindow::onLaunchGame()
         const QStringList args = opengothic::launchArgs(root, haveIni ? iniName : QString());
         qCInfo(logging::lcLaunch) << "launch game: opengothic" << engine << args;
         if (!subprocess::startDetached(engine, args))
-            ui::warn(this, T("launch_error_title"), T("launch_error_body").arg(engine));
+            ui::warn(m_shell.dialogParent(), T("launch_error_title"), T("launch_error_body").arg(engine));
         return;
     }
 
@@ -2178,7 +2200,7 @@ void MainWindow::onLaunchGame()
     const QString gogExe = GameProfileRegistry::findGogGameExe(id);
     if (!gogExe.isEmpty() && QFile::exists(gogExe)) {
         if (!launchViaGog(gogExe))
-            ui::warn(this, T("launch_error_title"), T("launch_error_body").arg(gogExe));
+            ui::warn(m_shell.dialogParent(), T("launch_error_title"), T("launch_error_body").arg(gogExe));
         return;
     }
 
@@ -2200,12 +2222,12 @@ void MainWindow::onLaunchGame()
         // than before.
         const QString loader =
             findScriptExtenderLoader(adapter, QFileInfo(steamExe).path());
-        if (!loader.isEmpty() && launchViaProton(this, appId, loader)) return;
+        if (!loader.isEmpty() && launchViaProton(m_shell.dialogParent(), appId, loader)) return;
         if (!loader.isEmpty())
             qCWarning(logging::lcLaunch)
                 << "launch game: found" << loader
                 << "but could not build a Proton command - falling back to Steam";
-        dispatchSteamUrl(this, "steam://rungameid/" + appId);
+        dispatchSteamUrl(m_shell.dialogParent(), "steam://rungameid/" + appId);
         return;
     }
 
@@ -2213,7 +2235,7 @@ void MainWindow::onLaunchGame()
     if (!appId.isEmpty()) {
         qCInfo(logging::lcLaunch) << "launch game: exe not confirmed on disk,"
                                   << "asking Steam to run" << appId << "anyway";
-        dispatchSteamUrl(this, "steam://rungameid/" + appId);
+        dispatchSteamUrl(m_shell.dialogParent(), "steam://rungameid/" + appId);
         return;
     }
 
@@ -2221,7 +2243,7 @@ void MainWindow::onLaunchGame()
     qCInfo(logging::lcLaunch) << "launch game: nothing resolved for" << id
                               << "- asking the user for an exe";
     QString exePath = QFileDialog::getOpenFileName(
-        this, T("launch_locate_game").arg(currentProfile().displayName),
+        m_shell.dialogParent(), T("launch_locate_game").arg(m_shell.currentGameName()),
         QDir::homePath());
     if (exePath.isEmpty()) return;
     Settings::setGameExePath(id, exePath);
@@ -2231,8 +2253,8 @@ void MainWindow::onLaunchGame()
     // on the normal rungameid launch above, so paths 2/3 need no change.
     const QString seLoader = findScriptExtenderLoader(adapter, QFileInfo(exePath).path());
     const QString toRun = seLoader.isEmpty() ? exePath : seLoader;
-    if (!seLoader.isEmpty() && statusBar())
-        statusBar()->showMessage(T("launch_with_script_extender"), 3000);
+    if (!seLoader.isEmpty())
+        m_shell.showStatus(T("launch_with_script_extender"), 3000);
     if (!subprocess::startDetached(toRun, {}))
-        ui::warn(this, T("launch_error_title"), T("launch_error_body").arg(toRun));
+        ui::warn(m_shell.dialogParent(), T("launch_error_title"), T("launch_error_body").arg(toRun));
 }

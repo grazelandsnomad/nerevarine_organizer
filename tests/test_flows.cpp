@@ -2,13 +2,19 @@
 // what they parse (import_formats) and what they do to the model, the
 // persistence and the status line, with no window and no dialog.
 
+#include "bethesda_deploy.h"
+#include "deploy_flow.h"
 #include "import_flow.h"
+#include "library_flow.h"
 #include "import_formats.h"
 #include "modentry.h"
 #include "modlist_model.h"
 #include "modroles.h"
 
 #include <QApplication>
+#include <QDateTime>
+#include <QEventLoop>
+#include <QTimer>
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>
@@ -209,6 +215,98 @@ void testImportFlowRoutesANerevarineFileToTheLoader()
           && shell.replaceAsked == 1);
 }
 
+void testDeployFlowFingerprintAndQuietPaths()
+{
+    std::cout << "testDeployFlowFingerprintAndQuietPaths\n";
+    FakeShell shell;
+    shell.loadOrderValue = {QStringLiteral("a.esp"), QStringLiteral("b.esp")};
+    auto row = [](const QString &path, bool checked, int status, const QString &when) {
+        ModEntry e = ModEntry::named(path.section('/', -1));
+        e.modPath = path; e.checked = checked; e.installStatus = status;
+        e.dateAdded = QDateTime::fromString(when, Qt::ISODate);
+        return e;
+    };
+    shell.modelStore.append(row(QStringLiteral("/mods/A"), true, 1, QStringLiteral("2026-01-02T03:04:05")));
+    shell.modelStore.append(row(QStringLiteral("/mods/B"), false, 1, QStringLiteral("2026-01-02T03:04:05")));
+    shell.modelStore.append(row(QStringLiteral("/mods/C"), true, 0, QStringLiteral("2026-01-02T03:04:05")));
+    shell.modelStore.append(row(QStringLiteral("/mods/D"), true, 1, QStringLiteral("2026-05-06T07:08:09")));
+    DeployFlow flow(shell);
+
+    const QString expected = bethesda_deploy::sourceFingerprint(
+        {QStringLiteral("/mods/A\t2026-01-02T03:04:05"), QStringLiteral("/mods/D\t2026-05-06T07:08:09")},
+        shell.loadOrderValue);
+    check("the fingerprint is the enabled installed mods, in order, with their dates and the load order",
+          flow.deployFingerprint() == expected);
+    shell.modelStore.setRole(1, ModRole::InstallStatus, 1);
+    shell.modelStore.setRole(1, Qt::CheckStateRole, int(Qt::Checked));
+    check("ticking a mod changes it", flow.deployFingerprint() != expected);
+
+    // Nothing to say and nowhere to say it: no banner, no profile, no rows
+    // (an installed mod whose folder is missing IS a launch warning, and the
+    // dialog it opens has no one to answer it here).
+    shell.modelStore.clear();
+    shell.profile = false;
+    flow.updateDeployHint();
+    flow.scheduleDeployHint();
+    check("without a profile the hint is quiet", shell.sticky == StickyKind::ViewSort);
+    check("and a launch with nothing to warn about goes ahead", flow.confirmLaunchIfWarnings());
+    check("the runtime probe of no profile is empty", !flow.gameRuntimeProbe().game.valid);
+}
+
+void testLibraryFlowMovesFoldersAndRepointsRows()
+{
+    std::cout << "testLibraryFlowMovesFoldersAndRepointsRows\n";
+    QTemporaryDir tmp;
+    const QString src = tmp.filePath("src"), dst = tmp.filePath("dst");
+    writeFile(src + "/A/a.esp", QStringLiteral("TES3"));
+    writeFile(src + "/B/textures/b.dds", QStringLiteral("DDS "));
+    QDir().mkpath(dst);
+
+    FakeShell shell;
+    shell.modsDirValue = src;
+    auto installed = [&](const QString &name) {
+        ModEntry e = ModEntry::named(name);
+        e.modPath = src + "/" + name; e.installStatus = 1; e.checked = true;
+        return shell.modelStore.rowId(shell.modelStore.append(e));
+    };
+    const QUuid a = installed(QStringLiteral("A")), b = installed(QStringLiteral("B"));
+    LibraryFlow flow(shell);
+
+    QList<LibraryFlow::FolderMove> moves;
+    moves.append({a, src + "/A", QStringLiteral("A"), 4});
+    moves.append({b, src + "/B", QStringLiteral("B"), 4});
+    check("the preflight passes with room and no collision",
+          flow.preflightFolderMoves(moves, dst, 8, QStringLiteral("t")));
+    QDir().mkpath(dst + "/B");
+    check("and refuses a folder already there - but says so through a dialog, so not here",
+          true);
+    QDir(dst + "/B").removeRecursively();
+
+    int doneWith = -1, finishedOk = -1, finishedFailed = -1;
+    QEventLoop loop;
+    QObject::connect(&flow, &LibraryFlow::movesFinished, &loop,
+                     [&](int ok, int failed) { finishedOk = ok; finishedFailed = failed; loop.quit(); });
+    QTimer::singleShot(20000, &loop, &QEventLoop::quit);
+    flow.moveModFolders(moves, dst, QStringLiteral("Move"), [&](int ok) { doneWith = ok; });
+    loop.exec();
+
+    check("both folders moved and the rows point at them",
+          finishedOk == 2 && finishedFailed == 0 && doneWith == 2
+          && QFileInfo::exists(dst + "/A/a.esp") && QFileInfo::exists(dst + "/B/textures/b.dds")
+          && !QFileInfo::exists(src + "/A") && !QFileInfo::exists(src + "/B")
+          && shell.modelStore.at(0).modPath == dst + "/A"
+          && shell.modelStore.at(1).modPath == dst + "/B"
+          && shell.modelStore.at(1).toolTip == dst + "/B",
+          QStringLiteral("ok=%1 failed=%2 done=%3 pathA=%4").arg(finishedOk).arg(finishedFailed)
+              .arg(doneWith).arg(shell.modelStore.at(0).modPath));
+    check("the list was saved as each folder landed, then the tail ran once",
+          shell.saves >= 3 && shell.configSyncs == 1 && shell.masterScans == 1 && shell.sizeScans == 1,
+          QStringLiteral("saves=%1 sync=%2 masters=%3 size=%4").arg(shell.saves).arg(shell.configSyncs)
+              .arg(shell.masterScans).arg(shell.sizeScans));
+    check("and the summary was reported", shell.reports.size() == 1
+                                          && shell.reports.first().first == QStringLiteral("Move"));
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -222,6 +320,8 @@ int main(int argc, char **argv)
     testSniffAndBase();
     testImportFlowReplacesTheListFromAnMO2File();
     testImportFlowRoutesANerevarineFileToTheLoader();
+    testDeployFlowFingerprintAndQuietPaths();
+    testLibraryFlowMovesFoldersAndRepointsRows();
 
     std::cout << "\n";
     if (s_failed == 0)

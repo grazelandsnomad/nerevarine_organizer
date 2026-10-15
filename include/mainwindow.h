@@ -62,6 +62,8 @@ class ScanCoordinator;
 class BackupManager;
 class BulkInstallQueue;
 class ImportFlow;
+class DeployFlow;
+class LibraryFlow;
 
 class MainWindow : public QMainWindow, public WindowShell {
     Q_OBJECT
@@ -178,22 +180,6 @@ private slots:
     void onSetTranslateProvider();
     void onSetModsDir();
     void onSetLanguage(const QString &language);
-    void onLaunchOpenMW();
-    void onLaunchOpenMWLauncher();
-    // Sums the four warning signals (missing masters/deps, empty installs,
-    // forbidden enabled); summary dialog if any fire. False on Cancel.
-    bool confirmLaunchIfWarnings();
-    // Mark the rows whose script-extender DLL predates the installed game.
-    // Called when Data/ changes (deploy, and the pre-launch re-sync), never
-    // from a paint path: it reads every plugin DLL in the game folder.
-    void refreshScriptExtenderFlags();
-    // Block launch on a pending kernel reboot (true = abort). Arch pacman wipes
-    // /usr/lib/modules/<running-kernel> on kernel upgrade, so DRM/input module
-    // loads fail and OpenMW dies with no clear error.
-    bool refuseLaunchIfRebootPending();
-    void onLaunchGame();            // generic launch for non-Morrowind games
-    void onLaunchSteamLauncher();   // launches the game's official launcher (e.g. SkyrimSELauncher.exe)
-    void onTuneSkyrimIni();         // BethINI-style INI tweaks for Skyrim SE
     // Dependency canvas: draws the DependsOn web and applies edits back
     // through the same write path the "Required mods" dialog uses.
     void onDependencyGraph();
@@ -222,14 +208,9 @@ private slots:
     void checkpointBeforeSort();
     void onInspectOpenMWSetup();
     void onInspectConflicts();
-    void onDeployBethesda();        // experimental: link enabled mods into a Bethesda game's Data/
-    void onUndeployBethesda();      // revert a Bethesda deployment, restoring the original game files
-    void maybeDeployBeforeLaunch(const QString &id);  // re-sync Data/ before launching, if deployed before
-    void onInspectDeployment();     // read-only diagnostics: resolved paths + manifest state
     void onTriageOpenMWLog();
     void onModlistSummary();
     void onToggleTheme();           // flip light <-> dark, persist, update button
-    void onMoveModsDir();
     // Zip modlist + load-order files, openmw.cfg, the tail of OpenMW.log, and a
     // system summary into nerev_diagnostics_<timestamp>.zip for bug reports.
     // Asks where to save, reveals when done. No network, no PII beyond modlist.
@@ -263,16 +244,6 @@ private slots:
     QString currentProfileKey() const;
     void    strandInflightInstalls();
     void    restoreStrandedInstalls();
-    // Pull any of this profile's mods living outside its modsDir into it. Main
-    // case: a cloned profile still points at the source's mods on disk; copy/
-    // move them in to decouple the two profiles. No-op when all mods are already
-    // inside m_modsDir. Refuses mid-download or with m_modsDir unset.
-    void onConsolidateModsIntoActiveProfile();
-    // Reclaim mod folders nothing points at any more: older builds left behind
-    // by upgrades, extract dirs from installs that never finished, leftovers
-    // from "remove but keep files". Previews everything with sizes and deletes
-    // only on explicit confirm. Refuses mid-download or mid-install.
-    void onCleanUpModFolders();
     void onAddGame();
     // Detect an external (non-OpenMW) game in Steam/Heroic/Lutris, prompt for
     // the exe if not found, create a profile and switch. From pinned-game menu.
@@ -392,13 +363,6 @@ private:
     bool confirmReplaceModList() override;
     void onViewChangelog(ModRow item);
     void onNewModList();
-    // savePath fires when the resolved path changes (auto-detected via PATH or
-    // picked in the dialog); the call site owns the persisted-key choice via its
-    // typed Settings:: accessor.
-    void launchProgram(QString &storedPath,
-                       std::function<void(const QString&)> savePath,
-                       const QString &execName, const QString &locateTitle,
-                       bool monitored = false);
     void checkNxmHandlerRegistration();
     void checkDesktopShortcut();
     void collapseSection(ModRow sep, bool collapse);
@@ -508,30 +472,6 @@ private:
     // so there is nothing for them to mismatch against anyway.
     bool confirmGameForDownload(const QString &game);
 
-    // -- Moving mod folders: Move Mod Library and Consolidate ----------
-    //
-    // One folder to move: the row it belongs to, where it is now, and what
-    // it will be called under the destination root.
-    struct FolderMove {
-        QUuid   row;              // mod_row::rowId; resolved when the move lands
-        QString oldPath;
-        QString          folderName;
-        qint64           sizeBytes = 0;
-    };
-    // The checks both moves share before asking: enough free space under
-    // destRoot (10% headroom, since a cross-filesystem move copies first) and
-    // no folder of the same name already there. Tells the user and returns
-    // false when either fails.
-    bool preflightFolderMoves(const QList<FolderMove> &moves, const QString &destRoot,
-                              qint64 totalBytes, const QString &title);
-    // Move each folder under destRoot on a worker (safefs::moveTreeVerified)
-    // behind a cancellable progress dialog. Every folder that lands has its
-    // row repointed and the list saved at once, so a crash midway loses
-    // nothing. `done(movedOk)` runs on the UI thread after the last one, before
-    // the tail both moves share (config sync, rescans, undo cleared) and the
-    // summary dialog.
-    void moveModFolders(const QList<FolderMove> &moves, const QString &destRoot,
-                        const QString &title, std::function<void(int movedOk)> done);
     // "Translate mod...": collects every player-visible string the mod's
     // plugins carry, opens the editor, and turns what the user types into a
     // separate translation mod inserted directly below this one. The original
@@ -547,11 +487,6 @@ private:
     // override when it has one, else the shared default. Empty means the user
     // has never been asked - callers must not read that as English, which is
     // the bug this replaced (see target_language.h).
-    // What the installed game says about itself, cached per profile: the
-    // executable's version and whether a script extender sits beside it.
-    // Fallout 4 ships both runtimes under one game id, so the profile cannot
-    // answer "which build is this" and the install has to.
-    const game_runtime::Probe &gameRuntimeProbe();
 
         QString translationLanguage() const;
     // Where this mod's half-finished translation lives, and whether any of it
@@ -697,21 +632,6 @@ private:
     // Translation coverage. Unlike the conflict scan this is opt-in: it reads
     // and decompresses record bodies, so it only runs while the toolbar toggle
     // is on. schedule() no-ops when the toggle is off.
-    // Bethesda profiles only load what is physically in the game's Data
-    // folder, so a modlist that was never deployed does nothing at all - and
-    // nothing said so. Shows a clickable sticky banner while the active
-    // profile is deploy-capable, has enabled installed mods, and has never
-    // been deployed. Clicking it deploys.
-    void updateDeployHint();
-    // What the active profile would deploy right now, as the digest the last
-    // deploy recorded beside its manifest (bethesda_deploy::sourceFingerprint):
-    // enabled installed mods in load order, each as path + install date, and
-    // the plugin load order. Different from the recorded one = stale.
-    QString deployFingerprint() const;
-    // A mod's files changed on disk without the list changing - a reinstall
-    // into the same folder, a variant swapped in. The fingerprint cannot see
-    // that, so the deploy recorded for `modlistFile` is marked stale by hand.
-    void markDeployStale(const QString &modlistFile);
 
     void scheduleTranslationScan();
     void runTranslationScan();
@@ -800,6 +720,8 @@ private:
 
     // The flows: one concern each, over the WindowShell the window is.
     ImportFlow                       *m_importFlow   = nullptr;
+    DeployFlow                       *m_deployFlow   = nullptr;
+    LibraryFlow                      *m_libraryFlow  = nullptr;
 
     ModListView                      *m_modList      = nullptr;
     ModListDelegate                  *m_delegate     = nullptr;
@@ -829,8 +751,6 @@ private:
     // order. Drives rowOrderForPersist() so saves never write the sorted order.
     bool                   m_viewSortActive = false;
     QString                m_apiKey;
-    game_runtime::Probe  m_gameRuntime;        // cached; see gameRuntimeProbe()
-    QString              m_gameRuntimeFor;     // profile id the cache is for
     // API-key persistence - prefers QKeychain (libsecret/KWallet/DPAPI),
     // migrates from old QSettings storage on first run when keychain is
     // available. See impls for the fallback when keychain isn't linked.
@@ -925,9 +845,6 @@ private:
 
     // Undo / redo - full-list snapshots, max kUndoLimit deep, in UndoStack.
     UndoStack                 *m_undoStack = nullptr;
-    // Pre-launch sanity check "don't warn again this session" - cleared on
-    // restart so a new install pass re-validates.
-    bool                       m_suppressLaunchSanityCheck = false;
     // One shot: the next finished update check opens the review screen rather
     // than only writing to the status bar. Set when the user asked the
     // question from the launch dialog, where a list they can install from is
@@ -966,12 +883,6 @@ private:
     // finishing mid-deploy would otherwise call finish() and take the deploy's
     // panel down with it.
     ScanOverlay *m_deployOverlay       = nullptr;
-    QTimer      *m_deployProgressTimer = nullptr;
-    // Coalesces the deploy-hint check. It rides every "list changed" edge,
-    // and a save fires one per row through itemChanged; evaluated once per
-    // turn of the event loop instead, and - which is what matters - after a
-    // game switch has finished rather than halfway through it.
-    QTimer      *m_deployHintTimer     = nullptr;
     // Set when the user turns the toggle on, so that scan ends on a result
     // panel they have to acknowledge. The scan also re-runs after any list
     // edit, and a dialog on every checkbox click would be intolerable - those
