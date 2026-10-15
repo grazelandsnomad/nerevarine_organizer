@@ -820,9 +820,8 @@ void MainWindow::setupCentralWidget()
     m_modList->setMouseTracking(true);
     m_modList->viewport()->setMouseTracking(true);
 
-    // Push undo state before a drag-drop reorder, then save afterwards. A
-    // drop onto a separator is one reorder of the model (the view's own
-    // signals); a drag between rows is a model move per row.
+    // Push undo state before a reorder, then save afterwards. The view reports
+    // every reorder as one pair, however many rows a drag moves.
     const auto beforeReorder = [this]() {
         if (!m_undoStack->isApplyingState()) m_undoStack->pushUndo();
     };
@@ -835,8 +834,6 @@ void MainWindow::setupCentralWidget()
         scheduleSaveModList();
         scheduleConflictScan();
     };
-    connect(m_modList->model(), &QAbstractItemModel::rowsAboutToBeMoved, this, beforeReorder);
-    connect(m_modList->model(), &QAbstractItemModel::rowsMoved, this, afterReorder);
     connect(m_modList, &ModListView::aboutToReorderRows, this, beforeReorder);
     connect(m_modList, &ModListView::rowsReordered, this, afterReorder);
 

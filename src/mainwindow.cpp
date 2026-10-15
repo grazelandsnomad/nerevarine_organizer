@@ -506,6 +506,13 @@ MainWindow::MainWindow(QWidget *parent)
     auto *redoSc = new QShortcut(QKeySequence::Redo, this);
     connect(redoSc, &QShortcut::activated, m_undoStack, &UndoStack::performRedo);
 
+    // Alt+Up / Alt+Down move the current row one place (debounced save, so
+    // holding the key rapid-fires moves without a write per step).
+    auto *moveUpSc = new QShortcut(QKeySequence(Qt::ALT | Qt::Key_Up), this);
+    connect(moveUpSc, &QShortcut::activated, this, &MainWindow::onMoveUp);
+    auto *moveDownSc = new QShortcut(QKeySequence(Qt::ALT | Qt::Key_Down), this);
+    connect(moveDownSc, &QShortcut::activated, this, &MainWindow::onMoveDown);
+
     // Ctrl+Home/End: jump to first/last row even with no selection. Qt's
     // built-in handlers need a current item and fail silently on a freshly
     // loaded list where nothing is highlighted, so do it by hand.

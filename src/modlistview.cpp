@@ -33,6 +33,16 @@ void ModListView::setModel(QAbstractItemModel *model)
     });
     connect(m_model, &ModlistModel::rowHiddenChanged, this,
             [this](int row, bool hidden) { setRowHidden(row, hidden); });
+    // The model's moves, reported as reorders: one pair per move outside a
+    // drop, one pair for the whole drop however many rows Qt moves in it.
+    connect(m_model, &QAbstractItemModel::rowsAboutToBeMoved, this, [this] {
+        if (!m_inDrop) { emit aboutToReorderRows(); return; }
+        if (!m_dropAnnounced) { m_dropAnnounced = true; emit aboutToReorderRows(); }
+    });
+    connect(m_model, &QAbstractItemModel::rowsMoved, this, [this] {
+        if (!m_inDrop) emit rowsReordered();
+        else m_dropMoved = true;
+    });
     // A reset forgets the view's hidden rows; an insert may bring a hidden one.
     connect(m_model, &QAbstractItemModel::modelReset, this,
             [this] { syncHiddenRows(0, m_model->count() - 1); });
@@ -242,5 +252,13 @@ void ModListView::dropEvent(QDropEvent *event)
         event->acceptProposedAction();
         return;
     }
+    // A drag between rows: Qt calls moveRow once per selected row. Report
+    // the whole drop as one reorder, so an eleven-row drag is one undo step
+    // and not eleven snapshots that push the pre-drag state off the stack.
+    m_inDrop = true;
+    m_dropAnnounced = false;
+    m_dropMoved = false;
     QListView::dropEvent(event);
+    m_inDrop = false;
+    if (m_dropMoved) emit rowsReordered();
 }

@@ -72,8 +72,10 @@ signals:
     void itemDoubleClicked(const ModRow &row);
     // Local files dropped from outside, one tick after the drop.
     void localFilesDropped(const QStringList &paths);
-    // Around a selection dropped onto a separator: one reorder of the model,
-    // so the window takes one undo step and one save, as for a drag.
+    // Around every reorder of the rows: a drag between rows (one pair however
+    // many rows it moves - Qt moves them one at a time), a selection dropped
+    // onto a separator, a programmatic model move. The window takes one undo
+    // step before and one save after.
     void aboutToReorderRows();
     void rowsReordered();
 
@@ -87,4 +89,8 @@ private:
     void syncHiddenRows(int first, int last);
 
     ModlistModel *m_model = nullptr;
+    // A drop in progress: the model's per-row moves are reported as one.
+    bool m_inDrop = false;
+    bool m_dropAnnounced = false;
+    bool m_dropMoved = false;
 };

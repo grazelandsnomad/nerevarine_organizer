@@ -302,6 +302,17 @@ void testRowHandlesAndTheView()
                               && m.at(2).displayName == QStringLiteral("S"));
     view.moveRowsTo({0}, 99);                          // C S B D A
     check("past the end is the end", m.at(4).displayName == QStringLiteral("A"));
+    int before = 0, after = 0;
+    QObject::connect(&view, &ModListView::aboutToReorderRows, &view, [&] { ++before; });
+    QObject::connect(&view, &ModListView::rowsReordered, &view, [&] { ++after; });
+    m.moveRows(QModelIndex(), 0, 1, QModelIndex(), 3);
+    check("a model move is reported as one reorder", before == 1 && after == 1,
+          QStringLiteral("%1/%2").arg(before).arg(after));
+    m.reorder({0, 1, 2, 3, 4});
+    check("and a no-op reorder is not", before == 1 && after == 1);
+    view.moveRowsTo({0}, 0);
+    check("nor a block move that changes nothing", before == 1 && after == 1);
+    m.moveRows(QModelIndex(), 2, 1, QModelIndex(), 0);  // back to C S B D A
     view.removeRow(4);                                 // A goes
     view.removeRow(3);                                 // D goes
     view.removeRow(1);                                 // S goes
