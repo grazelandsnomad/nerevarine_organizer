@@ -945,29 +945,24 @@ void MainWindow::onFileListFetched(const QUuid &rowKey,
     // Runtime-variant recommendation, same shape as the OAAB one above. A
     // Skyrim mod page routinely carries one file per game version - Scrambled
     // Bugs ships an Anniversary Edition build and a Special Edition one - and
-    // the wrong build is an SKSE plugin that silently refuses to load. Only
-    // fires when the page offers BOTH kinds, so a page with a single
-    // unmarked file never draws a recommendation.
+    // the wrong build is an SKSE plugin that silently refuses to load; a
+    // Fallout 4 page now carries one per build (OG, NG, AE). The FOMOD wizard
+    // asks fomod::chooseRuntimeOption the same question, so the page and the
+    // installer cannot disagree. Only a page that offers runtimes at all gets
+    // an answer, so a single unmarked file never draws a recommendation.
     {
         const QString gid =
             m_profiles->isEmpty() ? QString() : currentProfile().id;
-        const auto pref = fomod::runtimePreferenceForGame(
-            gid, m_deployFlow->gameRuntimeProbe().game);
-        if (pref != fomod::Runtime::None) {
-            bool haveAe = false, haveSe = false;
-            int  wantIdx = -1;
-            for (int i = 0; i < files.size(); ++i) {
-                const auto v = fomod::classifyRuntimeVariant(files[i].name, gid);
-                haveAe |= (v == fomod::Runtime::Current);
-                haveSe |= (v == fomod::Runtime::Legacy);
-                if (v == pref && wantIdx < 0) wantIdx = i;
-            }
-            if (haveAe && haveSe && wantIdx >= 0) {
-                bestIdx       = wantIdx;
-                recommendIdx  = wantIdx;
-                recommendNote = QStringLiteral("  ")
-                              + T("install_pick_recommended_runtime");
-            }
+        QStringList names;
+        names.reserve(files.size());
+        for (const auto &f : files) names << f.name;
+        const auto choice = fomod::chooseRuntimeOption(
+            names, gid, m_deployFlow->gameRuntimeProbe().game);
+        if (choice.pick >= 0) {
+            bestIdx       = choice.pick;
+            recommendIdx  = choice.pick;
+            recommendNote = QStringLiteral("  ")
+                          + T("install_pick_recommended_runtime");
         }
     }
 

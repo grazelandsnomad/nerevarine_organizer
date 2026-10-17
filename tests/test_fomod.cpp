@@ -1935,6 +1935,72 @@ static void run_fomod_fallout4_runtime()
           && fomod::isOptOutLabel(
                  QStringLiteral("None - install none of these")
                      .section(QLatin1Char('-'), 0, 0)));
+
+    // Fallout 4 in three builds. Necessity's NG-AE installer asks between
+    // the two post-update builds - both the Current side - so a rule wanting
+    // one option per side never fired, and the installer's first radio,
+    // Next-Gen, stood on the 1.11.240 install that reported it.
+    std::cout << "\n[the Fallout 4 build the game runs]\n";
+    const QString fo4 = QStringLiteral("fallout4");
+    const QStringList ngAe = {QStringLiteral("Next-Gen (1.10.984)"),
+                              QStringLiteral("Anniversary (1.11.x)")};
+    check("an Anniversary install picks the Anniversary build",
+          fomod::chooseRuntimeOption(ngAe, fo4, ver(1, 11, 240)).pick == 1);
+    check("a next-gen install the Next-Gen one",
+          fomod::chooseRuntimeOption(ngAe, fo4, ver(1, 10, 984)).pick == 0);
+    check("the first next-gen build too",
+          fomod::chooseRuntimeOption(ngAe, fo4, ver(1, 10, 980)).pick == 0);
+    {
+        const auto og = fomod::chooseRuntimeOption(ngAe, fo4, ver(1, 10, 163));
+        check("the original game gets neither, in a group still about runtimes",
+              og.offersRuntimes && og.pick == -1);
+    }
+
+    // A mod page with a file per build. The side rule answered the first
+    // Current file - the NG one - on an Anniversary install.
+    const QStringList page = {QStringLiteral("Foo - OG"), QStringLiteral("Foo - NG"),
+                              QStringLiteral("Foo - AE")};
+    check("three builds: the Anniversary file on an Anniversary install",
+          fomod::chooseRuntimeOption(page, fo4, ver(1, 11, 240)).pick == 2);
+    check("the next-gen file on a next-gen one",
+          fomod::chooseRuntimeOption(page, fo4, ver(1, 10, 984)).pick == 1);
+    check("and the original on the original",
+          fomod::chooseRuntimeOption(page, fo4, ver(1, 10, 163)).pick == 0);
+    check("a version after a v counts",
+          fomod::chooseRuntimeOption({"Foo v1.10.984", "Foo v1.11.240"}, fo4,
+                                     ver(1, 11, 240)).pick == 1);
+
+    // What the side rule settled, it still settles.
+    const QStringList oldNecessity = {"OG", "AE", "None - install none of these"};
+    check("the earlier Necessity installer still answers AE",
+          fomod::chooseRuntimeOption(oldNecessity, fo4, ver(1, 11, 240)).pick == 1);
+    check("an OG/NG pair on an Anniversary install answers NG, the nearer",
+          fomod::chooseRuntimeOption({"OG", "NG"}, fo4, ver(1, 11, 240)).pick == 1);
+    check("a name for two builds is the post-update side",
+          fomod::chooseRuntimeOption({"NG/AE", "OG"}, fo4, ver(1, 11, 240)).pick == 0);
+    {
+        const auto lone =
+            fomod::chooseRuntimeOption({"Foo AE", "Foo Extras"}, fo4, ver(1, 11, 240));
+        check("one build alone is no runtime choice",
+              !lone.offersRuntimes && lone.pick == -1);
+    }
+    // No fact, no verdict - not even the "None" option, which the old loop
+    // took for the match when the preference itself was None.
+    {
+        const auto blind = fomod::chooseRuntimeOption(oldNecessity, fo4, {});
+        check("an unreadable version picks nothing",
+              blind.offersRuntimes && blind.pick == -1);
+    }
+
+    // Skyrim keeps answering from its profile, and never in Fallout 4 builds.
+    const QStringList spid = {"SSE v1.6.629+ ('Anniversary Edition')",
+                              "SSE v1.5.97 ('Special Edition')"};
+    check("Skyrim still picks by profile",
+          fomod::chooseRuntimeOption(spid, "skyrimanniversaryedition", {}).pick == 0
+          && fomod::chooseRuntimeOption(spid, "skyrimspecialedition", {}).pick == 1);
+    check("the Fallout 4 builds stay dormant there",
+          !fomod::chooseRuntimeOption(ngAe, "skyrimanniversaryedition", {})
+               .offersRuntimes);
 }
 
 // The probe that reads those facts off a real install.
@@ -3536,6 +3602,54 @@ static void plan_testRequirementWithoutWidgets()
     check("ticked with it", q[0][0].options[0].checked);
 }
 
+// The report: Necessity's NG-AE installer opens on "Game and DLC" and asks
+// Next-Gen (1.10.984) or Anniversary (1.11.x), Next-Gen first, on an install
+// whose Fallout4.exe says 1.11.240 with f4se_1_11_240.dll beside it. Both
+// builds are the post-update side, so the runtime pass stayed out and the
+// installer's first radio stood.
+static void plan_testFallout4BuildWithoutWidgets()
+{
+    std::cout << "\n[planSelections: the Fallout 4 build the game runs]\n";
+    auto mk = [](const QString &name) {
+        FomodPlugin p; p.name = name; p.type = QStringLiteral("Optional"); return p;
+    };
+    FomodGroup version;
+    version.name = "Game Version"; version.type = "SelectExactlyOne";
+    version.plugins = {mk("Next-Gen (1.10.984)"), mk("Anniversary (1.11.x)")};
+    FomodGroup dlc;
+    dlc.name = "DLC"; dlc.type = "SelectExactlyOne";
+    dlc.plugins = {mk("All DLC"), mk("No DLC")};
+    FomodStep st;
+    st.name = "Game and DLC"; st.groups = {version, dlc};
+
+    fomod::PlanContext ctx;
+    ctx.gameId = "fallout4";
+    ctx.runtime.game.major = 1; ctx.runtime.game.minor = 11; ctx.runtime.game.build = 240;
+    ctx.runtime.game.valid = true;
+    ctx.runtime.extenderPresent = true;
+
+    const fomod::Plan p = fomod::planSelections({st}, ctx);
+    const fomod::OptionPlan &ng = p[0][0].options[0];
+    const fomod::OptionPlan &ae = p[0][0].options[1];
+    check("Anniversary is selected, Next-Gen is not", ae.checked && !ng.checked);
+    check("and recommended",
+          ae.text.contains(QStringLiteral("✅ Recommended")), ae.text);
+    check("with the game's version under it",
+          ae.notes.join(' ').contains("1.11.240"), ae.notes.join(" | "));
+    check("Next-Gen keeps its plain name", ng.text == "Next-Gen (1.10.984)", ng.text);
+    check("the DLC question is left to the installer",
+          p[0][1].options[0].checked && !p[0][1].options[1].checked
+          && p[0][1].options[1].text == "No DLC");
+
+    // The build is a fact about the game, so a pick stored from an earlier
+    // install on Next-Gen does not come back.
+    fomod::PlanContext again = ctx;
+    again.priorChoices = fomod_choices::encode({st}, {fomod_choices::key(0, 0, 0)});
+    const fomod::Plan q = fomod::planSelections({st}, again);
+    check("a stored Next-Gen pick does not override it",
+          q[0][0].options[1].checked && !q[0][0].options[0].checked);
+}
+
 // NRV_FOMOD_CORPUS: the wizard keeps what it opens, once, and only when asked.
 static void wizardui_testCorpusCapture()
 {
@@ -3566,6 +3680,7 @@ static void run_fomod_wizard_ui()
     wizardui_testPlanFollowsTheButtons();
     plan_testRadioRulesWithoutWidgets();
     plan_testRequirementWithoutWidgets();
+    plan_testFallout4BuildWithoutWidgets();
     wizardui_testCorpusCapture();
 
     // The real F4SE group from Necessity - Nexus Essentials Merged, on the

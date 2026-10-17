@@ -313,36 +313,35 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
                         }
                     }
 
-                    // Pass A3: game-runtime pairs - an SKSE-plugin FOMOD
+                    // Pass A3: game-runtime choices - an SKSE-plugin FOMOD
                     // offering its DLL per runtime ("SSE v1.6.629+
                     // ('Anniversary Edition')" vs "SSE v1.5.97 ('Special
-                    // Edition')"). Which one is right is not a preference, it
-                    // is a fact the manager already holds: the AE/SE split IS
-                    // the game profile. Only fires when the group contains
-                    // both kinds, so a stray "AE" in an unrelated option name
-                    // never draws a tick.
+                    // Edition')"), or a Fallout 4 one asking which build
+                    // ("Next-Gen (1.10.984)" vs "Anniversary (1.11.x)").
+                    // Which one is right is not a preference, it is a fact
+                    // the manager already holds: the Skyrim profile, or the
+                    // Fallout 4 executable. fomod::chooseRuntimeOption
+                    // answers, and only for a group that offers runtimes at
+                    // all, so a stray "AE" in an unrelated option name never
+                    // draws a tick.
                     {
-                        const auto pref = fomod::runtimePreferenceForGame(
-                            ctx.gameId, ctx.runtime.game);
-                        bool haveCur = false, haveLeg = false;
-                        int prefIdx = -1, optOutIdx = -1;
-                        for (int pi = 0; pi < group.plugins.size(); ++pi) {
-                            const auto v = fomod::classifyRuntimeVariant(
-                                group.plugins[pi].name, ctx.gameId);
-                            haveCur |= (v == fomod::Runtime::Current);
-                            haveLeg |= (v == fomod::Runtime::Legacy);
-                            if (v == pref && prefIdx == -1) prefIdx = pi;
-                            // "None - install none of these" is the answer when
-                            // the extender is absent. isOptOut is anchored and
-                            // will not see it, and loosening that would weaken
-                            // Pass G, so only the leading token is tested here.
-                            if (optOutIdx == -1 && v == fomod::Runtime::None
+                        QStringList names;
+                        names.reserve(group.plugins.size());
+                        for (const FomodPlugin &p : group.plugins) names << p.name;
+                        const auto choice = fomod::chooseRuntimeOption(
+                            names, ctx.gameId, ctx.runtime.game);
+                        // "None - install none of these" is the answer when
+                        // the extender is absent. isOptOut is anchored and
+                        // will not see it, and loosening that would weaken
+                        // Pass G, so only the leading token is tested here.
+                        int optOutIdx = -1;
+                        for (int pi = 0; pi < names.size() && optOutIdx == -1; ++pi)
+                            if (fomod::classifyRuntimeVariant(names[pi], ctx.gameId)
+                                    == fomod::Runtime::None
                                 && fomod::isOptOutLabel(
-                                       group.plugins[pi].name.section(
-                                           QLatin1Char('-'), 0, 0)))
+                                       names[pi].section(QLatin1Char('-'), 0, 0)))
                                 optOutIdx = pi;
-                        }
-                        if (haveCur && haveLeg) {
+                        if (choice.offersRuntimes) {
                             // An extender plugin is worth nothing without the
                             // extender. Ask first, because "which build" is
                             // the wrong question when the answer is "none".
@@ -354,10 +353,9 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
                                 if (auto *btn = buttons[si][gi].value(optOutIdx);
                                     btn && btn->isEnabled())
                                     btn->setChecked(true);
-                                for (int pi = 0; pi < group.plugins.size(); ++pi) {
-                                    const auto v = fomod::classifyRuntimeVariant(
-                                        group.plugins[pi].name, ctx.gameId);
-                                    if (v == fomod::Runtime::None) continue;
+                                for (int pi = 0; pi < names.size(); ++pi) {
+                                    if (fomod::classifyRuntimeVariant(names[pi], ctx.gameId)
+                                        == fomod::Runtime::None) continue;
                                     if (auto *b = buttons[si][gi].value(pi))
                                         addNoteUnder(b, QStringLiteral(
                                             "No script extender found in your "
@@ -367,9 +365,9 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
                                 settledGroups.insert(groupKey);
                                 continue;
                             }
-                            if (prefIdx != -1 && haveExt) {
+                            if (choice.pick != -1 && haveExt) {
                                 Option *btn =
-                                    buttons[si][gi].value(prefIdx);
+                                    buttons[si][gi].value(choice.pick);
                                 if (btn && btn->isEnabled()) {
                                     btn->setChecked(true);
                                     btn->setText(btn->text() + QStringLiteral(

@@ -339,6 +339,38 @@ Runtime classifyRuntimeVariant(const QString &optionName,
 Runtime runtimePreferenceForGame(const QString &gameId,
                                  const pe_info::Version &gameVersion = {});
 
+// Which of `names` - a FOMOD group's options, a mod page's files - is built
+// for the game that is installed. The wizard and the file picker both ask
+// here, so an installer and a page cannot disagree about it.
+//
+// Two sides were the whole question for Fallout 4 until the Anniversary
+// Edition (1.11.x) shipped, and installers began asking between the two
+// post-update builds:
+//
+//   Game Version
+//     (o) Next-Gen (1.10.984)       <- the installer's default
+//     ( ) Anniversary (1.11.x)
+//
+// Both are Runtime::Current, so a rule wanting one option per side saw no
+// pair, and the default stood on a 1.11.240 install. Fallout 4 is read in its
+// three builds - old gen (1.10.163 and before), next gen (1.10.98x),
+// anniversary (1.11 on) - wherever the names say which build they are for.
+//
+// The finest answer first:
+//   builds  Fallout 4 with a readable version, and names covering two builds
+//           or more: the first name of the game's own build.
+//   sides   names holding both sides: the first one on the side
+//           runtimePreferenceForGame gives. An "OG | NG" pair on an
+//           Anniversary install still answers NG, the nearer of the two.
+// No preference - another game, an unreadable version - picks nothing, and a
+// lone "AE" among unrelated names is not a runtime choice at all.
+struct RuntimeChoice {
+    bool offersRuntimes = false;   // the names hold both sides, or two builds
+    int  pick           = -1;      // the one built for the installed game
+};
+RuntimeChoice chooseRuntimeOption(const QStringList &names, const QString &gameId,
+                                  const pe_info::Version &gameVersion);
+
 // Also used by the DOWNLOAD path, not just the wizard: a mod page routinely
 // carries one file per runtime, and the names say which is which -
 //

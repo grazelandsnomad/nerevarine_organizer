@@ -8,6 +8,7 @@
 #include <QStringList>
 
 #include <algorithm>
+#include <bit>
 #include <tuple>
 #include <utility>
 
@@ -536,6 +537,87 @@ Runtime runtimePreferenceForGame(const QString &gameId,
                                                    : Runtime::Legacy;
     }
     return Runtime::None;
+}
+
+namespace {
+
+// Fallout 4's three builds, one step finer than Runtime: see
+// chooseRuntimeOption. Values are bit positions for the "which builds do the
+// names cover" mask.
+enum class Fo4Build { Unknown = -1, OldGen, NextGen, Anniversary };
+
+// The build a name is for, by the scene's words and the version numbers. A
+// name for two builds ("NG/AE", "Next-Gen and Anniversary") is for both, which
+// is no answer to "which one" - Unknown, as classifyRuntimeVariant says None
+// to a name carrying both sides. Version numbers are matched after a "v" too
+// ("v1.11.240"), which \b would refuse.
+Fo4Build fo4BuildOfName(const QString &name)
+{
+    static const QRegularExpression kOld(QStringLiteral(
+        "\\bog\\b|\\bold[ -]?gen|(?<![\\d.])1[._]10[._]163(?!\\d)"));
+    static const QRegularExpression kNext(QStringLiteral(
+        "\\bng\\b|\\bnext[ -]?gen|(?<![\\d.])1[._]10[._]9\\d"));
+    static const QRegularExpression kAnniversary(QStringLiteral(
+        "\\bae\\b|anniversary|(?<![\\d.])1[._]11(?!\\d)"));
+    const QString n = name.toLower();
+    const bool old  = kOld.match(n).hasMatch();
+    const bool next = kNext.match(n).hasMatch();
+    const bool anni = kAnniversary.match(n).hasMatch();
+    if (int(old) + int(next) + int(anni) != 1) return Fo4Build::Unknown;
+    return old ? Fo4Build::OldGen : next ? Fo4Build::NextGen : Fo4Build::Anniversary;
+}
+
+// The build an executable version belongs to. The same 1.10.163 boundary as
+// runtimePreferenceForGame, plus the Anniversary Edition's 1.11.
+Fo4Build fo4BuildOfVersion(const pe_info::Version &v)
+{
+    if (!v.valid) return Fo4Build::Unknown;
+    const auto t = std::tuple(v.major, v.minor, v.build);
+    if (t <= std::tuple(1, 10, 163)) return Fo4Build::OldGen;
+    if (t <  std::tuple(1, 11, 0))   return Fo4Build::NextGen;
+    return Fo4Build::Anniversary;
+}
+
+} // namespace
+
+RuntimeChoice chooseRuntimeOption(const QStringList &names, const QString &gameId,
+                                  const pe_info::Version &gameVersion)
+{
+    RuntimeChoice out;
+
+    // Builds first, where the game has them and the names say which.
+    if (gameId.compare(QLatin1String("fallout4"), Qt::CaseInsensitive) == 0) {
+        const Fo4Build want = fo4BuildOfVersion(gameVersion);
+        unsigned covered = 0;
+        for (int i = 0; i < names.size(); ++i) {
+            const Fo4Build b = fo4BuildOfName(names[i]);
+            if (b == Fo4Build::Unknown) continue;
+            covered |= 1u << int(b);
+            if (b == want && out.pick < 0) out.pick = i;
+        }
+        if (std::popcount(covered) >= 2) {
+            out.offersRuntimes = true;
+            if (out.pick >= 0) return out;
+        }
+        out.pick = -1;   // one build named alone answers nothing
+    }
+
+    // Then the two sides. With no preference there is no verdict: the first
+    // name of side None - "None - install none of these" - is not a match.
+    const Runtime pref = runtimePreferenceForGame(gameId, gameVersion);
+    bool haveCur = false, haveLeg = false;
+    int  sideIdx = -1;
+    for (int i = 0; i < names.size(); ++i) {
+        const Runtime v = classifyRuntimeVariant(names[i], gameId);
+        haveCur |= (v == Runtime::Current);
+        haveLeg |= (v == Runtime::Legacy);
+        if (pref != Runtime::None && v == pref && sideIdx < 0) sideIdx = i;
+    }
+    if (haveCur && haveLeg) {
+        out.offersRuntimes = true;
+        out.pick = sideIdx;
+    }
+    return out;
 }
 
 
