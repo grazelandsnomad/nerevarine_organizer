@@ -104,10 +104,12 @@ FomodWizard::run(const QString &archiveRoot,
                  const QStringList &installedModNames,
                  const QString &gameId,
                  const QStringList &installedNexusUrls,
-                 const game_runtime::Probe &runtime)
+                 const game_runtime::Probe &runtime,
+                 const fomod::FileStateFn &fileState)
 {
     FomodWizard dlg(archiveRoot, parent);
     dlg.m_runtime           = runtime;
+    dlg.m_fileState         = fileState;
     dlg.m_priorChoices      = priorChoices;
     dlg.m_installedModNames = installedModNames;
     dlg.m_gameId            = gameId;
@@ -149,7 +151,8 @@ void FomodWizard::showAsync(
     std::function<void(const Decision &)> onDone,
     const QString &gameId,
     const QStringList &installedNexusUrls,
-    const game_runtime::Probe &runtime)
+    const game_runtime::Probe &runtime,
+    const fomod::FileStateFn &fileState)
 {
     auto *dlg = new FomodWizard(archiveRoot, parent);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
@@ -157,6 +160,7 @@ void FomodWizard::showAsync(
     dlg->m_installedModNames = installedModNames;
     dlg->m_gameId            = gameId;
     dlg->m_runtime           = runtime;
+    dlg->m_fileState         = fileState;
     dlg->m_installedNexusKeys = nexusKeys(installedNexusUrls);
 
     const bool parsed = dlg->parse();
@@ -582,13 +586,11 @@ bool FomodWizard::parse()
                             }
                         }
                         else if (nameIs("typeDescriptor")) {
-                            while (!xml.atEnd()) {
-                                xml.readNext();
-                                if (xml.tokenType() == QXmlStreamReader::EndElement && nameIs("typeDescriptor")) break;
-                                if (xml.tokenType() != QXmlStreamReader::StartElement) continue;
-                                if (nameIs("type"))
-                                    plugin.type = xml.attributes().value("name").toString();
-                            }
+                            // A plain <type>, or a <dependencyType> whose
+                            // patterns the plan answers against the profile.
+                            // Reading only the last <type> in it made every
+                            // conditional option "Recommended".
+                            fomod::readTypeDescriptor(xml, plugin);
                         }
                         else if (nameIs("conditionFlags")) {
                             while (!xml.atEnd()) {
@@ -637,21 +639,12 @@ bool FomodWizard::parse()
                         if (xml.tokenType() != QXmlStreamReader::StartElement) continue;
 
                         if (nameIs("dependencies")) {
-                            QString op = xml.attributes().value("operator").toString();
-                            if (!op.isEmpty()) pat.op = op;
-                            while (!xml.atEnd()) {
-                                xml.readNext();
-                                if (xml.tokenType() == QXmlStreamReader::EndElement && nameIs("dependencies")) break;
-                                if (xml.tokenType() != QXmlStreamReader::StartElement) continue;
-                                if (nameIs("flagDependency")) {
-                                    FomodFlagValue fv;
-                                    fv.name  = xml.attributes().value("flag").toString();
-                                    fv.value = xml.attributes().value("value").toString();
-                                    pat.flagDeps.append(fv);
-                                }
-                                // Only flagDependency handled; OpenMW FOMODs
-                                // don't use fileDependency / nested deps.
-                            }
+                            // The whole tree. A flat read stopped at the
+                            // first inner </dependencies> and dropped the
+                            // leaves after it: Necessity NG-AE's
+                            // And(And(build=ae, dlc=yes), prp=no) lost prp=no
+                            // and installed the PRP main files over the plain.
+                            pat.when = fomod::readDependencies(xml);
                         }
                         else if (nameIs("files")) {
                             while (!xml.atEnd()) {
@@ -831,6 +824,7 @@ void FomodWizard::buildUi()
     ctx.installedNexusKeys = m_installedNexusKeys;
     ctx.gameId             = m_gameId;
     ctx.runtime            = m_runtime;
+    ctx.fileState          = m_fileState;
     ctx.priorChoices       = m_priorChoices;
     const fomod::Plan plan = fomod::planSelections(m_steps, ctx);
     for (int si = 0; si < plan.size() && si < m_buttons.size(); ++si) {
@@ -847,9 +841,12 @@ void FomodWizard::buildUi()
                 if (!gp.exclusive || o.checked) btn->setChecked(o.checked);
                 for (const QString &note : o.notes) addNoteUnder(btn, note);
             }
-            if (gp.hasNone && gp.noneChecked)
-                if (QAbstractButton *none = noneButtons.value((quint64(si) << 16) | quint64(gi)))
-                    none->setChecked(true);
+            if (!gp.hasNone) continue;
+            if (QAbstractButton *none = noneButtons.value((quint64(si) << 16) | quint64(gi))) {
+                none->setText(none->text() + gp.noneBadge);
+                if (!gp.noneToolTip.isEmpty()) none->setToolTip(gp.noneToolTip);
+                if (gp.noneChecked) none->setChecked(true);
+            }
         }
     }
 
@@ -938,30 +935,12 @@ fomod_install::Plan FomodWizard::plannedInstall() const
         }
     }
 
-    // 3. conditionalFileInstalls - test each pattern against the active flags.
-    //    "And" (default): every flagDependency matches. "Or": at least one.
-    //    Zero flagDeps = always install (unconditional fallback).
+    // 3. conditionalFileInstalls - every pattern whose conditions hold against
+    //    the picks' flags and this profile's files and game version. Unknown
+    //    installs nothing; a pattern with no conditions always installs.
+    const fomod::Facts facts{m_fileState, m_runtime.game, activeFlags};
     for (const FomodPattern &pat : m_conditionalInstalls) {
-        bool satisfied = false;
-        if (pat.flagDeps.isEmpty()) {
-            satisfied = true;
-        } else if (pat.op.compare("Or", Qt::CaseInsensitive) == 0) {
-            for (const FomodFlagValue &dep : pat.flagDeps) {
-                if (activeFlags.value(dep.name) == dep.value) {
-                    satisfied = true;
-                    break;
-                }
-            }
-        } else { // "And" (default)
-            satisfied = true;
-            for (const FomodFlagValue &dep : pat.flagDeps) {
-                if (activeFlags.value(dep.name) != dep.value) {
-                    satisfied = false;
-                    break;
-                }
-            }
-        }
-        if (!satisfied) continue;
+        if (fomod::evaluate(pat.when, facts) != fomod::Truth::True) continue;
         add(pat.files,   false);
         add(pat.folders, true);
     }

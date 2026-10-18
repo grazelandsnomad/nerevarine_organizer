@@ -70,6 +70,26 @@ struct OptionFacts {
     QStringList       required;    // mods its description says it requires (Pass F)
 };
 
+// "a", "a and b", "a, b and c", "a, b, c and 3 more": the files a note names,
+// by file name - "F4SE\Plugins\RobCo_Patcher.dll" reads as RobCo_Patcher.dll.
+QString fileList(const QStringList &paths)
+{
+    QStringList names;
+    for (QString p : paths) {
+        p.replace(QLatin1Char('\\'), QLatin1Char('/'));
+        names << p.section(QLatin1Char('/'), -1);
+    }
+    names.removeDuplicates();
+    if (names.size() > 4) {
+        const qsizetype more = names.size() - 3;
+        return names.mid(0, 3).join(QStringLiteral(", "))
+             + QStringLiteral(" and %1 more").arg(more);
+    }
+    if (names.size() <= 1) return names.value(0);
+    const QString last = names.takeLast();
+    return names.join(QStringLiteral(", ")) + QStringLiteral(" and ") + last;
+}
+
 } // namespace
 
 Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
@@ -77,10 +97,20 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
     // The installer's own defaults, as the buttons were born with them. A radio
     // group keeps the last default-on option, as Qt does when several are set
     // in turn.
+    //
+    // An option's type may depend on the setup - "Recommended when
+    // 3DNPC_FO4.esp is active" - and is answered here, page by page: the
+    // profile's files and the game's version from ctx, and the flags the
+    // earlier pages raise with the options they start on, as a page's
+    // conditions can only ask about the pages before it (fomod_conditions.h).
     Plan plan;
     plan.resize(steps.size());
+    QList<QList<QList<TypeVerdict>>> verdicts;   // [si][gi][pi]
+    verdicts.resize(steps.size());
+    Facts conditionFacts{ctx.fileState, ctx.runtime.game, {}};
     for (int si = 0; si < steps.size(); ++si) {
         plan[si].resize(steps[si].groups.size());
+        verdicts[si].resize(steps[si].groups.size());
         for (int gi = 0; gi < steps[si].groups.size(); ++gi) {
             const FomodGroup &group = steps[si].groups[gi];
             GroupPlan &gp = plan[si][gi];
@@ -94,9 +124,11 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
             bool anyChecked = false;
             for (int pi = 0; pi < group.plugins.size(); ++pi) {
                 const FomodPlugin &plugin = group.plugins[pi];
-                const bool required    = (plugin.type == "Required");
-                const bool notUsable   = (plugin.type == "NotUsable");
-                const bool recommended = (plugin.type == "Recommended");
+                const TypeVerdict verdict = resolveType(plugin, conditionFacts);
+                verdicts[si][gi].append(verdict);
+                const bool required    = (verdict.type == "Required");
+                const bool notUsable   = (verdict.type == "NotUsable");
+                const bool recommended = (verdict.type == "Recommended");
 
                 OptionPlan o;
                 o.text    = plugin.name;
@@ -117,6 +149,53 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
                 Option(&gp, pi).setChecked(defaultOn);
             }
             gp.noneChecked = gp.hasNone && !anyChecked;
+        }
+        // What this page raises with the options it starts on, for the pages
+        // after it. A later page's flag of the same name wins, as it would
+        // at install.
+        for (int gi = 0; gi < steps[si].groups.size(); ++gi) {
+            const FomodGroup &group = steps[si].groups[gi];
+            for (int pi = 0; pi < group.plugins.size(); ++pi)
+                if (plan[si][gi].options[pi].checked)
+                    for (const FomodFlagValue &fv : group.plugins[pi].conditionFlags)
+                        conditionFacts.flags.insert(fv.name, fv.value);
+        }
+    }
+
+    // Where the installer stated a condition and this profile answered it.
+    // An option whose verdict came from a file or the game's version; an
+    // exclusive group that starts on such an option recommended, or on
+    // "None" with every option so decided. The installer knows its own
+    // options better than a name match does, so the name passes (B to H)
+    // leave these alone - an exclusive group once ANY option in it is
+    // decided - and a stored pick does not overrule them.
+    const auto decidedOption = [&](int si, int gi, int pi) {
+        return verdicts[si][gi][pi].fromFacts;
+    };
+    QSet<quint64> decidedGroups;   // (si<<16)|gi: the group's start is the installer's answer
+    QSet<quint64> touchedGroups;   // (si<<16)|gi: an exclusive group with a decided option
+    for (int si = 0; si < steps.size(); ++si) {
+        for (int gi = 0; gi < steps[si].groups.size(); ++gi) {
+            const GroupPlan &gp = plan[si][gi];
+            if (!gp.exclusive || gp.options.isEmpty()) continue;
+            const quint64 groupKey = (quint64(si) << 16) | quint64(gi);
+            bool anyDecided = false, allDecided = true;
+            int  pick = -1;
+            for (int pi = 0; pi < gp.options.size(); ++pi) {
+                if (decidedOption(si, gi, pi)) anyDecided = true;
+                else                           allDecided = false;
+                if (gp.options[pi].checked) pick = pi;
+            }
+            if (!anyDecided) continue;
+            touchedGroups.insert(groupKey);
+            bool decided = gp.noneChecked && allDecided;
+            if (pick >= 0) {
+                const QString &type = verdicts[si][gi][pick].type;
+                decided = decidedOption(si, gi, pick)
+                       && (type == QLatin1String("Recommended")
+                           || type == QLatin1String("Required"));
+            }
+            if (decided) decidedGroups.insert(groupKey);
         }
     }
 
@@ -177,9 +256,10 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
     // Exclusive groups whose pick is a fact, not a preference, so a choice
     // stored from an earlier install must not put the old pick back: the
     // engine this manager runs (Pass A), the language it reads (A2), the
-    // game's own runtime (A3), and what the modlist holds (G, H). Key:
-    // (si<<16)|gi. Named for the first of them, OpenMW, until there were five.
-    QSet<quint64> settledGroups;
+    // game's own runtime (A3), what the modlist holds (G, H), and what the
+    // installer's own conditions answered (decidedGroups). Key: (si<<16)|gi.
+    // Named for the first of them, OpenMW, until there were six.
+    QSet<quint64> settledGroups = decidedGroups;
     // Checkbox plugins Pass C auto-recommends because the named mod is present.
     // Key: (si<<32)|(gi<<16)|pi. Prior-choices block ORs this in so a Recommended
     // checkbox isn't unticked just because an earlier install left it off.
@@ -189,8 +269,17 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
     // same key, value = the tick that was forced. Whether a mod is installed
     // is a fact about this profile, not a preference, so a choice stored from
     // an earlier install of this same FOMOD must not put the old tick back:
-    // the modlist it was made against is gone.
+    // the modlist it was made against is gone. The installer's own
+    // conditions settle a checkbox the same way.
     QHash<quint64, bool> modlistSettledPlugins;
+    for (int si = 0; si < steps.size(); ++si)
+        for (int gi = 0; gi < steps[si].groups.size(); ++gi) {
+            if (plan[si][gi].exclusive) continue;
+            for (int pi = 0; pi < plan[si][gi].options.size(); ++pi)
+                if (decidedOption(si, gi, pi) && plan[si][gi].options[pi].enabled)
+                    modlistSettledPlugins.insert(fomod_choices::key(si, gi, pi),
+                                                 plan[si][gi].options[pi].checked);
+        }
 
     {
         // (si,gi) pairs with a stored selection. Pass B annotates but doesn't
@@ -388,6 +477,10 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
                         }
                     }
 
+                    // The installer asked its own question here and the
+                    // profile answered it: a name match has nothing to add.
+                    if (touchedGroups.contains(groupKey)) continue;
+
                     // Pass B: Yes/No groups - check modlist presence.
                     int yesIdx = -1, noIdx = -1;
                     for (int pi = 0; pi < group.plugins.size(); ++pi) {
@@ -515,6 +608,9 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
                         // as a needle finds "OpenMW Quest Menu" and would
                         // announce that the mod is present.
                         if (engineOpts.contains(pi)) continue;
+                        // Nor is a name worth matching where the installer's
+                        // own condition already answered (Pass I).
+                        if (decidedOption(si, gi, pi)) continue;
 
                         const QString pluginName = group.plugins[pi].name.trimmed();
                         if (pluginName.length() < 4) continue;
@@ -623,6 +719,7 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
                     Option *btn = buttons[si][gi][pi];
                     if (!btn || !btn->isEnabled()) continue;
                     if (btn->isChecked()) continue;  // already on (Pass C)
+                    if (decidedOption(si, gi, pi)) continue;   // the installer's call
                     btn->setChecked(true);
                     btn->setText(btn->text() +
                         QStringLiteral(" \u2705 Patch hub - default ON. "
@@ -687,6 +784,8 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
                     // negated name elsewhere is safest left alone.
                     if (!facts[si][gi][pi].negatedMod.isEmpty())
                         continue;
+                    // The installer's own condition answered this one.
+                    if (decidedOption(si, gi, pi)) continue;
 
                     Option *btn = buttons[si][gi][pi];
                     if (!btn) continue;
@@ -791,6 +890,8 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
                 const FomodGroup &group = step.groups[gi];
                 if (group.type != QLatin1String("SelectExactlyOne")
                     && group.type != QLatin1String("SelectAtMostOne")) continue;
+                // The installer's own conditions cover this group (Pass I).
+                if (touchedGroups.contains((quint64(si) << 16) | quint64(gi))) continue;
 
                 QStringList names;
                 names.reserve(group.plugins.size());
@@ -892,6 +993,30 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
                     // prior-choices block must not undo it.
                     settledGroups.insert((quint64(si) << 16) | quint64(gi));
                 }
+
+                // Nothing named here is installed, the group offers no way
+                // out of its own, and the installer's pick is one of the
+                // missing - a patch for 3DNPC on a list without 3DNPC. A
+                // SelectAtMostOne group still has a way out: the wizard's own
+                // "None" radio, which used to go unconsidered while the
+                // missing pick stood under its own warning.
+                GroupPlan &gp = plan[si][gi];
+                if (choice.index < 0 && !choice.anyInstalled && gp.hasNone
+                    && !gp.noneChecked) {
+                    int cur = -1;
+                    for (int pi = 0; pi < gp.options.size(); ++pi)
+                        if (gp.options[pi].checked) cur = pi;
+                    if (cur >= 0 && choice.states.value(cur) == St::Missing) {
+                        for (OptionPlan &o : gp.options) o.checked = false;
+                        gp.noneChecked = true;
+                        gp.noneBadge   = QStringLiteral(" \u2705 Recommended");
+                        gp.noneToolTip = QStringLiteral(
+                            "The installer's pick, %1, is for a mod that is not "
+                            "in your mod list. Pick an option here only if you "
+                            "are about to install its mod.").arg(names[cur]);
+                        settledGroups.insert((quint64(si) << 16) | quint64(gi));
+                    }
+                }
             }
         }
 
@@ -913,6 +1038,8 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
                 const FomodGroup &group = step.groups[gi];
                 if (group.type != QLatin1String("SelectExactlyOne")
                     && group.type != QLatin1String("SelectAtMostOne")) continue;
+                // The installer's own conditions cover this group (Pass I).
+                if (touchedGroups.contains((quint64(si) << 16) | quint64(gi))) continue;
 
                 QStringList names;
                 names.reserve(group.plugins.size());
@@ -1021,6 +1148,9 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
                     // mentions X in its prose is not an option FOR X.
                     if (!facts[si][gi][pi].negatedMod.isEmpty())
                         continue;
+                    // The installer's own condition answered this one: its
+                    // file says more than a name read out of the prose.
+                    if (decidedOption(si, gi, pi)) continue;
 
                     const QStringList &needed = facts[si][gi][pi].required;
                     if (needed.isEmpty()) continue;
@@ -1076,6 +1206,71 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
                 }
             }
         }
+
+        // Pass I: the installer's own conditions, said out loud.
+        //
+        // Necessity NG-AE's Bunker Hill fix comes in three versions, each
+        // recommended when its mod's plugin is active. On a list with none of
+        // them the defaults above start the group on "None" - right, and
+        // silent: the options look as available as ever, and nothing says
+        // why the wizard set the installer's usual pick aside. So:
+        //   - an option they recommend, and that is picked, wears the tick,
+        //     with what it was recommended for under it;
+        //   - one they hold back for a file this profile lacks names the
+        //     file - under it in a radio group, where it is one of a few, in
+        //     its tooltip in a checkbox list, where a line under every patch
+        //     would bury the page;
+        //   - a group they leave on "None" says that is the recommendation.
+        // An option a fact pass already ticked (A3's runtime) keeps its words.
+        for (int si = 0; si < steps.size(); ++si) {
+            for (int gi = 0; gi < steps[si].groups.size(); ++gi) {
+                GroupPlan &gp = plan[si][gi];
+                for (int pi = 0; pi < gp.options.size(); ++pi) {
+                    const TypeVerdict &v = verdicts[si][gi][pi];
+                    if (!v.fromFacts) continue;
+                    OptionPlan &o = gp.options[pi];
+                    if (v.type == QLatin1String("Recommended")) {
+                        if (!o.checked || o.text.contains(QStringLiteral("\u2705")))
+                            continue;
+                        o.text += QStringLiteral(" \u2705 Recommended");
+                        QString why = QStringLiteral("it matches your setup.");
+                        if (v.pattern >= 0 && !v.found.isEmpty())
+                            why = QStringLiteral("you have %1.").arg(fileList(v.found));
+                        else if (v.pattern >= 0 && v.byGame && ctx.runtime.game.valid)
+                            why = QStringLiteral("your game is version %1.")
+                                      .arg(ctx.runtime.game.shortString());
+                        else if (v.pattern < 0 && !v.lacked.isEmpty())
+                            why = QStringLiteral("%1 %2 not installed.")
+                                      .arg(fileList(v.lacked),
+                                           v.lacked.size() == 1 ? QStringLiteral("is")
+                                                                : QStringLiteral("are"));
+                        o.notes << QStringLiteral("Recommended by the installer: ") + why;
+                    } else if (!v.lackedToRecommend.isEmpty()
+                               && v.type != QLatin1String("Required")) {
+                        const QString files = fileList(v.lackedToRecommend);
+                        if (gp.exclusive) {
+                            o.notes << QStringLiteral("Needs %1 - not installed.").arg(files);
+                        } else {
+                            o.toolTip = (o.toolTip.isEmpty()
+                                             ? QString()
+                                             : o.toolTip + QStringLiteral("\n\n"))
+                                + QStringLiteral("The installer recommends this only "
+                                                 "with %1, which %2 not installed.")
+                                      .arg(files, v.lackedToRecommend.size() == 1
+                                                      ? QStringLiteral("is")
+                                                      : QStringLiteral("are"));
+                        }
+                    }
+                }
+                if (gp.hasNone && gp.noneChecked && gp.noneBadge.isEmpty()
+                    && decidedGroups.contains((quint64(si) << 16) | quint64(gi))) {
+                    gp.noneBadge   = QStringLiteral(" \u2705 Recommended");
+                    gp.noneToolTip = QStringLiteral(
+                        "None of these options is for your setup: the files "
+                        "they are for are not installed.");
+                }
+            }
+        }
     }
 
     // Apply prior choices over the defaults above: the picks fomod_choices
@@ -1104,6 +1299,14 @@ Plan planSelections(const QList<FomodStep> &steps, const PlanContext &ctx)
                 if (exclusive) {
                     for (int pi = 0; pi < group.plugins.size() && pi < buttons[si][gi].size(); ++pi) {
                         Option *btn = buttons[si][gi][pi];
+                        // Never back onto an option the installer recommends
+                        // only with files this profile lacks: the pick was
+                        // made against a list that had them.
+                        const TypeVerdict &v = verdicts[si][gi][pi];
+                        if (v.fromFacts && !v.lackedToRecommend.isEmpty()
+                            && v.type != QLatin1String("Recommended")
+                            && v.type != QLatin1String("Required"))
+                            continue;
                         if (btn->isEnabled() && priorSet.contains(encode(si, gi, pi))) {
                             btn->setChecked(true);
                             break;

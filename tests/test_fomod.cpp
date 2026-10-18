@@ -11,6 +11,7 @@
 #include "fomod_scripts.h"
 #include "fomod_install.h"
 #include "fomod_plan.h"
+#include "fomod_facts.h"
 #include "fs_progress.h"
 #include "install_job.h"
 #include "bain.h"
@@ -37,6 +38,7 @@
 #include <QString>
 #include <QTemporaryDir>
 #include <QWidget>
+#include <QXmlStreamReader>
 
 #include <iostream>
 #include <type_traits>
@@ -2525,6 +2527,13 @@ struct FomodWizardTestHook {
     { w->m_requiredFiles = files; w->m_requiredFolders = folders; }
     static void setPatterns(FomodWizard *w, const QList<FomodPattern> &p)
     { w->m_conditionalInstalls = p; }
+    // For a wizard made with make() and parseInto(): what showAsync would
+    // have handed it, then the dialog.
+    static void setFacts(FomodWizard *w, const QString &gameId,
+                         const game_runtime::Probe &runtime,
+                         const fomod::FileStateFn &fileState)
+    { w->m_gameId = gameId; w->m_runtime = runtime; w->m_fileState = fileState; }
+    static void buildParsed(FomodWizard *w) { w->buildUi(); }
 };
 
 static FomodPlugin wizardui_mkPlugin(const QString &name, const QString &type = "Optional")
@@ -3514,11 +3523,21 @@ static void wizardui_testPlanFollowsTheButtons()
         {}, {}, {}, QStringLiteral("/tmp/nrv_plan_test"));
     FomodWizardTestHook::setRequired(w, { {"Core/Mod.esp", "", 0} },
                                         { {"Core/meshes", "meshes", 0} });
+    // <dependencies operator="And"><flagDependency flag= value=/></dependencies>
+    const auto flagIs = [](const QString &flag, const QString &value) {
+        FomodCondition leaf;
+        leaf.kind    = FomodCondition::Kind::Flag;
+        leaf.subject = flag;
+        leaf.value   = value;
+        FomodCondition all;
+        all.children = {leaf};
+        return all;
+    };
     FomodPattern needsHd;
-    needsHd.flagDeps = { {"hd", "On"} };
+    needsHd.when  = flagIs("hd", "On");
     needsHd.files = { {"Extras/hd_normals.esp", "", 0} };
     FomodPattern needsSd;
-    needsSd.flagDeps = { {"sd", "On"} };
+    needsSd.when  = flagIs("sd", "On");
     needsSd.files = { {"Extras/sd_only.esp", "", 0} };
     FomodWizardTestHook::setPatterns(w, {needsHd, needsSd});
 
@@ -4363,6 +4382,647 @@ static void run_bain_wizard_ui()
     std::cout << "\n";
 }
 
+// --- The installer's own conditions --------------------------------------
+//
+// Necessity NG-AE (Fallout 4) states most of its choices as conditions: each
+// Bunker Hill fix version "Recommended when" its mod's plugin is active, each
+// patch when its plugin is, the DLC choice by the six DLC masters, the build
+// by the game version. The wizard read only the last <type> in each, so all
+// three Bunker Hill versions came out "Recommended" and the last one stood
+// on a list with neither mod.
+
+static FomodCondition cond_leaf(FomodCondition::Kind kind, const QString &subject,
+                                const QString &value)
+{
+    FomodCondition c;
+    c.kind    = kind;
+    c.subject = subject;
+    c.value   = value;
+    return c;
+}
+
+static FomodCondition cond_file(const QString &file, const QString &state = "Active")
+{ return cond_leaf(FomodCondition::Kind::File, file, state); }
+
+static FomodCondition cond_flag(const QString &flag, const QString &value)
+{ return cond_leaf(FomodCondition::Kind::Flag, flag, value); }
+
+static FomodCondition cond_game(const QString &version)
+{ return cond_leaf(FomodCondition::Kind::Game, {}, version); }
+
+static FomodCondition cond_all(const QList<FomodCondition> &children)
+{
+    FomodCondition c;
+    c.kind     = FomodCondition::Kind::All;
+    c.children = children;
+    return c;
+}
+
+static FomodCondition cond_any(const QList<FomodCondition> &children)
+{
+    FomodCondition c = cond_all(children);
+    c.kind = FomodCondition::Kind::Any;
+    return c;
+}
+
+// An option of type `type` that takes each pattern's type while it holds.
+static FomodPlugin cond_plugin(const QString &name, const QString &type,
+                               const QList<FomodTypePattern> &patterns = {},
+                               const QList<FomodFlagValue> &flags = {})
+{
+    FomodPlugin p;
+    p.name           = name;
+    p.type           = type;
+    p.typePatterns   = patterns;
+    p.conditionFlags = flags;
+    return p;
+}
+
+// A profile holding exactly `active`, and everything else missing.
+static fomod::FileStateFn cond_have(const QStringList &active)
+{
+    QSet<QString> set;
+    for (QString a : active) set.insert(a.replace(QLatin1Char('\\'), QLatin1Char('/')).toLower());
+    return [set](const QString &path) -> std::optional<fomod::FileState> {
+        QString k = path;
+        k.replace(QLatin1Char('\\'), QLatin1Char('/'));
+        return set.contains(k.toLower()) ? fomod::FileState::Active
+                                         : fomod::FileState::Missing;
+    };
+}
+
+static game_runtime::Probe cond_fallout4(int major, int minor, int build)
+{
+    game_runtime::Probe rt;
+    rt.game.major = major; rt.game.minor = minor; rt.game.build = build;
+    rt.game.valid = true;
+    rt.extenderPresent = true;
+    return rt;
+}
+
+static FomodGroup cond_group(const QString &name, const QString &type,
+                             const QList<FomodPlugin> &plugins)
+{
+    FomodGroup g;
+    g.name    = name;
+    g.type    = type;
+    g.plugins = plugins;
+    return g;
+}
+
+// Necessity NG-AE as it reads, cut to what each shape needs: its first page
+// (build, DLC, previs), the plugin variant, the Bunker Hill fix and three
+// patches. Steps 0 to 3.
+static QList<FomodStep> cond_necessity()
+{
+    const QString rec = QStringLiteral("Recommended"), opt = QStringLiteral("Optional");
+    const FomodCondition dlcs = cond_all({cond_file("DLCRobot.esm"), cond_file("DLCCoast.esm")});
+    const FomodCondition prp  = cond_all({cond_file("prp.esp")});
+
+    FomodStep game;
+    game.name = "Game and DLC";
+    game.groups = {
+        cond_group("Game Version", "SelectExactlyOne", {
+            cond_plugin("Next-Gen (1.10.984)", opt,
+                        {{cond_all({cond_game("1.11.0.0")}), opt},
+                         {cond_all({cond_game("1.10.980.0")}), rec}},
+                        {{"build", "ae"}, {"game", "ng"}}),
+            cond_plugin("Anniversary (1.11.x)", opt,
+                        {{cond_all({cond_game("1.11.0.0")}), rec}},
+                        {{"build", "ae"}, {"game", "ae"}})}),
+        cond_group("DLC", "SelectExactlyOne", {
+            cond_plugin("All DLC", opt, {{dlcs, rec}}, {{"dlc", "yes"}}),
+            cond_plugin("No DLC", rec, {{dlcs, opt}}, {{"dlc", "no"}})}),
+        cond_group("Previs and Precombines", "SelectExactlyOne", {
+            cond_plugin("Standard", rec, {{prp, opt}}, {{"prp", "no"}}),
+            cond_plugin("PRP", opt, {{prp, rec}}, {{"prp", "yes"}})}),
+    };
+
+    FomodStep plugin;
+    plugin.name = "Plugin Version";
+    plugin.groups = {cond_group("Plugin Version", "SelectExactlyOne", {
+        cond_plugin("Standard", rec, {}, {{"runtime", "std"}}),
+        cond_plugin("RobCo Patcher", opt,
+                    {{cond_all({cond_file("F4SE\\Plugins\\RobCo_Patcher.dll")}), rec}},
+                    {{"runtime", "robco"}}),
+        cond_plugin("SPID", opt, {}, {{"runtime", "spid"}})})};
+
+    FomodStep addons;
+    addons.name = "Add-ons";
+    addons.groups = {cond_group("Bunker Hill CTD Fix - Alternate Versions", "SelectAtMostOne", {
+        cond_plugin("3DNPC", opt, {{cond_all({cond_file("3DNPC_FO4.esp")}), rec}}),
+        cond_plugin("Scrap Everything", opt,
+                    {{cond_all({cond_file("ScrapEverything.esp")}), rec}}),
+        cond_plugin("3DNPC + Scrap Everything", opt,
+                    {{cond_all({cond_file("3DNPC_FO4.esp"),
+                                cond_file("ScrapEverything.esp")}), rec}})})};
+
+    FomodStep patches;
+    patches.name = "Patches";
+    patches.groups = {cond_group("Patches", "SelectAny", {
+        cond_plugin("FROST - Lootable and Locked Cars", opt,
+                    {{cond_any({cond_all({cond_flag("build", "ae"), cond_flag("dlc", "no")})}),
+                      "NotUsable"},
+                     {cond_all({cond_file("FROST - LootableCars.esp")}), rec}}),
+        cond_plugin("Unofficial Fallout 4 Patch", opt,
+                    {{cond_all({cond_file("Unofficial Fallout 4 Patch.esp")}), rec}}),
+        cond_plugin("Midnight Cult Fix - EXT", opt)})};
+
+    return {game, plugin, addons, patches};
+}
+
+static void conditions_testReader()
+{
+    std::cout << "\n[fomod_conditions: reading <dependencies> and <typeDescriptor>]\n";
+    using K = FomodCondition::Kind;
+    const auto read = [](const QString &xml) {
+        QXmlStreamReader r(xml);
+        r.readNextStartElement();
+        return fomod::readDependencies(r);
+    };
+
+    // Necessity's main files: the leaf after the inner block is the one a
+    // flat read lost.
+    const FomodCondition main = read(
+        "<dependencies operator=\"And\">"
+        "  <dependencies operator=\"And\">"
+        "    <flagDependency flag=\"build\" value=\"ae\"/>"
+        "    <flagDependency flag=\"dlc\" value=\"yes\"/>"
+        "  </dependencies>"
+        "  <flagDependency flag=\"prp\" value=\"no\"/>"
+        "</dependencies>");
+    check("a nested block reads as a child",
+          main.kind == K::All && main.children.size() == 2
+              && main.children[0].kind == K::All && main.children[0].children.size() == 2);
+    check("and the leaf after it survives",
+          main.children[1].kind == K::Flag && main.children[1].subject == "prp"
+              && main.children[1].value == "no");
+
+    const FomodCondition any = read(
+        "<dependencies operator=\"Or\">"
+        "<fileDependency file=\"3DNPC_FO4.esp\" state=\"Missing\"/>"
+        "<fileDependency file=\"x.esp\"/>"
+        "<gameDependency version=\"1.11.0.0\"/>"
+        "<fommDependency version=\"0.13.21\"/>"
+        "<foseDependency version=\"1.2\"/>"
+        "</dependencies>");
+    check("Or reads as Any, with every leaf",
+          any.kind == K::Any && any.children.size() == 5, QString::number(any.children.size()));
+    check("a file and the state it asks for",
+          any.children[0].kind == K::File && any.children[0].subject == "3DNPC_FO4.esp"
+              && any.children[0].value == "Missing");
+    check("a file without a state asks for Active", any.children[1].value == "Active");
+    check("the game version",
+          any.children[2].kind == K::Game && any.children[2].value == "1.11.0.0");
+    check("the manager version", any.children[3].kind == K::Manager);
+    check("a leaf it does not know stays Other", any.children[4].kind == K::Other);
+
+    // A type depending on the game version, as Necessity's Next-Gen option
+    // has it; the patterns keep their order, which decides.
+    QXmlStreamReader r(QStringLiteral(
+        "<plugin><TypeDescriptor><dependencyType>"
+        "<defaultType name=\"Optional\"/>"
+        "<patterns>"
+        "<pattern><dependencies operator=\"And\"><gameDependency version=\"1.11.0.0\"/>"
+        "</dependencies><type name=\"Optional\"/></pattern>"
+        "<pattern><dependencies operator=\"And\"><gameDependency version=\"1.10.980.0\"/>"
+        "</dependencies><type name=\"Recommended\"/></pattern>"
+        "</patterns></dependencyType></TypeDescriptor><after/></plugin>"));
+    r.readNextStartElement();   // <plugin>
+    r.readNextStartElement();   // <TypeDescriptor>
+    FomodPlugin p;
+    fomod::readTypeDescriptor(r, p);
+    check("the default type is the type", p.type == "Optional", p.type);
+    check("both patterns, in order",
+          p.typePatterns.size() == 2 && p.typePatterns[0].type == "Optional"
+              && p.typePatterns[1].type == "Recommended");
+    check("each with its condition",
+          p.typePatterns.size() == 2
+              && p.typePatterns[1].when.children.value(0).value == "1.10.980.0");
+    check("and the reader stops at its own end",
+          r.readNextStartElement() && r.name() == QLatin1String("after"));
+
+    QXmlStreamReader plain(QStringLiteral(
+        "<typeDescriptor><type name=\"Recommended\"/></typeDescriptor>"));
+    plain.readNextStartElement();
+    FomodPlugin q;
+    fomod::readTypeDescriptor(plain, q);
+    check("a plain type has no patterns", q.type == "Recommended" && q.typePatterns.isEmpty());
+}
+
+static void conditions_testEvaluate()
+{
+    std::cout << "\n[fomod_conditions: three answers]\n";
+    using fomod::Truth;
+    fomod::Facts f;
+    f.file = [](const QString &path) -> std::optional<fomod::FileState> {
+        if (path == "here.esp")  return fomod::FileState::Active;
+        if (path == "off.esp")   return fomod::FileState::Inactive;
+        if (path == "gone.esp")  return fomod::FileState::Missing;
+        return std::nullopt;   // cannot be known
+    };
+    f.game  = cond_fallout4(1, 11, 240).game;
+    f.flags = {{"dlc", "yes"}};
+
+    const auto ev = [&](const FomodCondition &c) { return fomod::evaluate(c, f); };
+    check("an active file is active", ev(cond_file("here.esp")) == Truth::True);
+    check("an inactive one is not active", ev(cond_file("off.esp")) == Truth::False);
+    check("but is Inactive", ev(cond_file("off.esp", "Inactive")) == Truth::True);
+    check("a missing one is Missing", ev(cond_file("gone.esp", "Missing")) == Truth::True);
+    check("a file nobody can see is Unknown", ev(cond_file("who.esp")) == Truth::Unknown);
+    check("so is every file without facts",
+          fomod::evaluate(cond_file("here.esp"), fomod::Facts{}) == Truth::Unknown);
+
+    check("a flag as set", ev(cond_flag("dlc", "yes")) == Truth::True);
+    check("a flag set otherwise", ev(cond_flag("dlc", "no")) == Truth::False);
+    check("a flag nobody raised reads as empty", ev(cond_flag("prp", "")) == Truth::True);
+
+    check("1.11.240 is at least 1.11.0.0", ev(cond_game("1.11.0.0")) == Truth::True);
+    check("and at least 1.10.980.0", ev(cond_game("1.10.980.0")) == Truth::True);
+    check("but not 1.12", ev(cond_game("1.12.0.0")) == Truth::False);
+    check("a version that is not one is Unknown", ev(cond_game("next")) == Truth::Unknown);
+    fomod::Facts noGame = f;
+    noGame.game = {};
+    check("an unread game is Unknown",
+          fomod::evaluate(cond_game("1.11.0.0"), noGame) == Truth::Unknown);
+    check("a manager version always holds",
+          ev(cond_leaf(FomodCondition::Kind::Manager, {}, "9.9")) == Truth::True);
+
+    const FomodCondition yes = cond_file("here.esp"), no = cond_file("gone.esp"),
+                         dunno = cond_file("who.esp");
+    check("And: one false is false", ev(cond_all({no, dunno})) == Truth::False);
+    check("And: unknown otherwise", ev(cond_all({yes, dunno})) == Truth::Unknown);
+    check("Or: one true is true", ev(cond_any({yes, dunno})) == Truth::True);
+    check("Or: unknown otherwise", ev(cond_any({no, dunno})) == Truth::Unknown);
+    check("an empty And holds", ev(cond_all({})) == Truth::True);
+    check("an empty Or does not", ev(cond_any({})) == Truth::False);
+}
+
+static void conditions_testResolveType()
+{
+    std::cout << "\n[fomod_conditions: the type an option takes here]\n";
+    const QList<FomodStep> n = cond_necessity();
+    const FomodPlugin &nextGen  = n[0].groups[0].plugins[0];
+    const FomodPlugin &standard = n[0].groups[2].plugins[0];
+    const FomodPlugin &both     = n[2].groups[0].plugins[2];
+
+    fomod::Facts ae;
+    ae.game = cond_fallout4(1, 11, 240).game;
+    ae.file = cond_have({"3DNPC_FO4.esp"});
+
+    // The first pattern that holds decides: on 1.11 Next-Gen is Optional,
+    // though 1.11 is past 1.10.980 too.
+    fomod::TypeVerdict v = fomod::resolveType(nextGen, ae);
+    check("Next-Gen on 1.11.240 is Optional, by its first pattern",
+          v.type == "Optional" && v.pattern == 0 && v.fromFacts && v.byGame);
+    fomod::Facts ng = ae;
+    ng.game = cond_fallout4(1, 10, 984).game;
+    v = fomod::resolveType(nextGen, ng);
+    check("on 1.10.984 its second pattern makes it Recommended",
+          v.type == "Recommended" && v.pattern == 1);
+    fomod::Facts unread = ae;
+    unread.game = {};
+    v = fomod::resolveType(nextGen, unread);
+    check("an unread version skips both: the default, and no fact",
+          v.type == "Optional" && v.pattern == -1 && !v.fromFacts);
+
+    v = fomod::resolveType(both, ae);
+    check("3DNPC + Scrap Everything with only 3DNPC: the default",
+          v.type == "Optional" && v.pattern == -1 && v.fromFacts);
+    check("lacking what the recommending pattern asked for",
+          v.lackedToRecommend == QStringList{"ScrapEverything.esp"},
+          v.lackedToRecommend.join(", "));
+
+    v = fomod::resolveType(standard, ae);
+    check("Standard without prp.esp: its default, Recommended",
+          v.type == "Recommended" && v.pattern == -1 && v.fromFacts);
+    check("for want of prp.esp", v.lacked == QStringList{"prp.esp"}, v.lacked.join(", "));
+    check("which no recommending pattern asked for", v.lackedToRecommend.isEmpty());
+
+    // An Unknown pattern never decides, and spoils the verdict as a fact.
+    const FomodPlugin odd = cond_plugin("Odd", "Optional", {
+        {cond_all({cond_leaf(FomodCondition::Kind::Other, "foseDependency", "1")}), "NotUsable"},
+        {cond_all({cond_file("3DNPC_FO4.esp")}), "Recommended"}});
+    v = fomod::resolveType(odd, ae);
+    check("an Unknown pattern is skipped",
+          v.type == "Recommended" && v.pattern == 1 && !v.fromFacts);
+    check("a plain type is just that",
+          !fomod::resolveType(cond_plugin("P", "Recommended"), ae).fromFacts
+              && fomod::resolveType(cond_plugin("P", "Recommended"), ae).type == "Recommended");
+}
+
+static void conditions_testFacts()
+{
+    std::cout << "\n[fomod_facts: what the profile holds]\n";
+    using fomod::FileState;
+    QTemporaryDir tmp;
+    const QString a = tmp.filePath("mods/A"), b = tmp.filePath("mods/B"),
+                  data = tmp.filePath("game/Data");
+    writeFile(a + "/Mod.ESP");
+    writeFile(a + "/light.esl");
+    writeFile(a + "/Optional/Deep.esp");         // deploys to Data/Optional/: never loads
+    writeFile(b + "/F4SE/Plugins/RobCo_Patcher.dll");
+    writeFile(data + "/DLCRobot.esm");
+    writeFile(data + "/Stale.esp");              // deployed from a mod since unticked
+    writeFile(data + "/F4SE/Plugins/Manual.dll");
+    writeFile(data + "/F4SE/Plugins/Linked.dll");
+
+    fomod_facts::Profile p;
+    p.layout   = fomod_facts::Profile::Layout::DataFolder;
+    p.modRoots = {a, b};
+    p.dataDir  = data;
+    p.deployed = {"stale.esp", "f4se/plugins/linked.dll"};
+    const fomod::FileStateFn fs = fomod_facts::fileState(p);
+    const auto is = [&](const QString &path, std::optional<FileState> want) {
+        return fs(path) == want;
+    };
+    check("a plugin at a mod's root, any case", is("mod.esp", FileState::Active));
+    check("an .esl too", is("LIGHT.ESL", FileState::Active));
+    check("not one below the root", is("Deep.esp", FileState::Missing));
+    check("the game's own master", is("DLCRobot.esm", FileState::Active));
+    check("not a stale deployed link", is("Stale.esp", FileState::Missing));
+    check("a DLL under a mod, by a Windows path in other case",
+          is("f4se\\plugins\\robco_patcher.dll", FileState::Active));
+    check("one put in Data/ by hand", is("F4SE/Plugins/Manual.dll", FileState::Active));
+    check("not one this manager deployed", is("F4SE/Plugins/Linked.dll", FileState::Missing));
+    check("and nothing else", is("3DNPC_FO4.esp", FileState::Missing));
+
+    fomod_facts::Profile holed = p;
+    holed.complete = false;
+    const fomod::FileStateFn partial = fomod_facts::fileState(holed);
+    check("a hole in the picture: found is still found",
+          partial("Mod.esp") == std::optional(FileState::Active));
+    check("but not found is not known", !partial("3DNPC_FO4.esp").has_value());
+    fomod_facts::Profile noData = p;
+    noData.dataDir.clear();
+    check("nor without Data/", !fomod_facts::fileState(noData)("DLCCoast.esm").has_value());
+
+    fomod_facts::Profile mw;
+    mw.layout   = fomod_facts::Profile::Layout::OpenMW;
+    mw.content  = {"tamriel_data.esm"};
+    mw.heldBack = {"patch.esp"};
+    const fomod::FileStateFn om = fomod_facts::fileState(mw);
+    check("OpenMW: a ticked mod's content",
+          om("Tamriel_Data.esm") == std::optional(FileState::Active));
+    check("the base masters", om("Bloodmoon.esm") == std::optional(FileState::Active));
+    check("one held back for its master",
+          om("Patch.esp") == std::optional(FileState::Inactive));
+    check("other content is missing", om("OAAB_Data.esm") == std::optional(FileState::Missing));
+    check("other paths are not answered", !om("meshes/x.nif").has_value());
+
+    check("a game it cannot speak for answers nothing",
+          !fomod_facts::fileState(fomod_facts::Profile{}));
+}
+
+static void conditions_testPlan()
+{
+    std::cout << "\n[planSelections: the installer's own conditions]\n";
+    const QList<FomodStep> n = cond_necessity();
+    fomod::PlanContext ctx;
+    ctx.gameId    = "fallout4";
+    ctx.runtime   = cond_fallout4(1, 11, 240);
+    ctx.fileState = cond_have({"DLCRobot.esm", "DLCCoast.esm",
+                               "Unofficial Fallout 4 Patch.esp"});
+    const fomod::Plan p = fomod::planSelections(n, ctx);
+
+    // The report: none of the three Bunker Hill versions is for this list.
+    const fomod::GroupPlan &bunker = p[2][0];
+    check("Bunker Hill starts on None",
+          bunker.noneChecked && !bunker.options[0].checked && !bunker.options[1].checked
+              && !bunker.options[2].checked);
+    check("and says so", bunker.noneBadge.contains(QStringLiteral("✅ Recommended")),
+          bunker.noneBadge);
+    check("each version names the plugin it needs",
+          bunker.options[1].notes.contains("Needs ScrapEverything.esp - not installed.")
+              && bunker.options[2].notes.contains(
+                     "Needs 3DNPC_FO4.esp and ScrapEverything.esp - not installed."),
+          bunker.options[2].notes.join(" | "));
+    check("and no name heuristic adds its own warning",
+          !bunker.options[0].text.contains(QStringLiteral("⚠")), bunker.options[0].text);
+
+    fomod::PlanContext se = ctx;
+    se.fileState = cond_have({"DLCRobot.esm", "DLCCoast.esm", "ScrapEverything.esp"});
+    const fomod::Plan q = fomod::planSelections(n, se);
+    check("with Scrap Everything installed, its version is picked",
+          q[2][0].options[1].checked && !q[2][0].noneChecked
+              && q[2][0].options[1].text.contains(QStringLiteral("✅ Recommended")));
+    check("and why",
+          q[2][0].options[1].notes.contains(
+              "Recommended by the installer: you have ScrapEverything.esp."),
+          q[2][0].options[1].notes.join(" | "));
+
+    // The first page: build, DLC, previs.
+    check("Anniversary, through the runtime pass",
+          p[0][0].options[1].checked
+              && p[0][0].options[1].text.contains("matches your game version"));
+    check("All DLC, recommended for the DLC found",
+          p[0][1].options[0].checked
+              && p[0][1].options[0].notes.contains(
+                     "Recommended by the installer: you have DLCRobot.esm and DLCCoast.esm."),
+          p[0][1].options[0].notes.join(" | "));
+    check("Standard previs, for want of prp.esp",
+          p[0][2].options[0].checked
+              && p[0][2].options[0].notes.contains(
+                     "Recommended by the installer: prp.esp is not installed."));
+    check("PRP says what it needs",
+          p[0][2].options[1].notes.contains("Needs prp.esp - not installed."));
+    check("RobCo Patcher names its DLL",
+          p[1][0].options[0].checked
+              && p[1][0].options[1].notes.contains("Needs RobCo_Patcher.dll - not installed."),
+          p[1][0].options[1].notes.join(" | "));
+
+    // Patches: only the one whose plugin is here.
+    const fomod::GroupPlan &patches = p[3][0];
+    check("the Unofficial Patch patch is ticked",
+          patches.options[1].checked
+              && patches.options[1].text.contains(QStringLiteral("✅ Recommended")));
+    check("FROST's is not, and its tooltip says why",
+          !patches.options[0].checked && patches.options[0].enabled
+              && patches.options[0].toolTip.contains(
+                     "recommends this only with FROST - LootableCars.esp, which is not "
+                     "installed."),
+          patches.options[0].toolTip);
+    check("a plain option keeps the installer's word", !patches.options[2].checked);
+
+    // Without the DLC: "No DLC" is the installer's default and stays, and the
+    // flag it raises makes the DLC-only patch unusable two pages later.
+    fomod::PlanContext bare = ctx;
+    bare.fileState = cond_have({});
+    const fomod::Plan r = fomod::planSelections(n, bare);
+    check("no DLC found: No DLC",
+          r[0][1].options[1].checked
+              && r[0][1].options[1].notes.contains(
+                     "Recommended by the installer: DLCRobot.esm and DLCCoast.esm are not "
+                     "installed."),
+          r[0][1].options[1].notes.join(" | "));
+    check("and the patch that needs them is not usable",
+          !r[3][0].options[0].enabled && !r[3][0].options[0].checked);
+
+    // Picks stored from an earlier install.
+    const QString stored = fomod_choices::encode(n, {
+        fomod_choices::key(0, 1, 1),   // No DLC
+        fomod_choices::key(0, 2, 1),   // PRP
+        fomod_choices::key(1, 0, 2),   // SPID - a preference
+        fomod_choices::key(2, 0, 2),   // 3DNPC + Scrap Everything
+        fomod_choices::key(3, 0, 0)}); // FROST
+    fomod::PlanContext again = ctx;
+    again.priorChoices = stored;
+    const fomod::Plan s = fomod::planSelections(n, again);
+    check("a stored pick does not overrule the DLC found",
+          s[0][1].options[0].checked && !s[0][1].options[1].checked);
+    check("nor the missing prp.esp", s[0][2].options[0].checked);
+    check("nor bring back a Bunker Hill version for absent mods",
+          s[2][0].noneChecked && !s[2][0].options[2].checked);
+    check("nor a patch for one", !s[3][0].options[0].checked);
+    check("but SPID, a preference, comes back", s[1][0].options[2].checked);
+    fomod::PlanContext robco = ctx;
+    robco.priorChoices = fomod_choices::encode(n, {fomod_choices::key(1, 0, 1)});
+    check("while RobCo Patcher, without its DLL, does not",
+          fomod::planSelections(n, robco)[1][0].options[0].checked);
+
+    // Nothing known: the installer's defaults, and the name passes as before.
+    fomod::PlanContext unknown = ctx;
+    unknown.fileState = {};
+    const fomod::Plan u = fomod::planSelections(n, unknown);
+    check("unknown files: Bunker Hill on None by its defaults, unmarked",
+          u[2][0].noneChecked && u[2][0].noneBadge.isEmpty());
+    check("No DLC, the installer's own default", u[0][1].options[1].checked);
+    check("and no patch ticked", !u[3][0].options[0].checked && !u[3][0].options[1].checked);
+    check("the name passes still speak",
+          u[2][0].options[0].text.contains("not installed"), u[2][0].options[0].text);
+}
+
+// An installer with plain types picks a version for a mod that is not there,
+// and offers no way out of its own: the wizard's "None" is one.
+static void conditions_testNoneFallback()
+{
+    std::cout << "\n[planSelections: the wizard's None, for a missing pick]\n";
+    const QList<FomodStep> steps = wizardui_oneGroup(wizardui_mkGroup("SelectAtMostOne", {
+        wizardui_mkPlugin("3DNPC", "Recommended"), wizardui_mkPlugin("Scrap Everything")}));
+    fomod::PlanContext ctx;
+    ctx.gameId = "fallout4";
+    const fomod::Plan p = fomod::planSelections(steps, ctx);
+    check("None instead of the missing 3DNPC",
+          p[0][0].noneChecked && !p[0][0].options[0].checked);
+    check("recommended", p[0][0].noneBadge.contains(QStringLiteral("✅ Recommended")));
+    check("naming the pick it set aside", p[0][0].noneToolTip.contains("3DNPC"),
+          p[0][0].noneToolTip);
+    fomod::PlanContext again = ctx;
+    again.priorChoices = fomod_choices::encode(steps, {fomod_choices::key(0, 0, 0)});
+    check("a stored 3DNPC pick does not come back",
+          fomod::planSelections(steps, again)[0][0].noneChecked);
+    fomod::PlanContext have = ctx;
+    have.installedModNames = {"Interesting NPCs - 3DNPC"};
+    check("with 3DNPC installed the installer's pick stands",
+          fomod::planSelections(steps, have)[0][0].options[0].checked);
+}
+
+// The same, from XML through the wizard, down to what the install copies:
+// nested conditions pick exactly one main folder and one plugin.
+static void conditions_testInstall()
+{
+    std::cout << "\n[plannedInstall: nested conditions and files]\n";
+    QTemporaryDir dir;
+    QDir().mkpath(dir.filePath("fomod"));
+    const auto plugin = [](const QString &name, const QString &flag, const QString &value,
+                           const QString &type) {
+        return QStringLiteral("<plugin name=\"%1\"><description>d</description>"
+                              "<conditionFlags><flag name=\"%2\">%3</flag></conditionFlags>"
+                              "%4</plugin>").arg(name, flag, value, type);
+    };
+    const QString plain = QStringLiteral("<typeDescriptor><type name=\"%1\"/></typeDescriptor>");
+    const QString when = QStringLiteral(
+        "<typeDescriptor><dependencyType><defaultType name=\"%1\"/><patterns><pattern>"
+        "<dependencies operator=\"And\"><fileDependency file=\"%2\" state=\"Active\"/>"
+        "</dependencies><type name=\"%3\"/></pattern></patterns></dependencyType>"
+        "</typeDescriptor>");
+    const auto main = [](const QString &inner, const QString &outer, const QString &files) {
+        return QStringLiteral("<pattern><dependencies operator=\"And\">"
+                              "<dependencies operator=\"And\">%1</dependencies>%2"
+                              "</dependencies><files>%3</files></pattern>")
+            .arg(inner, outer, files);
+    };
+    const QString dlcYes = QStringLiteral("<flagDependency flag=\"dlc\" value=\"yes\"/>");
+    QString xml =
+        "<config><moduleName>Necessity</moduleName>"
+        "<requiredInstallFiles><folder source=\"00 Core\" destination=\"\"/></requiredInstallFiles>"
+        "<installSteps order=\"Explicit\">"
+        "<installStep name=\"Game and DLC\"><optionalFileGroups>"
+        "<group name=\"DLC\" type=\"SelectExactlyOne\"><plugins>"
+        + plugin("All DLC", "dlc", "yes", when.arg("Optional", "DLCRobot.esm", "Recommended"))
+        + plugin("No DLC", "dlc", "no", when.arg("Recommended", "DLCRobot.esm", "Optional"))
+        + "</plugins></group>"
+          "<group name=\"Previs and Precombines\" type=\"SelectExactlyOne\"><plugins>"
+        + plugin("Standard", "prp", "no", when.arg("Recommended", "prp.esp", "Optional"))
+        + plugin("PRP", "prp", "yes", when.arg("Optional", "prp.esp", "Recommended"))
+        + "</plugins></group></optionalFileGroups></installStep>"
+          "<installStep name=\"Plugin Version\"><optionalFileGroups>"
+          "<group name=\"Plugin Version\" type=\"SelectExactlyOne\"><plugins>"
+        + plugin("Standard", "runtime", "std", plain.arg("Recommended"))
+        + plugin("SPID", "runtime", "spid", plain.arg("Optional"))
+        + "</plugins></group></optionalFileGroups></installStep>"
+          "</installSteps><conditionalFileInstalls><patterns>"
+        + main(dlcYes, "<flagDependency flag=\"prp\" value=\"no\"/>",
+               "<folder source=\"01 Main\\ae_dlc\" destination=\"\"/>")
+        + main(dlcYes, "<flagDependency flag=\"prp\" value=\"yes\"/>",
+               "<folder source=\"01 Main PRP\\ae_dlc\" destination=\"\"/>")
+        + main(dlcYes, "<flagDependency flag=\"runtime\" value=\"std\"/>",
+               "<file source=\"10 Plugins\\standard\\necessity.esp\" destination=\"necessity.esp\"/>")
+        + main(dlcYes, "<flagDependency flag=\"runtime\" value=\"spid\"/>",
+               "<file source=\"10 Plugins\\spid\\necessity.esp\" destination=\"necessity.esp\"/>")
+        + "<pattern><dependencies operator=\"And\">"
+          "<fileDependency file=\"DLCRobot.esm\" state=\"Active\"/></dependencies>"
+          "<files><file source=\"extra\\robot.esp\" destination=\"robot.esp\"/></files></pattern>"
+          "</patterns></conditionalFileInstalls></config>";
+    writeFile(dir.filePath("fomod/ModuleConfig.xml"), xml.toUtf8());
+
+    auto *w = FomodWizardTestHook::make(dir.path());
+    FomodWizardTestHook::setFacts(w, "fallout4", cond_fallout4(1, 11, 240),
+                                  cond_have({"DLCRobot.esm"}));
+    check("the installer parses", FomodWizardTestHook::parseInto(w));
+    const auto &steps = FomodWizardTestHook::steps(w);
+    check("a conditional type keeps its default and its pattern",
+          steps.size() == 2 && steps[0].groups[0].plugins[0].type == "Optional"
+              && steps[0].groups[0].plugins[0].typePatterns.size() == 1);
+    FomodWizardTestHook::buildParsed(w);
+    check("All DLC and Standard start picked",
+          FomodWizardTestHook::btn(w, 0, 0, 0)->isChecked()
+              && FomodWizardTestHook::btn(w, 0, 1, 0)->isChecked());
+
+    const auto copies = [&] {
+        QStringList got;
+        for (const auto &c : FomodWizardTestHook::plan(w).copies)
+            got << c.source + "->" + c.destination;
+        return got;
+    };
+    const QStringList want = {"00 Core->", "01 Main\\ae_dlc->",
+                              "10 Plugins\\standard\\necessity.esp->necessity.esp",
+                              "extra\\robot.esp->robot.esp"};
+    check("one main folder, one plugin, and the file the DLC asks for",
+          copies() == want, copies().join("\n"), want.join("\n"));
+
+    FomodWizardTestHook::btn(w, 0, 1, 1)->setChecked(true);   // PRP
+    FomodWizardTestHook::btn(w, 1, 0, 1)->setChecked(true);   // SPID
+    const QStringList picked = {"00 Core->", "01 Main PRP\\ae_dlc->",
+                                "10 Plugins\\spid\\necessity.esp->necessity.esp",
+                                "extra\\robot.esp->robot.esp"};
+    check("other picks, the other halves", copies() == picked, copies().join("\n"),
+          picked.join("\n"));
+    delete w;
+}
+
+static void run_fomod_conditions()
+{
+    std::cout << "=== fomod: the installer's own conditions ===\n";
+    conditions_testReader();
+    conditions_testEvaluate();
+    conditions_testResolveType();
+    conditions_testFacts();
+    conditions_testPlan();
+    conditions_testNoneFallback();
+    conditions_testInstall();
+}
+
 int main(int argc, char **argv)
 {
     // Wizard section needs Widgets; run headless via offscreen QPA.
@@ -4388,6 +5048,7 @@ int main(int argc, char **argv)
     run_fomod_choices();
     run_fomod_wizard_ui();
     run_fomod_wizard_engine();
+    run_fomod_conditions();
     run_bain_wizard_ui();
 
     std::cout << s_passed << " passed, " << s_failed << " failed\n";

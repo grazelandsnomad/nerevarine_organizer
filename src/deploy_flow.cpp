@@ -651,19 +651,11 @@ static QList<bethesda_deploy::DeploySource> gatherScriptExtenderSources(
     for (int i : order) {
         const ModEntry &item = model.at(i);
         if (!item.isMod() || !item.checked || !item.isInstalled()) continue;
-        QString modPath = item.modPath;
-        if (modPath.isEmpty() || !QDir(modPath).exists()) continue;
+        if (item.modPath.isEmpty() || !QDir(item.modPath).exists()) continue;
 
         // Same data-root repair as the Data/ gather: a mod installed one level
         // too deep would otherwise hide its own root files.
-        {
-            const QDir d(modPath);
-            const QString parent = QFileInfo(modPath).path();
-            if (install_layout::isDataRootName(d.dirName())
-                && !modsDir.isEmpty()
-                && QFileInfo(parent) != QFileInfo(modsDir))
-                modPath = parent;
-        }
+        const QString modPath = install_layout::deployRoot(item.modPath, modsDir);
 
         QString label = item->data(ModRole::CustomName).toString();
         if (label.isEmpty()) label = item->text();
@@ -853,15 +845,7 @@ static QList<bethesda_deploy::DeploySource> gatherBethesdaSources(const ModlistM
         // Guarded on the parent not being the mods dir itself: climbing out of
         // a top-level mod folder that merely happened to be named "meshes"
         // would deploy every mod in the library at once.
-        QString effectiveRoot = modPath;
-        {
-            const QDir d(modPath);
-            const QString parent = QFileInfo(modPath).path();
-            if (install_layout::isDataRootName(d.dirName())
-                && !modsDir.isEmpty()
-                && QFileInfo(parent) != QFileInfo(modsDir))
-                effectiveRoot = parent;
-        }
+        const QString effectiveRoot = install_layout::deployRoot(modPath, modsDir);
 
         QStringList roots;
         for (const auto &p : plugins::collectDataFolders(effectiveRoot, kExts))
@@ -1681,6 +1665,35 @@ const game_runtime::Probe &DeployFlow::gameRuntimeProbe()
     }
     m_gameRuntime = game_runtime::probe(fi.absolutePath(), fi.fileName(), prefix);
     return m_gameRuntime;
+}
+
+// Read where skseFindingsFor reads it: the resolved Data/ (no prompt) and the
+// profile's deploy manifest. Not cached - a deploy changes the answer, and
+// the reading is one small JSON file.
+DeployFlow::GameData DeployFlow::gameData()
+{
+    GameData out;
+    if (!m_shell.hasProfile()) return out;
+    const QString id = m_shell.currentGameId();
+    const GameAdapter *adapter = GameAdapterRegistry::find(id);
+    if (!adapter || adapter->dataSubdir().isEmpty()) return out;
+    out.dataDir = bethesdaResolveDataDir(m_shell.dialogParent(), id, adapter,
+                                         /*allowPrompt=*/false);
+    if (out.dataDir.isEmpty()) return out;
+
+    QString manifestPath, backupDir;
+    bethesdaStatePaths(m_shell.modlistPath(), manifestPath, backupDir);
+    QFile mf(manifestPath);
+    if (mf.open(QIODevice::ReadOnly)) {
+        const auto man =
+            bethesda_deploy::manifestFromJson(QString::fromUtf8(mf.readAll()));
+        for (const auto &df : man.files) {
+            QString rel = df.rel.toLower();
+            rel.replace(QLatin1Char('\\'), QLatin1Char('/'));
+            out.deployed.insert(rel);
+        }
+    }
+    return out;
 }
 
 // The paths for skse_check::gather, which does the reading. Only the "where"

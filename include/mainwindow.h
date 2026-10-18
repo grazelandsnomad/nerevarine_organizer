@@ -33,6 +33,7 @@
 #include "modentry.h"
 #include "deps_resolver.h"            // ModEntry complete type: QList<ModEntry> by value below
 #include "game_runtime.h"             // game_runtime::Probe, cached per profile
+#include "fomod_conditions.h"         // fomod::FileStateFn
 #include "install_job.h"              // install_job::Work/Result by value below
 
 struct FsProgress;
@@ -583,6 +584,10 @@ private:
         QString mergeTarget;       // filled by startInstallJob, for its messages
     };
     void startInstallJob(install_job::Work work, InstallFollowUp follow);
+    // What this profile holds, for a FOMOD's own conditions ("Recommended
+    // when 3DNPC_FO4.esp is active"): the folders a deploy puts into the game
+    // and the game's own Data/. Empty for a game it cannot speak for.
+    fomod::FileStateFn fomodFileFacts();
     void finishInstallJob(const InstallFollowUp &follow,
                           const install_job::Result &result);
     // "Merge into existing": when `placeholder` carries a pending

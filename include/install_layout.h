@@ -43,6 +43,14 @@ QString diveTarget(const QStringList &topSubdirs,
 // Case-insensitive.
 bool isDataRootName(const QString &folderName);
 
+// The folder a Bethesda deploy merges into Data/ for a mod stored at
+// `modPath`: its parent when the stored root is itself one of the folders
+// above, else `modPath`. Never `modsDir` itself - a top-level mod folder that
+// merely happens to be called "meshes" would deploy the whole library.
+// Deploy and the FOMOD wizard's file lookups both ask it, so they agree on
+// where a mod's files land.
+QString deployRoot(const QString &modPath, const QString &modsDir);
+
 // Dependency-variant classification for Nexus download files.  Some Morrowind
 // mods publish two MAIN files: an "OAAB" build (depends on the OAAB Data
 // resource pack) and a "No OAAB" build that doesn't.  Classifying a file's

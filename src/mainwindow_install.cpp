@@ -13,6 +13,8 @@
 #include "install_job.h"
 #include "placeholder_state.h"
 #include "fomodwizard.h"
+#include "fomod_facts.h"
+#include "install_layout.h"
 #include "bain.h"
 #include "bainwizard.h"
 #include "extract_errors.h"
@@ -278,6 +280,60 @@ void MainWindow::onExtractionCancelled(const QString &archivePath,
     statusBar()->showMessage(T("status_install_cancelled"), 3000);
 }
 
+// Where a FOMOD's own conditions look (fomod_facts.h): the ticked, installed
+// mods - each at the folder a deploy merges into Data/ - and the game's Data/
+// minus what this manager deployed there. Only paths and sets are gathered
+// here; the folders are listed on the wizard's first question about a file.
+fomod::FileStateFn MainWindow::fomodFileFacts()
+{
+    if (m_profiles->isEmpty()) return {};
+    const QString id = currentProfile().id;
+    const GameAdapter *adapter = GameAdapterRegistry::find(id);
+    if (!adapter) return {};
+
+    fomod_facts::Profile p;
+    switch (adapter->loadOrderStyle()) {
+    case LoadOrderStyle::OpenMW:
+        if (!m_scans) return {};
+        p.layout = fomod_facts::Profile::Layout::OpenMW;
+        break;
+    case LoadOrderStyle::AsteriskPluginsTxt:
+    case LoadOrderStyle::TimestampPluginsTxt:
+    case LoadOrderStyle::PlainListPluginsTxt:
+        p.layout = fomod_facts::Profile::Layout::DataFolder;
+        break;
+    case LoadOrderStyle::Unknown:
+        return {};
+    }
+
+    for (const ModEntry &row : m_model.all()) {
+        if (!row.isMod() || !row.isInstalled() || !row.checked) continue;
+        // A row that says installed but has no folder is a hole in the
+        // picture, not a mod without files: nothing may be called missing.
+        if (row.modPath.isEmpty() || !QFileInfo::exists(row.modPath)) {
+            p.complete = false;
+            continue;
+        }
+        if (p.layout == fomod_facts::Profile::Layout::DataFolder) {
+            p.modRoots << install_layout::deployRoot(row.modPath, m_modsDir);
+            continue;
+        }
+        for (const auto &dir : m_scans->cachedDataFolders(row.modPath,
+                                                          plugins::contentExtensions()))
+            for (const QString &f : dir.second) p.content.insert(f.toLower());
+    }
+
+    if (p.layout == fomod_facts::Profile::Layout::DataFolder) {
+        const DeployFlow::GameData game = m_deployFlow->gameData();
+        p.dataDir  = game.dataDir;
+        p.deployed = game.deployed;
+    } else {
+        for (const QString &held : std::as_const(m_suppressedPlugins))
+            p.heldBack.insert(held.toLower());
+    }
+    return fomod_facts::fileState(p);
+}
+
 void MainWindow::onExtractionSucceeded(const QString &archivePath,
                                        const QString &extractDir,
                                        const QString &modPathIn,
@@ -376,7 +432,11 @@ void MainWindow::onExtractionSucceeded(const QString &archivePath,
         // What the installed game says about itself, so a runtime-pair group
         // ("OG" / "AE") can be answered from the executable rather than left
         // on the installer's default.
-        m_deployFlow->gameRuntimeProbe());
+        m_deployFlow->gameRuntimeProbe(),
+        // And what the profile holds, for the installer's own conditions:
+        // "Recommended when 3DNPC_FO4.esp is active", "install these files
+        // when prp.esp is".
+        fomodFileFacts());
         return; // wizard is now shown; callback drives the rest
     }
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "fomod_conditions.h"
 #include "fomod_install.h"
 #include "fomod_types.h"
 #include "game_runtime.h"
@@ -44,7 +45,8 @@ public:
         const QStringList &installedModNames = {},
         const QString &gameId = {},
         const QStringList &installedNexusUrls = {},
-        const game_runtime::Probe &runtime = {});
+        const game_runtime::Probe &runtime = {},
+        const fomod::FileStateFn &fileState = {});
 
     // What the user decided. Nothing is copied yet: copying a big installer's
     // picks takes minutes, so the caller carries the plan out on a worker
@@ -74,7 +76,11 @@ public:
         std::function<void(const Decision &)> onDone,
         const QString &gameId = {},
         const QStringList &installedNexusUrls = {},
-        const game_runtime::Probe &runtime = {});
+        const game_runtime::Probe &runtime = {},
+        // What the profile holds at a Data path, for the installer's own
+        // conditions ("Recommended when 3DNPC_FO4.esp is active"); empty
+        // answers nothing. See fomod_facts.h.
+        const fomod::FileStateFn &fileState = {});
 
     // True when archiveRoot has fomod/ModuleConfig.xml (case-insensitive).
     static bool hasFomod(const QString &archiveRoot);
@@ -167,6 +173,9 @@ private:
     // Fallout 4 ships both runtimes under one id, so the profile cannot
     // answer and the executable has to.
     game_runtime::Probe  m_runtime;
+    // What the profile holds at a Data path, asked by the installer's own
+    // conditions: the plan's option types and the conditional installs.
+    fomod::FileStateFn   m_fileState;
     QList<FomodFile>     m_requiredFiles;
     QList<FomodFile>     m_requiredFolders;
     QList<FomodStep>     m_steps;

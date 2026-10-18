@@ -13,6 +13,9 @@
 // (tests/test_fomod_corpus.cpp).
 //
 // The passes, in the order they run (their comments in fomod_plan.cpp say why):
+//   the installer's defaults, its conditional types answered from the
+//       profile's files, the game's version and the earlier pages' picks
+//       (fomod_conditions.h) - "Recommended when 3DNPC_FO4.esp is active"
 //   A   an engine question - OpenMW over MGE XE, radio or checkbox
 //   A2  a language question - English
 //   A3  a game-runtime pair - the build matching the game, or none without
@@ -21,14 +24,21 @@
 //   C   checkbox options named after a mod, or a patch for one
 //   D   patch hubs - every option on
 //   E   options citing a Nexus mod page the modlist has, or lacks
-//   G   alternative frameworks - the installed one
+//   G   alternative frameworks - the installed one, or none
 //   H   one mod with and without a framework - the half that works
 //   F   options whose description names a mod they require
+//   I   the installer's own conditions, said out loud: a tick on what they
+//       recommend, the file it needs under what they hold back
 //   then the picks stored from a previous install, where nothing above settled
 //   the group or the option by what the modlist holds.
 //
+// Where the installer stated a condition and the profile answered it, that
+// answer stands: B to H, which match mod NAMES, leave such options and groups
+// alone, and a stored pick does not overrule them.
+//
 // Qt Core only.
 
+#include "fomod_conditions.h"
 #include "fomod_types.h"
 #include "game_runtime.h"
 
@@ -45,6 +55,9 @@ struct PlanContext {
     QSet<QString>       installedNexusKeys;  // "game/modId" of what is installed
     QString             gameId;              // the profile's game
     game_runtime::Probe runtime;             // what the installed game says about itself
+    // What the profile holds at a Data path (fomod_facts.h), for the
+    // installer's own conditions; empty answers nothing.
+    FileStateFn         fileState;
     QString             priorChoices;        // fomod_choices::encode, from a previous install
 };
 
@@ -64,6 +77,10 @@ struct GroupPlan {
     // picked, so the wizard adds a "None" radio of its own.
     bool hasNone     = false;
     bool noneChecked = false;
+    // Said beside and over that "None" radio, when the plan picks it for a
+    // reason worth giving.
+    QString noneBadge;
+    QString noneToolTip;
     QList<OptionPlan> options;
 };
 

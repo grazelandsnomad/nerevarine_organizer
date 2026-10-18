@@ -617,6 +617,27 @@ static void run_install_layout()
                {"ScriptPack"}, {},
                "ScriptPack");
 
+    // The other end of the same rule: a mod stored one level too deep deploys
+    // from its parent - and the FOMOD wizard looks there for its files too.
+    std::cout << "\ninstall_layout::deployRoot\n";
+    // Real folders: QFileInfo takes two paths that do not exist for the same.
+    QTemporaryDir modsDir;
+    const QString mods = modsDir.path();
+    for (const char *sub : {"Necessity", "Address Library/SKSE", "X/f4se", "meshes",
+                            "Better Boulder/Data"})
+        QDir().mkpath(mods + QLatin1Char('/') + QLatin1String(sub));
+    check("an ordinary mod deploys from its own folder",
+          install_layout::deployRoot(mods + "/Necessity", mods) == mods + "/Necessity");
+    check("one stored at its SKSE/ deploys from the folder above",
+          install_layout::deployRoot(mods + "/Address Library/SKSE", mods)
+              == mods + "/Address Library");
+    check("in any case", install_layout::deployRoot(mods + "/X/f4se", mods) == mods + "/X");
+    check("but never from the mods folder itself",
+          install_layout::deployRoot(mods + "/meshes", mods) == mods + "/meshes");
+    check("a folder merely called Data is a mod's own",
+          install_layout::deployRoot(mods + "/Better Boulder/Data", mods)
+              == mods + "/Better Boulder/Data");
+
     // Sixth House Minor Bases Refit ships "- OAAB" and "- No OAAB" mains; the
     // picker recommends whichever matches the modlist, so OAAB/No-OAAB
     // punctuation variants must each classify right.

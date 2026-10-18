@@ -19,6 +19,34 @@ struct FomodFlagValue {
     QString value;   // flag value when this plugin is picked (usually "Active")
 };
 
+// A <dependencies> block, as the installer wrote it: And / Or over leaves and
+// further blocks, nested as deep as the author went. Necessity NG-AE picks its
+// main files with And(And(build=ae, dlc=yes), prp=no), and a reader that kept
+// only one level installed the PRP and the plain versions both.
+// fomod_conditions answers one against the profile.
+struct FomodCondition {
+    enum class Kind {
+        All,       // <dependencies operator="And">: every child holds
+        Any,       // <dependencies operator="Or">: one child holds
+        File,      // <fileDependency file= state="Active|Inactive|Missing">
+        Flag,      // <flagDependency flag= value=>: set by an earlier pick
+        Game,      // <gameDependency version=>: the game is at least this
+        Manager,   // <fommDependency version=>: the mod manager is at least this
+        Other,     // a leaf this reader does not know - never answered
+    };
+    Kind    kind = Kind::All;
+    QString subject;   // File: the path; Flag: the flag's name
+    QString value;     // File: the state; Flag: the value; Game, Manager: the version
+    QList<FomodCondition> children;   // All and Any
+};
+
+// One <pattern> of a <dependencyType>: the type an option takes while `when`
+// holds. The first pattern that holds decides; none does, the default does.
+struct FomodTypePattern {
+    FomodCondition when;
+    QString        type;
+};
+
 struct FomodPlugin {
     QString name;
     QString description;
@@ -26,7 +54,13 @@ struct FomodPlugin {
     // with backslashes; resolved case-insensitively at display time. Empty
     // when the author supplied none.
     QString imagePath;
-    QString type;   // "Required" | "Recommended" | "Optional" | "NotUsable" | "CouldBeUsable"
+    // "Required" | "Recommended" | "Optional" | "NotUsable" | "CouldBeUsable":
+    // the plain <type>, or a <dependencyType>'s <defaultType>.
+    QString type;
+    // A <dependencyType>'s patterns, in order; empty for a plain <type>.
+    // "Recommended when 3DNPC_FO4.esp is active" lives here, and reading it
+    // as plain "Recommended" pre-selected options for mods nobody had.
+    QList<FomodTypePattern> typePatterns;
     QList<FomodFile> files;    // individual files to install
     QList<FomodFile> folders;  // directories to install (contents copied)
     // Flags the plugin raises when selected. Many FOMODs use these with
@@ -48,12 +82,12 @@ struct FomodStep {
 };
 
 // Module-level <conditionalFileInstalls>/<patterns>/<pattern>.
-// When the <dependencies> flag requirements are met by the user's step
-// selections, the pattern's files/folders install on top of what the plugins
-// provided. Operator "And" (all match) or "Or" (any match); default "And".
+// When `when` holds against the user's picks (their conditionFlags) and the
+// profile, the pattern's files/folders install on top of what the plugins
+// provided. Every pattern is tested; any number may install. A pattern with
+// no <dependencies> is an empty All, which always holds.
 struct FomodPattern {
-    QString op = QStringLiteral("And");   // "And" | "Or"
-    QList<FomodFlagValue> flagDeps;       // required (flag, value) pairs
+    FomodCondition   when;
     QList<FomodFile> files;
     QList<FomodFile> folders;
 };

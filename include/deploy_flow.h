@@ -9,6 +9,7 @@
 #include "game_runtime.h"
 
 #include <QObject>
+#include <QSet>
 #include <QString>
 
 #include <functional>
@@ -63,6 +64,16 @@ public:
     // What the installed game says about itself, cached per profile: the
     // executable's version and whether a script extender sits beside it.
     const game_runtime::Probe &gameRuntimeProbe();
+    // The game's Data/ and what this manager deployed into it, for telling
+    // the game's own files (masters, DLC, Creation Club) from deployed ones -
+    // the FOMOD wizard's file conditions ask (fomod_facts.h). `deployed` is
+    // relative to Data/, lower-cased, '/'-separated. Empty when the game has
+    // no Data/ or it cannot be found; never prompts.
+    struct GameData {
+        QString       dataDir;
+        QSet<QString> deployed;
+    };
+    GameData gameData();
 
 private:
     // Block launch on a pending kernel reboot (true = abort). Arch pacman wipes

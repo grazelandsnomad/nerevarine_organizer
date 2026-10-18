@@ -1,5 +1,7 @@
 #include "install_layout.h"
 
+#include <QDir>
+#include <QFileInfo>
 #include <QRegularExpression>
 #include <QSet>
 
@@ -35,6 +37,16 @@ bool isDataRootName(const QString &folderName)
         "trees", "distantlod", "calientetools", "planetdata",
     };
     return kDataRootNames.contains(folderName.toLower());
+}
+
+QString deployRoot(const QString &modPath, const QString &modsDir)
+{
+    const QString parent = QFileInfo(modPath).path();
+    if (isDataRootName(QDir(modPath).dirName())
+        && !modsDir.isEmpty()
+        && QFileInfo(parent) != QFileInfo(modsDir))
+        return parent;
+    return modPath;
 }
 
 QString diveTarget(const QStringList &topSubdirs,
