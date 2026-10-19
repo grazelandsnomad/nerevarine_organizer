@@ -525,7 +525,9 @@ void LoadOrderController::scanMissingMasters(
                     }
                 }
                 if (!hit) {
-                    masters = plugins::readTes3Masters(pluginPath);
+                    // Both header formats: Morrowind's, and the Bethesda
+                    // games' since the scan covers them too.
+                    masters = plugins::readMasters(pluginPath).names;
                     QMutexLocker lk(self->m_mastersCacheMu);
                     self->m_mastersCache.insert(pluginPath, { mtime, masters });
                 }

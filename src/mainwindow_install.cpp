@@ -292,17 +292,11 @@ fomod::FileStateFn MainWindow::fomodFileFacts()
     if (!adapter) return {};
 
     fomod_facts::Profile p;
-    switch (adapter->loadOrderStyle()) {
-    case LoadOrderStyle::OpenMW:
-        if (!m_scans) return {};
-        p.layout = fomod_facts::Profile::Layout::OpenMW;
-        break;
-    case LoadOrderStyle::AsteriskPluginsTxt:
-    case LoadOrderStyle::TimestampPluginsTxt:
-    case LoadOrderStyle::PlainListPluginsTxt:
+    if (listsPluginsTxt(adapter->loadOrderStyle())) {
         p.layout = fomod_facts::Profile::Layout::DataFolder;
-        break;
-    case LoadOrderStyle::Unknown:
+    } else if (adapter->loadOrderStyle() == LoadOrderStyle::OpenMW && m_scans) {
+        p.layout = fomod_facts::Profile::Layout::OpenMW;
+    } else {
         return {};
     }
 

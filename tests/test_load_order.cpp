@@ -826,6 +826,60 @@ static void testMorrowindPluginRejected()
     check("nothing collected", pl.overrides.isEmpty());
 }
 
+// plugins::readMasters: the header record alone, for both formats. Fallout 4's
+// missing-master check and the deploy read every active plugin this way.
+static void testReadMasters()
+{
+    std::cout << "\n[readMasters: the masters from the header, TES4 and TES3]\n";
+    QTemporaryDir d;
+    const auto bpd = plugins::readMasters(writePlugin(d, "bpd.esp",
+        makePlugin({"Fallout4.esm", "Boston_Police_Department.esp",
+                    "VehicleOverhaulContinued.esp"}, {0x00000001, 0x02000001})));
+    check("a TES4 plugin's masters, in order",
+          bpd.ok && bpd.names == QStringList({"Fallout4.esm", "Boston_Police_Department.esp",
+                                              "VehicleOverhaulContinued.esp"}),
+          bpd.names.join(", "));
+    const auto none = plugins::readMasters(writePlugin(d, "base.esm", makePlugin({}, {})));
+    check("no masters is still a reading", none.ok && none.names.isEmpty());
+
+    // Morrowind: 16-byte header, 4-byte field sizes.
+    QByteArray tes3Fields;
+    tes3Fields.append("MAST");
+    const QByteArray mw = QByteArrayLiteral("Morrowind.esm") + '\0';
+    put32(tes3Fields, quint32(mw.size()));
+    tes3Fields.append(mw);
+    QByteArray tes3 = "TES3";
+    put32(tes3, quint32(tes3Fields.size()));
+    tes3.append(QByteArray(8, '\0'));
+    tes3.append(tes3Fields);
+    const auto old = plugins::readMasters(writePlugin(d, "mw.esp", tes3));
+    check("a TES3 plugin as readTes3Masters reads it",
+          old.ok && old.names == QStringList{"Morrowind.esm"}, old.names.join(", "));
+
+    QByteArray cut = makePlugin({"Fallout4.esm"}, {});
+    cut.truncate(30);
+    check("a header cut short is no reading",
+          !plugins::readMasters(writePlugin(d, "cut.esp", cut)).ok);
+    check("nor is a file that is not a plugin",
+          !plugins::readMasters(writePlugin(d, "readme.txt", "hello")).ok);
+
+    // An XXXX field carries the size of the next one, which 16 bits cannot.
+    QByteArray fields;
+    fields.append("XXXX");
+    fields.append(char(4)); fields.append(char(0));
+    put32(fields, 70000);
+    fields.append("ONAM");
+    fields.append(char(0)); fields.append(char(0));
+    fields.append(QByteArray(70000, '\0'));
+    fields.append("MAST");
+    const QByteArray late = QByteArrayLiteral("Late.esm") + '\0';
+    fields.append(char(late.size())); fields.append(char(0));
+    fields.append(late);
+    check("a field past an XXXX-sized one is still read",
+          plugin_records::headerMasters(fields) == QStringList{"Late.esm"},
+          plugin_records::headerMasters(fields).join(", "));
+}
+
 static void testTranslationClashIsFound()
 {
     std::cout << "\n[a translation clashes on records while sharing no file]\n";
@@ -1251,6 +1305,7 @@ static void run_plugin_records()
     std::cout << "=== plugin_records ===\n";
     pr_test::testMastersAndOverrides();
     pr_test::testMorrowindPluginRejected();
+    pr_test::testReadMasters();
     pr_test::testTranslationClashIsFound();
     pr_test::testSmallOrPartialOverlapIgnored();
     std::cout << "\n";

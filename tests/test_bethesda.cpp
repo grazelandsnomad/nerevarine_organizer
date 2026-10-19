@@ -7,6 +7,7 @@
 #include "dll_overrides.h"
 #include "game_adapter.h"
 #include "root_routes.h"
+#include "steam_client.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -258,6 +259,71 @@ static void testMastersFirst()
           mastersFirst({"a.ESP", "b.EsM"}) == QStringList({"b.EsM", "a.ESP"}));
 }
 
+// The Fallout 4 list of 2026-10-19, cut down: Vehicle Overhaul Continued's
+// Boston PD add-on needs a police mod nobody installed, and three plugins sat
+// ahead of their own masters.
+static void testSettle()
+{
+    std::cout << "\n[settle: missing masters held back, masters before their plugins]\n";
+    const QStringList active = {
+        "VehicleOverhaulContinued.esp", "VehicleOverhaulContinued_BostonPoliceDepartment.esp",
+        "IAF - Far Harbor & Nuka World.esp", "ImmersiveAnimationFramework.esp",
+        "Adaptive Combat Tactics - DLC.esp", "Unrelated.esp", "Adaptive Combat Tactics.esp"};
+    const QHash<QString, QStringList> masters = {
+        {"vehicleoverhaulcontinued.esp", {"Fallout4.esm"}},
+        {"vehicleoverhaulcontinued_bostonpolicedepartment.esp",
+         {"Fallout4.esm", "Boston_Police_Department.esp", "VehicleOverhaulContinued.esp"}},
+        {"iaf - far harbor & nuka world.esp",
+         {"Fallout4.esm", "DLCCoast.esm", "ImmersiveAnimationFramework.esp"}},
+        {"immersiveanimationframework.esp", {"Fallout4.esm"}},
+        {"adaptive combat tactics - dlc.esp", {"Fallout4.esm", "Adaptive Combat Tactics.esp"}},
+        {"adaptive combat tactics.esp", {"Fallout4.esm"}},
+    };
+    QSet<QString> present = {"fallout4.esm", "dlccoast.esm"};   // the game's own
+    for (const QString &p : active) present.insert(p.toLower());
+
+    const Settled s = settle(active, masters, present);
+    check("the add-on for a mod that is not there is held back",
+          s.held.size() == 1
+              && s.held.first().plugin == "VehicleOverhaulContinued_BostonPoliceDepartment.esp"
+              && s.held.first().missing == QStringList{"Boston_Police_Department.esp"},
+          s.held.isEmpty() ? QString() : s.held.first().missing.join(", "));
+    const QStringList want = {
+        "VehicleOverhaulContinued.esp", "ImmersiveAnimationFramework.esp",
+        "IAF - Far Harbor & Nuka World.esp", "Adaptive Combat Tactics.esp",
+        "Adaptive Combat Tactics - DLC.esp", "Unrelated.esp"};
+    check("each plugin right after its masters, the rest in the user's order",
+          s.order == want, s.order.join(" | "), want.join(" | "));
+
+    // Holding one back strands what needs it.
+    const Settled chain = settle({"B.esp", "C.esp", "D.esp"},
+                                 {{"b.esp", {"A.esp"}}, {"c.esp", {"B.esp"}}},
+                                 {"b.esp", "c.esp", "d.esp"});   // A.esp is in no file
+    check("a chain falls with its first link",
+          chain.order == QStringList{"D.esp"} && chain.held.size() == 2
+              && chain.held[0].missing == QStringList{"A.esp"}
+              && chain.held[1].missing == QStringList{"B.esp"},
+          chain.order.join(" | "));
+
+    // Present in Data/ but not in this list (put there by hand, or the
+    // game's own) satisfies a master: dropping a working mod on a guess is
+    // worse than what this prevents.
+    const Settled byHand = settle({"Patch.esp"}, {{"patch.esp", {"Manual.esp"}}},
+                                  {"patch.esp", "manual.esp"});
+    check("a master anywhere in Data/ counts", byHand.held.isEmpty()
+                                                   && byHand.order == QStringList{"Patch.esp"});
+    check("an unreadable header moves and holds nothing",
+          settle({"X.esp", "Y.esp"}, {}, {}).order == QStringList({"X.esp", "Y.esp"}));
+    const Settled loop = settle({"A.esp", "B.esp"},
+                                {{"a.esp", {"B.esp"}}, {"b.esp", {"A.esp"}}},
+                                {"a.esp", "b.esp"});
+    check("two files naming each other neither hang nor vanish",
+          loop.held.isEmpty() && loop.order.size() == 2, loop.order.join(" | "));
+    check("masters match whatever their case",
+          settle({"p.esp"}, {{"p.esp", {"FALLOUT4.ESM"}}}, {"fallout4.esm", "p.esp"})
+              .held.isEmpty());
+}
+
 static void testPluginsTxt()
 {
     std::cout << "\n[pluginsTxtContent: CRLF, no '*' prefix, order preserved]\n";
@@ -348,6 +414,7 @@ static void run_bethesda_loadorder()
 {
     std::cout << "=== bethesda_loadorder tests ===\n";
     loadorder_section::testMastersFirst();
+    loadorder_section::testSettle();
     loadorder_section::testPluginsTxt();
     loadorder_section::testAsteriskPluginsTxt();
     loadorder_section::testTimestampOrder();
@@ -1440,6 +1507,94 @@ static void run_dll_overrides()
     dllov_section::testCreatesSectionWhenPrefixHasNone();
 }
 
+// -- steam_client: is Steam up before a Proton launch -------------------------
+//
+// On 2026-10-19 Fallout 4 was started through F4SE with Steam closed and never
+// appeared: the game started Steam to relaunch itself and the F4SE instance was
+// lost. The launch now waits for Steam, and these are the files it asks.
+
+namespace steam_section {
+
+static void write(const QString &path, const QByteArray &bytes)
+{
+    QFile f(path);
+    if (f.open(QIODevice::WriteOnly)) { f.write(bytes); f.close(); }
+}
+
+// registry.vdf as Steam writes it: HKLM's SteamPID, HKCU's ActiveProcess.
+static QByteArray registry(qint64 pid, const char *activeUser)
+{
+    QByteArray r = "\"Registry\"\n{\n\t\"HKLM\"\n\t{\n\t\t\"Software\"\n\t\t{\n"
+                   "\t\t\t\"Valve\"\n\t\t\t{\n\t\t\t\t\"Steam\"\n\t\t\t\t{\n"
+                   "\t\t\t\t\t\"SteamPID\"\t\t\"" + QByteArray::number(pid) + "\"\n"
+                   "\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n";
+    if (activeUser)
+        r += "\t\"HKCU\"\n\t{\n\t\t\"ActiveProcess\"\n\t\t{\n"
+             "\t\t\t\"ActiveUser\"\t\t\"" + QByteArray(activeUser) + "\"\n\t\t}\n\t}\n";
+    return r + "}\n";
+}
+
+static void testState()
+{
+    std::cout << "\n[steam_client::state: Steam's own files]\n";
+    QTemporaryDir dot;
+    const qint64 steamPid = 4242;
+    const steam_client::PidCheck isSteam = [&](qint64 pid) { return pid == steamPid; };
+
+    write(dot.filePath("registry.vdf"), registry(0, nullptr));   // as left by an exit
+    auto s = steam_client::state(dot.path(), isSteam);
+    check("SteamPID 0 is not running", !s.running && !s.loggedIn);
+
+    write(dot.filePath("steam.pid"), "4242\n");
+    s = steam_client::state(dot.path(), isSteam);
+    check("a starting Steam shows in steam.pid first", s.running && !s.loggedIn);
+
+    write(dot.filePath("registry.vdf"), registry(steamPid, "0"));
+    s = steam_client::state(dot.path(), isSteam);
+    check("running but nobody signed in yet", s.running && s.knowsLogin && !s.loggedIn);
+
+    write(dot.filePath("registry.vdf"), registry(steamPid, "123456789"));
+    s = steam_client::state(dot.path(), isSteam);
+    check("signed in: ready", s.running && s.loggedIn);
+
+    write(dot.filePath("registry.vdf"), registry(9999, "123456789"));
+    write(dot.filePath("steam.pid"), "9999");
+    s = steam_client::state(dot.path(), isSteam);
+    check("a pid that is not Steam's is not running, whatever the registry says",
+          !s.running && !s.loggedIn);
+
+    check("no files at all: not running",
+          !steam_client::state(dot.filePath("nowhere"), isSteam).running);
+}
+
+static void testNext()
+{
+    std::cout << "\n[steam_client::next: go, wait, give up]\n";
+    using steam_client::Next;
+    const steam_client::State down{false, false, false};
+    const steam_client::State starting{true, false, true};
+    const steam_client::State ready{true, true, true};
+    const steam_client::State noKey{true, false, false};
+    check("signed in: go", steam_client::next(ready, 500, 500) == Next::Go);
+    check("starting: wait", steam_client::next(starting, 5000, 4000) == Next::Wait);
+    check("not up yet: wait", steam_client::next(down, 5000, 0) == Next::Wait);
+    check("a Steam that never writes ActiveUser goes after the grace",
+          steam_client::next(noKey, 20000, steam_client::kNoLoginGraceMs) == Next::Go
+              && steam_client::next(noKey, 2000, 1000) == Next::Wait);
+    check("and nothing waits for good",
+          steam_client::next(starting, steam_client::kTimeoutMs, 80000) == Next::GiveUp
+              && steam_client::next(down, steam_client::kTimeoutMs, 0) == Next::GiveUp);
+}
+
+} // namespace steam_section
+
+static void run_steam_client()
+{
+    std::cout << "=== steam_client tests ===\n";
+    steam_section::testState();
+    steam_section::testNext();
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -1451,6 +1606,7 @@ int main(int argc, char **argv)
     run_bethesda_custom_ini();
     run_deployment_report();
     run_proton_paths();
+    run_steam_client();
     run_dll_overrides();
     run_game_adapters();
 

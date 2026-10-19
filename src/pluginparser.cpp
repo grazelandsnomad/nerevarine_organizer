@@ -1,11 +1,15 @@
 #include "pluginparser.h"
 
+#include "plugin_bytes.h"
+#include "plugin_records.h"
+
 #include <QByteArray>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 
 #include <cstring>
+#include <optional>
 
 namespace plugins {
 
@@ -120,22 +124,23 @@ QStringList collectResourceFolders(const QString &root, int maxDepth)
     return out;
 }
 
-QStringList readTes3Masters(const QString &path)
-{
-    QFile f(path);
-    if (!f.open(QIODevice::ReadOnly)) return {};
+namespace {
 
+// The TES3 header's masters, or nullopt when the file is not TES3 or the
+// header is cut short.
+std::optional<QStringList> tes3Masters(QFile &f)
+{
     // TES3 header (Morrowind, little-endian): [0..4) tag "TES3",
     // [4..8) uint32 body size, [8..16) unused. Body is subrecords, each
     // [0..4) tag [4..8) uint32 size [8..size+8) data.
     QByteArray head = f.read(16);
-    if (head.size() < 16 || head.left(4) != "TES3") return {};
+    if (head.size() < 16 || head.left(4) != "TES3") return std::nullopt;
 
     quint32 recSize;
     std::memcpy(&recSize, head.constData() + 4, 4);
 
     QByteArray body = f.read(recSize);
-    if (static_cast<quint32>(body.size()) < recSize) return {};
+    if (static_cast<quint32>(body.size()) < recSize) return std::nullopt;
 
     QStringList masters;
     quint32 pos = 0;
@@ -154,6 +159,36 @@ QStringList readTes3Masters(const QString &path)
         pos += subSize;
     }
     return masters;
+}
+
+} // namespace
+
+QStringList readTes3Masters(const QString &path)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) return {};
+    return tes3Masters(f).value_or(QStringList{});
+}
+
+Masters readMasters(const QString &path)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) return {};
+    const QByteArray magic = f.peek(4);
+    if (magic == "TES3") {
+        const auto m = tes3Masters(f);
+        return m ? Masters{*m, true} : Masters{};
+    }
+    if (magic != "TES4") return {};
+
+    // The header record alone: 24 bytes, then its fields. A TES4 header is
+    // never compressed, and the masters come before anything large.
+    char hdr[plugin_bytes::kHeader];
+    if (f.read(hdr, plugin_bytes::kHeader) != plugin_bytes::kHeader) return {};
+    const quint32 size = plugin_bytes::le32(hdr + 4);
+    const QByteArray fields = f.read(qint64(size));
+    if (quint32(fields.size()) != size) return {};
+    return {plugin_records::headerMasters(fields), true};
 }
 
 } // namespace plugins

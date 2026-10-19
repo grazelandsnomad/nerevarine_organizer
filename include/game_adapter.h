@@ -31,6 +31,15 @@ enum class LoadOrderStyle {
                          // over it (Oblivion Remastered)
 };
 
+// The Bethesda styles: plugins at the root of Data/, named in a Plugins.txt
+// the deploy writes.
+inline bool listsPluginsTxt(LoadOrderStyle style)
+{
+    return style == LoadOrderStyle::TimestampPluginsTxt
+        || style == LoadOrderStyle::AsteriskPluginsTxt
+        || style == LoadOrderStyle::PlainListPluginsTxt;
+}
+
 class GameAdapter {
 public:
     virtual ~GameAdapter() = default;

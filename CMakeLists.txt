@@ -103,6 +103,7 @@ set(CORE_SOURCES
     src/fomod_plan.cpp
     src/fomod_conditions.cpp
     src/fomod_facts.cpp
+    src/steam_client.cpp
     src/install_job.cpp
     src/fomod_path.cpp
     src/fomod_scripts.cpp
@@ -276,6 +277,7 @@ set(CORE_SOURCES
     include/fomod_plan.h
     include/fomod_conditions.h
     include/fomod_facts.h
+    include/steam_client.h
     include/install_job.h
     include/fs_progress.h
     include/fomod_path.h

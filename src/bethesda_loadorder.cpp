@@ -25,6 +25,60 @@ QStringList mastersFirst(const QStringList &plugins)
     return masters + regular;
 }
 
+Settled settle(const QStringList &active,
+               const QHash<QString, QStringList> &mastersOf,
+               const QSet<QString> &presentLower)
+{
+    // Held: a master in no file, or held itself - to a fixed point, since
+    // holding one can strand another that needs it.
+    QHash<QString, QStringList> why;   // lower-cased plugin -> what it lacks
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (const QString &p : active) {
+            const QString lp = p.toLower();
+            if (why.contains(lp)) continue;
+            QStringList missing;
+            for (const QString &m : mastersOf.value(lp)) {
+                const QString lm = m.toLower();
+                if (!presentLower.contains(lm) || why.contains(lm)) missing << m;
+            }
+            if (!missing.isEmpty()) {
+                why.insert(lp, missing);
+                changed = true;
+            }
+        }
+    }
+
+    Settled out;
+    QHash<QString, QString> kept;   // lower-cased -> as listed
+    for (const QString &p : active) {
+        const QString lp = p.toLower();
+        if (why.contains(lp)) out.held.append({p, why.value(lp)});
+        else                  kept.insert(lp, p);
+    }
+
+    // Each kept plugin after its masters. Depth-first, so a master's own
+    // masters go first too; `onPath` stops a cycle (a broken pair of files
+    // naming each other) from recursing forever without dropping either.
+    QSet<QString> placed, onPath;
+    const auto place = [&](const auto &self, const QString &lp) -> void {
+        if (placed.contains(lp) || onPath.contains(lp)) return;
+        onPath.insert(lp);
+        for (const QString &m : mastersOf.value(lp)) {
+            const QString lm = m.toLower();
+            if (kept.contains(lm)) self(self, lm);
+        }
+        onPath.remove(lp);
+        placed.insert(lp);
+        out.order << kept.value(lp);
+    };
+    for (const QString &p : active) {
+        const QString lp = p.toLower();
+        if (kept.contains(lp)) place(place, lp);
+    }
+    return out;
+}
+
 QString pluginsTxtContent(const QStringList &activeInOrder)
 {
     QString out;

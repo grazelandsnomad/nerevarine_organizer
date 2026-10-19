@@ -8,7 +8,9 @@
 
 #include "game_runtime.h"
 
+#include <QDialog>
 #include <QObject>
+#include <QPointer>
 #include <QSet>
 #include <QString>
 
@@ -53,9 +55,9 @@ public:
     void markDeployStale(const QString &modlistFile);
     // Re-sync Data/ before launching, if deployed before. Best-effort, silent.
     void maybeDeployBeforeLaunch(const QString &id);
-    // Sums the warning signals (missing masters/deps, empty installs,
-    // forbidden enabled, stale script extenders); summary dialog if any fire.
-    // False on Cancel.
+    // Sums the warning signals (missing deps, empty installs, forbidden
+    // enabled, stale script extenders); summary dialog if any fire. False on
+    // Cancel. Missing masters are left out of the game instead (see the .cpp).
     bool confirmLaunchIfWarnings();
     // Mark the rows whose script-extender DLL predates the installed game.
     // Called when Data/ changes (deploy, and the pre-launch re-sync), never
@@ -87,6 +89,11 @@ private:
                        std::function<void(const QString &)> savePath,
                        const QString &execName, const QString &locateTitle,
                        bool monitored = false);
+    // Run a script-extender loader through Proton once Steam is up - starting
+    // Steam and waiting for it, behind a small dialog, when it is not
+    // (steam_client.h says why it has to be).
+    void launchWhenSteamReady(const QString &appId, const QString &loader);
+    QPointer<QDialog> m_steamWait;   // the wait in progress, if any
 
     WindowShell &m_shell;
     QTimer      *m_deployProgressTimer = nullptr;

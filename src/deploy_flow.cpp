@@ -149,10 +149,29 @@ using fsutils::sanitizeFolderName;
 #include "modlist_model.h"
 #include "user_state_paths.h"
 #include "root_routes.h"
+#include "steam_client.h"
+
+// What writing the load order did: how many plugins it activated, and which it
+// left out because a master is not installed - each with the mod it came from.
+struct HeldPlugin {
+    QString     plugin;
+    QStringList missing;
+    QString     mod;
+};
+struct ActivateResult {
+    int               activated = 0;
+    QList<HeldPlugin> held;
+};
+// What a deploy reports: the summary the Deploy dialog shows, and how many
+// plugins it had to leave out, for the pre-launch re-sync's one status line.
+struct DeployOutcome {
+    QString summary;
+    int     heldBack = 0;
+};
 
 // Forward-declare the moved file-statics so intra-TU call order is irrelevant.
-static int bethesdaActivate(const QString &id, const GameAdapter *adapter, const QString &dataDir, const bethesda_deploy::Manifest &manifest, const QStringList &loadOrder);
-static QString bethesdaApplyDeploy(const QString &id, const GameAdapter *adapter, const QString &dataDir, const QList<bethesda_deploy::DeploySource> &sources, const QList<bethesda_deploy::DeploySource> &rootSources, const QString &modlistFile, const QStringList &loadOrder, const QString &fingerprint, const bethesda_deploy::ProgressFn &progress);
+static ActivateResult bethesdaActivate(const QString &id, const GameAdapter *adapter, const QString &dataDir, const bethesda_deploy::Manifest &manifest, const QStringList &loadOrder);
+static DeployOutcome bethesdaApplyDeploy(const QString &id, const GameAdapter *adapter, const QString &dataDir, const QList<bethesda_deploy::DeploySource> &sources, const QList<bethesda_deploy::DeploySource> &rootSources, const QString &modlistFile, const QStringList &loadOrder, const QString &fingerprint, const bethesda_deploy::ProgressFn &progress);
 static QString bethesdaApplyUndeploy(const QString &id, const GameAdapter *adapter, const QString &dataDir, const QString &modlistFile);
 static QStringList bethesdaConfigureArchives(const QString &id, const GameAdapter *adapter, const QString &dataDir, const bethesda_deploy::Manifest &manifest);
 static QStringList bethesdaPrefixUserDirs(const GameAdapter *adapter, const QString &dataDir);
@@ -536,11 +555,7 @@ static void restoreNerevarineBak(const QString &path)
 // .esm at all).  Picks the "_overlay" variant of a string for those.
 static bool writesPluginList(const GameAdapter *adapter)
 {
-    const LoadOrderStyle style = adapter ? adapter->loadOrderStyle()
-                                         : LoadOrderStyle::Unknown;
-    return style == LoadOrderStyle::TimestampPluginsTxt
-        || style == LoadOrderStyle::AsteriskPluginsTxt
-        || style == LoadOrderStyle::PlainListPluginsTxt;
+    return adapter && listsPluginsTxt(adapter->loadOrderStyle());
 }
 
 static QString deployText(const GameAdapter *adapter, const char *key)
@@ -877,16 +892,19 @@ static QList<bethesda_deploy::DeploySource> gatherBethesdaSources(const ModlistM
     return sources;
 }
 
-// Timestamp engines (Oblivion/FO3/FNV): stamp the deployed plugins' mtimes for
-// load order + write Plugins.txt (active set, masters first).  Returns the count
-// of plugins stamped; a no-op for other load-order styles.
-static int bethesdaActivate(const QString &id, const GameAdapter *adapter,
-                            const QString &dataDir,
-                            const bethesda_deploy::Manifest &manifest,
-                            const QStringList &loadOrder)
+// Write the load order for the plugins just linked into Data/: Plugins.txt, and
+// for the timestamp engines (Oblivion/FO3/FNV) the files' mtimes. Masters first,
+// each plugin after its own masters, and none whose master is not installed
+// (bethesda_loadorder::settle). Returns what it activated and what it left out;
+// a no-op for games without a plugin list.
+static ActivateResult bethesdaActivate(const QString &id, const GameAdapter *adapter,
+                                       const QString &dataDir,
+                                       const bethesda_deploy::Manifest &manifest,
+                                       const QStringList &loadOrder)
 {
+    ActivateResult result;
     const LoadOrderStyle style = adapter->loadOrderStyle();
-    if (!writesPluginList(adapter)) return 0;
+    if (!writesPluginList(adapter)) return result;
     QSet<QString> active;
     for (const auto &f : manifest.files) {
         if (f.rel.contains('/')) continue;        // plugins load from Data/ root only
@@ -903,7 +921,39 @@ static int bethesdaActivate(const QString &id, const GameAdapter *adapter,
             ordered << f.rel; placed.insert(f.rel);
         }
     ordered = bethesda_loadorder::mastersFirst(ordered);
-    if (ordered.isEmpty()) return 0;
+
+    // Masters, read from the files as they now sit in Data/. A plugin whose
+    // master is in no file there would stop the game while it loads, so it is
+    // left out; what Data/ holds of the game's own (masters, DLC, Creation
+    // Club, files put there by hand) counts as present, and nothing else is
+    // assumed about it.
+    {
+        static const QStringList kPlugins = {QStringLiteral("*.esp"),
+                                             QStringLiteral("*.esm"),
+                                             QStringLiteral("*.esl")};
+        const QDir data(dataDir);
+        QSet<QString> present;
+        for (const QString &f : data.entryList(kPlugins, QDir::Files))
+            present.insert(f.toLower());
+        QHash<QString, QStringList> mastersOf;
+        for (const QString &p : std::as_const(ordered)) {
+            const plugins::Masters m = plugins::readMasters(data.filePath(p));
+            if (m.ok) mastersOf.insert(p.toLower(), m.names);
+        }
+        const bethesda_loadorder::Settled settled =
+            bethesda_loadorder::settle(ordered, mastersOf, present);
+        ordered = settled.order;
+
+        QHash<QString, QString> modOf;
+        for (const auto &f : manifest.files) modOf.insert(f.rel.toLower(), f.sourceMod);
+        for (const auto &h : settled.held) {
+            result.held.append({h.plugin, h.missing, modOf.value(h.plugin.toLower())});
+            qCWarning(logging::lcLaunch).noquote()
+                << "deploy: left" << h.plugin << "out of the load order - it needs"
+                << h.missing.join(QStringLiteral(", ")) << "which is not installed";
+        }
+    }
+    if (ordered.isEmpty()) return result;
 
     const QString pluginsTxt = resolveBethesdaPluginsTxt(id, adapter, dataDir);
     int activated = 0;
@@ -921,7 +971,7 @@ static int bethesdaActivate(const QString &id, const GameAdapter *adapter,
         }
         // No list to add to means we are not looking at the game's Data/:
         // writing a fresh one would load the mods and none of the game.
-        if (original.trimmed().isEmpty()) return 0;
+        if (original.trimmed().isEmpty()) return result;
         activated = int(ordered.size());
         body = bethesda_loadorder::mergedPluginsTxtContent(original, ordered);
     } else if (style == LoadOrderStyle::TimestampPluginsTxt) {
@@ -950,7 +1000,8 @@ static int bethesdaActivate(const QString &id, const GameAdapter *adapter,
             Settings::setPluginsTxtPath(id, pluginsTxt);
         }
     }
-    return activated;
+    result.activated = activated;
+    return result;
 }
 
 // Rewrite one game ini through `transform`, backing the original up once.
@@ -1100,8 +1151,9 @@ static QString opengothicActivate(const GameAdapter *adapter, const QString &gam
 
 // Undeploy the previous manifest, deploy `sources`, persist the new manifest,
 // then activate (load order + Plugins.txt) and configure archives.  Returns the
-// human summary.  Shared by the Deploy action and deploy-on-launch.
-static QString bethesdaApplyDeploy(const QString &id, const GameAdapter *adapter,
+// human summary and what was left out.  Shared by the Deploy action and
+// deploy-on-launch.
+static DeployOutcome bethesdaApplyDeploy(const QString &id, const GameAdapter *adapter,
                                    const QString &dataDir,
                                    const QList<bethesda_deploy::DeploySource> &sources,
                                    const QList<bethesda_deploy::DeploySource> &rootSources,
@@ -1168,16 +1220,27 @@ static QString bethesdaApplyDeploy(const QString &id, const GameAdapter *adapter
         outFile.close();
     }
     writeSmallFile(bethesdaFingerprintPath(modlistFile), fingerprint);
-    const int activated = bethesdaActivate(id, adapter, dataDir, res.manifest, loadOrder);
+    const ActivateResult act = bethesdaActivate(id, adapter, dataDir, res.manifest, loadOrder);
     const QStringList stray =
         bethesdaConfigureArchives(id, adapter, dataDir, res.manifest);
     const QString gothicNote = opengothicActivate(adapter, dataDir, res.manifest);
 
     QString summary = writesPluginList(adapter)
         ? T("deploy_done").arg(res.filesDeployed).arg(res.vanillaBackedUp)
-                          .arg(activated).arg(res.errors.size())
+                          .arg(act.activated).arg(res.errors.size())
         : T("deploy_done_overlay").arg(res.filesDeployed).arg(res.vanillaBackedUp)
                                  .arg(res.errors.size());
+    // Right after the counts: these are plugins the user enabled that the
+    // game will not load, and the reason is something only they can fix.
+    if (!act.held.isEmpty()) {
+        QStringList lines;
+        for (const HeldPlugin &h : act.held)
+            lines << T("deploy_held_line")
+                         .arg(h.plugin, h.mod.isEmpty() ? QStringLiteral("?") : h.mod,
+                              h.missing.join(QStringLiteral(", ")));
+        summary += QStringLiteral("\n\n")
+                 + T("deploy_held_back").arg(lines.join(QLatin1Char('\n')));
+    }
     // Worth its own line: it is what makes Start able to run the extender at
     // all, and it is the one part of the deploy that touches the game folder
     // rather than Data/.
@@ -1197,7 +1260,7 @@ static QString bethesdaApplyDeploy(const QString &id, const GameAdapter *adapter
     // The Gothic line goes last because it is the one that decides what the
     // engine will actually load.
     if (!gothicNote.isEmpty()) summary += QStringLiteral("\n\n") + gothicNote;
-    return summary;
+    return {summary, int(act.held.size())};
 }
 
 DeployFlow::DeployFlow(WindowShell &shell, QObject *parent)
@@ -1432,7 +1495,7 @@ void DeployFlow::onDeployBethesda()
                 [progressCell](int done, int total) {
                     progressCell->store((qint64(done) << 32) | quint32(total),
                                   std::memory_order_relaxed);
-                });
+                }).summary;
         },
         [](DeployFlow *self, QString summary) {
             if (self->m_deployProgressTimer) self->m_deployProgressTimer->stop();
@@ -1441,6 +1504,7 @@ void DeployFlow::onDeployBethesda()
             self->updateDeployHint();  // a manifest exists now; banner comes down
             // Data/ just changed, so which plugins can load may have too.
             self->refreshScriptExtenderFlags();
+            self->m_shell.scanMissingMasters();
         });
 }
 
@@ -1495,12 +1559,19 @@ void DeployFlow::maybeDeployBeforeLaunch(const QString &id)
     // No progress panel here: this is the pre-launch re-sync, it only runs when
     // a deployment already exists, and the user is on their way into the game
     // rather than watching the window.
-    bethesdaApplyDeploy(id, adapter, dataDir, sources,
-                        gatherScriptExtenderSources(m_shell.model(), order, adapter, m_shell.modsDir()),
-                        m_shell.modlistPath(), m_shell.loadOrder(), deployFingerprint(), {});
+    const DeployOutcome out = bethesdaApplyDeploy(
+        id, adapter, dataDir, sources,
+        gatherScriptExtenderSources(m_shell.model(), order, adapter, m_shell.modsDir()),
+        m_shell.modlistPath(), m_shell.loadOrder(), deployFingerprint(), {});
     updateDeployHint();
-    m_shell.showStatus(T("deploy_relaunch_synced"), 3000);
+    // The summary is not shown here - the user is on their way into the game -
+    // but a plugin left out is worth a line: the game starts without it.
+    if (out.heldBack > 0)
+        m_shell.showStatus(T("deploy_relaunch_synced_held").arg(out.heldBack), 10000);
+    else
+        m_shell.showStatus(T("deploy_relaunch_synced"), 3000);
     refreshScriptExtenderFlags();
+    m_shell.scanMissingMasters();
 }
 
 // Read-only diagnostic for the experimental Bethesda deployment: shows every
@@ -1627,16 +1698,6 @@ void DeployFlow::launchProgram(QString &storedPath,
     }
 }
 
-// Pre-launch sanity check.  Aggregates the four warning signals that
-// are already maintained per-row and, if any fired, shows a summary
-// dialog with a Launch-anyway / Cancel choice.  Returns true when the
-// caller should proceed with the launch.
-//
-// The check is OpenMW-specific (non-Morrowind profiles skip it).  Data
-// is read from the roles populated by scanMissingMasters and
-// scanMissingDependencies + an on-the-fly `collectDataFolders` call -
-// no background work, no fresh scans.  If every bucket is empty the
-// dialog isn't shown at all.
 const game_runtime::Probe &DeployFlow::gameRuntimeProbe()
 {
     const QString id = m_shell.currentGameId();
@@ -1803,6 +1864,13 @@ void DeployFlow::refreshScriptExtenderFlags()
             << " marked=" << stale.size();
 }
 
+// Pre-launch sanity check: the warnings the rows already carry (missing
+// dependencies, empty installs, forbidden mods enabled) and the script
+// extender's verdict on what Data/ now holds, in a summary dialog with a
+// Launch-anyway / Cancel choice when any fired. True when the caller should go
+// on. Missing masters are not among them: the OpenMW sync and the Bethesda
+// deploy both leave such a plugin out of the game, so it cannot stop the
+// launch, and the row's red mark says so.
 bool DeployFlow::confirmLaunchIfWarnings()
 {
     if (m_suppressLaunchSanityCheck) return true;
@@ -2006,6 +2074,87 @@ static bool launchViaProton(QWidget *parent, const QString &appId,
         ui::warn(parent, T("launch_error_title"), T("launch_error_body").arg(exePath));
     }
     return ok;
+}
+
+void DeployFlow::launchWhenSteamReady(const QString &appId, const QString &loader)
+{
+    QWidget *parent = m_shell.dialogParent();
+    // Falls back to the plain Steam launch when no Proton command can be built
+    // - never worse than before, as onLaunchGame always did.
+    const auto run = [parent, appId, loader] {
+        if (launchViaProton(parent, appId, loader)) return;
+        qCWarning(logging::lcLaunch)
+            << "launch game: found" << loader
+            << "but could not build a Proton command - falling back to Steam";
+        dispatchSteamUrl(parent, "steam://rungameid/" + appId);
+    };
+
+    const steam_client::State now = steam_client::state();
+    if (now.loggedIn) { run(); return; }
+    if (m_steamWait) {            // already waiting: one Steam, one game
+        m_steamWait->raise();
+        m_steamWait->activateWindow();
+        return;
+    }
+    if (!now.running) {
+        qCInfo(logging::lcLaunch) << "launch game: Steam is not running - starting it first";
+        if (!subprocess::startDetached(QStringLiteral("steam"), {QStringLiteral("-silent")})
+            && !subprocess::startDetached(QStringLiteral("xdg-open"),
+                                          {QStringLiteral("steam://open/main")})) {
+            qCWarning(logging::lcLaunch) << "launch game: could not start Steam";
+            ui::warn(parent, T("launch_error_title"), T("launch_steam_cannot_start"));
+            return;
+        }
+    } else {
+        qCInfo(logging::lcLaunch) << "launch game: Steam is up but not signed in - waiting";
+    }
+
+    // Non-modal, with the window usable behind it; polled, never blocking.
+    auto *dlg = new QDialog(parent);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->setWindowTitle(T("launch_steam_wait_title"));
+    auto *lay = new QVBoxLayout(dlg);
+    auto *label = new QLabel(T("launch_steam_wait_body").arg(m_shell.currentGameName()), dlg);
+    label->setWordWrap(true);
+    lay->addWidget(label);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, dlg);
+    lay->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::rejected, dlg, &QDialog::reject);
+    m_steamWait = dlg;
+
+    auto *timer = new QTimer(dlg);
+    timer->setInterval(500);
+    auto waited = std::make_shared<QElapsedTimer>();
+    auto runningSince = std::make_shared<qint64>(now.running ? 0 : -1);
+    waited->start();
+    connect(dlg, &QDialog::rejected, timer, &QTimer::stop);
+    connect(timer, &QTimer::timeout, dlg, [dlg, timer, run, waited, runningSince, parent] {
+        const steam_client::State s = steam_client::state();
+        if (s.running && *runningSince < 0) *runningSince = waited->elapsed();
+        const qint64 runningFor = *runningSince < 0 ? 0 : waited->elapsed() - *runningSince;
+        switch (steam_client::next(s, waited->elapsed(), runningFor)) {
+        case steam_client::Next::Wait:
+            return;
+        case steam_client::Next::Go: {
+            timer->stop();
+            qCInfo(logging::lcLaunch) << "launch game: Steam ready after"
+                                      << waited->elapsed() << "ms";
+            const auto go = run;   // the lambda owning `run` goes with the dialog
+            dlg->accept();
+            go();
+            return;
+        }
+        case steam_client::Next::GiveUp:
+            timer->stop();
+            qCWarning(logging::lcLaunch) << "launch game: Steam not ready after"
+                                         << waited->elapsed() << "ms - not launching";
+            dlg->reject();
+            ui::warn(parent, T("launch_error_title"), T("launch_steam_timeout"));
+            return;
+        }
+    });
+    dlg->show();
+    timer->start();
 }
 
 void DeployFlow::onLaunchSteamLauncher()
@@ -2235,11 +2384,10 @@ void DeployFlow::onLaunchGame()
         // than before.
         const QString loader =
             findScriptExtenderLoader(adapter, QFileInfo(steamExe).path());
-        if (!loader.isEmpty() && launchViaProton(m_shell.dialogParent(), appId, loader)) return;
-        if (!loader.isEmpty())
-            qCWarning(logging::lcLaunch)
-                << "launch game: found" << loader
-                << "but could not build a Proton command - falling back to Steam";
+        if (!loader.isEmpty()) {
+            launchWhenSteamReady(appId, loader);
+            return;
+        }
         dispatchSteamUrl(m_shell.dialogParent(), "steam://rungameid/" + appId);
         return;
     }

@@ -27,6 +27,9 @@
 #include "column_header.h"
 #include "forbidden_mods.h"
 #include "game_profiles.h"
+#include "game_adapter.h"
+#include "deploy_flow.h"
+#include "install_layout.h"
 #include "conflict_inspector.h"
 #include "report_dialog.h"
 #include "toolbar_customization.h"
@@ -958,16 +961,26 @@ void MainWindow::scanMissingDependencies()
 
 void MainWindow::runMissingMastersScan()
 {
-    // Plugin master checks are Morrowind-specific (TES3 format).  For other
-    // profiles just clear any previously-flagged icons synchronously and bail.
-    if (m_profiles->isEmpty() || currentProfile().id != "morrowind") {
+    const auto clearAll = [this] {
         for (int i = 0; i < m_modList->count(); ++i) {
             ModRow item = m_modList->item(i);
             item->setData(ModRole::HasMissingMaster, false);
             item->setData(ModRole::MissingMasters, QStringList());
         }
+    };
+    if (m_profiles->isEmpty()) { clearAll(); return; }
+
+    // The Bethesda games: the deploy now leaves a plugin whose master is not
+    // installed out of Plugins.txt (Fallout 4 stopped loading on one), and this
+    // is where the list says so - the same red mark Morrowind rows get.
+    const GameAdapter *adapter = GameAdapterRegistry::find(currentProfile().id);
+    if (adapter && listsPluginsTxt(adapter->loadOrderStyle())) {
+        runDataFolderMastersScan();
         return;
     }
+    // Otherwise only Morrowind's TES3 plugins are checked. For other profiles
+    // just clear any previously-flagged icons synchronously and bail.
+    if (currentProfile().id != "morrowind") { clearAll(); return; }
 
     // Snapshot enabled + installed mods into the POD form the controller
     // expects.  No QListWidgetItem pointers cross the thread boundary --
@@ -1012,6 +1025,47 @@ void MainWindow::runMissingMastersScan()
         enabledMods.append(e);
     }
 
+    m_loadCtl->scanMissingMasters(enabledMods, availableLower);
+}
+
+// A Bethesda game loads the plugins at the root of Data/, so the candidates are
+// each enabled mod's plugins at the folder a deploy merges into Data/
+// (install_layout::deployRoot), and what satisfies a master is those plus the
+// game's own files in Data/ - masters, DLC, Creation Club - which no mod
+// deploys. Without Data/ those are unknown and every plugin would look like it
+// lacks Fallout4.esm, so nothing is marked.
+void MainWindow::runDataFolderMastersScan()
+{
+    const DeployFlow::GameData game = m_deployFlow->gameData();
+    if (game.dataDir.isEmpty()) {
+        for (int i = 0; i < m_modList->count(); ++i) {
+            ModRow item = m_modList->item(i);
+            item->setData(ModRole::HasMissingMaster, false);
+            item->setData(ModRole::MissingMasters, QStringList());
+        }
+        return;
+    }
+
+    static const QStringList kPlugins = {QStringLiteral("*.esp"), QStringLiteral("*.esm"),
+                                         QStringLiteral("*.esl")};
+    QSet<QString> availableLower;
+    for (const QString &f : QDir(game.dataDir).entryList(kPlugins, QDir::Files))
+        if (!game.deployed.contains(f.toLower())) availableLower.insert(f.toLower());
+
+    QList<LoadOrderController::MastersInput> enabledMods;
+    const QList<ModEntry> modRows = m_model.all();
+    for (const ModEntry &item : modRows) {
+        if (!item.isMod() || !item.isInstalled() || !item.checked) continue;
+        if (item.modPath.isEmpty()) continue;
+        const QDir root(install_layout::deployRoot(item.modPath, m_modsDir));
+        LoadOrderController::MastersInput e;
+        e.modPath = item.modPath;
+        for (const QString &f : root.entryList(kPlugins, QDir::Files)) {
+            availableLower.insert(f.toLower());
+            e.plugins.append({root.filePath(f), f});
+        }
+        if (!e.plugins.isEmpty()) enabledMods.append(e);
+    }
     m_loadCtl->scanMissingMasters(enabledMods, availableLower);
 }
 

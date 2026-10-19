@@ -15,6 +15,9 @@
 // Pure helpers plus one FS helper (mtime stamping), all path-explicit so
 // QTemporaryDir can exercise them.
 
+#include <QHash>
+#include <QList>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 
@@ -24,6 +27,37 @@ namespace bethesda_loadorder {
 // relative order within each group preserved. Timestamp engines load masters
 // first regardless of mtime, so the encoded order must match.
 QStringList mastersFirst(const QStringList &plugins);
+
+// A plugin left out of the load order, and the masters it lacks: in no file
+// in Data/, or left out themselves.
+struct Held {
+    QString     plugin;
+    QStringList missing;
+};
+
+struct Settled {
+    QStringList order;   // what to activate: `active` minus the held, each after its masters
+    QList<Held> held;    // in `active`'s order
+};
+
+// Settle `active` (already in the order to load) against what Data/ holds.
+//
+// A plugin whose master is in no file in Data/ stops the game while it loads
+// - Fallout 4 with a Vehicle Overhaul Continued add-on for a police mod that
+// was not installed - so it is held back, and so is everything that needs a
+// held plugin. Generous on purpose: `presentLower` is every plugin file in
+// Data/, active or not, the game's own included, because dropping a working
+// mod on a wrong guess would be worse than the crash this prevents.
+//
+// The rest keep their order, except that a plugin comes after its masters:
+// before one is placed, any master of it still to come is placed first.
+// IAF - Far Harbor & Nuka World.esp loaded ahead of the framework it extends.
+//
+// `mastersOf` is keyed by lower-cased file name; a plugin missing from it
+// (an unreadable header) counts as having no masters.
+Settled settle(const QStringList &active,
+               const QHash<QString, QStringList> &mastersOf,
+               const QSet<QString> &presentLower);
 
 // Classic Plugins.txt body (Oblivion / FO3 / FNV): active filenames one per
 // line, CRLF (Windows file read through the prefix), no '*' prefix. Order here

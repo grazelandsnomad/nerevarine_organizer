@@ -943,6 +943,7 @@ private:
     // closeEvent drains it so the work has landed on disk before exit.
     SaveQueue m_saveQueue;
     void runMissingMastersScan();  // slot wired to m_mastersScanTimer::timeout
+    void runDataFolderMastersScan();   // its Bethesda half: Data/ and the deploy roots
     // The size scan's result, written into ModRole::ModSize by mod path; a
     // row that is not installed loses its size.
     void onModSizesScanned(const QHash<QString, qint64> &bytesByPath);

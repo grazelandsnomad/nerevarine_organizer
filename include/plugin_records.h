@@ -28,6 +28,7 @@
 // plugin costs a few thousand 24-byte reads. Morrowind plugins are rejected on
 // the magic ("TES3"), which keeps this off an OpenMW modlist entirely.
 
+#include <QByteArray>
 #include <QHash>
 #include <QList>
 #include <QSet>
@@ -46,6 +47,12 @@ struct Plugin {
 // Reads `path`. Returns an invalid Plugin for anything that is not a
 // TES4-family plugin, is unreadable, or is structurally broken.
 Plugin scan(const QString &path);
+
+// The masters a TES4 header record declares, in order, from its fields (the
+// bytes after the record's 24-byte header). An XXXX field gives the size of
+// the field after it, which the 16-bit size cannot hold. Shared with
+// plugins::readMasters, which reads nothing but the header.
+QStringList headerMasters(const QByteArray &fields);
 
 // One mod's plugins, for the pairwise pass below.
 struct ModPlugins {

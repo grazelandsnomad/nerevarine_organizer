@@ -45,6 +45,18 @@ QStringList collectResourceFolders(const QString &root, int maxDepth = 4);
 // .toLower() first).
 QStringList readTes3Masters(const QString &path);
 
+// The masters a plugin loads after, from its header record alone, for every
+// engine this manager deploys: Morrowind's TES3, and the TES4 header of
+// Oblivion through Starfield. readTes3Masters returned nothing for the latter,
+// which is how a Fallout 4 patch whose master was not installed reached the
+// game unremarked. `ok` is false when the file cannot be read or is neither,
+// so a caller can tell "no masters" from "could not tell".
+struct Masters {
+    QStringList names;    // as written in the header, in order
+    bool        ok = false;
+};
+Masters readMasters(const QString &path);
+
 } // namespace plugins
 
 #endif // PLUGINPARSER_H

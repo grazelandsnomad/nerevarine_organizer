@@ -20,28 +20,35 @@ bool readExactly(QFile &f, char *buf, int n)
     return f.read(buf, n) == n;
 }
 
-// Master list from the TES4 header record's MAST fields.
 QStringList readMasters(QFile &f, quint32 headerDataSize)
 {
-    QStringList masters;
-    QByteArray fields = f.read(qint64(headerDataSize));
-    if (fields.size() != int(headerDataSize)) return masters;
-    int off = 0;
-    while (off + 6 <= fields.size()) {
-        const char *p = fields.constData() + off;
-        const quint16 size = le16(p + 4);
-        if (qstrncmp(p, "MAST", 4) == 0) {
-            const int start = off + 6;
-            if (start + size > fields.size()) break;
-            masters << QString::fromLatin1(
-                QByteArray(fields.constData() + start, size)).remove(QChar('\0'));
-        }
-        off += 6 + size;
-    }
-    return masters;
+    const QByteArray fields = f.read(qint64(headerDataSize));
+    if (fields.size() != int(headerDataSize)) return {};
+    return headerMasters(fields);
 }
 
 } // namespace
+
+QStringList headerMasters(const QByteArray &fields)
+{
+    QStringList masters;
+    qsizetype off = 0;
+    quint32 nextSize = 0;   // from an XXXX field: the size of the one after it
+    while (off + 6 <= fields.size()) {
+        const char *p = fields.constData() + off;
+        quint32 size = le16(p + 4);
+        if (nextSize) { size = nextSize; nextSize = 0; }
+        const qsizetype start = off + 6;
+        if (start + qsizetype(size) > fields.size()) break;
+        if (qstrncmp(p, "XXXX", 4) == 0 && size >= 4)
+            nextSize = le32(fields.constData() + start);
+        else if (qstrncmp(p, "MAST", 4) == 0)
+            masters << QString::fromLatin1(
+                QByteArray(fields.constData() + start, qsizetype(size))).remove(QChar('\0'));
+        off = start + qsizetype(size);
+    }
+    return masters;
+}
 
 Plugin scan(const QString &path)
 {
