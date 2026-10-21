@@ -2,42 +2,43 @@
 
 A native Linux mod manager for OpenMW.
 
-## 0.73 - in development
+## 0.74 - in development
 
 Changes for the next release are collected in
-[`docs/release-notes/0.73.md`](docs/release-notes/0.73.md) as they land.
+[`docs/release-notes/0.74.md`](docs/release-notes/0.74.md) as they land.
 
 Guides: [mod conflicts and how to fix each kind](docs/conflicts.md).
 
-### Latest release: 0.72
+### Latest release: 0.73
 
 Download: [AppImage or plain Linux
-binary](https://github.com/grazelandsnomad/nerevarine_organizer/releases/tag/v0.72).
+binary](https://github.com/grazelandsnomad/nerevarine_organizer/releases/tag/v0.73).
 The AppImage is portable and runs on most distros, Steam Deck included. It
 needs FUSE 2 (`libfuse2t64` or `libfuse2` on Ubuntu and Debian, `fuse2` on
 Arch); without it, start it with `--appimage-extract-and-run`. The plain
 binary keeps its mod lists and settings next to itself, so unpack a new
 version over the old folder to keep them.
 
-Installs stopped looking broken and stopped losing things:
+Installers stopped choosing for a setup they could not see:
 
-- **Big installs run in the background**, with a progress bar on the mod's
-  row, instead of freezing the window for minutes - a BAIN archive like
-  Tamriel Data now installs in seconds.
-- **Updating a mod keeps your load order**, and cancelling an update, a failed
-  download or closing the app halfway no longer leaves the mod uninstalled.
-- **Oblivion Remastered** is found on its own and deploys, `.pak`, UE4SS and
-  OBSE64 mods included.
-- **Check Updates notices a retired file** - one its Nexus page archived or
-  replaced - and says what the page offers now.
-- **Mod-list backups survive cleaning a source checkout**, with a second copy
-  kept outside it.
+- **A FOMOD's "recommended when you have mod X" is answered from your mod
+  list and your game.** Options for mods you don't have are no longer
+  pre-selected, a Fallout 4 installer picks the build your game runs
+  (Next-Gen or Anniversary), and nested install conditions are read whole.
+- **Start works with Steam closed**: it opens Steam, waits for it, then starts
+  the game through its script extender.
+- **A plugin whose master is missing is left out of the load order** and
+  marked red, instead of stopping a Bethesda game as it loads; each plugin
+  now loads after its own masters.
+- **The welcome wizard comes back after a first run that was cut short**, and
+  Qt's own buttons (Next, Finish, Yes, No) speak the app's language.
+- **Importing an MO2 modlist links mods to their Nexus pages**, undo after a
+  drag goes back to before the drag, and moving the mod library no longer
+  freezes the window.
 
-Full notes: [`docs/release-notes/0.72.md`](docs/release-notes/0.72.md)
-(prior: [0.71](docs/release-notes/0.71.md), [0.70](docs/release-notes/0.70.md),
-[0.5](docs/release-notes/0.5.md), [0.4](docs/release-notes/0.4.md),
-[0.3.1](docs/release-notes/0.3.1.md), [0.3](docs/release-notes/0.3.md),
-[0.2](docs/release-notes/0.2.md))
+Full notes: [`docs/release-notes/0.73.md`](docs/release-notes/0.73.md)
+(prior: [0.72](docs/release-notes/0.72.md), [0.71](docs/release-notes/0.71.md),
+[0.70](docs/release-notes/0.70.md))
 
 # Tech Stack
 C++26 and Qt6.
