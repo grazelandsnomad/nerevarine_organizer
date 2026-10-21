@@ -679,12 +679,24 @@ void MainWindow::showFirstRunWizardIfNeeded()
     // Probe every game's on-disk modlist - the current profile might not be the
     // one with mods. Via resolveUserStatePath so AppImage hits AppDataLocation,
     // not the read-only squashfs mount.
+    //
+    // "With mods", not "exists": every run saves its list on close, header
+    // line included, so a file alone is left behind by a first run whose
+    // wizard was cancelled or never finished - and that user never saw the
+    // wizard again. Only a mod row in the file is prior use.
+    const auto holdsMods = [](const QString &path) {
+        QFile f(path);
+        if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return false;
+        const QList<ModEntry> rows =
+            modlist_serializer::parseModlist(QString::fromUtf8(f.readAll()));
+        for (const ModEntry &e : rows)
+            if (e.isMod()) return true;
+        return false;
+    };
     if (!hasExistingModlist) {
         for (const GameProfile &gp : m_profiles->games()) {
             const QString filename = "modlist_" + gp.id + ".txt";
-            const QString resolved = resolveUserStatePath(filename);
-            QFileInfo fi(resolved);
-            if (fi.exists() && fi.size() > 0) {
+            if (holdsMods(resolveUserStatePath(filename))) {
                 hasExistingModlist = true;
                 break;
             }
@@ -693,8 +705,7 @@ void MainWindow::showFirstRunWizardIfNeeded()
             for (const QString &dir : {QCoreApplication::applicationDirPath() + "/",
                                         QCoreApplication::applicationDirPath() + "/../"})
             {
-                QFileInfo fb(dir + filename);
-                if (fb.exists() && fb.size() > 0) {
+                if (holdsMods(dir + filename)) {
                     hasExistingModlist = true;
                     break;
                 }
