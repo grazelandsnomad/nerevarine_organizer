@@ -16,6 +16,7 @@
 #include "settings_migrations.h"
 #include "theme.h"
 #include "translator.h"
+#include "qt_strings.h"
 
 // The app version is injected by CMake from project(... VERSION) in
 // CMakeLists.txt, so there's a single place to bump it for a release. This
@@ -203,6 +204,10 @@ int main(int argc, char *argv[])
         // Don't save yet - let the user confirm/change it if they want
     }
     Translator::init(lang);
+    // Qt's own dialog strings (a wizard's Next / Finish, a prompt's Yes / No)
+    // in the language the translator settled on - the desktop installs them
+    // for the system locale, which put Catalan buttons on the English wizard.
+    qCInfo(logging::lcApp) << qt_strings::install(app, Translator::currentLanguage());
 
     // Mirror the UI for right-to-left languages (e.g. Arabic)
     app.setLayoutDirection(Translator::isRtl() ? Qt::RightToLeft : Qt::LeftToRight);

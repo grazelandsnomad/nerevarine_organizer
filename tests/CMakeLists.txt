@@ -40,6 +40,7 @@ endfunction()
 #   test_extract                archive magic, extractor errors, InstallController
 #   test_loadorder_controller   the scan workers' lifecycle
 #   test_translation_coverage   the "no translation" verdict
+#   test_qt_strings             Qt's own dialog strings follow the app's language
 #   test_launch_warnings        the launch-blocking rules
 #   test_queues                 the install queues and rows that vanish mid-flight
 #   test_modlist_views          the model, the row handle and the view, the sort orders
@@ -57,6 +58,7 @@ set(UNIT_TESTS
     test_modlist
     test_profiles
     test_translate_ui
+    test_qt_strings
     test_nexus
     test_plugins
     test_load_order
