@@ -22,6 +22,7 @@ namespace {
 // Qt string comes back in its language.
 class CatalanLikeDesktop final : public QTranslator {
 public:
+    using QTranslator::QTranslator;   // parented to the app, or LeakSanitizer objects
     bool isEmpty() const override { return false; }
     QString translate(const char *context, const char *sourceText, const char *,
                       int) const override
@@ -58,7 +59,7 @@ int main(int argc, char **argv)
         app.installTranslator(desktop);
     } else {
         delete desktop;
-        app.installTranslator(new CatalanLikeDesktop);
+        app.installTranslator(new CatalanLikeDesktop(&app));
     }
     std::cout << (real ? "  (using the machine's qtbase_ca.qm)\n"
                        : "  (no qtbase_ca.qm here - a stand-in translator)\n");
