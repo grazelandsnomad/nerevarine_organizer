@@ -2090,7 +2090,7 @@ void DeployFlow::launchWhenSteamReady(const QString &appId, const QString &loade
     };
 
     const steam_client::State now = steam_client::state();
-    if (now.loggedIn) { run(); return; }
+    if (steam_client::next(now, 0) == steam_client::Next::Go) { run(); return; }
     if (m_steamWait) {            // already waiting: one Steam, one game
         m_steamWait->raise();
         m_steamWait->activateWindow();
@@ -2125,14 +2125,10 @@ void DeployFlow::launchWhenSteamReady(const QString &appId, const QString &loade
     auto *timer = new QTimer(dlg);
     timer->setInterval(500);
     auto waited = std::make_shared<QElapsedTimer>();
-    auto runningSince = std::make_shared<qint64>(now.running ? 0 : -1);
     waited->start();
     connect(dlg, &QDialog::rejected, timer, &QTimer::stop);
-    connect(timer, &QTimer::timeout, dlg, [dlg, timer, run, waited, runningSince, parent] {
-        const steam_client::State s = steam_client::state();
-        if (s.running && *runningSince < 0) *runningSince = waited->elapsed();
-        const qint64 runningFor = *runningSince < 0 ? 0 : waited->elapsed() - *runningSince;
-        switch (steam_client::next(s, waited->elapsed(), runningFor)) {
+    connect(timer, &QTimer::timeout, dlg, [dlg, timer, run, waited, parent] {
+        switch (steam_client::next(steam_client::state(), waited->elapsed())) {
         case steam_client::Next::Wait:
             return;
         case steam_client::Next::Go: {

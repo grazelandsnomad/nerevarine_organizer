@@ -1540,50 +1540,55 @@ static void testState()
     QTemporaryDir dot;
     const qint64 steamPid = 4242;
     const steam_client::PidCheck isSteam = [&](qint64 pid) { return pid == steamPid; };
+    const steam_client::AgeCheck age = [](qint64) { return qint64(30000); };
 
     write(dot.filePath("registry.vdf"), registry(0, nullptr));   // as left by an exit
-    auto s = steam_client::state(dot.path(), isSteam);
+    auto s = steam_client::state(dot.path(), isSteam, age);
     check("SteamPID 0 is not running", !s.running && !s.loggedIn);
 
     write(dot.filePath("steam.pid"), "4242\n");
-    s = steam_client::state(dot.path(), isSteam);
+    s = steam_client::state(dot.path(), isSteam, age);
     check("a starting Steam shows in steam.pid first", s.running && !s.loggedIn);
 
     write(dot.filePath("registry.vdf"), registry(steamPid, "0"));
-    s = steam_client::state(dot.path(), isSteam);
+    s = steam_client::state(dot.path(), isSteam, age);
     check("running but nobody signed in yet", s.running && s.knowsLogin && !s.loggedIn);
 
     write(dot.filePath("registry.vdf"), registry(steamPid, "123456789"));
-    s = steam_client::state(dot.path(), isSteam);
-    check("signed in: ready", s.running && s.loggedIn);
+    s = steam_client::state(dot.path(), isSteam, age);
+    check("signed in: ready, and up for as long as the process says",
+          s.running && s.loggedIn && s.runningForMs == 30000);
 
     write(dot.filePath("registry.vdf"), registry(9999, "123456789"));
     write(dot.filePath("steam.pid"), "9999");
-    s = steam_client::state(dot.path(), isSteam);
+    s = steam_client::state(dot.path(), isSteam, age);
     check("a pid that is not Steam's is not running, whatever the registry says",
           !s.running && !s.loggedIn);
 
     check("no files at all: not running",
-          !steam_client::state(dot.filePath("nowhere"), isSteam).running);
+          !steam_client::state(dot.filePath("nowhere"), isSteam, age).running);
 }
 
 static void testNext()
 {
     std::cout << "\n[steam_client::next: go, wait, give up]\n";
     using steam_client::Next;
-    const steam_client::State down{false, false, false};
-    const steam_client::State starting{true, false, true};
-    const steam_client::State ready{true, true, true};
-    const steam_client::State noKey{true, false, false};
-    check("signed in: go", steam_client::next(ready, 500, 500) == Next::Go);
-    check("starting: wait", steam_client::next(starting, 5000, 4000) == Next::Wait);
-    check("not up yet: wait", steam_client::next(down, 5000, 0) == Next::Wait);
-    check("a Steam that never writes ActiveUser goes after the grace",
-          steam_client::next(noKey, 20000, steam_client::kNoLoginGraceMs) == Next::Go
-              && steam_client::next(noKey, 2000, 1000) == Next::Wait);
+    using steam_client::State;
+    const State down{false, false, false, 0};
+    const State starting{true, false, true, 2000};
+    const State ready{true, true, true, 500};
+    const State noKeyNew{true, false, false, 1000};
+    const State noKeyOld{true, false, false, steam_client::kNoLoginGraceMs};
+    check("signed in: go", steam_client::next(ready, 500) == Next::Go);
+    check("starting: wait", steam_client::next(starting, 5000) == Next::Wait);
+    check("not up yet: wait", steam_client::next(down, 5000) == Next::Wait);
+    check("no ActiveUser key: a Steam that has been up a while goes at once",
+          steam_client::next(noKeyOld, 0) == Next::Go);
+    check("one just started gets its sign-in time",
+          steam_client::next(noKeyNew, 2000) == Next::Wait);
     check("and nothing waits for good",
-          steam_client::next(starting, steam_client::kTimeoutMs, 80000) == Next::GiveUp
-              && steam_client::next(down, steam_client::kTimeoutMs, 0) == Next::GiveUp);
+          steam_client::next(starting, steam_client::kTimeoutMs) == Next::GiveUp
+              && steam_client::next(down, steam_client::kTimeoutMs) == Next::GiveUp);
 }
 
 } // namespace steam_section
