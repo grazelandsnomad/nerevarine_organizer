@@ -1469,9 +1469,12 @@ void MainWindow::loadModList(const QString &path,
     // A freshly loaded list is in saved order; end any temporary view sort.
     clearViewSortState();
     m_modList->clear();
-    // What a batch update did is about the list being replaced.
+    // What a batch update did is about the list being replaced, and a check
+    // still out for it can no longer mark a row of this one: a reply that
+    // never came must not keep the button from ever offering Update All.
     m_updateNote = {};
     if (m_updateNoteTimer) m_updateNoteTimer->stop();
+    m_checksRunning = 0;
 
     // Schema-versioned read.  parseModlist sniffs the first non-empty
     // line: if it's the v2 JSONL header, dispatch to the JSON parser;

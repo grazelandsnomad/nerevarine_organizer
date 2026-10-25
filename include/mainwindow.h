@@ -56,6 +56,7 @@ class UndoStack;
 class ZoomController;
 class FilterBar;
 class NotifyBanner;
+namespace ReviewUpdates { struct Candidate; }
 class ColumnHeader;
 class ForbiddenModsRegistry;
 class ToolbarCustomization;
@@ -127,6 +128,12 @@ private slots:
     void onMoveUp();
     void onMoveDown();
     void onCheckUpdates();
+    // The toolbar's Check Updates button: a check, or Update All while the
+    // last check's finds wait (updateCheckUpdatesButton says which).
+    void onCheckUpdatesButton();
+    // Start every update a check found this session that nothing has
+    // started since (ModlistModel::pendingUpdateRows), no questions asked.
+    void onUpdateAll();
     // The same check narrowed to named mods, for the launch dialog's "check
     // these for updates". Labels are matched against each row's display name,
     // which is what the deploy manifest recorded them as. Returns how many
@@ -733,6 +740,15 @@ private:
     void updateUntranslatedButton();
     // Repaint m_themeBtn to name the theme it switches TO.
     void updateThemeButton();
+    // Check Updates, green; or "Update All (N)", red, while N of the last
+    // check's finds wait and no check is running. Cheap and read-only: run
+    // through scheduleCheckButtonRefresh, at most once per event-loop turn.
+    void updateCheckUpdatesButton();
+    void scheduleCheckButtonRefresh();
+    // The update paths' common start: each row still there and not already
+    // updating gets prepareItemForInstall + a file list fetched without the
+    // picker. Returns how many started.
+    int  startUpdates(const QList<ReviewUpdates::Candidate> &picked);
     // Re-bake text colours into the transparent toolbar buttons (Profile, theme
     // toggle) from the live palette after a theme swap.
     void restyleToolbarTextButtons();
@@ -779,6 +795,13 @@ private:
     };
     UpdateNote                        m_updateNote;
     QTimer                           *m_updateNoteTimer = nullptr;
+    // The Check Updates button and its other face, Update All.
+    QAction     *m_actCheckUpdates  = nullptr;  // text + tooltip; the button copies them
+    QToolButton *m_checkUpdatesBtn  = nullptr;  // the stylesheet: green, or red
+    QTimer      *m_checkButtonTimer = nullptr;  // 0 ms: one refresh per burst of row changes
+    int          m_checksRunning    = 0;        // checks dispatched, not yet finished
+    bool         m_updateAllMode    = false;    // the button reads Update All
+    qint64       m_updateAllSinceMs = 0;        // when it last turned red (double-click guard)
     DownloadQueue                    *m_downloadQueue = nullptr;
     // Bulk-install throttle: drip-feeds onInstallFromNexus to avoid hammering
     // the Nexus rate-limiter and stacking modal pickers.

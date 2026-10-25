@@ -2,6 +2,7 @@
 
 #include "modlist_model.h"
 #include "modentry.h"
+#include "modrow.h"
 #include "game_profiles.h"
 #include "settings.h"
 #include "target_language.h"
@@ -369,6 +370,40 @@ static void mm_testRowsOfOnePage()
     check("no file id, no match", m.findRowWithFile("fallout4", 100, 0, 0) == -1);
 }
 
+// What the window's row hooks read off a change: the "disable these too?"
+// question waits for a check-state write, and the toolbar's Update All
+// recounts on its roles or on a whole-row update, which names none.
+static void mm_testWritesNameTheirRole()
+{
+    std::cout << "\n[a check-state write names its role; a whole-row update names none]\n";
+    ModlistModel m;
+    ModEntry e = mm_installedMod("A", QStringLiteral("https://www.nexusmods.com/morrowind/mods/1"));
+    e.checked = true;
+    m.append(e);
+    const QUuid id = m.at(0).rowId;
+    QSignalSpy spy(&m, &QAbstractItemModel::dataChanged);
+    auto rolesOf = [&](int i) { return spy.at(i).at(2).value<QList<int>>(); };
+
+    // The checkbox: the delegate writes the state through setData.
+    m.setData(m.index(0), int(Qt::Unchecked), Qt::CheckStateRole);
+    check("unticking through the view names Qt::CheckStateRole",
+          spy.size() == 1 && rolesOf(0) == QList<int>({Qt::CheckStateRole}));
+    // A section toggle and the context menu: ModRow::setCheckState.
+    ModRow(&m, id).setCheckState(Qt::Checked);
+    check("and so does ModRow::setCheckState",
+          spy.size() == 2 && rolesOf(1) == QList<int>({Qt::CheckStateRole}));
+
+    ModEntry u = m.at(0);
+    u.updateAvailable = true;
+    u.updateFoundThisSession = true;
+    m.update(0, u);
+    check("a whole-row update names no role",
+          spy.size() == 3 && rolesOf(2).isEmpty());
+    ModRow(&m, id).setData(ModRole::UpdateFoundThisSession, false);
+    check("an update-mark write names its own role",
+          spy.size() == 4 && rolesOf(3) == QList<int>({ModRole::UpdateFoundThisSession}));
+}
+
 static void run_modlist_model()
 {
     std::cout << "=== ModlistModel ===\n";
@@ -388,6 +423,7 @@ static void run_modlist_model()
     mm_testAllReturnsIndependentSnapshot();
     mm_testPendingUpdateRows();
     mm_testRowsOfOnePage();
+    mm_testWritesNameTheirRole();
 }
 
 // --- modlist profiles ---

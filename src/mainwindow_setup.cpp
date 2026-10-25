@@ -371,6 +371,8 @@ public:
 
 } // namespace
 
+static QString checkUpdatesButtonStyle(bool updateAll);   // below
+
 void MainWindow::setupToolbar()
 {
     auto *tb = addToolBar("Main");
@@ -584,23 +586,29 @@ void MainWindow::setupToolbar()
     auto *checkBar = addToolBar(QStringLiteral("Check Updates"));
     checkBar->setMovable(false);
     checkBar->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    auto *actCheck = checkBar->addAction(T("toolbar_check_updates"), this, &MainWindow::onCheckUpdates);
-    if (auto *btn = qobject_cast<QToolButton *>(checkBar->widgetForAction(actCheck))) {
-        btn->setStyleSheet(
-            "QToolButton {"
-            "  background-color: #1a8a1a;"
-            "  color: white;"
-            "  font-weight: bold;"
-            "  border-radius: 4px;"
-            "  padding: 3px 10px;"
-            "}"
-            "QToolButton:hover {"
-            "  background-color: #22a822;"
-            "}"
-            "QToolButton:pressed {"
-            "  background-color: #156815;"
-            "}");
-    }
+    m_actCheckUpdates = checkBar->addAction(T("toolbar_check_updates"),
+                                            this, &MainWindow::onCheckUpdatesButton);
+    m_checkUpdatesBtn = qobject_cast<QToolButton *>(checkBar->widgetForAction(m_actCheckUpdates));
+    if (m_checkUpdatesBtn) m_checkUpdatesBtn->setStyleSheet(checkUpdatesButtonStyle(false));
+
+    // While the last check's finds wait, the same button updates them all.
+    // The rows say when that changes; the refresh waits for the end of the
+    // burst (a check clears and sets its marks one row at a time), and the
+    // handlers below only test a role and restart the timer.
+    m_checkButtonTimer = new QTimer(this);
+    m_checkButtonTimer->setSingleShot(true);
+    m_checkButtonTimer->setInterval(0);
+    connect(m_checkButtonTimer, &QTimer::timeout, this, &MainWindow::updateCheckUpdatesButton);
+    connect(&m_model, &QAbstractItemModel::dataChanged, this,
+            [this](const QModelIndex &, const QModelIndex &, const QList<int> &roles) {
+        if (roles.isEmpty() || roles.contains(ModRole::UpdateAvailable)
+            || roles.contains(ModRole::UpdateFoundThisSession)
+            || roles.contains(ModRole::InstallStatus) || roles.contains(ModRole::NexusUrl))
+            scheduleCheckButtonRefresh();
+    });
+    connect(&m_model, &QAbstractItemModel::modelReset,   this, &MainWindow::scheduleCheckButtonRefresh);
+    connect(&m_model, &QAbstractItemModel::rowsInserted, this, &MainWindow::scheduleCheckButtonRefresh);
+    connect(&m_model, &QAbstractItemModel::rowsRemoved,  this, &MainWindow::scheduleCheckButtonRefresh);
 
     // Register every customizable toolbar entry so the "Customize toolbar…"
     // dialog can show and persist a checkbox per item.  The game selector
@@ -621,7 +629,7 @@ void MainWindow::setupToolbar()
     m_tbCustom->registerAction("sort_separators",       actSortSeps,              T("toolbar_sort_separators"),      /*defaultVisible=*/false);
     m_tbCustom->registerAction("forbidden_mods",        actForbidden,             T("menu_forbidden_mods"));
     m_tbCustom->registerAction("remove_mod",            actRemove,                T("toolbar_remove"),               /*defaultVisible=*/false);
-    m_tbCustom->registerAction("check_updates",         actCheck,                 T("toolbar_check_updates"));
+    m_tbCustom->registerAction("check_updates",         m_actCheckUpdates,        T("toolbar_check_updates"));
     m_tbCustom->registerAction("review_updates",        actReview,                T("toolbar_review_updates"),       /*defaultVisible=*/false);
     m_tbCustom->registerAction("restore_backup",        actRestore,               T("toolbar_restore_backup"));
     m_tbCustom->registerAction("good_states",           actGoodStates,            T("toolbar_good_states"));
@@ -637,6 +645,57 @@ void MainWindow::setupToolbar()
     updateGameButton(); // sets game button text/menu + shows correct launch button(s)
     updateProfileButton();
     m_tbCustom->applyAll();
+}
+
+// Filled, so it reads the same on either theme: green for Check Updates, red
+// while it offers Update All.
+static QString checkUpdatesButtonStyle(bool updateAll)
+{
+    const char *base    = updateAll ? "#c0392b" : "#1a8a1a";
+    const char *hover   = updateAll ? "#d9473a" : "#22a822";
+    const char *pressed = updateAll ? "#962d22" : "#156815";
+    return QStringLiteral(
+        "QToolButton {"
+        "  background-color: %1;"
+        "  color: white;"
+        "  font-weight: bold;"
+        "  border-radius: 4px;"
+        "  padding: 3px 10px;"
+        "}"
+        "QToolButton:hover {"
+        "  background-color: %2;"
+        "}"
+        "QToolButton:pressed {"
+        "  background-color: %3;"
+        "}").arg(QLatin1String(base), QLatin1String(hover), QLatin1String(pressed));
+}
+
+void MainWindow::scheduleCheckButtonRefresh()
+{
+    if (m_checkButtonTimer) m_checkButtonTimer->start();
+}
+
+void MainWindow::updateCheckUpdatesButton()
+{
+    if (!m_actCheckUpdates) return;
+    // A running check has cleared the marks it is about to set again; its
+    // count means nothing until it is done.
+    const int n = m_checksRunning > 0 ? 0 : int(m_model.pendingUpdateRows().size());
+    const bool updateAll = n > 0;
+    if (updateAll != m_updateAllMode) {
+        m_updateAllMode = updateAll;
+        if (updateAll) m_updateAllSinceMs = QDateTime::currentMSecsSinceEpoch();
+        if (m_checkUpdatesBtn)
+            m_checkUpdatesBtn->setStyleSheet(checkUpdatesButtonStyle(updateAll));
+    }
+    // QAction ignores a text or tooltip it already has.
+    if (updateAll) {
+        m_actCheckUpdates->setText(T("toolbar_update_all").arg(n));
+        m_actCheckUpdates->setToolTip(T("toolbar_update_all_tip").arg(n));
+    } else {
+        m_actCheckUpdates->setText(T("toolbar_check_updates"));
+        m_actCheckUpdates->setToolTip(QString());
+    }
 }
 
 void MainWindow::restyleToolbarTextButtons()

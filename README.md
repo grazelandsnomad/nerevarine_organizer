@@ -27,6 +27,9 @@ Installers stopped choosing for a setup they could not see:
   (Next-Gen or Anniversary), and nested install conditions are read whole.
 - **Start works with Steam closed**: it opens Steam, waits for it, then starts
   the game through its script extender.
+- **Update All**: when Check Updates finds updates, its button turns red and
+  updates them all in one click, each mod to the new version of the file you
+  installed.
 - **A plugin whose master is missing is left out of the load order** and
   marked red, instead of stopping a Bethesda game as it loads; each plugin
   now loads after its own masters.

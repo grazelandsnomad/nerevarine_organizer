@@ -142,9 +142,6 @@
 #include "deps_resolver.h"
 #include <QFutureWatcher>
 #include <QtConcurrentRun>
-
-#include <algorithm>
-#include <utility>
 // From src/pluginparser.cpp.
 using plugins::collectDataFolders;
 using plugins::readTes3Masters;
@@ -154,8 +151,10 @@ static QList<firstrun::GameChoice> builtinGameChoices();
 #include <QDropEvent>
 #include <QMimeData>
 
+#include <algorithm>
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <utility>
 
 // Drop onto a separator lands just after it (mod becomes the section's first
@@ -283,7 +282,12 @@ MainWindow::MainWindow(QWidget *parent)
             this, [this](const QUuid &row) {
         ModRow item = replyRow(row, "update check");
         if (!item) return;
-        item->setData(ModRole::UpdateAvailable, true);
+        // The arrow, and that this session's check found it - what the
+        // toolbar's Update All counts - in one write, as one row change.
+        ModEntry e = item.entry();
+        e.updateAvailable        = true;
+        e.updateFoundThisSession = true;
+        item.model()->update(item.row(), std::move(e));
         m_modList->update(m_modList->indexFromItem(item));
         // Tint the parent separator grey to nudge update-or-delete; clears once
         // every mod in the section is resolved.
@@ -1124,6 +1128,10 @@ void MainWindow::prepareItemForInstall(ModRow item)
     if (name.isEmpty()) name = item->text();
     item->setText(QString("⠋ %1 (%2)").arg(T("status_installing_label"), name));
     mod_row::setInstallStatus(item, InstallStatus::Installing);
+    // Started: Update All no longer counts it, and an update that fails or is
+    // cancelled keeps its arrow without turning the button red again.
+    if (item->data(ModRole::UpdateFoundThisSession).toBool())
+        item->setData(ModRole::UpdateFoundThisSession, false);
     // Mint a stable per-install identity so InstallController signals can
     // route back to this row even after a profile switch parks it in
     // m_strandedInstalls.  Reuse an existing token if one is already
@@ -1784,10 +1792,15 @@ collectUpdateTargets(ModListView *modList, const QStringList &only)
         // recount and a rescheduled conflict scan per row, all at once on the
         // UI thread. That burst is what kept restarting the conflict scan
         // while the UI thread was busy, the conditions for its worst crash.
-        if (item->data(ModRole::UpdateAvailable).toBool())
-            item->setData(ModRole::UpdateAvailable, false);
-        if (!item->data(ModRole::FileSuperseded).toString().isEmpty())
-            item->setData(ModRole::FileSuperseded, QVariant());
+        // So, too, all of a row's marks go in one write.
+        if (const ModEntry &cur = item.entry();
+            cur.updateAvailable || cur.updateFoundThisSession || !cur.fileSuperseded.isEmpty()) {
+            ModEntry e = cur;
+            e.updateAvailable        = false;
+            e.updateFoundThisSession = false;
+            e.fileSuperseded.clear();
+            item.model()->update(item.row(), std::move(e));
+        }
         toCheck.append({mod_row::rowId(item), ref->game, ref->modId,
                         item->data(ModRole::NexusFileId).toLongLong()});
     }
@@ -1822,6 +1835,8 @@ void MainWindow::onCheckUpdates()
     }
 
     statusBar()->showMessage(T("check_updates_checking").arg(toCheck.size()));
+    ++m_checksRunning;
+    scheduleCheckButtonRefresh();
     m_nexusCtl->checkForUpdates(toCheck, [this](const QUuid &row) {
         return updateBaseline(rowById(row));
     });
@@ -1847,6 +1862,8 @@ int MainWindow::checkUpdatesForMods(const QStringList &labels)
     // something to claim was looked at.
     statusBar()->showMessage(T("check_updates_checking").arg(toCheck.size()));
     m_reviewAfterCheck = true;
+    ++m_checksRunning;
+    scheduleCheckButtonRefresh();
     m_nexusCtl->checkForUpdates(toCheck, [this](const QUuid &row) {
         return updateBaseline(rowById(row));
     });
@@ -1855,6 +1872,10 @@ int MainWindow::checkUpdatesForMods(const QStringList &labels)
 
 void MainWindow::onCheckUpdatesFinished(int foundCount, int supersededCount)
 {
+    // The marks are final now; the button may offer Update All.
+    if (m_checksRunning > 0) --m_checksRunning;
+    scheduleCheckButtonRefresh();
+
     // Final sweep once the batch of per-mod checks has drained: covers the
     // edge case where onCheckUpdates cleared every stale UpdateAvailable flag
     // and the new batch found nothing, so no updateFoundForItem fired to
@@ -1890,6 +1911,18 @@ void MainWindow::onCheckUpdatesFinished(int foundCount, int supersededCount)
     if (review && foundCount > 0) onReviewUpdates();
 }
 
+// A row as the update paths take it, or nothing for a URL that is no Nexus
+// mod page.
+static std::optional<ReviewUpdates::Candidate> updateCandidate(const ModRow &it)
+{
+    const QString url = it->data(ModRole::NexusUrl).toString();
+    const auto ref = parseNexusModUrl(url);
+    if (!ref) return std::nullopt;
+    QString name = it->data(ModRole::CustomName).toString();
+    if (name.isEmpty()) name = it->text();
+    return ReviewUpdates::Candidate{mod_row::rowId(it), name, ref->game, ref->modId, url};
+}
+
 // Batch-update review screen
 //
 // Collects every mod the last onCheckUpdates pass flagged with
@@ -1918,14 +1951,7 @@ void MainWindow::onReviewUpdates()
         // Already on its way: queueing it again corrupts the download queue,
         // which keeps one entry per row.
         if (mod_row::isInstalling(it))                               continue;
-
-        const QString url = it->data(ModRole::NexusUrl).toString();
-        const auto ref = parseNexusModUrl(url);
-        if (!ref) continue;
-
-        QString name = it->data(ModRole::CustomName).toString();
-        if (name.isEmpty()) name = it->text();
-        candidates.append({mod_row::rowId(it), name, ref->game, ref->modId, url});
+        if (auto c = updateCandidate(it)) candidates.append(*c);
     }
 
     if (candidates.isEmpty()) {
@@ -1935,18 +1961,57 @@ void MainWindow::onReviewUpdates()
 
     const auto picked = ReviewUpdates::showDialog(this, candidates);
     if (picked.isEmpty()) return;
+    startUpdates(picked);
+}
 
+void MainWindow::onCheckUpdatesButton()
+{
+    if (!m_updateAllMode) {
+        onCheckUpdates();
+        return;
+    }
+    // A short list is checked in one round trip, so the second click of a
+    // double-click on Check Updates can land on Update All. Not a request
+    // to update anything.
+    if (QDateTime::currentMSecsSinceEpoch() - m_updateAllSinceMs
+            < QApplication::doubleClickInterval())
+        return;
+    onUpdateAll();
+}
+
+void MainWindow::onUpdateAll()
+{
+    if (m_apiKey.isEmpty()) {
+        ui::info(this, T("nxm_api_key_required_title"), T("nxm_api_key_required_body"));
+        onSetApiKey();
+        if (m_apiKey.isEmpty()) return;
+    }
+    QList<ReviewUpdates::Candidate> candidates;
+    for (int i : m_model.pendingUpdateRows())
+        if (auto c = updateCandidate(m_modList->item(i))) candidates.append(*c);
+    startUpdates(candidates);
+    // Started rows no longer count; the button reads Check Updates again.
+    scheduleCheckButtonRefresh();
+}
+
+int MainWindow::startUpdates(const QList<ReviewUpdates::Candidate> &picked)
+{
     // Single-slot download queue (kMaxConcurrentDownloads=1) serialises the
     // actual network I/O, so we just loop and kick each one off.
-    statusBar()->showMessage(T("review_updates_kicking_off").arg(picked.size()));
+    int started = 0;
     for (const auto &c : picked) {
-        // Re-validate: the user could have removed a row between check-updates
-        // and the dialog exec.
+        // Re-validate: the row may be gone, or already updating, since the
+        // list was made (a dialog was open, or a reply landed in between).
         ModRow item = rowById(c.row);
         if (!item || mod_row::isInstalling(item)) continue;
         prepareItemForInstall(item);
         fetchModFiles(c.game, c.modId, item, /*autoPickMain=*/true);
+        ++started;
     }
+    // After the loop: each fetch writes its own "fetching files" line.
+    if (started > 0)
+        statusBar()->showMessage(T("review_updates_kicking_off").arg(started));
+    return started;
 }
 
 const NexusClient::FileEntry *MainWindow::updatePick(
@@ -2974,6 +3039,7 @@ void MainWindow::strandInflightInstalls()
         const ModEntry &e = m_model.at(i);
         if (!e.isMod() || !e.isInstalling()) continue;
         ModEntry taken = m_model.takeAt(i);
+        taken.updateFoundThisSession = false;   // a find of the list switched away from
         stranded.prepend(taken.rowId);
         m_parked.append(std::move(taken));
     }
