@@ -927,23 +927,31 @@ void MainWindow::setupCentralWidget()
             updateModCount();
             updateSectionCounts();
             scheduleConflictScan();
+        }
+    });
 
-            // Someone just turned a mod off. Queue it; the check runs on the
-            // next turn of the event loop (see m_depWarnTimer) so no dialog is
-            // ever exec'd from inside setData, and a bulk section toggle asks
-            // once instead of once per row.
-            //
-            // Only Unchecked is hooked, and that is what bounds this to the
-            // three real disable paths: every other live-row setCheckState in
-            // the app sets Checked, and every path that unchecks - loading,
-            // importing, undo - does it before addItem, which emits nothing.
-            if (item->checkState() == Qt::Unchecked && !m_depWarnSuspended
-                && m_depWarnTimer
-                && (!m_undoStack || !m_undoStack->isApplyingState())) {
-                m_pendingDisables.append(
-                    QPersistentModelIndex(m_modList->indexFromItem(item)));
-                m_depWarnTimer->start();
-            }
+    // Someone just turned a mod off. Queue it; the check runs on the next
+    // turn of the event loop (see m_depWarnTimer) so no dialog is ever exec'd
+    // from inside setData, and a bulk section toggle asks once instead of
+    // once per row.
+    //
+    // A write of the check state itself, to Unchecked: that is what bounds
+    // this to the three real disable paths - every other live-row
+    // setCheckState in the app sets Checked, and every path that unchecks -
+    // loading, importing, undo - does it before addItem, which emits nothing.
+    // Hooked on any change to a row that was off, it asked "disable these
+    // too?" about a mod switched off long ago, whenever an update check
+    // marked it or an update of it landed.
+    connect(&m_model, &QAbstractItemModel::dataChanged, this,
+            [this](const QModelIndex &tl, const QModelIndex &br, const QList<int> &roles) {
+        if (!roles.contains(Qt::CheckStateRole) || m_depWarnSuspended || !m_depWarnTimer
+            || (m_undoStack && m_undoStack->isApplyingState()))
+            return;
+        for (int r = tl.row(); r <= br.row(); ++r) {
+            ModRow item = m_modList->item(r);
+            if (!mod_row::isMod(item) || item->checkState() != Qt::Unchecked) continue;
+            m_pendingDisables.append(QPersistentModelIndex(m_modList->indexFromItem(item)));
+            m_depWarnTimer->start();
         }
     });
 
