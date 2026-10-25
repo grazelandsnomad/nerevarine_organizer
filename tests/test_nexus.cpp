@@ -150,6 +150,10 @@ static void testFilesList()
         check("archived ancestors dropped",
               std::none_of(l.begin(), l.end(),
                            [](const auto &f) { return f.fileId == 7001 || f.fileId == 7002; }));
+        check("the survivor knows every upload it replaces",
+              l.size() > 0 && l[0].replaces == QList<int>({7001, 7002, 8001}));
+        check("a file in no chain replaces nothing",
+              l.size() > 1 && l[1].replaces.isEmpty());
     }
 
     // Empty "files" array -> empty list, not error (zero-file mod is real).
@@ -174,6 +178,181 @@ static void testFilesList()
     check("array top-level → WrongShape",
           !wrong && wrong.error().kind == K::WrongShape,
           wrong ? QString() : wrong.error().toString());
+}
+
+// What each kept file replaces, for an update that has to find the new copy
+// of the file a row was installed from.
+static void testFilesListSuccession()
+{
+    std::cout << "\nparseFilesList succession:\n";
+    auto parse = [](const char *json) {
+        return NexusClient::parseFilesList(QByteArray(json)).value_or(QList<NexusClient::FileEntry>{});
+    };
+    auto byId = [](const QList<NexusClient::FileEntry> &l, int id) -> const NexusClient::FileEntry * {
+        for (const auto &f : l) if (f.fileId == id) return &f;
+        return nullptr;
+    };
+
+    // The installed 50 and the intermediate 200 are gone from the page; 100
+    // is still listed as an old version, 300 is the current file.
+    const auto gaps = parse(R"({
+        "files": [
+            { "file_id": 100, "name": "Mod", "category_name": "OLD_VERSION" },
+            { "file_id": 300, "name": "Mod", "category_name": "MAIN" }
+        ],
+        "file_updates": [
+            { "old_file_id": 50,  "new_file_id": 100 },
+            { "old_file_id": 100, "new_file_id": 200 },
+            { "old_file_id": 200, "new_file_id": 300 }
+        ]
+    })");
+    const auto *head = byId(gaps, 300);
+    check("deleted and listed ancestors all lead to the current file",
+          gaps.size() == 1 && head && head->replaces == QList<int>({50, 100, 200}),
+          head ? QString::number(head->replaces.size()) : QStringLiteral("no 300"));
+
+    // A chain that runs on into a file the page no longer lists ends at the
+    // last one it does list.
+    const auto tail = parse(R"({
+        "files": [ { "file_id": 400, "name": "Mod", "category_name": "MAIN" } ],
+        "file_updates": [
+            { "old_file_id": 390, "new_file_id": 400 },
+            { "old_file_id": 400, "new_file_id": 500 }
+        ]
+    })");
+    const auto *f400 = byId(tail, 400);
+    check("the head is the last listed file, not the end of the chain",
+          f400 && f400->replaces == QList<int>({390}));
+
+    const auto viaUnlisted = parse(R"({
+        "files": [ { "file_id": 1, "name": "Mod", "category_name": "MAIN" } ],
+        "file_updates": [
+            { "old_file_id": 1, "new_file_id": 9 },
+            { "old_file_id": 9, "new_file_id": 1 }
+        ]
+    })");
+    const auto *f1 = byId(viaUnlisted, 1);
+    check("a cycle through an unlisted file ends", f1 && f1->replaces == QList<int>({9}));
+
+    const auto listedCycle = parse(R"({
+        "files": [
+            { "file_id": 1, "name": "A", "category_name": "MAIN" },
+            { "file_id": 2, "name": "B", "category_name": "MAIN" }
+        ],
+        "file_updates": [
+            { "old_file_id": 1, "new_file_id": 2 },
+            { "old_file_id": 2, "new_file_id": 1 }
+        ]
+    })");
+    check("a cycle of listed files ends (both dropped, as before)", listedCycle.isEmpty());
+
+    const auto selfLoop = parse(R"({
+        "files": [ { "file_id": 5, "name": "Mod", "category_name": "MAIN" } ],
+        "file_updates": [ { "old_file_id": 5, "new_file_id": 5 } ]
+    })");
+    check("a file that names itself replaces nothing",
+          selfLoop.size() == 1 && selfLoop[0].replaces.isEmpty());
+
+    const auto noChain = parse(R"({
+        "files": [ { "file_id": 5, "name": "Mod", "category_name": "MAIN" } ]
+    })");
+    check("no file_updates, nothing replaced",
+          noChain.size() == 1 && noChain[0].replaces.isEmpty());
+}
+
+static void testUpdateTarget()
+{
+    std::cout << "\n[file_status::updateTarget]\n";
+    using K = file_status::UpdateTarget::Kind;
+    using file_status::PageFile;
+    auto target = [](const QList<PageFile> &page, qint64 installed, qint64 fallback,
+                     bool safe = false) {
+        return file_status::updateTarget(page, installed, fallback, safe);
+    };
+    auto installs = [](const file_status::UpdateTarget &t, qint64 id) {
+        return t.kind == K::Install && t.fileId == id;
+    };
+
+    // The page's record wins over the name and over the page's default.
+    const QList<PageFile> chained = {
+        {20, "Mod 2K", "2", "MAIN", {10}},
+        {21, "Mod 4K", "2", "MAIN", {11}},
+    };
+    check("the 4K row gets the 4K file the page says replaced it",
+          installs(target(chained, 11, 20), 21));
+    check("the 2K row gets the 2K one", installs(target(chained, 10, 20), 20));
+
+    const QList<PageFile> archivedHead = {
+        {30, "Mod", "3", "ARCHIVED", {12}},
+        {31, "Mod Other", "1", "MAIN", {}},
+    };
+    check("a replacement the page itself retired is not installed",
+          target(archivedHead, 12, 31).kind == K::NeedsPick);
+
+    // Same name, newer upload, the old one still up.
+    const QList<PageFile> twoMains = {
+        {40, "Mod", "1.0", "MAIN", {}},
+        {41, "Mod", "1.1", "MAIN", {}},
+    };
+    check("a newer MAIN under the same name is the update",
+          installs(target(twoMains, 40, 40), 41));
+    check("the newest file is already the newest",
+          target(twoMains, 41, 41).kind == K::AlreadyNewest);
+
+    // Variants: different names are different files.
+    const QList<PageFile> variants = {
+        {50, "Mod", "2", "MAIN", {}},
+        {51, "Mod - Lite", "2", "MAIN", {}},
+        {52, "Mod 1K", "2", "MAIN", {}},
+        {53, "Mod 2K", "3", "MAIN", {}},
+    };
+    check("a Lite row is not handed the page's main file",
+          target(variants, 51, 50).kind == K::NeedsPick);
+    check("1K and 2K are not the same file",
+          target(variants, 52, 50).kind == K::NeedsPick);
+    check("the page's default, when it is yours, is already the newest",
+          target(variants, 50, 50).kind == K::AlreadyNewest);
+
+    // An optional file nobody touched is current, even on a page whose main
+    // file moved on.
+    const QList<PageFile> withOptional = {
+        {60, "Mod", "2", "MAIN", {59}},
+        {61, "Mod - Patch for X", "1", "OPTIONAL", {}},
+    };
+    check("an optional row whose file is unchanged is already the newest",
+          target(withOptional, 61, 60).kind == K::AlreadyNewest);
+    check("the main row on that page follows its chain",
+          installs(target(withOptional, 59, 60), 60));
+
+    // Tamriel Data: SD superseded under its own name, HD moved off the page.
+    const QList<PageFile> tamriel = {
+        {1000052258, "Tamriel Data (HD)", "25.05", "ARCHIVED", {}},
+        {1000052301, "Tamriel Data (SD)", "25.05", "OLD_VERSION", {}},
+        {1000068848, "Tamriel_Data  (sd)", "26.08", "MAIN", {}},
+    };
+    check("SD 25.05 updates to SD 26.08, whatever the spelling",
+          installs(target(tamriel, 1000052301, 1000068848), 1000068848));
+    check("HD, archived with only SD left, is not swapped for SD",
+          target(tamriel, 1000052258, 1000068848).kind == K::NeedsPick);
+    check("nor is an HD file the page no longer lists",
+          target(tamriel, 1000060000, 1000068848, true).kind == K::NeedsPick);
+
+    const QList<PageFile> spaced = {
+        {70, "Mod", "1", "OLD VERSION", {}},
+        {71, "Mod", "2", "MAIN", {}},
+    };
+    check("\"OLD VERSION\" with a space counts as retired",
+          installs(target(spaced, 70, 71), 71));
+
+    // Nothing known about the installed file.
+    const QList<PageFile> lone = {{80, "Mod", "2", "MAIN", {}}};
+    check("unknown file, safe fallback: the fallback",
+          installs(target(lone, 0, 80, true), 80));
+    check("unknown file, unsafe fallback: left for the picker",
+          target(lone, 0, 80, false).kind == K::NeedsPick);
+    check("unknown file, no fallback: left for the picker",
+          target(lone, 0, 0, true).kind == K::NeedsPick);
+    check("an empty page answers nothing", target({}, 40, 0, true).kind == K::NeedsPick);
 }
 
 static void testDownloadUri()
@@ -378,8 +557,8 @@ static void testFileStatusJudge()
 
     // Names are retyped between uploads without meaning another file.
     QList<file_status::PageFile> moved = {
-        {1, "Tamriel Data (HD)", "25.05", "ARCHIVED"},
-        {2, "Tamriel_Data  (hd)", "26.08", "MAIN"},
+        {1, "Tamriel Data (HD)", "25.05", "ARCHIVED", {}},
+        {2, "Tamriel_Data  (hd)", "26.08", "MAIN", {}},
     };
     check("underscores, spacing and case do not hide the replacement",
           file_status::judge(1, moved).replacement.fileId == 2);
@@ -391,10 +570,12 @@ static void run_nexus_client()
 
     testModInfo();
     testFilesList();
+    testFilesListSuccession();
     testDownloadUri();
     testValidateUser();
     testParseModFilesV2();
     testFileStatusJudge();
+    testUpdateTarget();
 }
 
 using deps::ModEntry;

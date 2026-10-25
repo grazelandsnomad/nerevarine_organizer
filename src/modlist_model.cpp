@@ -296,6 +296,51 @@ int ModlistModel::findInstalledByModId(const QString &game, int modId,
     return -1;
 }
 
+bool ModlistModel::hasOtherRowOfPage(const QString &game, int modId,
+                                     int exceptRow) const
+{
+    const QString gameLc = game.toLower();
+    for (int i = 0; i < m_entries.size(); ++i) {
+        if (i == exceptRow) continue;
+        const ModEntry &e = m_entries[i];
+        if (!e.isMod() || (!e.isInstalled() && !e.isInstalling())) continue;
+        const auto ref = parseNexusModUrl(e.nexusUrl);
+        if (ref && ref->modId == modId && ref->game == gameLc) return true;
+    }
+    return false;
+}
+
+int ModlistModel::findRowWithFile(const QString &game, int modId, qint64 fileId,
+                                  int exceptRow) const
+{
+    if (fileId <= 0) return -1;
+    const QString gameLc = game.toLower();
+    for (int i = 0; i < m_entries.size(); ++i) {
+        if (i == exceptRow) continue;
+        const ModEntry &e = m_entries[i];
+        if (!e.isMod()) continue;
+        const bool has = (e.isInstalled() || e.isInstalling()) && e.nexusFileId == fileId;
+        const bool fetching = e.isInstalling() && e.pendingFileId == fileId;
+        if (!has && !fetching) continue;
+        const auto ref = parseNexusModUrl(e.nexusUrl);
+        if (ref && ref->modId == modId && ref->game == gameLc) return i;
+    }
+    return -1;
+}
+
+QList<int> ModlistModel::pendingUpdateRows() const
+{
+    QList<int> out;
+    for (int i = 0; i < m_entries.size(); ++i) {
+        const ModEntry &e = m_entries[i];
+        if (!e.isMod() || !e.isInstalled()) continue;
+        if (!e.updateAvailable || !e.updateFoundThisSession) continue;
+        if (!parseNexusModUrl(e.nexusUrl)) continue;
+        out.append(i);
+    }
+    return out;
+}
+
 QStringList ModlistModel::modDisplayNames() const
 {
     QStringList out;

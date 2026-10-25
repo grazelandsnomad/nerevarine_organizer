@@ -150,10 +150,12 @@ void markInstalled(ModEntry &e, const QString &modPath)
     e.installStatus = int(InstallStatus::Installed);
     e.downloadProgress = 0;
     e.updateAvailable = false;
+    e.updateFoundThisSession = false;
     clearInstallTransients(e);
     if (wasUpdate || !e.dateAdded.isValid())
         e.dateAdded = QDateTime::currentDateTime();
-    e.checked = true;
+    // A new mod goes in enabled; an update leaves the mod as the user had it.
+    if (!wasUpdate) e.checked = true;
     e.toolTip = modPath;
 }
 void markInstalled(ModRow row, const QString &modPath)

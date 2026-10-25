@@ -907,7 +907,9 @@ void MainWindow::addModFromPath(const QString &dirPath, ModRow placeholder)
     // update-check must compare the Nexus timestamp against.
     if (wasUpdate || !item->data(ModRole::DateAdded).toDateTime().isValid())
         item->setData(ModRole::DateAdded, QDateTime::currentDateTime());
-    item->setCheckState(Qt::Checked);
+    // A new mod goes in enabled. An update leaves it as the user had it: a
+    // mod switched off and updated with the rest is still off.
+    if (!wasUpdate) item->setCheckState(Qt::Checked);
     item->setToolTip(dirPath);
 
     // One folder per mod.  When a Nexus archive is re-downloaded, the default

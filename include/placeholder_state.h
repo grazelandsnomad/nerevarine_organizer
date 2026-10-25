@@ -84,7 +84,8 @@ void resetToNotInstalled(ModRow row, const QString &fallbackName);
 
 // Roll a row forward to "installed at modPath": Mod type, status 1, set path,
 // restore flags, clear updateAvailable + transients, (re)stamp dateAdded on
-// update or when unset, check it, set the tool tip. Display name from
+// update or when unset, check it unless it was an update (an update keeps
+// the mod enabled or disabled as it was), set the tool tip. Display name from
 // customName, falling back to the folder name. Does NOT persist. A null row
 // is left alone.
 void markInstalled(ModEntry &e, const QString &modPath);

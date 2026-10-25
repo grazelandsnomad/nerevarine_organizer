@@ -275,6 +275,100 @@ static void mm_testInstalledModDisplayNames()
           names.join(','));
 }
 
+// pendingUpdateRows: what the toolbar's Update All counts - installed mods
+// whose update a check found this session, with a page to fetch it from.
+static void mm_testPendingUpdateRows()
+{
+    std::cout << "\n[pendingUpdateRows: this session's finds, not yet started]\n";
+    const QString url = QStringLiteral("https://www.nexusmods.com/fallout4/mods/%1");
+    auto flagged = [&](const QString &name, int id) {
+        ModEntry e = mm_installedMod(name, url.arg(id));
+        e.updateAvailable = true;
+        e.updateFoundThisSession = true;
+        return e;
+    };
+    ModlistModel m;
+    m.append(mm_separator("Section"));
+    m.append(flagged("Found", 1));                                   // 1: counted
+    ModEntry saved = mm_installedMod("Saved flag", url.arg(2));
+    saved.updateAvailable = true;                                    // 2: from an earlier session
+    m.append(saved);
+    ModEntry started = flagged("Started", 3);
+    started.updateFoundThisSession = false;                          // 3: an install began
+    m.append(started);
+    ModEntry installing = flagged("Installing", 4);
+    installing.installStatus = 2;                                    // 4: on its way
+    m.append(installing);
+    ModEntry placeholder = flagged("Not installed", 5);
+    placeholder.installStatus = 0;                                   // 5
+    m.append(placeholder);
+    ModEntry noPage = flagged("No page", 6);
+    noPage.nexusUrl = QStringLiteral("not a url");                   // 6: nothing to fetch from
+    m.append(noPage);
+    ModEntry cleared = flagged("Checked again", 7);
+    cleared.updateAvailable = false;                                 // 7: the next check cleared it
+    m.append(cleared);
+    m.append(flagged("Also found", 8));                              // 8: counted
+
+    const QList<int> rows = m.pendingUpdateRows();
+    check("only this session's finds that nothing started, in list order",
+          rows == QList<int>({1, 8}),
+          QString::number(rows.size()));
+
+    // Undo rebuilds every row from a snapshot; the finds come back with it.
+    m.replace(m.all());
+    check("an undo snapshot keeps them", m.pendingUpdateRows() == QList<int>({1, 8}));
+    check("an empty list has none", ModlistModel().pendingUpdateRows().isEmpty());
+}
+
+// The two questions an update without a picker asks about the rest of the
+// list before it downloads anything.
+static void mm_testRowsOfOnePage()
+{
+    std::cout << "\n[hasOtherRowOfPage / findRowWithFile]\n";
+    const QString page = QStringLiteral("https://www.nexusmods.com/fallout4/mods/100");
+    ModlistModel m;
+    ModEntry main = mm_installedMod("Mod", page);
+    main.nexusFileId = 1001;
+    m.append(main);                                                  // 0
+    ModEntry optional = mm_installedMod("Mod - Patch", page);
+    optional.nexusFileId = 1002;
+    m.append(optional);                                              // 1
+    ModEntry fetching = mm_installedMod("Mod - Extra", page);
+    fetching.installStatus = 2;
+    fetching.nexusFileId   = 1003;
+    fetching.pendingFileId = 1004;
+    m.append(fetching);                                              // 2
+    ModEntry otherGame = mm_installedMod("Same id", QStringLiteral(
+        "https://www.nexusmods.com/skyrimspecialedition/mods/100"));
+    otherGame.nexusFileId = 1005;
+    m.append(otherGame);                                             // 3
+    ModEntry lone = mm_installedMod("Lone", QStringLiteral(
+        "https://www.nexusmods.com/fallout4/mods/200"));
+    m.append(lone);                                                  // 4
+    ModEntry placeholder = mm_mod("Queued", QStringLiteral(
+        "https://www.nexusmods.com/fallout4/mods/300"));
+    m.append(placeholder);                                           // 5, not installed
+    m.append(mm_installedMod("Lone too", QStringLiteral(
+        "https://www.nexusmods.com/fallout4/mods/300")));            // 6
+
+    check("the main row has a sibling on its page", m.hasOtherRowOfPage("fallout4", 100, 0));
+    check("a lone row has none",                    !m.hasOtherRowOfPage("fallout4", 200, 4));
+    check("a not-installed placeholder is not a sibling",
+          !m.hasOtherRowOfPage("fallout4", 300, 6));
+    check("the same id on another game is another page",
+          !m.hasOtherRowOfPage("skyrimspecialedition", 100, 3));
+    check("game names match in any case", m.hasOtherRowOfPage("Fallout4", 100, 0));
+
+    check("a file another row has installed is found", m.findRowWithFile("fallout4", 100, 1002, 0) == 1);
+    check("so is one another row is fetching",         m.findRowWithFile("fallout4", 100, 1004, 0) == 2);
+    check("and the file an installing row still has",  m.findRowWithFile("fallout4", 100, 1003, 0) == 2);
+    check("the row asking is skipped",                 m.findRowWithFile("fallout4", 100, 1001, 0) == -1);
+    check("another page with the same id is not looked at",
+          m.findRowWithFile("fallout4", 100, 1005, 0) == -1);
+    check("no file id, no match", m.findRowWithFile("fallout4", 100, 0, 0) == -1);
+}
+
 static void run_modlist_model()
 {
     std::cout << "=== ModlistModel ===\n";
@@ -292,6 +386,8 @@ static void run_modlist_model()
     mm_testModCountsExcludeSeparators();
     mm_testModCountsEmptyModelReturnsZero();
     mm_testAllReturnsIndependentSnapshot();
+    mm_testPendingUpdateRows();
+    mm_testRowsOfOnePage();
 }
 
 // --- modlist profiles ---

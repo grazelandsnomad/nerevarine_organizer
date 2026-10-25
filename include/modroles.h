@@ -82,6 +82,19 @@ namespace ModRole {
     // replaces the mod without asking "Already Installed". Session-only;
     // cleared with the other install transients.
     constexpr int AwaitingUpdateDownload = Qt::UserRole + 61; // bool
+    // UpdateAvailable as found by a check run this session, and not yet
+    // acted on: what the toolbar's Update All counts. Set with
+    // UpdateAvailable when a check finds the update; cleared when the next
+    // check starts and when an install starts on the row, so an update that
+    // fails or is cancelled keeps its arrow but is not counted again. An
+    // UpdateAvailable saved by an earlier session never has it. Session-only.
+    constexpr int UpdateFoundThisSession = Qt::UserRole + 64; // bool
+    // When an update without a picker found the installed file still the
+    // newest on its page (file_status::updateTarget, AlreadyNewest). Check
+    // Updates compares the page's date with the later of this and DateAdded,
+    // so a page that changed without changing this file stops reading as an
+    // update. Saved; invalid when never confirmed.
+    constexpr int ConfirmedCurrentAt     = Qt::UserRole + 65; // QDateTime
     constexpr int DependsOn         = Qt::UserRole + 25; // QStringList of Nexus URLs this mod depends on
     constexpr int HighlightRole     = Qt::UserRole + 26; // int: 0=none, 1=dependency of selected, 2=uses selected
     constexpr int HasMissingDependency  = Qt::UserRole + 27; // bool: ≥1 DependsOn URL is missing/disabled/uninstalled

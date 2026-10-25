@@ -11,6 +11,8 @@
 #include <QUrl>
 #include <QUrlQuery>
 
+#include <algorithm>
+
 namespace {
 constexpr const char *kBaseUrl = "https://api.nexusmods.com";
 }
@@ -442,6 +444,28 @@ NexusClient::parseFilesList(const QByteArray &json)
                 if (!superseded.contains(f.fileId)) current.append(std::move(f));
             out = std::move(current);
         }
+
+        // Keep what the chain says, not only what it drops: each old id goes
+        // to the last still-listed file its chain reaches, so an update knows
+        // which file is the new copy of the one installed even after the old
+        // one left the page. The last listed node, not the first: a listed
+        // intermediate is itself superseded and was dropped above.
+        QHash<int, int> keptAt;
+        for (int i = 0; i < out.size(); ++i) keptAt.insert(out[i].fileId, i);
+        for (auto it = nextOf.cbegin(); it != nextOf.cend(); ++it) {
+            int cur = it.key();
+            int head = 0;
+            QSet<int> seen{cur};
+            while (nextOf.contains(cur)) {
+                cur = nextOf.value(cur);
+                if (seen.contains(cur)) break;          // a cycle
+                seen.insert(cur);
+                if (present.contains(cur)) head = cur;
+            }
+            if (head != 0 && keptAt.contains(head))
+                out[keptAt.value(head)].replaces.append(it.key());
+        }
+        for (FileEntry &f : out) std::sort(f.replaces.begin(), f.replaces.end());
     }
 
     return out;

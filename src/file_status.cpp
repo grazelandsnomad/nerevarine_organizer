@@ -18,6 +18,15 @@ bool isOffered(const QString &category)
     return category == QLatin1String("MAIN") || category == QLatin1String("UPDATE");
 }
 
+// Off the page's current downloads. The v1 list spells the old-version
+// category either way.
+bool isRetired(const QString &category)
+{
+    const QString c = category.toUpper();
+    return c == QLatin1String("OLD_VERSION") || c == QLatin1String("OLD VERSION")
+        || c == QLatin1String("ARCHIVED")    || c == QLatin1String("REMOVED");
+}
+
 } // namespace
 
 Verdict judge(qint64 installedFileId, const QList<PageFile> &pageFiles)
@@ -58,6 +67,47 @@ Verdict judge(qint64 installedFileId, const QList<PageFile> &pageFiles)
             }
     }
     return v;
+}
+
+UpdateTarget updateTarget(const QList<PageFile> &pageFiles, qint64 installedFileId,
+                          qint64 fallbackFileId, bool fallbackIsSafe)
+{
+    using K = UpdateTarget::Kind;
+    const UpdateTarget pick{K::NeedsPick, 0};
+
+    if (installedFileId <= 0)
+        return fallbackIsSafe && fallbackFileId > 0
+            ? UpdateTarget{K::Install, fallbackFileId} : pick;
+
+    // The author's own record of which upload replaced which.
+    for (const PageFile &f : pageFiles)
+        if (f.replaces.contains(installedFileId))
+            return isRetired(f.category) ? pick : UpdateTarget{K::Install, f.fileId};
+
+    const PageFile *mine = nullptr;
+    for (const PageFile &f : pageFiles)
+        if (f.fileId == installedFileId) { mine = &f; break; }
+    if (!mine) return pick;
+
+    // A new upload under the same name. Nexus ids only grow, so the highest
+    // is the newest.
+    const QString want = normalized(mine->name);
+    const bool mineRetired = isRetired(mine->category);
+    const PageFile *next = nullptr;
+    for (const PageFile &f : pageFiles) {
+        if (f.fileId == installedFileId || isRetired(f.category)
+            || normalized(f.name) != want)
+            continue;
+        if (!mineRetired && (f.category != mine->category || f.fileId < installedFileId))
+            continue;
+        if (!next || f.fileId > next->fileId) next = &f;
+    }
+    if (next) return {K::Install, next->fileId};
+    if (mineRetired) return pick;
+
+    if (!isOffered(mine->category) || fallbackFileId == installedFileId)
+        return {K::AlreadyNewest, installedFileId};
+    return pick;
 }
 
 } // namespace file_status

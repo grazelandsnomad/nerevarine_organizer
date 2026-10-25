@@ -142,6 +142,9 @@
 #include "deps_resolver.h"
 #include <QFutureWatcher>
 #include <QtConcurrentRun>
+
+#include <algorithm>
+#include <utility>
 // From src/pluginparser.cpp.
 using plugins::collectDataFolders;
 using plugins::readTes3Masters;
@@ -295,6 +298,12 @@ MainWindow::MainWindow(QWidget *parent)
     });
     connect(m_nexusCtl, &NexusController::checkUpdatesFinished,
             this, &MainWindow::onCheckUpdatesFinished);
+    // The file lists of a batch update come back one by one; the note waits
+    // until they have stopped coming rather than speaking once per mod.
+    m_updateNoteTimer = new QTimer(this);
+    m_updateNoteTimer->setSingleShot(true);
+    m_updateNoteTimer->setInterval(2000);
+    connect(m_updateNoteTimer, &QTimer::timeout, this, &MainWindow::flushUpdateNote);
     connect(m_nexusCtl, &NexusController::titleFetched,
             this, &MainWindow::onTitleFetched);
     connect(m_nexusCtl, &NexusController::modFileSiblings,
@@ -1772,6 +1781,19 @@ collectUpdateTargets(ModListView *modList, const QStringList &only)
     return toCheck;
 }
 
+// What a mod page's last update is measured against: the install, or the
+// later moment an update without a picker found the installed file still the
+// newest on that page.
+static QDateTime updateBaseline(const ModRow &item)
+{
+    if (!item) return {};
+    const ModEntry &e = item.entry();
+    if (e.confirmedCurrentAt.isValid()
+        && (!e.dateAdded.isValid() || e.confirmedCurrentAt > e.dateAdded))
+        return e.confirmedCurrentAt;
+    return e.dateAdded;
+}
+
 void MainWindow::onCheckUpdates()
 {
     if (m_apiKey.isEmpty()) {
@@ -1788,8 +1810,7 @@ void MainWindow::onCheckUpdates()
 
     statusBar()->showMessage(T("check_updates_checking").arg(toCheck.size()));
     m_nexusCtl->checkForUpdates(toCheck, [this](const QUuid &row) {
-        ModRow item = rowById(row);
-        return item ? item->data(ModRole::DateAdded).toDateTime() : QDateTime();
+        return updateBaseline(rowById(row));
     });
 }
 
@@ -1814,8 +1835,7 @@ int MainWindow::checkUpdatesForMods(const QStringList &labels)
     statusBar()->showMessage(T("check_updates_checking").arg(toCheck.size()));
     m_reviewAfterCheck = true;
     m_nexusCtl->checkForUpdates(toCheck, [this](const QUuid &row) {
-        ModRow item = rowById(row);
-        return item ? item->data(ModRole::DateAdded).toDateTime() : QDateTime();
+        return updateBaseline(rowById(row));
     });
     return toCheck.size();
 }
@@ -1863,8 +1883,8 @@ void MainWindow::onCheckUpdatesFinished(int foundCount, int supersededCount)
 // UpdateAvailable=true, shows them in a checklist, updates a subset or "Update
 // All". Selected rows take the same path as the green-triangle arrow:
 // prepare-for-install + fetchModFiles, with autoPickMain so the per-mod file
-// picker is skipped (15 back-to-back modal pickers is worse than taking the
-// first MAIN/UPDATE file).
+// picker is skipped (15 back-to-back modal pickers is worse than one note
+// naming the mods updatePick could not answer for).
 //
 // Single-slot queue (kMaxConcurrentDownloads=1) serialises the network I/O, so
 // just loop and kick each off - they queue and drain one at a time.
@@ -1911,6 +1931,126 @@ void MainWindow::onReviewUpdates()
         prepareItemForInstall(item);
         fetchModFiles(c.game, c.modId, item, /*autoPickMain=*/true);
     }
+}
+
+const NexusClient::FileEntry *MainWindow::updatePick(
+    ModRow item, const QString &game, int modId,
+    const QList<NexusClient::FileEntry> &allFiles,
+    const NexusClient::FileEntry &fallback, bool fallbackDecided)
+{
+    QList<file_status::PageFile> page;
+    page.reserve(allFiles.size());
+    for (const NexusClient::FileEntry &f : allFiles) {
+        file_status::PageFile p{f.fileId, f.name, f.version, f.category, {}};
+        for (int id : f.replaces) p.replaces.append(id);
+        page.append(std::move(p));
+    }
+
+    // The rows this one shares a page with are in its own list: the live
+    // one, or the parked rows of a profile switched away from mid-batch.
+    ModlistModel *rows = item.model();
+    const int self = item.row();
+    const bool safe = fallbackDecided && !rows->hasOtherRowOfPage(game, modId, self);
+    const auto target = file_status::updateTarget(
+        page, item->data(ModRole::NexusFileId).toLongLong(), fallback.fileId, safe);
+
+    using K = file_status::UpdateTarget::Kind;
+    if (target.kind != K::Install) {
+        abandonBatchedUpdate(item, target.kind == K::AlreadyNewest
+                                       ? UpdateOutcome::AlreadyNewest
+                                       : UpdateOutcome::NeedsPick);
+        return nullptr;
+    }
+    const auto hit = std::find_if(allFiles.cbegin(), allFiles.cend(),
+        [&](const NexusClient::FileEntry &f) { return f.fileId == target.fileId; });
+    if (hit == allFiles.cend()) {
+        abandonBatchedUpdate(item, UpdateOutcome::NeedsPick);
+        return nullptr;
+    }
+    // One file in two rows of a page is the second install removing the
+    // first as a stale copy of itself, folder and all.
+    if (rows->findRowWithFile(game, modId, hit->fileId, self) >= 0) {
+        abandonBatchedUpdate(item, UpdateOutcome::Duplicate);
+        return nullptr;
+    }
+    noteUpdateOutcome(item, UpdateOutcome::Started);
+    return &*hit;
+}
+
+void MainWindow::abandonBatchedUpdate(ModRow item, UpdateOutcome why)
+{
+    restoreAbandonedRow(item);
+    if (why == UpdateOutcome::AlreadyNewest && item) {
+        // The check flagged it only because the page changed. Drop the arrow,
+        // and keep the moment, so the next check measures the page from here
+        // rather than from the install and raises the same mark again.
+        ModEntry e = item.entry();
+        e.updateAvailable    = false;
+        e.confirmedCurrentAt = QDateTime::currentDateTime();
+        item.model()->update(item.row(), std::move(e));
+        scheduleSaveModList();
+    }
+    noteUpdateOutcome(item, why);
+}
+
+void MainWindow::restoreAbandonedRow(ModRow item)
+{
+    if (!item || !mod_row::isInstalling(item)) return;
+    if (placeholder_state::restoreInstalled(item)) scheduleSaveModList();
+}
+
+void MainWindow::noteUpdateOutcome(ModRow item, UpdateOutcome what)
+{
+    // A row a profile switch parked belongs to a list no longer on screen.
+    if (!item || item.model() != &m_model) return;
+    QString name = item->data(ModRole::CustomName).toString();
+    if (name.isEmpty()) name = item->text();
+    switch (what) {
+    case UpdateOutcome::Started:       ++m_updateNote.started;          break;
+    case UpdateOutcome::AlreadyNewest: m_updateNote.newest    << name;  break;
+    case UpdateOutcome::NeedsPick:     m_updateNote.pick      << name;  break;
+    case UpdateOutcome::Duplicate:     m_updateNote.duplicate << name;  break;
+    case UpdateOutcome::Failed:        m_updateNote.failed    << name;  break;
+    }
+    m_updateNoteTimer->start();
+}
+
+void MainWindow::flushUpdateNote()
+{
+    const UpdateNote n = std::exchange(m_updateNote, UpdateNote{});
+    if (n.isEmpty()) return;
+
+    // A banner is one or two lines: name a few, count the rest.
+    auto names = [](const QStringList &l) {
+        constexpr int kShown = 3;
+        QString s = l.mid(0, kShown).join(QStringLiteral(", "));
+        if (l.size() > kShown)
+            s += QLatin1Char(' ') + T("update_all_more").arg(l.size() - kShown);
+        return s;
+    };
+    QStringList parts;
+    if (n.started > 0)
+        parts << T("update_all_started").arg(n.started);
+    if (!n.newest.isEmpty())
+        parts << T("update_all_newest").arg(QString::number(n.newest.size()), names(n.newest));
+    if (!n.pick.isEmpty())
+        parts << T("update_all_pick").arg(QString::number(n.pick.size()), names(n.pick));
+    if (!n.duplicate.isEmpty())
+        parts << T("update_all_duplicate").arg(QString::number(n.duplicate.size()),
+                                                names(n.duplicate));
+    if (!n.failed.isEmpty())
+        parts << T("update_all_failed").arg(QString::number(n.failed.size()), names(n.failed));
+    const QString msg = parts.join(QLatin1Char(' '));
+
+    qCInfo(logging::lcNexus).noquote()
+        << "update batch:" << n.started << "started; newest:" << n.newest.join(QStringLiteral(", "))
+        << "| pick:" << n.pick.join(QStringLiteral(", "))
+        << "| duplicate:" << n.duplicate.join(QStringLiteral(", "))
+        << "| failed:" << n.failed.join(QStringLiteral(", "));
+    statusBar()->showMessage(msg, 8000);
+    // Everything started as asked needs no banner; the rows say it.
+    if (n.newest.size() + n.pick.size() + n.duplicate.size() + n.failed.size() > 0)
+        m_notify->show(msg, QStringLiteral("#8a4a1a"));
 }
 
 

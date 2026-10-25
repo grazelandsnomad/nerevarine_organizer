@@ -113,6 +113,9 @@ QJsonObject modToJson(const ModEntry &e)
         o.insert(QStringLiteral("deps"), a);
     }
     if (e.updateAvailable)           o.insert(QStringLiteral("update"),   true);
+    // No v1 counterpart, like "file": an older build reading this ignores it.
+    if (e.confirmedCurrentAt.isValid())
+        o.insert(QStringLiteral("current_at"), e.confirmedCurrentAt.toString(Qt::ISODate));
     if (e.isUtility)                 o.insert(QStringLiteral("utility"),  true);
     if (e.isGeneratedTranslation)
         o.insert(QStringLiteral("generated_translation"), true);
@@ -199,6 +202,8 @@ ModEntry modFromJson(const QJsonObject &o)
             if (v.isString()) e.dependsOn << v.toString();
     }
     e.updateAvailable = o.value(QStringLiteral("update")).toBool(false);
+    e.confirmedCurrentAt = QDateTime::fromString(
+                       o.value(QStringLiteral("current_at")).toString(), Qt::ISODate);
     e.isUtility       = o.value(QStringLiteral("utility")).toBool(false);
     // No v1 counterpart: the tab format predates the translate editor, so a
     // v1 list cannot hold one of these.

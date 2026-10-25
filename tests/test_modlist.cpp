@@ -964,6 +964,39 @@ static void testNexusFileIdRoundTrips()
           !mid.isEmpty() && mid[0].installStatus == 2 && mid[0].nexusFileId == 1000068816);
 }
 
+// What an update learnt about the installed file is kept; what this session's
+// check found is not.
+static void testUpdateMarksAcrossASave()
+{
+    std::cout << "\n-- update marks across a save --\n";
+    ModEntry m;
+    m.itemType      = QStringLiteral("mod");
+    m.displayName   = QStringLiteral("Mod");
+    m.modPath       = QStringLiteral("/mods/Mod");
+    m.nexusUrl      = QStringLiteral("https://www.nexusmods.com/fallout4/mods/100");
+    m.installStatus = 1;
+    m.updateAvailable        = true;
+    m.updateFoundThisSession = true;
+    m.confirmedCurrentAt = QDateTime::fromString("2026-10-25T12:30:00", Qt::ISODate);
+
+    const QString text = modlist_serializer::serializeModlist({m});
+    const QList<ModEntry> got = modlist_serializer::parseModlist(text);
+    check("one row back", got.size() == 1);
+    if (got.isEmpty()) return;
+    check("the update mark is saved", got[0].updateAvailable);
+    check("but not that this session found it", !got[0].updateFoundThisSession);
+    check("the date the file was confirmed current round-trips",
+          got[0].confirmedCurrentAt == m.confirmedCurrentAt,
+          got[0].confirmedCurrentAt.toString(Qt::ISODate));
+
+    ModEntry never = m;
+    never.confirmedCurrentAt = QDateTime();
+    const QString neverText = modlist_serializer::serializeModlist({never});
+    check("never confirmed writes nothing", !neverText.contains(QStringLiteral("current_at")));
+    const QList<ModEntry> back = modlist_serializer::parseModlist(neverText);
+    check("and reads back as never", !back.isEmpty() && !back[0].confirmedCurrentAt.isValid());
+}
+
 static void run_modlist_serialization()
 {
     using namespace serialization_section;
@@ -998,6 +1031,7 @@ static void run_modlist_serialization()
     testLoadOrderV1StillLoads();
     testGeneratedTranslationFlagRoundTrips();
     testNexusFileIdRoundTrips();
+    testUpdateMarksAcrossASave();
 }
 
 // === ModEntry ===

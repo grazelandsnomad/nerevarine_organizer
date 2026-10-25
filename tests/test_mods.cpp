@@ -1334,6 +1334,28 @@ static void testModRowAnswersFromTheTwoRoles()
     check("and so does a row that is gone", !mod_row::isMod(mod) && !mod_row::isInstalled(mod));
 }
 
+// An update lands in a parked row (another profile) through markInstalled:
+// a mod the user had switched off stays off, a new mod goes in enabled.
+static void testMarkInstalledKeepsAnUpdatesCheckbox()
+{
+    std::cout << "\n[markInstalled: an update keeps the mod enabled or disabled]\n";
+    ModEntry off;
+    off.installStatus   = 2;
+    off.updateAvailable = true;
+    off.updateFoundThisSession = true;
+    off.checked         = false;
+    placeholder_state::markInstalled(off, QStringLiteral("/mods/Updated"));
+    check("an update of a disabled mod leaves it disabled", !off.checked);
+    check("and clears the update marks",
+          !off.updateAvailable && !off.updateFoundThisSession);
+
+    ModEntry fresh;
+    fresh.installStatus = 2;
+    fresh.checked       = false;
+    placeholder_state::markInstalled(fresh, QStringLiteral("/mods/New"));
+    check("a new mod goes in enabled", fresh.checked);
+}
+
 static void run_mod_row()
 {
     std::cout << "\n=== mod_row ===\n";
@@ -1346,6 +1368,7 @@ static void run_placeholder_state()
     testFolderInstalled();
     testRestoreInstalled();
     testAwaitingUpdateDownloadLifetime();
+    testMarkInstalledKeepsAnUpdatesCheckbox();
 }
 
 int main(int argc, char **argv)

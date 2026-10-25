@@ -968,12 +968,20 @@ void MainWindow::onFileListFetched(const QUuid &rowKey,
 
     // Single main file - skip the picker.  Batch-update flow passes
     // autoPickMain=true to skip the picker even with multiple files, since
-    // iterating 20 pickers for "Update All" is worse UX than just taking
-    // the first MAIN/UPDATE entry (which is what the user almost always
-    // picks manually anyway).  In either no-picker case, use the engine-
-    // scored best match rather than files.first().
+    // iterating 20 pickers for "Update All" is worse UX than one choice made
+    // here.  A single file takes the engine-scored best match rather than
+    // files.first(); a batch update takes the file that replaces the row's
+    // own, which for a row on a 4K or Lite build, or the optional row of a
+    // page, is not the page's default at all - and when the page cannot say
+    // which that is, the row is left for the picker instead of guessed at.
     if (files.size() == 1 || autoPickMain) {
-        const auto &f = files.at(bestIdx);
+        const NexusClient::FileEntry *chosen = &files.at(bestIdx);
+        if (autoPickMain) {
+            chosen = updatePick(item, game, modId, allFiles, *chosen,
+                                files.size() == 1 || recommendIdx >= 0);
+            if (!chosen) return;
+        }
+        const auto &f = *chosen;
         prepareItemForInstall(item);
         item->setData(ModRole::PendingFileId, QVariant::fromValue(qint64(f.fileId)));
         stashChecksum(item, f);

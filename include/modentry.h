@@ -61,6 +61,7 @@ struct ModEntry {
     int     installStatus    = 0;      // 0 not installed, 1 installed, 2 installing
     int     downloadProgress = 0;      // 0-100 while downloading, -1 while extracting
     bool    updateAvailable  = false;
+    QDateTime confirmedCurrentAt;      // ModRole::ConfirmedCurrentAt; invalid == never
     QString expectedMd5;               // lower-case hex, cleared after verify
     qint64  expectedSize     = 0;      // bytes, cleared after verify
     qint64  expectedFileId   = 0;      // the Nexus file the two above describe
@@ -114,6 +115,7 @@ struct ModEntry {
     QString     fileSuperseded;            // ModRole::FileSuperseded
     qint64      pendingFileId = 0;         // ModRole::PendingFileId
     bool        awaitingUpdateDownload = false;
+    bool        updateFoundThisSession = false; // ModRole::UpdateFoundThisSession
     bool        sepHasUpdate = false;      // separator only
     QString     nexusFileName;             // ModRole::NexusFileName
     qint64      sortAnchor = -1;           // ModRole::SortAnchor; -1 = never stamped

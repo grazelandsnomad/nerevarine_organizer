@@ -551,12 +551,35 @@ private:
     void setProfileTranslationLanguage(const QString &token);
     void checkModDependencies(const QString &game, int modId, ModRow item);
     // Fetch the Nexus file list for (game, modId). autoPickMain=true skips the
-    // per-mod picker and takes the first MAIN/UPDATE file; used by batch update,
-    // where 10+ stacked pickers are worse than letting the user cancel the few
-    // that need it.
+    // per-mod picker and takes the file that replaces the row's own
+    // (updatePick), leaving the row as it was when the page cannot say which;
+    // used by batch update, where 10+ stacked pickers are worse than a note
+    // naming the few that need one.
     void fetchModFiles(const QString &game, int modId, ModRow item,
                        bool autoPickMain = false);
     void prepareItemForInstall(ModRow item);
+
+    // -- Updates without a picker (Update All, Review Updates) ------------
+    // How each row of such a batch ended, for the one note that sums it up.
+    enum class UpdateOutcome { Started, AlreadyNewest, NeedsPick, Duplicate, Failed };
+    // The file that replaces the one `item` was installed from
+    // (file_status::updateTarget, guarded against a file another row of the
+    // page has or is fetching), or nullptr after leaving the row as it was.
+    // `fallbackDecided`: the page has one download, or a fact (OAAB, runtime
+    // build) chose `fallback`.
+    const NexusClient::FileEntry *updatePick(ModRow item, const QString &game, int modId,
+                                             const QList<NexusClient::FileEntry> &allFiles,
+                                             const NexusClient::FileEntry &fallback,
+                                             bool fallbackDecided);
+    // Back to installed, as before the update started, and noted. A file
+    // found to be still the newest also loses its update mark, and the date
+    // is kept so the next check does not raise it again for the same page.
+    void abandonBatchedUpdate(ModRow item, UpdateOutcome why);
+    // A row whose fetch ended before any download: back to installed when it
+    // still has its folder. Rows that were never Installing are left alone.
+    void restoreAbandonedRow(ModRow item);
+    void noteUpdateOutcome(ModRow item, UpdateOutcome what);
+    void flushUpdateNote();
     // Roll a placeholder back to not-installed after a mid-install cancel (FOMOD
     // cancel today). Tolerates a null/removed placeholder.
     void resetPlaceholderAfterInstallCancel(ModRow placeholder,
@@ -739,9 +762,23 @@ private:
     // setAsCustomName=true), consumed by onTitleFetched. Keeps the controller
     // from needing to know about ModRole::CustomName.
     QSet<QUuid>                       m_titleSetsCustomName;
-    // Rows (by id) whose fetchFileList asked to auto-pick the first MAIN/UPDATE file
-    // (batch update). Consumed by onFileListFetched; same idea as above.
+    // Rows (by id) whose fetchFileList asked to pick the file without the
+    // picker (batch update, see updatePick). Consumed by onFileListFetched;
+    // same idea as above.
     QSet<QUuid>                       m_autoPickMainItems;
+    // What the current batch of updates without a picker did, row by row.
+    // Flushed by m_updateNoteTimer a moment after the last outcome rather
+    // than when m_autoPickMainItems empties: replyRow drops ids silently and
+    // no request has a timeout, so "empty" might never come.
+    struct UpdateNote {
+        int         started = 0;
+        QStringList newest, pick, duplicate, failed;
+        [[nodiscard]] bool isEmpty() const
+        { return started == 0 && newest.isEmpty() && pick.isEmpty()
+                 && duplicate.isEmpty() && failed.isEmpty(); }
+    };
+    UpdateNote                        m_updateNote;
+    QTimer                           *m_updateNoteTimer = nullptr;
     DownloadQueue                    *m_downloadQueue = nullptr;
     // Bulk-install throttle: drip-feeds onInstallFromNexus to avoid hammering
     // the Nexus rate-limiter and stacking modal pickers.

@@ -26,6 +26,10 @@ struct PageFile {
     // Nexus's own word: MAIN, UPDATE, OPTIONAL, MISCELLANEOUS, OLD_VERSION,
     // ARCHIVED, REMOVED.
     QString category;
+    // Earlier uploads this one replaces, from the v1 list's "file_updates"
+    // chain (NexusClient::FileEntry::replaces). The v2 query has no chain, so
+    // it is empty there.
+    QList<qint64> replaces;
 };
 
 struct Verdict {
@@ -54,5 +58,40 @@ struct Verdict {
 // that answered nothing says nothing - so it is Current, and a bad reply cannot
 // raise a flag.
 Verdict judge(qint64 installedFileId, const QList<PageFile> &pageFiles);
+
+// What an update without a picker (Update All, Review Updates) should
+// download for a row installed from `installedFileId`.
+//
+// That path used to take the page's default file whatever the row had: a mod
+// installed from the 4K file came back as the 2K one, and the optional patch
+// of a mod came back as the mod itself, landing on top of the main file's own
+// row. This answers only from what the page says about THE installed file,
+// and when it says nothing, says so - the row is left for the picker, never
+// given a guess.
+//
+// In order:
+//   - installed id unknown (0): the fallback, when the caller says it is
+//     safe (the page's only row in the list, and one download or a fact
+//     choosing it); else NeedsPick
+//   - a file whose `replaces` holds the installed id: that file (NeedsPick
+//     when it is itself retired)
+//   - the installed file not listed and nothing linking it: NeedsPick
+//   - the newest listed file carrying the installed one's name (case,
+//     spacing and underscores aside): that file. While the installed file is
+//     still offered, only a newer upload in its own category counts
+//   - the installed file retired, nothing of its name: NeedsPick (it may have
+//     moved to a page of its own, as Tamriel Data's HD file did)
+//   - the installed file optional/miscellaneous, or the page's default is
+//     the installed file: AlreadyNewest - nothing newer for this file
+//   - otherwise NeedsPick: the page now leads with a different main file.
+//
+// `fallbackFileId` is the file the picker would preselect.
+struct UpdateTarget {
+    enum class Kind { Install, AlreadyNewest, NeedsPick };
+    Kind   kind = Kind::NeedsPick;
+    qint64 fileId = 0;   // Install: the file to download
+};
+UpdateTarget updateTarget(const QList<PageFile> &pageFiles, qint64 installedFileId,
+                          qint64 fallbackFileId, bool fallbackIsSafe);
 
 } // namespace file_status

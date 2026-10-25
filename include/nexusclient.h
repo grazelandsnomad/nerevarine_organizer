@@ -212,11 +212,18 @@ public:
         // you. The author's answer to "which one do I want?", and the only
         // field here that ranks the files at all.
         bool    isPrimary = false;
+        // The earlier uploads this file replaces, by the page's own record:
+        // every old_file_id whose "file_updates" chain ends here, including
+        // files no longer listed. Ascending. The one answer to "which of the
+        // page's files is the new version of the one I have?" that does not
+        // depend on how the author named them.
+        QList<int> replaces;
     };
     // Every file in "files", minus any the "file_updates" succession chain
     // marks superseded by a still-present newer file (an author re-uploading
     // without archiving leaves two same-version entries the picker can't tell
-    // apart). Order preserved. Zero files -> empty list, not an error.
+    // apart). Order preserved. Each file kept carries the old ids its chain
+    // replaces (FileEntry::replaces). Zero files -> empty list, not an error.
     // MissingField("files") only fires when the key is absent or not an array
     // (Nexus error envelopes, HTML interstitials).
     static std::expected<QList<FileEntry>, NexusError>

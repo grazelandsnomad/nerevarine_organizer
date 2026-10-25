@@ -97,6 +97,26 @@ public:
     int findInstalledByModId(const QString &game, int modId,
                              int exceptRow = -1) const;
 
+    // Another mod row of that Nexus page, installed or installing,
+    // `exceptRow` aside. The main and optional files of one mod are often two
+    // rows on one page, and an update without a picker must not treat either
+    // as the page's only copy.
+    [[nodiscard]] bool hasOtherRowOfPage(const QString &game, int modId,
+                                         int exceptRow) const;
+
+    // Another row of that page with `fileId` installed, or on its way
+    // (pendingFileId), `exceptRow` aside; -1 if none. Installing one file into
+    // two rows lands the second beside the first, and the install then
+    // removes the first as a stale copy, folder and all.
+    [[nodiscard]] int findRowWithFile(const QString &game, int modId, qint64 fileId,
+                                      int exceptRow) const;
+
+    // What Update All updates, as row indices in list order: installed mods
+    // whose update a check found this session (UpdateFoundThisSession, which
+    // starting an install clears) and still carry it, with a Nexus page to
+    // fetch it from.
+    [[nodiscard]] QList<int> pendingUpdateRows() const;
+
     // Mod row display names in order; separators and empty names excluded.
     // installedModDisplayNames() narrows to installStatus == 1. Used for
     // duplicate-name hints (FOMOD wizard) and "is companion Y present?" checks.
