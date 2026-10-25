@@ -834,6 +834,13 @@ void MainWindow::onFileListFetched(const QUuid &rowKey,
     if (files.isEmpty()) files = allFiles;
 
     if (files.isEmpty()) {
+        // Nothing to download, so nothing changed: an update is still the
+        // installed mod it was. A batch says so in its note, not a box a mod.
+        if (autoPickMain) {
+            abandonBatchedUpdate(item, UpdateOutcome::Failed);
+            return;
+        }
+        restoreAbandonedRow(item);
         ui::info(this, T("install_pick_file_title"), T("install_no_files"));
         statusBar()->clearMessage();
         return;
@@ -1075,6 +1082,9 @@ void MainWindow::onFileListFetched(const QUuid &rowKey,
 
     if (dlg.exec() != QDialog::Accepted) {
         statusBar()->clearMessage();
+        // Cancelled before any download: the update arrow's row is the mod
+        // it was. The row may have gone while the picker was open.
+        restoreAbandonedRow(replyRow(rowKey, "file picker"));
         return;
     }
 

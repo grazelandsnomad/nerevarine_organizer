@@ -770,6 +770,9 @@ void MainWindow::setupCentralWidget()
             [this](const QModelIndex &idx){
         ModRow item = m_modList->item(idx.row());
         if (!item) return;
+        // The arrow stays painted while the update it started is under way;
+        // a second click would queue the row twice.
+        if (mod_row::isInstalling(item)) return;
 
         if (m_apiKey.isEmpty()) {
             ui::info(this, T("nxm_api_key_required_title"), T("nxm_api_key_required_body"));

@@ -1463,11 +1463,24 @@ void MainWindow::onFileListFetchFailed(const QUuid &row, const QString &reason, 
 {
     ModRow item = replyRow(row, "file list failure");
     if (!item) return;
-    m_autoPickMainItems.remove(row);
+    const bool batched = m_autoPickMainItems.remove(row);
     const QString msg =
           (httpStatus == 401) ? T("nexus_api_error_link_401")
         : (httpStatus == 403) ? T("nexus_api_error_link_403")
         :                        T("nexus_api_error_link").arg(reason);
+    qCInfo(logging::lcNexus).noquote() << "file list failed for" << item->text()
+                                       << "HTTP" << httpStatus << reason;
+    // Nothing was downloaded: an update is still the mod it was, not
+    // "Installing" for the rest of the session. In a batch only the first
+    // failure explains itself in a box - the replies come back together, and
+    // one box per mod stacked them - and the note names the rest.
+    if (batched) {
+        const bool first = m_updateNote.failed.isEmpty();
+        abandonBatchedUpdate(item, UpdateOutcome::Failed);
+        if (!first) return;
+    } else {
+        restoreAbandonedRow(item);
+    }
     ui::warn(this, T("nexus_api_error_title"), msg);
     statusBar()->showMessage(T("status_download_failed"), 4000);
 }
@@ -1902,6 +1915,9 @@ void MainWindow::onReviewUpdates()
         ModRow it = m_modList->item(i);
         if (!mod_row::isMod(it)) continue;
         if (!it->data(ModRole::UpdateAvailable).toBool())            continue;
+        // Already on its way: queueing it again corrupts the download queue,
+        // which keeps one entry per row.
+        if (mod_row::isInstalling(it))                               continue;
 
         const QString url = it->data(ModRole::NexusUrl).toString();
         const auto ref = parseNexusModUrl(url);
@@ -1927,7 +1943,7 @@ void MainWindow::onReviewUpdates()
         // Re-validate: the user could have removed a row between check-updates
         // and the dialog exec.
         ModRow item = rowById(c.row);
-        if (!item) continue;
+        if (!item || mod_row::isInstalling(item)) continue;
         prepareItemForInstall(item);
         fetchModFiles(c.game, c.modId, item, /*autoPickMain=*/true);
     }
