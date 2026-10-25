@@ -2106,7 +2106,7 @@ void MainWindow::flushUpdateNote()
         constexpr int kShown = 3;
         QString s = l.mid(0, kShown).join(QStringLiteral(", "));
         if (l.size() > kShown)
-            s += QLatin1Char(' ') + T("update_all_more").arg(l.size() - kShown);
+            s += QLatin1Char(' ') + T("list_and_more").arg(l.size() - kShown);
         return s;
     };
     QStringList parts;

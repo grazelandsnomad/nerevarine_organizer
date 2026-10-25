@@ -28,11 +28,13 @@ namespace bethesda_loadorder {
 // first regardless of mtime, so the encoded order must match.
 QStringList mastersFirst(const QStringList &plugins);
 
-// A plugin left out of the load order, and the masters it lacks: in no file
-// in Data/, or left out themselves.
+// A plugin left out of the load order, and why: masters in no file in Data/
+// (`missing`), and masters that are in Data/ but were left out themselves
+// (`heldMasters`). At least one of the two is non-empty.
 struct Held {
     QString     plugin;
     QStringList missing;
+    QStringList heldMasters;
 };
 
 struct Settled {
@@ -58,6 +60,18 @@ struct Settled {
 Settled settle(const QStringList &active,
                const QHash<QString, QStringList> &mastersOf,
                const QSet<QString> &presentLower);
+
+// What a held list comes down to: each file that is really missing, with
+// every held plugin that needs it - directly, or through a master held for
+// it. 22 plugins that all need Skyrim.esm are one fact, and this is how the
+// deploy summary says it once. Most-needed first, then by name; the plugins
+// in `held`'s order. A held master that is in Data/ is never listed, since
+// it is not what is missing.
+struct MissingMaster {
+    QString     master;     // as first spelled in `held`
+    QStringList neededBy;
+};
+QList<MissingMaster> missingMasters(const QList<Held> &held);
 
 // Classic Plugins.txt body (Oblivion / FO3 / FNV): active filenames one per
 // line, CRLF (Windows file read through the prefix), no '*' prefix. Order here

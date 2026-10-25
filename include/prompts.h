@@ -28,6 +28,11 @@ bool confirm(QWidget *parent, const QString &title, const QString &body);
 // call; differ only in the icon.
 void warn(QWidget *parent, const QString &title, const QString &body);
 void info(QWidget *parent, const QString &title, const QString &body);
+// The same, with `details` behind Qt's "Show Details..." button in a
+// scrolling box, for a list too long for the message itself. Empty details
+// is the plain call.
+void info(QWidget *parent, const QString &title, const QString &body,
+          const QString &details);
 void critical(QWidget *parent, const QString &title, const QString &body);
 
 } // namespace ui

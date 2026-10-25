@@ -155,17 +155,22 @@ using fsutils::sanitizeFolderName;
 // left out because a master is not installed - each with the mod it came from.
 struct HeldPlugin {
     QString     plugin;
-    QStringList missing;
+    QStringList missing;       // in no file in Data/
+    QStringList heldMasters;   // in Data/, but left out themselves
     QString     mod;
 };
 struct ActivateResult {
     int               activated = 0;
     QList<HeldPlugin> held;
+    // The same, by the file actually missing (bethesda_loadorder::missingMasters).
+    QList<bethesda_loadorder::MissingMaster> missingFiles;
 };
-// What a deploy reports: the summary the Deploy dialog shows, and how many
-// plugins it had to leave out, for the pre-launch re-sync's one status line.
+// What a deploy reports: the summary the Deploy dialog shows, the long lists
+// it keeps behind Show Details, and how many plugins it had to leave out, for
+// the pre-launch re-sync's one status line.
 struct DeployOutcome {
     QString summary;
+    QString details;
     int     heldBack = 0;
 };
 
@@ -892,6 +897,26 @@ static QList<bethesda_deploy::DeploySource> gatherBethesdaSources(const ModlistM
     return sources;
 }
 
+// The game's own executables, as the adapter knows them: its Steam build and
+// its GOG ones, relative to the game folder.
+static QStringList gameExeNames(const GameAdapter *adapter)
+{
+    QStringList names;
+    if (const QString exe = adapter->steamLayout().exe; !exe.isEmpty()) names << exe;
+    for (const auto &g : adapter->gogLayouts())
+        if (!g.exe.isEmpty() && !names.contains(g.exe, Qt::CaseInsensitive)) names << g.exe;
+    return names;
+}
+
+// "A, B, C and 4 more": a list that fits on a line of a message box.
+static QString namesAndMore(const QStringList &names, int shown)
+{
+    QString s = names.mid(0, shown).join(QStringLiteral(", "));
+    if (names.size() > shown)
+        s += QLatin1Char(' ') + T("list_and_more").arg(names.size() - shown);
+    return s;
+}
+
 // Write the load order for the plugins just linked into Data/: Plugins.txt, and
 // for the timestamp engines (Oblivion/FO3/FNV) the files' mtimes. Masters first,
 // each plugin after its own masters, and none whose master is not installed
@@ -947,11 +972,18 @@ static ActivateResult bethesdaActivate(const QString &id, const GameAdapter *ada
         QHash<QString, QString> modOf;
         for (const auto &f : manifest.files) modOf.insert(f.rel.toLower(), f.sourceMod);
         for (const auto &h : settled.held) {
-            result.held.append({h.plugin, h.missing, modOf.value(h.plugin.toLower())});
+            result.held.append({h.plugin, h.missing, h.heldMasters,
+                                modOf.value(h.plugin.toLower())});
+            QStringList why;
+            if (!h.missing.isEmpty())
+                why << h.missing.join(QStringLiteral(", ")) + QStringLiteral(" (not installed)");
+            if (!h.heldMasters.isEmpty())
+                why << h.heldMasters.join(QStringLiteral(", ")) + QStringLiteral(" (left out too)");
             qCWarning(logging::lcLaunch).noquote()
                 << "deploy: left" << h.plugin << "out of the load order - it needs"
-                << h.missing.join(QStringLiteral(", ")) << "which is not installed";
+                << why.join(QStringLiteral("; "));
         }
+        result.missingFiles = bethesda_loadorder::missingMasters(settled.held);
     }
     if (ordered.isEmpty()) return result;
 
@@ -1230,16 +1262,44 @@ static DeployOutcome bethesdaApplyDeploy(const QString &id, const GameAdapter *a
                           .arg(act.activated).arg(res.errors.size())
         : T("deploy_done_overlay").arg(res.filesDeployed).arg(res.vanillaBackedUp)
                                  .arg(res.errors.size());
+    QStringList details;   // the long lists, behind Show Details
+
     // Right after the counts: these are plugins the user enabled that the
     // game will not load, and the reason is something only they can fix.
+    // Said once per missing file rather than once per plugin - 22 plugins
+    // that all need Skyrim.esm are one fact - and first of all, whether the
+    // game is there at all: an uninstall leaves the Data folder standing.
+    const QString missingExe = writesPluginList(adapter)
+        ? bethesda_deploy::missingGameExe(gameRoot, gameExeNames(adapter)) : QString();
+    if (!missingExe.isEmpty()) {
+        summary += QStringLiteral("\n\n")
+                 + T("deploy_game_missing").arg(adapter->displayName(), missingExe,
+                                                QDir::toNativeSeparators(gameRoot));
+        if (!act.held.isEmpty())
+            summary += QLatin1Char(' ') + T("deploy_game_missing_held").arg(act.held.size());
+    } else if (!act.held.isEmpty()) {
+        summary += QStringLiteral("\n\n") + T("deploy_held_summary").arg(act.held.size());
+        constexpr int kFilesShown = 5;
+        const auto &files = act.missingFiles;
+        for (int i = 0; i < std::min(int(files.size()), kFilesShown); ++i)
+            summary += QLatin1Char('\n')
+                     + T("deploy_held_group").arg(files[i].master,
+                                                  namesAndMore(files[i].neededBy, 3));
+        if (files.size() > kFilesShown)
+            summary += QLatin1Char('\n')
+                     + T("deploy_held_more_groups").arg(int(files.size()) - kFilesShown);
+    }
     if (!act.held.isEmpty()) {
         QStringList lines;
-        for (const HeldPlugin &h : act.held)
+        for (const HeldPlugin &h : act.held) {
+            QStringList needs = h.missing;
+            for (const QString &m : h.heldMasters)
+                needs << T("deploy_held_left_out_too").arg(m);
             lines << T("deploy_held_line")
                          .arg(h.plugin, h.mod.isEmpty() ? QStringLiteral("?") : h.mod,
-                              h.missing.join(QStringLiteral(", ")));
-        summary += QStringLiteral("\n\n")
-                 + T("deploy_held_back").arg(lines.join(QLatin1Char('\n')));
+                              needs.join(QStringLiteral(", ")));
+        }
+        details << T("deploy_held_back").arg(lines.join(QLatin1Char('\n')));
     }
     // Worth its own line: it is what makes Start able to run the extender at
     // all, and it is the one part of the deploy that touches the game folder
@@ -1248,9 +1308,13 @@ static DeployOutcome bethesdaApplyDeploy(const QString &id, const GameAdapter *a
         summary += QStringLiteral("\n\n") + T("deploy_script_extender").arg(rootPlaced);
     // An archive named after no plugin never loads, and nothing else would say
     // so: registering it would mean rewriting the engine's whole archive list.
-    if (!stray.isEmpty())
+    if (!stray.isEmpty()) {
+        constexpr int kStrayShown = 5;
         summary += QStringLiteral("\n\n")
-                 + T("deploy_stray_archives").arg(stray.join(QStringLiteral(", ")));
+                 + T("deploy_stray_archives").arg(namesAndMore(stray, kStrayShown));
+        if (stray.size() > kStrayShown)
+            details << T("deploy_stray_archives").arg(stray.join(QStringLiteral(", ")));
+    }
     // Say so plainly: this is a change to the game's Proton prefix, not just to
     // its folder, and it is the step that makes a wrapper mod do anything.
     if (!res.manifest.dllOverrides.isEmpty())
@@ -1260,7 +1324,7 @@ static DeployOutcome bethesdaApplyDeploy(const QString &id, const GameAdapter *a
     // The Gothic line goes last because it is the one that decides what the
     // engine will actually load.
     if (!gothicNote.isEmpty()) summary += QStringLiteral("\n\n") + gothicNote;
-    return {summary, int(act.held.size())};
+    return {summary, details.join(QStringLiteral("\n\n")), int(act.held.size())};
 }
 
 DeployFlow::DeployFlow(WindowShell &shell, QObject *parent)
@@ -1488,19 +1552,19 @@ void DeployFlow::onDeployBethesda()
     async::guarded(this,
         [id, adapter, dataDir, sources, rootSources, modlistFile, loadOrder, fingerprint,
          progressCell]
-        (DeployFlow *) -> QString {
+        (DeployFlow *) -> DeployOutcome {
             return bethesdaApplyDeploy(
                 id, adapter, dataDir, sources, rootSources, modlistFile, loadOrder,
                 fingerprint,
                 [progressCell](int done, int total) {
                     progressCell->store((qint64(done) << 32) | quint32(total),
                                   std::memory_order_relaxed);
-                }).summary;
+                });
         },
-        [](DeployFlow *self, QString summary) {
+        [](DeployFlow *self, const DeployOutcome &out) {
             if (self->m_deployProgressTimer) self->m_deployProgressTimer->stop();
             if (ScanOverlay *overlay = self->m_shell.deployOverlay()) overlay->finish();
-            ui::info(self->m_shell.dialogParent(), T("deploy_title"), summary);
+            ui::info(self->m_shell.dialogParent(), T("deploy_title"), out.summary, out.details);
             self->updateDeployHint();  // a manifest exists now; banner comes down
             // Data/ just changed, so which plugins can load may have too.
             self->refreshScriptExtenderFlags();

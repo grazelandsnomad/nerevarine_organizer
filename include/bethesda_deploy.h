@@ -134,4 +134,18 @@ Manifest manifestFromJson(const QString &json);
 // ones that change nothing, like switching games or quitting.
 QString sourceFingerprint(const QStringList &mods, const QStringList &loadOrder);
 
+// Whether the game itself is in `gameRoot`: empty when one of `exeNames`
+// (paths relative to it - the adapter's Steam and GOG executables) is there,
+// else the first of them, the file that is missing.
+//
+// The deploy writes into the Data folder saved for the profile, and a Steam
+// uninstall leaves that folder standing: Steam deletes only the files it
+// installed, so the mods, the Creation Club downloads and the script extender
+// stay, and the game and its own masters go. Every plugin then needs a file
+// that is not there - which is true, and which buried the one fact that
+// mattered under a line per plugin. The file name is matched in any case, as
+// the game's Windows side would see it; an empty list cannot tell, and says
+// nothing.
+QString missingGameExe(const QString &gameRoot, const QStringList &exeNames);
+
 } // namespace bethesda_deploy

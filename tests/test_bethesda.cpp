@@ -223,6 +223,30 @@ static void testSourceFingerprint()
               && sourceFingerprint({"a"}, {"b"}) != sourceFingerprint({"a", "b"}, {}));
 }
 
+// An uninstall leaves the Data folder standing; the deploy must be able to
+// say the game is gone rather than list every plugin that needs it.
+static void testMissingGameExe()
+{
+    std::cout << "\n[missingGameExe: is the game itself in its folder]\n";
+    QTemporaryDir tmp;
+    const QString root = tmp.path();
+    QDir().mkpath(root + "/Data");
+    check("an empty folder misses the first name",
+          missingGameExe(root, {"SkyrimSE.exe", "Other.exe"}) == "SkyrimSE.exe");
+    QFile f(root + "/skyrimse.EXE");
+    if (f.open(QIODevice::WriteOnly)) f.close();
+    check("the exe in another case is the exe", missingGameExe(root, {"SkyrimSE.exe"}).isEmpty());
+    check("any of the names will do", missingGameExe(root, {"TESV.exe", "SkyrimSE.exe"}).isEmpty());
+    QDir().mkpath(root + "/bin/x64");
+    QFile g(root + "/bin/x64/Game.exe");
+    if (g.open(QIODevice::WriteOnly)) g.close();
+    check("a path under the folder", missingGameExe(root, {"bin/x64/Game.exe"}).isEmpty());
+    check("a folder named like the exe is not the exe",
+          missingGameExe(root, {"Data"}) == "Data");
+    check("no names cannot tell", missingGameExe(root, {}).isEmpty()
+                                  && missingGameExe(root, {""}).isEmpty());
+}
+
 } // namespace deploy_section
 
 static void run_bethesda_deploy()
@@ -235,6 +259,7 @@ static void run_bethesda_deploy()
     deploy_section::testNestedAndCopyMethod();
     deploy_section::testManifestRoundTrip();
     deploy_section::testSourceFingerprint();
+    deploy_section::testMissingGameExe();
 }
 
 namespace loadorder_section {
@@ -302,8 +327,20 @@ static void testSettle()
     check("a chain falls with its first link",
           chain.order == QStringList{"D.esp"} && chain.held.size() == 2
               && chain.held[0].missing == QStringList{"A.esp"}
-              && chain.held[1].missing == QStringList{"B.esp"},
+              && chain.held[0].heldMasters.isEmpty()
+              && chain.held[1].missing.isEmpty()
+              && chain.held[1].heldMasters == QStringList{"B.esp"},
           chain.order.join(" | "));
+    // B.esp is a file in Data/: what C lacks is that B was left out, not
+    // that B is not installed, and the summary says which.
+    const Settled mixed = settle({"U.esp", "G.esp"},
+                                 {{"u.esp", {"Skyrim.esm"}},
+                                  {"g.esp", {"Skyrim.esm", "U.esp"}}},
+                                 {"u.esp", "g.esp"});
+    check("missing files and masters left out too are told apart",
+          mixed.held.size() == 2
+              && mixed.held[1].missing == QStringList{"Skyrim.esm"}
+              && mixed.held[1].heldMasters == QStringList{"U.esp"});
 
     // Present in Data/ but not in this list (put there by hand, or the
     // game's own) satisfies a master: dropping a working mod on a guess is
@@ -408,6 +445,40 @@ static void testMergedPluginsTxtNoDuplicates()
               == QStringLiteral("Oblivion.esm\r\nKnights.esp\r\nA.esp\r\n"));
 }
 
+// The Skyrim list of 2026-10-25, cut down: the game was uninstalled, so
+// every plugin needs Skyrim.esm, and two needed USSEP, itself left out.
+static void testMissingMasters()
+{
+    std::cout << "\n[missingMasters: each missing file once, with what needs it]\n";
+    const QList<Held> held = {
+        {"HFs_WhiterunBridges_REDONE.esp", {"Skyrim.esm"}, {}},
+        {"unofficial skyrim special edition patch.esp",
+         {"Skyrim.esm", "Update.esm", "ccbgssse001-fish.esm"}, {}},
+        {"Grand Solitude.esp", {"Skyrim.esm", "Update.esm", "ccBGSSSE001-Fish.esm"},
+         {"unofficial skyrim special edition patch.esp"}},
+        {"Lively Farms.esp", {}, {"Unofficial Skyrim Special Edition Patch.esp"}},
+        {"Quest Shortened V2.esp", {"Skyrim.esm", "Update.esm"}, {}},
+    };
+    const QList<MissingMaster> files = missingMasters(held);
+    QStringList got;
+    for (const MissingMaster &m : files) got << m.master + "=" + QString::number(m.neededBy.size());
+    check("most-needed first, a held master never listed as missing",
+          got == QStringList({"Skyrim.esm=5", "Update.esm=4", "ccbgssse001-fish.esm=3"}),
+          got.join(" | "));
+    check("a plugin held only through USSEP counts under what USSEP lacks",
+          !files.isEmpty() && files[0].neededBy.contains("Lively Farms.esp"));
+    check("the plugins in the held list's order",
+          !files.isEmpty() && files[0].neededBy.first() == "HFs_WhiterunBridges_REDONE.esp");
+    check("one file however it is spelled",
+          files.size() == 3 && files[2].neededBy.size() == 3);
+
+    const QList<Held> pair = {{"A.esp", {"X.esm"}, {"B.esp"}}, {"B.esp", {}, {"A.esp"}}};
+    const QList<MissingMaster> loop = missingMasters(pair);
+    check("two held plugins naming each other end, both under the missing file",
+          loop.size() == 1 && loop[0].neededBy == QStringList({"A.esp", "B.esp"}));
+    check("nothing held, nothing missing", missingMasters({}).isEmpty());
+}
+
 } // namespace loadorder_section
 
 static void run_bethesda_loadorder()
@@ -415,6 +486,7 @@ static void run_bethesda_loadorder()
     std::cout << "=== bethesda_loadorder tests ===\n";
     loadorder_section::testMastersFirst();
     loadorder_section::testSettle();
+    loadorder_section::testMissingMasters();
     loadorder_section::testPluginsTxt();
     loadorder_section::testAsteriskPluginsTxt();
     loadorder_section::testTimestampOrder();

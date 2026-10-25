@@ -7,6 +7,8 @@
 #include <QFile>
 #include <QFileInfo>
 
+#include <algorithm>
+
 namespace bethesda_loadorder {
 
 static bool isMaster(const QString &p)
@@ -31,30 +33,40 @@ Settled settle(const QStringList &active,
 {
     // Held: a master in no file, or held itself - to a fixed point, since
     // holding one can strand another that needs it.
-    QHash<QString, QStringList> why;   // lower-cased plugin -> what it lacks
+    QSet<QString> held;   // lower-cased
     for (bool changed = true; changed;) {
         changed = false;
         for (const QString &p : active) {
             const QString lp = p.toLower();
-            if (why.contains(lp)) continue;
-            QStringList missing;
+            if (held.contains(lp)) continue;
             for (const QString &m : mastersOf.value(lp)) {
                 const QString lm = m.toLower();
-                if (!presentLower.contains(lm) || why.contains(lm)) missing << m;
-            }
-            if (!missing.isEmpty()) {
-                why.insert(lp, missing);
-                changed = true;
+                if (!presentLower.contains(lm) || held.contains(lm)) {
+                    held.insert(lp);
+                    changed = true;
+                    break;
+                }
             }
         }
     }
 
+    // Why, against the final set: a plugin held early for a missing file
+    // may also need one held later, and the summary tells the two apart.
     Settled out;
     QHash<QString, QString> kept;   // lower-cased -> as listed
     for (const QString &p : active) {
         const QString lp = p.toLower();
-        if (why.contains(lp)) out.held.append({p, why.value(lp)});
-        else                  kept.insert(lp, p);
+        if (!held.contains(lp)) {
+            kept.insert(lp, p);
+            continue;
+        }
+        Held h{p, {}, {}};
+        for (const QString &m : mastersOf.value(lp)) {
+            const QString lm = m.toLower();
+            if (!presentLower.contains(lm)) h.missing << m;
+            else if (held.contains(lm))     h.heldMasters << m;
+        }
+        out.held.append(std::move(h));
     }
 
     // Each kept plugin after its masters. Depth-first, so a master's own
@@ -76,6 +88,53 @@ Settled settle(const QStringList &active,
         const QString lp = p.toLower();
         if (kept.contains(lp)) place(place, lp);
     }
+    return out;
+}
+
+QList<MissingMaster> missingMasters(const QList<Held> &held)
+{
+    QHash<QString, const Held *> byName;   // lower-cased plugin
+    for (const Held &h : held) byName.insert(h.plugin.toLower(), &h);
+
+    QList<MissingMaster> out;
+    QHash<QString, int> at;                // lower-cased file -> index in out
+    for (const Held &h : held) {
+        // The missing files this plugin comes down to, through every master
+        // held for it. Breadth-first with a seen-set: no memo, because a
+        // pair of held plugins naming each other would cache a half answer.
+        QStringList files;
+        QSet<QString> seenFiles;
+        QSet<QString> seenPlugins{h.plugin.toLower()};
+        QList<const Held *> queue{&h};
+        while (!queue.isEmpty()) {
+            const Held *cur = queue.takeFirst();
+            for (const QString &m : cur->missing) {
+                const QString lm = m.toLower();
+                if (seenFiles.contains(lm)) continue;
+                seenFiles.insert(lm);
+                files << m;
+            }
+            for (const QString &m : cur->heldMasters) {
+                const QString lm = m.toLower();
+                if (seenPlugins.contains(lm)) continue;
+                seenPlugins.insert(lm);
+                if (const Held *next = byName.value(lm)) queue << next;
+            }
+        }
+        for (const QString &f : std::as_const(files)) {
+            const QString lf = f.toLower();
+            auto it = at.constFind(lf);
+            if (it == at.cend()) {
+                it = at.insert(lf, int(out.size()));
+                out.append({f, {}});
+            }
+            out[it.value()].neededBy << h.plugin;
+        }
+    }
+    std::stable_sort(out.begin(), out.end(), [](const MissingMaster &a, const MissingMaster &b) {
+        if (a.neededBy.size() != b.neededBy.size()) return a.neededBy.size() > b.neededBy.size();
+        return a.master.compare(b.master, Qt::CaseInsensitive) < 0;
+    });
     return out;
 }
 

@@ -250,6 +250,26 @@ QString sourceFingerprint(const QStringList &mods, const QStringList &loadOrder)
         QCryptographicHash::hash(joined.toUtf8(), QCryptographicHash::Sha1).toHex());
 }
 
+QString missingGameExe(const QString &gameRoot, const QStringList &exeNames)
+{
+    const QDir root(gameRoot);
+    QString first;
+    for (const QString &rel : exeNames) {
+        if (rel.isEmpty()) continue;
+        if (first.isEmpty()) first = rel;
+        const QFileInfo fi(root.filePath(rel));
+        if (fi.isFile()) return {};
+        // The same name in another case: a Linux disk keeps case, and the
+        // game asks for its files as Windows does, without it.
+        const QDir dir = fi.dir();
+        if (!dir.exists()) continue;
+        const QStringList names = dir.entryList(QDir::Files | QDir::Hidden);
+        for (const QString &n : names)
+            if (n.compare(fi.fileName(), Qt::CaseInsensitive) == 0) return {};
+    }
+    return first;
+}
+
 Manifest manifestFromJson(const QString &json)
 {
     Manifest m;
