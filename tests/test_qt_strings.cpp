@@ -6,8 +6,14 @@
 // stand-in translator when it does not, so the suite never skips.
 
 #include "qt_strings.h"
+#include "standard_buttons.h"
 
+#include <QAbstractButton>
+#include <QApplication>
 #include <QCoreApplication>
+#include <QDialogButtonBox>
+#include <QMessageBox>
+#include <QPushButton>
 #include <QLibraryInfo>
 #include <QLocale>
 #include <QTranslator>
@@ -42,7 +48,8 @@ QString yes()    { return QCoreApplication::translate("QPlatformTheme", "&Yes");
 
 int main(int argc, char **argv)
 {
-    QCoreApplication app(argc, argv);
+    // A QApplication, for the button rows below; offscreen, as every suite.
+    QApplication app(argc, argv);
     std::cout << "=== qt_strings ===\n";
 
     check("a language file name maps to its code",
@@ -75,6 +82,44 @@ int main(int argc, char **argv)
     check("an unknown language leaves things as they are",
           qt_strings::install(app, "klingon").contains("no code")
               && finish() == QStringLiteral("&Finish"));
+
+    // KDE's platform theme labels a prompt's buttons from KDE's catalogs, in
+    // the desktop's language, past every translator. Here the theme is
+    // played by setting its Catalan texts on the buttons by hand.
+    std::cout << "\n[standard_buttons]\n";
+    check("a standard button's text comes through the translators",
+          standard_buttons::text(QDialogButtonBox::Yes) == QStringLiteral("&Yes")
+              && standard_buttons::text(QDialogButtonBox::Cancel) == QStringLiteral("Cancel")
+              && standard_buttons::text(QDialogButtonBox::NoButton).isEmpty());
+    {
+        QDialogButtonBox row(QDialogButtonBox::Yes | QDialogButtonBox::No | QDialogButtonBox::Ok);
+        row.button(QDialogButtonBox::Yes)->setText(QStringLiteral("&Sí"));
+        row.button(QDialogButtonBox::No)->setText(QStringLiteral("&No"));
+        row.button(QDialogButtonBox::Ok)->setText(QStringLiteral("Update Selected (3)"));
+        const QHash<int, QString> kde = {{int(QDialogButtonBox::Yes), QStringLiteral("&Sí")},
+                                         {int(QDialogButtonBox::No), QStringLiteral("&No")},
+                                         {int(QDialogButtonBox::Ok), QStringLiteral("D'acord")}};
+        standard_buttons::relabel(&row, kde);
+        check("the theme's Catalan Yes becomes the app's",
+              row.button(QDialogButtonBox::Yes)->text() == QStringLiteral("&Yes"),
+              row.button(QDialogButtonBox::Yes)->text());
+        check("a button the app named itself keeps its name",
+              row.button(QDialogButtonBox::Ok)->text() == QStringLiteral("Update Selected (3)"),
+              row.button(QDialogButtonBox::Ok)->text());
+    }
+    {
+        // Installed, it acts on show - a QMessageBox's own row included.
+        standard_buttons::install(app);
+        QMessageBox box(QMessageBox::Question, QStringLiteral("t"), QStringLiteral("body"),
+                        QMessageBox::Yes | QMessageBox::No);
+        box.show();
+        QCoreApplication::processEvents();
+        check("a message box shows the app's Yes and No",
+              box.button(QMessageBox::Yes)->text() == QStringLiteral("&Yes")
+                  && box.button(QMessageBox::No)->text() == QStringLiteral("&No"),
+              box.button(QMessageBox::Yes)->text() + " / " + box.button(QMessageBox::No)->text());
+        box.hide();
+    }
 
     std::cout << "\n" << s_passed << " passed, " << s_failed << " failed\n";
     return s_failed == 0 ? 0 : 1;

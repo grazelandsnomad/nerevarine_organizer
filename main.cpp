@@ -17,6 +17,7 @@
 #include "theme.h"
 #include "translator.h"
 #include "qt_strings.h"
+#include "standard_buttons.h"
 
 // The app version is injected by CMake from project(... VERSION) in
 // CMakeLists.txt, so there's a single place to bump it for a release. This
@@ -208,6 +209,9 @@ int main(int argc, char *argv[])
     // in the language the translator settled on - the desktop installs them
     // for the system locale, which put Catalan buttons on the English wizard.
     qCInfo(logging::lcApp) << qt_strings::install(app, Translator::currentLanguage());
+    // The prompts' OK / Yes / No too: Qt takes those from the platform theme,
+    // and KDE's answers in the desktop's language whatever the translators say.
+    standard_buttons::install(app);
 
     // Mirror the UI for right-to-left languages (e.g. Arabic)
     app.setLayoutDirection(Translator::isRtl() ? Qt::RightToLeft : Qt::LeftToRight);

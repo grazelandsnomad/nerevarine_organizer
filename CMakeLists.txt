@@ -87,6 +87,7 @@ set(CORE_SOURCES
     src/row_caption.cpp
     src/translator.cpp
     src/qt_strings.cpp
+    src/standard_buttons.cpp
     src/fomodwizard.cpp
     src/fomod_copy.cpp
     src/fomod_hint.cpp
@@ -280,6 +281,7 @@ set(CORE_SOURCES
     include/fomod_facts.h
     include/steam_client.h
     include/qt_strings.h
+    include/standard_buttons.h
     include/install_job.h
     include/fs_progress.h
     include/fomod_path.h
