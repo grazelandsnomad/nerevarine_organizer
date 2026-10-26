@@ -930,21 +930,31 @@ static ActivateResult bethesdaActivate(const QString &id, const GameAdapter *ada
     ActivateResult result;
     const LoadOrderStyle style = adapter->loadOrderStyle();
     if (!writesPluginList(adapter)) return result;
-    QSet<QString> active;
+    // By name in any case, as the game matches them: the list spells a
+    // plugin as its mod does, Data/ as the deploy settled on (one spelling
+    // per name), and a translation's respelt plugin is the same plugin.
+    QHash<QString, QString> active;   // lower-cased -> as placed in Data/
     for (const auto &f : manifest.files) {
         if (f.rel.contains('/')) continue;        // plugins load from Data/ root only
         const QString low = f.rel.toLower();
         if (low.endsWith(".esp") || low.endsWith(".esm") || low.endsWith(".esl"))
-            active.insert(f.rel);
+            active.insert(low, f.rel);
     }
     QStringList ordered;
-    QSet<QString> placed;
-    for (const QString &p : loadOrder)
-        if (active.contains(p)) { ordered << p; placed.insert(p); }
-    for (const auto &f : manifest.files)
-        if (active.contains(f.rel) && !placed.contains(f.rel)) {
-            ordered << f.rel; placed.insert(f.rel);
-        }
+    QSet<QString> placed;   // lower-cased
+    for (const QString &p : loadOrder) {
+        const QString low = p.toLower();
+        const auto it = active.constFind(low);
+        if (it == active.cend() || placed.contains(low)) continue;
+        ordered << it.value();
+        placed.insert(low);
+    }
+    for (const auto &f : manifest.files) {
+        const QString low = f.rel.toLower();
+        if (!active.contains(low) || placed.contains(low)) continue;
+        ordered << f.rel;
+        placed.insert(low);
+    }
     ordered = bethesda_loadorder::mastersFirst(ordered);
 
     // Masters, read from the files as they now sit in Data/. A plugin whose

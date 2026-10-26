@@ -19,6 +19,7 @@
 #include <QStringList>
 #include <QTemporaryDir>
 
+#include <algorithm>
 #include <iostream>
 
 using bethesda_archives::configureArchives;
@@ -223,6 +224,106 @@ static void testSourceFingerprint()
               && sourceFingerprint({"a"}, {"b"}) != sourceFingerprint({"a", "b"}, {}));
 }
 
+// Every name in a folder, sorted, for checking which spellings exist.
+static QStringList namesIn(const QString &dir)
+{
+    QStringList n = QDir(dir).entryList(QDir::AllEntries | QDir::NoDotAndDotDot);
+    n.sort();
+    return n;
+}
+
+// Fallout 4's Data/ of 2026-10-26 held F4SE and f4se, Meshes and meshes and
+// three more pairs, and Skyrim's two spellings of one plugin: on a disk that
+// keeps case, Proton walks one of each pair and never sees the other.
+static void testOneSpellingPerPath()
+{
+    std::cout << "\n[deploy: one spelling per path, as the game reads it]\n";
+    QTemporaryDir tmp;
+    const QString data = tmp.filePath("Data");
+    const QString bak  = tmp.filePath("backup");
+    touch(data + "/Textures/vanilla.dds", "vanilla");          // the game's own folder
+    touch(data + "/Meshes/x.nif", "vanilla x");                // and an original file
+
+    touch(tmp.filePath("A/textures/a.dds"), "a");
+    touch(tmp.filePath("A/F4SE/Plugins/one.dll"), "one");
+    touch(tmp.filePath("A/alternate start - live another life.esp"), "original");
+    touch(tmp.filePath("B/TEXTURES/b.dds"), "b");
+    touch(tmp.filePath("B/f4se/plugins/two.dll"), "two");
+    touch(tmp.filePath("B/Alternate Start - Live Another Life.esp"), "translation");
+    touch(tmp.filePath("B/meshes/X.NIF"), "mod x");
+
+    const DeployResult r = deploy(data, bak, {
+        {"Original", tmp.filePath("A")}, {"Translation", tmp.filePath("B")}});
+    check("no errors", r.errors.isEmpty(), r.errors.join(';'));
+    check("the mods' folders join the game's, in its spelling",
+          namesIn(data) == QStringList({"F4SE", "Meshes", "Textures",
+                                        "alternate start - live another life.esp"}),
+          namesIn(data).join('|'));
+    check("both mods' textures in the one folder",
+          namesIn(data + "/Textures") == QStringList({"a.dds", "b.dds", "vanilla.dds"}),
+          namesIn(data + "/Textures").join('|'));
+    check("one F4SE/Plugins with both plugins in it",
+          namesIn(data + "/F4SE") == QStringList({"Plugins"})
+              && namesIn(data + "/F4SE/Plugins") == QStringList({"one.dll", "two.dll"}),
+          namesIn(data + "/F4SE").join('|') + " / " + namesIn(data + "/F4SE/Plugins").join('|'));
+    check("the respelt plugin replaced the original, as on Windows",
+          readAll(data + "/alternate start - live another life.esp") == "translation");
+    check("and the manifest holds it once, won by the later mod",
+          std::count_if(r.manifest.files.cbegin(), r.manifest.files.cend(),
+                        [](const DeployedFile &f) {
+                            return f.rel.compare("Alternate Start - Live Another Life.esp",
+                                                 Qt::CaseInsensitive) == 0
+                                && f.sourceMod == "Translation";
+                        }) == 1
+              && r.filesDeployed == 6,
+          QString::number(r.filesDeployed));
+    check("an original in another case is that file: backed up, then overridden",
+          namesIn(data + "/Meshes") == QStringList({"x.nif"})
+              && readAll(data + "/Meshes/x.nif") == "mod x"
+              && readAll(bak + "/Meshes/x.nif") == "vanilla x");
+
+    const UndeployResult u = undeploy(data, bak, r.manifest);
+    check("undeploy restores the original where it was", u.errors.isEmpty()
+              && readAll(data + "/Meshes/x.nif") == "vanilla x", u.errors.join(';'));
+    check("and takes away the folders it emptied, not the game's",
+          namesIn(data) == QStringList({"Meshes", "Textures"})
+              && namesIn(data + "/Textures") == QStringList({"vanilla.dds"}),
+          namesIn(data).join('|'));
+}
+
+// A deployment made before this one spelled paths as each mod did: taking it
+// out leaves both spellings empty, and the next deploy settles on one.
+static void testRedeployMergesOldTwins()
+{
+    std::cout << "\n[redeploy: an older deployment's twins become one folder]\n";
+    QTemporaryDir tmp;
+    const QString data = tmp.filePath("Data");
+    const QString bak  = tmp.filePath("backup");
+    touch(data + "/Scripts/old1.pex", "1");
+    touch(data + "/scripts/old2.pex", "2");
+    QDir().mkpath(data + "/Interface");
+    touch(data + "/Interface/keep.swf", "the user's own");
+    Manifest old;
+    old.files = {{"Scripts/old1.pex", "A", LinkMethod::Copy, false},
+                 {"scripts/old2.pex", "B", LinkMethod::Copy, false}};
+
+    const UndeployResult u = undeploy(data, bak, old);
+    check("the old deployment comes out, both twins with it",
+          u.removed == 2 && namesIn(data) == QStringList({"Interface"}),
+          namesIn(data).join('|'));
+
+    touch(tmp.filePath("A/Scripts/new1.pex"), "1");
+    touch(tmp.filePath("B/scripts/new2.pex"), "2");
+    touch(tmp.filePath("B/interface/new.swf"), "swf");
+    const DeployResult r = deploy(data, bak, {{"A", tmp.filePath("A")}, {"B", tmp.filePath("B")}});
+    check("and the new one has a single spelling of each",
+          r.errors.isEmpty()
+              && namesIn(data) == QStringList({"Interface", "Scripts"})
+              && namesIn(data + "/Scripts") == QStringList({"new1.pex", "new2.pex"})
+              && namesIn(data + "/Interface") == QStringList({"keep.swf", "new.swf"}),
+          namesIn(data).join('|'));
+}
+
 // An uninstall leaves the Data folder standing; the deploy must be able to
 // say the game is gone rather than list every plugin that needs it.
 static void testMissingGameExe()
@@ -260,6 +361,8 @@ static void run_bethesda_deploy()
     deploy_section::testManifestRoundTrip();
     deploy_section::testSourceFingerprint();
     deploy_section::testMissingGameExe();
+    deploy_section::testOneSpellingPerPath();
+    deploy_section::testRedeployMergesOldTwins();
 }
 
 namespace loadorder_section {

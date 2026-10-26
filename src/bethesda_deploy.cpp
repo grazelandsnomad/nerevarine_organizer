@@ -9,6 +9,9 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSet>
+
+#include <algorithm>
 
 #include <unistd.h>   // ::link; Qt has no hardlink primitive
 
@@ -66,6 +69,88 @@ bool placeFile(const QString &src, const QString &dst,
     return false;
 }
 
+// One spelling per path under a deploy root.
+//
+// The game reads its folder the way Windows does, without case, and Proton
+// finds a path one component at a time: on a Linux disk, which keeps case,
+// one mod's "textures/" and another's "Textures/" are two folders, and
+// whatever sits in the one Proton does not walk into is never seen. Fallout
+// 4's Data/ had F4SE and f4se, Meshes and meshes, and three more pairs; a
+// translation that spelled its plugin's name differently landed beside the
+// original instead of replacing it.
+//
+// canonical() spells each component as the root already does - an entry
+// that is there in another case keeps its spelling, the first in name order
+// if two are - and remembers each new one, so the next mod that spells it
+// otherwise lands in the same place. Each folder is listed once, lazily.
+class CaseFold
+{
+public:
+    explicit CaseFold(const QString &root) : m_root(root) {}
+
+    QString canonical(const QString &rel)
+    {
+        const QStringList parts = rel.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+        QString actualDir, foldedDir;
+        QStringList out;
+        out.reserve(parts.size());
+        for (const QString &part : parts) {
+            QHash<QString, QString> &kids = childrenOf(foldedDir, actualDir);
+            const QString folded = part.toCaseFolded();
+            auto it = kids.constFind(folded);
+            if (it == kids.cend()) it = kids.insert(folded, part);
+            out << it.value();
+            actualDir = actualDir.isEmpty() ? it.value()
+                                            : actualDir + QLatin1Char('/') + it.value();
+            foldedDir = foldedDir.isEmpty() ? folded : foldedDir + QLatin1Char('/') + folded;
+        }
+        return out.join(QLatin1Char('/'));
+    }
+
+private:
+    QHash<QString, QString> &childrenOf(const QString &foldedDir, const QString &actualDir)
+    {
+        auto it = m_children.find(foldedDir);
+        if (it != m_children.end()) return it.value();
+        QHash<QString, QString> kids;
+        const QDir dir(actualDir.isEmpty() ? m_root : QDir(m_root).filePath(actualDir));
+        // Name order, so of two twins already there the same one always wins.
+        const QStringList names = dir.entryList(
+            QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot,
+            QDir::Name);
+        for (const QString &n : names) {
+            const QString folded = n.toCaseFolded();
+            if (!kids.contains(folded)) kids.insert(folded, n);
+        }
+        return m_children.insert(foldedDir, kids).value();
+    }
+
+    QString m_root;
+    QHash<QString, QHash<QString, QString>> m_children;  // folded dir -> folded name -> name
+};
+
+// The folders that held the files an undeploy took out, emptied by it: gone
+// too, deepest first, up to (never including) the root. Left standing, an old
+// deployment's "meshes" beside the game's "Meshes" kept the spellings apart
+// for the next deploy. QDir::rmdir only ever removes an empty folder, so one
+// that still holds anything - a restored original, a file of the user's - is
+// left as it is.
+void pruneEmptyDirs(const QString &root, const QSet<QString> &dirs)
+{
+    const QString cleanRoot = QDir::cleanPath(root);
+    QStringList todo(dirs.cbegin(), dirs.cend());
+    std::sort(todo.begin(), todo.end(), [](const QString &a, const QString &b) {
+        return a.size() > b.size();
+    });
+    for (QString d : std::as_const(todo)) {
+        d = QDir::cleanPath(d);
+        while (d.startsWith(cleanRoot + QLatin1Char('/'))) {
+            if (!QDir().rmdir(d)) break;
+            d = QFileInfo(d).path();
+        }
+    }
+}
+
 // Move `from` to `to`, crossing filesystems via copy+remove if rename fails.
 bool moveFile(const QString &from, const QString &to)
 {
@@ -87,6 +172,7 @@ DeployResult deploy(const QString &dataDir,
     DeployResult res;
     const QDir data(dataDir);
     QHash<QString, int> relToIdx;   // rel -> index in res.manifest.files
+    CaseFold fold(dataDir);         // one spelling per path, so rel is one key
 
     // Count first so the percentage is real. Walking the sources is pure
     // directory traversal - milliseconds against the thousands of mkpath +
@@ -133,6 +219,10 @@ DeployResult deploy(const QString &dataDir,
             QString rel = base.relativeFilePath(abs);
             if (rel.startsWith(QLatin1String(".."))) continue;   // don't escape Data/
             if (!src.destSubdir.isEmpty()) rel = src.destSubdir + QLatin1Char('/') + rel;
+            // As Data/ already spells it: a mod's "textures/" joins the
+            // game's "Textures/", and a file another mod placed in another
+            // case is the same file, which this one now wins.
+            rel = fold.canonical(rel);
             const QString dst = data.filePath(rel);
             QDir().mkpath(QFileInfo(dst).absolutePath());
 
@@ -197,14 +287,19 @@ UndeployResult undeploy(const QString &dataDir,
     // The manifest already knows the total, so no counting pass here.
     constexpr int kReportEvery = 64;
     int seen = 0;
+    QSet<QString> emptied;   // folders a removal may have left empty
 
     for (const DeployedFile &f : manifest.files) {
         if (progress && (++seen % kReportEvery) == 0)
             progress(seen, int(manifest.files.size()));
         const QString dst = data.filePath(f.rel);
         if (QFileInfo::exists(dst) || QFileInfo(dst).isSymLink()) {
-            if (QFile::remove(dst)) ++res.removed;
-            else res.errors << QStringLiteral("remove failed: %1").arg(f.rel);
+            if (QFile::remove(dst)) {
+                ++res.removed;
+                emptied.insert(QFileInfo(dst).absolutePath());
+            } else {
+                res.errors << QStringLiteral("remove failed: %1").arg(f.rel);
+            }
         }
         if (f.displacedVanilla) {
             const QString bak = QDir(backupDir).filePath(f.rel);
@@ -214,6 +309,7 @@ UndeployResult undeploy(const QString &dataDir,
             }
         }
     }
+    pruneEmptyDirs(dataDir, emptied);
     return res;
 }
 
@@ -244,7 +340,11 @@ QString sourceFingerprint(const QStringList &mods, const QStringList &loadOrder)
 {
     // Unit and record separators: neither can occur in a path or a plugin
     // name, so no two different inputs join to the same bytes.
-    const QString joined = mods.join(QChar(0x1e)) + QChar(0x1f)
+    // The version leads: a deploy that now lays files out differently - one
+    // spelling per path since 2 - is stale against every older one, and the
+    // next Start or deploy redoes it.
+    const QString joined = QStringLiteral("deploy-v2") + QChar(0x1f)
+                         + mods.join(QChar(0x1e)) + QChar(0x1f)
                          + loadOrder.join(QChar(0x1e));
     return QString::fromLatin1(
         QCryptographicHash::hash(joined.toUtf8(), QCryptographicHash::Sha1).toHex());

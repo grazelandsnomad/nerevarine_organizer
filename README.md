@@ -30,6 +30,9 @@ Installers stopped choosing for a setup they could not see:
 - **Update All**: when Check Updates finds updates, its button turns red and
   updates them all in one click, each mod to the new version of the file you
   installed.
+- **Mods that spell a folder differently share it in the game's Data**
+  (Textures and textures, F4SE and f4se), so under Proton all their files
+  load, and a translation's plugin replaces the original.
 - **A plugin whose master is missing is left out of the load order** and
   marked red, instead of stopping a Bethesda game as it loads; each plugin
   now loads after its own masters.
