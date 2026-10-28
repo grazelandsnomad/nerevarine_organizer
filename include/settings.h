@@ -43,6 +43,10 @@ struct Settings {
     // when Proton auto-detection fails. Empty until the user sets them.
     static QString dataDir(const QString &gameId);
     static void    setDataDir(const QString &gameId, const QString &dir);
+    // The Data dir a game was found to have moved away from, until the next
+    // deploy takes the mods out of it. Empty when no move is pending.
+    static QString movedFromDataDir(const QString &gameId);
+    static void    setMovedFromDataDir(const QString &gameId, const QString &dir);
     static QString pluginsTxtPath(const QString &gameId);
     static void    setPluginsTxtPath(const QString &gameId, const QString &path);
 

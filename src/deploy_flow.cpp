@@ -176,8 +176,10 @@ struct DeployOutcome {
 
 // Forward-declare the moved file-statics so intra-TU call order is irrelevant.
 static ActivateResult bethesdaActivate(const QString &id, const GameAdapter *adapter, const QString &dataDir, const bethesda_deploy::Manifest &manifest, const QStringList &loadOrder);
-static DeployOutcome bethesdaApplyDeploy(const QString &id, const GameAdapter *adapter, const QString &dataDir, const QList<bethesda_deploy::DeploySource> &sources, const QList<bethesda_deploy::DeploySource> &rootSources, const QString &modlistFile, const QStringList &loadOrder, const QString &fingerprint, const bethesda_deploy::ProgressFn &progress);
-static QString bethesdaApplyUndeploy(const QString &id, const GameAdapter *adapter, const QString &dataDir, const QString &modlistFile);
+static DeployOutcome bethesdaApplyDeploy(const QString &id, const GameAdapter *adapter, const QString &dataDir, const QList<bethesda_deploy::DeploySource> &sources, const QList<bethesda_deploy::DeploySource> &rootSources, const QString &modlistFile, const QStringList &loadOrder, const QString &fingerprint, const bethesda_deploy::ProgressFn &progress, const QString &movedFrom);
+static QString bethesdaApplyUndeploy(const QString &id, const GameAdapter *adapter, const QString &dataDir, const QString &modlistFile, int *removedOut = nullptr);
+static int bethesdaLeaveOldFolder(const QString &id, const GameAdapter *adapter, const QString &oldDataDir, const QString &modlistFile);
+static QStringList gameExeNames(const GameAdapter *adapter);
 static QStringList bethesdaConfigureArchives(const QString &id, const GameAdapter *adapter, const QString &dataDir, const bethesda_deploy::Manifest &manifest);
 static QStringList bethesdaPrefixUserDirs(const GameAdapter *adapter, const QString &dataDir);
 static QString bethesdaResolveDataDir(QWidget *parent, const QString &id, const GameAdapter *adapter, bool allowPrompt);
@@ -577,15 +579,36 @@ static QString bethesdaResolveDataDir(QWidget *parent, const QString &id,
                                       const GameAdapter *adapter, bool allowPrompt)
 {
     auto ok = [](const QString &d) { return !d.isEmpty() && QDir(d).exists(); };
-    QString dataDir = Settings::dataDir(id);
-    if (!ok(dataDir)) {
+    // Where the stores (GOG, then Steam) say the game is now.
+    auto storeData = [&]() -> QString {
         QString exe = GameProfileRegistry::findGogGameExe(id, /*wantLauncher=*/false);
         if (exe.isEmpty()) exe = GameProfileRegistry::findSteamGameExe(id);
-        if (!exe.isEmpty() && adapter)
-            // cleanPath so a "." subdir (Souls games load out of the exe's own
-            // folder) resolves to that folder rather than a trailing "/.".
-            dataDir = QDir::cleanPath(QFileInfo(exe).absolutePath()
-                                      + "/" + adapter->dataSubdir());
+        if (exe.isEmpty() || !adapter) return {};
+        // cleanPath so a "." subdir (Souls games load out of the exe's own
+        // folder) resolves to that folder rather than a trailing "/.".
+        return QDir::cleanPath(QFileInfo(exe).absolutePath() + "/" + adapter->dataSubdir());
+    };
+    QString dataDir = Settings::dataDir(id);
+    if (!ok(dataDir)) {
+        dataDir = storeData();
+    } else if (adapter) {
+        // A saved folder that still exists but no longer holds the game: the
+        // game was reinstalled somewhere else, and an uninstall leaves its
+        // old folder standing. Follow it; the next deploy takes the mods
+        // back out of the old one (Settings::movedFromDataDir).
+        const QStringList exes = gameExeNames(adapter);
+        if (!bethesda_deploy::missingGameExe(bethesdaGameRoot(adapter, dataDir), exes).isEmpty()) {
+            const auto loc = bethesda_deploy::followMovedGame(
+                dataDir, storeData(), exes, adapter->gameRootFromData());
+            if (!loc.movedFrom.isEmpty() && ok(loc.dataDir)) {
+                qCInfo(logging::lcLaunch).noquote()
+                    << "game" << id << "moved:" << loc.movedFrom << "->" << loc.dataDir;
+                // The first old folder is the one holding the deployment.
+                if (Settings::movedFromDataDir(id).isEmpty())
+                    Settings::setMovedFromDataDir(id, loc.movedFrom);
+                dataDir = loc.dataDir;
+            }
+        }
     }
     if (!ok(dataDir) && allowPrompt) {
         ui::info(parent, T("deploy_title"), deployText(adapter, "deploy_locate_data"));
@@ -742,7 +765,8 @@ static QStringList gamesSharingDataDir(const QList<GameProfile> &games,
 // files), restore the Plugins.txt / Oblivion.ini we backed up on deploy, and
 // clear the manifest so nothing is "deployed" any more.  Returns the summary.
 static QString bethesdaApplyUndeploy(const QString &id, const GameAdapter *adapter,
-                                     const QString &dataDir, const QString &modlistFile)
+                                     const QString &dataDir, const QString &modlistFile,
+                                     int *removedOut)
 {
     QString manifestPath, backupDir;
     bethesdaStatePaths(modlistFile, manifestPath, backupDir);
@@ -794,11 +818,38 @@ static QString bethesdaApplyUndeploy(const QString &id, const GameAdapter *adapt
     }
     QFile::remove(manifestPath);
     QFile::remove(bethesdaFingerprintPath(modlistFile));
+    if (removedOut) *removedOut = u.removed;
     QString summary = T("undeploy_done").arg(u.removed).arg(u.restored).arg(u.errors.size());
     if (!unset.isEmpty())
         summary += QStringLiteral("\n\n")
                  + T("undeploy_dll_overrides").arg(unset.join(QStringLiteral(", ")));
     return summary;
+}
+
+// The game moved (see bethesdaResolveDataDir): take this list's deployment
+// back out of the folder it was made into, before anything goes into the new
+// one. Against the OLD root - undeployed against the new one, the old
+// install's backed-up originals would be "restored" over the fresh game's
+// files. An old folder that is gone already has nothing to take out; its
+// manifests go, the backup store (the user's own files) stays. Returns how
+// many files came out.
+static int bethesdaLeaveOldFolder(const QString &id, const GameAdapter *adapter,
+                                  const QString &oldDataDir, const QString &modlistFile)
+{
+    int removed = 0;
+    if (QDir(oldDataDir).exists()) {
+        bethesdaApplyUndeploy(id, adapter, oldDataDir, modlistFile, &removed);
+    } else {
+        QString manifestPath, backupDir, rootManifestPath, rootBackupDir;
+        bethesdaStatePaths(modlistFile, manifestPath, backupDir);
+        bethesdaRootStatePaths(modlistFile, rootManifestPath, rootBackupDir);
+        QFile::remove(manifestPath);
+        QFile::remove(rootManifestPath);
+        QFile::remove(bethesdaFingerprintPath(modlistFile));
+    }
+    qCInfo(logging::lcLaunch).noquote() << "deploy: took" << removed
+                                        << "file(s) out of the old folder" << oldDataDir;
+    return removed;
 }
 
 // Enabled, installed mods' data roots in load order (top to bottom; later
@@ -1201,10 +1252,21 @@ static DeployOutcome bethesdaApplyDeploy(const QString &id, const GameAdapter *a
                                    const QList<bethesda_deploy::DeploySource> &rootSources,
                                    const QString &modlistFile, const QStringList &loadOrder,
                                    const QString &fingerprint,
-                                   const bethesda_deploy::ProgressFn &progress)
+                                   const bethesda_deploy::ProgressFn &progress,
+                                   const QString &movedFrom)
 {
     QString manifestPath, backupDir;
     bethesdaStatePaths(modlistFile, manifestPath, backupDir);
+
+    // The game moved: the previous deployment is in the old folder.
+    QString movedNote;
+    if (!movedFrom.isEmpty()) {
+        const int out = bethesdaLeaveOldFolder(id, adapter, movedFrom, modlistFile);
+        movedNote = T("deploy_moved_from").arg(adapter->displayName(),
+                                               QDir::toNativeSeparators(dataDir),
+                                               QDir::toNativeSeparators(movedFrom))
+                                          .arg(out);
+    }
 
     // Game-root pass (script-extender loaders). Its own root, backup store and
     // manifest - see bethesdaRootStatePaths. Undeployed first for the same
@@ -1273,6 +1335,7 @@ static DeployOutcome bethesdaApplyDeploy(const QString &id, const GameAdapter *a
         : T("deploy_done_overlay").arg(res.filesDeployed).arg(res.vanillaBackedUp)
                                  .arg(res.errors.size());
     QStringList details;   // the long lists, behind Show Details
+    if (!movedNote.isEmpty()) summary += QStringLiteral("\n\n") + movedNote;
 
     // Right after the counts: these are plugins the user enabled that the
     // game will not load, and the reason is something only they can fix.
@@ -1559,9 +1622,13 @@ void DeployFlow::onDeployBethesda()
     // Taken with the sources, on the same thread and from the same rows, so it
     // describes exactly what this deploy is about to place.
     const QString fingerprint = deployFingerprint();
+    // A move the resolver noticed: this deploy takes the mods out of the old
+    // folder first, so it is no longer pending.
+    const QString movedFrom = Settings::movedFromDataDir(id);
+    Settings::setMovedFromDataDir(id, {});
     async::guarded(this,
         [id, adapter, dataDir, sources, rootSources, modlistFile, loadOrder, fingerprint,
-         progressCell]
+         progressCell, movedFrom]
         (DeployFlow *) -> DeployOutcome {
             return bethesdaApplyDeploy(
                 id, adapter, dataDir, sources, rootSources, modlistFile, loadOrder,
@@ -1569,7 +1636,8 @@ void DeployFlow::onDeployBethesda()
                 [progressCell](int done, int total) {
                     progressCell->store((qint64(done) << 32) | quint32(total),
                                   std::memory_order_relaxed);
-                });
+                },
+                movedFrom);
         },
         [](DeployFlow *self, const DeployOutcome &out) {
             if (self->m_deployProgressTimer) self->m_deployProgressTimer->stop();
@@ -1601,12 +1669,21 @@ void DeployFlow::onUndeployBethesda()
         ui::info(m_shell.dialogParent(), T("undeploy_title"), T("undeploy_none"));
         return;
     }
-    const QString dataDir = bethesdaResolveDataDir(m_shell.dialogParent(), id, adapter, /*allowPrompt=*/true);
+    QString dataDir = bethesdaResolveDataDir(m_shell.dialogParent(), id, adapter, /*allowPrompt=*/true);
     if (dataDir.isEmpty()) return;
+    // The deployment is where it was made: in the old folder, if the game
+    // has moved since.
+    const QString movedFrom = Settings::movedFromDataDir(id);
+    if (!movedFrom.isEmpty()) dataDir = movedFrom;
     if (!ui::confirm(m_shell.dialogParent(), T("undeploy_title"),
                      deployText(adapter, "undeploy_confirm").arg(dataDir)))
         return;
-    const QString summary = bethesdaApplyUndeploy(id, adapter, dataDir, m_shell.modlistPath());
+    if (!movedFrom.isEmpty()) Settings::setMovedFromDataDir(id, {});
+    const QString summary = QDir(dataDir).exists()
+        ? bethesdaApplyUndeploy(id, adapter, dataDir, m_shell.modlistPath())
+        : T("undeploy_done").arg(bethesdaLeaveOldFolder(id, adapter, dataDir,
+                                                        m_shell.modlistPath()))
+                            .arg(0).arg(0);
     ui::info(m_shell.dialogParent(), T("undeploy_title"), summary);
     updateDeployHint();   // manifest is gone, so the banner comes back
 }
@@ -1633,10 +1710,12 @@ void DeployFlow::maybeDeployBeforeLaunch(const QString &id)
     // No progress panel here: this is the pre-launch re-sync, it only runs when
     // a deployment already exists, and the user is on their way into the game
     // rather than watching the window.
+    const QString movedFrom = Settings::movedFromDataDir(id);
+    Settings::setMovedFromDataDir(id, {});
     const DeployOutcome out = bethesdaApplyDeploy(
         id, adapter, dataDir, sources,
         gatherScriptExtenderSources(m_shell.model(), order, adapter, m_shell.modsDir()),
-        m_shell.modlistPath(), m_shell.loadOrder(), deployFingerprint(), {});
+        m_shell.modlistPath(), m_shell.loadOrder(), deployFingerprint(), {}, movedFrom);
     updateDeployHint();
     // The summary is not shown here - the user is on their way into the game -
     // but a plugin left out is worth a line: the game starts without it.
@@ -1644,6 +1723,9 @@ void DeployFlow::maybeDeployBeforeLaunch(const QString &id)
         m_shell.showStatus(T("deploy_relaunch_synced_held").arg(out.heldBack), 10000);
     else
         m_shell.showStatus(T("deploy_relaunch_synced"), 3000);
+    // Worth saying even on the way into the game: the mods changed folders.
+    if (!movedFrom.isEmpty())
+        m_shell.showStatus(T("deploy_moved_status").arg(QDir::toNativeSeparators(dataDir)), 10000);
     refreshScriptExtenderFlags();
     m_shell.scanMissingMasters();
 }

@@ -148,4 +148,22 @@ QString sourceFingerprint(const QStringList &mods, const QStringList &loadOrder)
 // nothing.
 QString missingGameExe(const QString &gameRoot, const QStringList &exeNames);
 
+// Where a game's Data is now. `savedData` is the folder remembered for it,
+// `foundData` the one the stores (Steam, GOG) report now, `rootFromData` the
+// adapter's way from Data/ to the game folder ("..").
+//
+// A game reinstalled on another drive leaves its old folder standing - the
+// mods, the Creation Club downloads and the script extender are not Steam's
+// to delete - and the saved path, still there, kept every deploy pointed at
+// those leftovers. The saved folder wins while its game is in it; once it is
+// not and the found one has it, the found one wins and `movedFrom` names the
+// old one, for the next deploy to take the mods back out of. With neither,
+// or no exe names to tell by, the saved folder stays.
+struct GameLocation {
+    QString dataDir;
+    QString movedFrom;   // empty: no move
+};
+GameLocation followMovedGame(const QString &savedData, const QString &foundData,
+                             const QStringList &exeNames, const QString &rootFromData);
+
 } // namespace bethesda_deploy

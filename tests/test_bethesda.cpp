@@ -324,6 +324,52 @@ static void testRedeployMergesOldTwins()
           namesIn(data).join('|'));
 }
 
+// The user's Skyrim, 2026-10-26: uninstalled from one drive, reinstalled on
+// another, the old folder left standing with the mods in it.
+static void testFollowMovedGame()
+{
+    std::cout << "\n[followMovedGame: a game reinstalled somewhere else]\n";
+    QTemporaryDir tmp;
+    const QString oldGame = tmp.filePath("2TB/Skyrim Special Edition");
+    const QString newGame = tmp.filePath("4TB/Skyrim Special Edition");
+    QDir().mkpath(oldGame + "/Data");
+    QDir().mkpath(newGame + "/Data");
+    const QStringList exes{"SkyrimSE.exe"};
+    touch(oldGame + "/SkyrimSE.exe", "exe");
+
+    auto at = [&](const QString &saved, const QString &found) {
+        return followMovedGame(saved, found, exes, "..");
+    };
+    GameLocation l = at(oldGame + "/Data", newGame + "/Data");
+    check("the saved folder wins while its game is in it",
+          l.dataDir == oldGame + "/Data" && l.movedFrom.isEmpty());
+
+    QFile::remove(oldGame + "/SkyrimSE.exe");
+    l = at(oldGame + "/Data", newGame + "/Data");
+    check("the new install has no exe yet (still downloading): stay",
+          l.dataDir == oldGame + "/Data" && l.movedFrom.isEmpty());
+
+    touch(newGame + "/SkyrimSE.exe", "exe");
+    l = at(oldGame + "/Data", newGame + "/Data");
+    check("the game is in the new folder only: follow it, naming the old one",
+          l.dataDir == newGame + "/Data" && l.movedFrom == oldGame + "/Data");
+    check("the stores reporting the same folder is no move",
+          at(oldGame + "/Data", oldGame + "/Data/").movedFrom.isEmpty());
+    check("nothing found: stay", at(oldGame + "/Data", {}).dataDir == oldGame + "/Data");
+    check("nothing saved: the found folder", at({}, newGame + "/Data").dataDir == newGame + "/Data");
+    check("no exe names cannot tell: stay",
+          followMovedGame(oldGame + "/Data", newGame + "/Data", {}, "..").movedFrom.isEmpty());
+
+    // The deployment comes out of the old folder, the new one stays clean.
+    touch(tmp.filePath("Mod/textures/a.dds"), "a");
+    const DeployResult r = deploy(oldGame + "/Data", tmp.filePath("bak"), {{"Mod", tmp.filePath("Mod")}});
+    const UndeployResult u = undeploy(oldGame + "/Data", tmp.filePath("bak"), r.manifest);
+    const DeployResult r2 = deploy(newGame + "/Data", tmp.filePath("bak"), {{"Mod", tmp.filePath("Mod")}});
+    check("mods leave the old folder and land in the new",
+          u.removed == 1 && !exists(oldGame + "/Data/textures")
+              && exists(newGame + "/Data/textures/a.dds") && r2.errors.isEmpty());
+}
+
 // An uninstall leaves the Data folder standing; the deploy must be able to
 // say the game is gone rather than list every plugin that needs it.
 static void testMissingGameExe()
@@ -363,6 +409,7 @@ static void run_bethesda_deploy()
     deploy_section::testMissingGameExe();
     deploy_section::testOneSpellingPerPath();
     deploy_section::testRedeployMergesOldTwins();
+    deploy_section::testFollowMovedGame();
 }
 
 namespace loadorder_section {

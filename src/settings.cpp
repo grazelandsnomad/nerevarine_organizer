@@ -202,6 +202,17 @@ void Settings::setDataDir(const QString &gameId, const QString &dir)
     QSettings().setValue(gameKey(gameId, "data_dir"), dir);
 }
 
+QString Settings::movedFromDataDir(const QString &gameId)
+{
+    return QSettings().value(gameKey(gameId, "data_dir_moved_from")).toString();
+}
+
+void Settings::setMovedFromDataDir(const QString &gameId, const QString &dir)
+{
+    if (dir.isEmpty()) QSettings().remove(gameKey(gameId, "data_dir_moved_from"));
+    else               QSettings().setValue(gameKey(gameId, "data_dir_moved_from"), dir);
+}
+
 QString Settings::pluginsTxtPath(const QString &gameId)
 {
     return QSettings().value(gameKey(gameId, "plugins_txt_path")).toString();

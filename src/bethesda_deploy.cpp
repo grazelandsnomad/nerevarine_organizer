@@ -370,6 +370,21 @@ QString missingGameExe(const QString &gameRoot, const QStringList &exeNames)
     return first;
 }
 
+GameLocation followMovedGame(const QString &savedData, const QString &foundData,
+                             const QStringList &exeNames, const QString &rootFromData)
+{
+    const auto root = [&](const QString &data) {
+        return QDir::cleanPath(data + QLatin1Char('/') + rootFromData);
+    };
+    if (savedData.isEmpty()) return {foundData, {}};
+    if (missingGameExe(root(savedData), exeNames).isEmpty()) return {savedData, {}};
+    if (foundData.isEmpty()
+        || QDir::cleanPath(foundData) == QDir::cleanPath(savedData)
+        || !missingGameExe(root(foundData), exeNames).isEmpty())
+        return {savedData, {}};
+    return {foundData, savedData};
+}
+
 Manifest manifestFromJson(const QString &json)
 {
     Manifest m;
