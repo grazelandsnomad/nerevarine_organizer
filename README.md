@@ -27,6 +27,9 @@ Installers stopped choosing for a setup they could not see:
   (Next-Gen or Anniversary), and nested install conditions are read whole.
 - **Start works with Steam closed**: it opens Steam, waits for it, then starts
   the game through its script extender.
+- **Bethesda.net Creations as rows**: paste or drop a Creation's page link,
+  get it in-game, and the next Deploy or Start takes its files into your
+  mod library like any mod.
 - **Update All**: when Check Updates finds updates, its button turns red and
   updates them all in one click, each mod to the new version of the file you
   installed.
