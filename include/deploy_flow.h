@@ -6,6 +6,7 @@
 // undeploy workers are file-statics in deploy_flow.cpp, where they always
 // were; the window reaches the flow through the few entry points below.
 
+#include "creations.h"
 #include "game_runtime.h"
 
 #include <QDialog>
@@ -16,6 +17,7 @@
 
 #include <functional>
 
+class GameAdapter;
 class QTimer;
 class WindowShell;
 
@@ -53,8 +55,11 @@ public:
     // into the same folder, a variant swapped in. The fingerprint cannot see
     // that, so the deploy recorded for `modlistFile` is marked stale by hand.
     void markDeployStale(const QString &modlistFile);
-    // Re-sync Data/ before launching, if deployed before. Best-effort, silent.
-    void maybeDeployBeforeLaunch(const QString &id);
+    // Re-sync Data/ before launching, if deployed before. Best-effort, silent,
+    // except that a Creation the game downloaded is copied into the library
+    // first, behind a progress dialog. `then` runs once Data/ is in sync (at
+    // once when there was nothing to do): the launch itself.
+    void maybeDeployBeforeLaunch(const QString &id, std::function<void()> then = {});
     // Sums the warning signals (missing deps, empty installs, forbidden
     // enabled, stale script extenders); summary dialog if any fire. False on
     // Cancel. Missing masters are left out of the game instead (see the .cpp).
@@ -77,7 +82,33 @@ public:
     };
     GameData gameData();
 
+    // -- Bethesda.net Creations the game downloaded (creations.h) ----------
+    // A row for each download that has none, and a word when a waiting row's
+    // files have arrived. Coalesced; runs after a profile load and when the
+    // window comes back to the front. Never moves a file.
+    void scheduleCreationsCheck();
+    void checkCreations();
+    struct AdoptionReport {
+        QStringList added;    // titles now in the library
+        QStringList files;    // "title: file" lines, for Show Details
+        QStringList failed;   // one finished sentence each
+    };
+    // Move the planned downloads into the mod library and turn their rows
+    // installed, off the UI thread: behind the deploy overlay, or a
+    // window-modal progress dialog when `modal`. `then` runs on the UI thread
+    // afterwards, also when the plan was empty. Only the deploy paths call
+    // this, so the files are linked straight back and the game never misses
+    // them.
+    void adoptCreations(const creations::Paths &paths, const creations::Plan &plan,
+                        bool modal, std::function<void(const AdoptionReport &)> then);
+
 private:
+    // The deploy proper, once the game's downloads have moved: gathers the
+    // sources again (rows changed hands) and runs the worker.
+    void deployAfterAdoption(const QString &id, const GameAdapter *adapter,
+                             const QString &dataDir, const AdoptionReport &adopted);
+    // onLaunchGame after the pre-launch re-sync.
+    void launchGameNow(const QString &id);
     // Block launch on a pending kernel reboot (true = abort). Arch pacman wipes
     // /usr/lib/modules/<running-kernel> on kernel upgrade, so DRM/input module
     // loads fail and OpenMW dies with no clear error.
@@ -98,6 +129,8 @@ private:
     WindowShell &m_shell;
     QTimer      *m_deployProgressTimer = nullptr;
     QTimer      *m_deployHintTimer     = nullptr;
+    QTimer      *m_creationsTimer      = nullptr;
+    QSet<QString> m_creationsTold;     // downloads already announced this session
     // Pre-launch sanity check "don't warn again this session" - cleared on
     // restart so a new install pass re-validates.
     bool m_suppressLaunchSanityCheck = false;

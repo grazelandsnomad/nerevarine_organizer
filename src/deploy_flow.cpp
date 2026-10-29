@@ -69,6 +69,8 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLocale>
+#include <QProgressBar>
 #include <QDialog>
 #include <QFormLayout>
 #include <QDialogButtonBox>
@@ -1400,6 +1402,81 @@ static DeployOutcome bethesdaApplyDeploy(const QString &id, const GameAdapter *a
     return {summary, details.join(QStringLiteral("\n\n")), int(act.held.size())};
 }
 
+// -- Bethesda.net Creations ---------------------------------------------------
+//
+// The game's record of what its Creations menu downloaded: ContentCatalog.txt
+// beside Plugins.txt for Fallout 4, under My Games for Starfield (creations.h).
+// The first one that exists; empty while the game has downloaded nothing.
+static QString resolveContentCatalog(const QString &id, const GameAdapter *adapter,
+                                     const QString &dataDir)
+{
+    if (!adapter || !writesPluginList(adapter) || dataDir.isEmpty()) return {};
+    QStringList localDirs, myGames;
+    const QString override = Settings::pluginsTxtPath(id);
+    if (!override.isEmpty()) localDirs << QFileInfo(override).absolutePath();
+    const QString local = adapter->localAppDataName();
+    const QString games = adapter->myGamesName();
+    for (const QString &pu : bethesdaPrefixUserDirs(adapter, dataDir)) {
+        if (!local.isEmpty()) localDirs << proton::localAppData(pu, local);
+        if (!games.isEmpty()) myGames << proton::myGamesDirs(pu, games);
+    }
+    for (const QString &c : creations::catalogCandidates(localDirs, myGames))
+        if (QFileInfo::exists(c)) return c;
+    return {};
+}
+
+static creations::Paths creationsPathsFor(const QString &id, const GameAdapter *adapter,
+                                          const QString &dataDir, const QString &modlistFile)
+{
+    creations::Paths p;
+    p.dataDir     = dataDir;
+    p.catalogPath = resolveContentCatalog(id, adapter, dataDir);
+    p.gameRoot    = bethesdaGameRoot(adapter, dataDir);
+    QString backupDir;
+    bethesdaStatePaths(modlistFile, p.manifestPath, backupDir);
+    return p;
+}
+
+// What the catalog says against the rows and the manifest, as
+// creations::planAdoption wants it. Empty without a catalog.
+static creations::Plan planCreations(const ModlistModel &model, const QString &id,
+                                     const creations::Paths &paths)
+{
+    if (paths.catalogPath.isEmpty() || paths.dataDir.isEmpty()) return {};
+    QFile cf(paths.catalogPath);
+    if (!cf.open(QIODevice::ReadOnly)) return {};
+    const QList<creations::CatalogEntry> catalog = creations::parseContentCatalog(cf.readAll());
+    if (catalog.isEmpty()) return {};
+
+    QHash<QString, creations::RowInfo> rows;
+    for (const ModEntry &e : model.all()) {
+        if (!e.isMod()) continue;
+        const auto ref = creations::parseCreationUrl(e.nexusUrl);
+        if (!ref) continue;
+        creations::RowInfo info;
+        info.rowId     = e.rowId;
+        info.installed = e.installStatus == int(InstallStatus::Installed);
+        info.version   = e.creationVersion;
+        info.modPath   = e.modPath;
+        // The label the deploy records as a file's mod (gatherBethesdaSources).
+        info.label     = e.customName.isEmpty() ? e.displayName : e.customName;
+        rows.insert(ref->id, info);
+    }
+    QHash<QString, QString> deployed;
+    QFile mf(paths.manifestPath);
+    if (mf.open(QIODevice::ReadOnly)) {
+        const auto man = bethesda_deploy::manifestFromJson(QString::fromUtf8(mf.readAll()));
+        for (const auto &df : man.files) {
+            if (df.rel.contains(QLatin1Char('/'))) continue;   // Creations land at Data/'s root
+            deployed.insert(df.rel.toLower(), df.sourceMod);
+        }
+    }
+    QSet<QString> ignored;
+    for (const QString &s : Settings::ignoredCreationIds(id)) ignored.insert(s.toLower());
+    return creations::planAdoption(catalog, rows, creations::dataRootFiles(paths.dataDir),
+                                   creations::cccPlugins(paths.gameRoot), deployed, ignored);
+}
+
 DeployFlow::DeployFlow(WindowShell &shell, QObject *parent)
     : QObject(parent), m_shell(shell)
 {
@@ -1561,7 +1638,12 @@ void DeployFlow::onDeployBethesda()
     m_shell.saveLoadOrder();
     const QList<int> order = m_shell.rowOrderForPersist();
     const auto sources = gatherBethesdaSources(m_shell.model(), order, adapter, m_shell.modsDir());
-    if (sources.isEmpty()) {
+    // Creations the game downloaded for a waiting row (or with no row yet):
+    // they move into the library first and this very deploy links them back,
+    // so a list whose only ticked row is such a download still has work.
+    const creations::Paths paths = creationsPathsFor(id, adapter, dataDir, m_shell.modlistPath());
+    const creations::Plan plan = planCreations(m_shell.model(), id, paths);
+    if (sources.isEmpty() && plan.adopt.isEmpty()) {
         ui::info(m_shell.dialogParent(), T("deploy_title"), T("deploy_none"));
         return;
     }
@@ -1577,10 +1659,33 @@ void DeployFlow::onDeployBethesda()
                             .arg(shared.join(QStringLiteral(", ")), dataDir)))
         return;
 
-    if (!ui::confirm(m_shell.dialogParent(), T("deploy_title"),
-                     deployText(adapter, "deploy_confirm")
-                         .arg(sources.size()).arg(dataDir)))
+    QString confirmText = deployText(adapter, "deploy_confirm").arg(sources.size()).arg(dataDir);
+    if (!plan.adopt.isEmpty()) {
+        QStringList names;
+        for (const creations::Adoption &a : plan.adopt) names << a.entry.title;
+        confirmText += QStringLiteral("\n\n") + T("deploy_confirm_creations").arg(namesAndMore(names, 3));
+    }
+    if (!ui::confirm(m_shell.dialogParent(), T("deploy_title"), confirmText))
         return;
+
+    adoptCreations(paths, plan, /*modal=*/false,
+                   [this, id, adapter, dataDir](const AdoptionReport &adopted) {
+                       deployAfterAdoption(id, adapter, dataDir, adopted);
+                   });
+}
+
+void DeployFlow::deployAfterAdoption(const QString &id, const GameAdapter *adapter,
+                                     const QString &dataDir, const AdoptionReport &adopted)
+{
+    // Gathered again: the downloads taken over just now are installed rows.
+    const QList<int> order = m_shell.rowOrderForPersist();
+    const auto sources = gatherBethesdaSources(m_shell.model(), order, adapter, m_shell.modsDir());
+    if (sources.isEmpty()) {
+        ui::info(m_shell.dialogParent(), T("deploy_title"),
+                 adopted.failed.isEmpty() ? T("deploy_none")
+                                          : adopted.failed.join(QStringLiteral("\n\n")));
+        return;
+    }
 
     // Off the UI thread from here.
     //
@@ -1639,15 +1744,207 @@ void DeployFlow::onDeployBethesda()
                 },
                 movedFrom);
         },
-        [](DeployFlow *self, const DeployOutcome &out) {
+        [adopted](DeployFlow *self, const DeployOutcome &out) {
             if (self->m_deployProgressTimer) self->m_deployProgressTimer->stop();
             if (ScanOverlay *overlay = self->m_shell.deployOverlay()) overlay->finish();
-            ui::info(self->m_shell.dialogParent(), T("deploy_title"), out.summary, out.details);
+            // The game's downloads taken over just before: first in the
+            // summary, their files behind Show Details.
+            QString summary = out.summary;
+            QString details = out.details;
+            if (!adopted.added.isEmpty()) {
+                summary = T("deploy_creations_added").arg(namesAndMore(adopted.added, 3))
+                        + QStringLiteral("\n\n") + summary;
+                const QString files =
+                    T("deploy_creations_files").arg(adopted.files.join(QLatin1Char('\n')));
+                details = details.isEmpty() ? files : files + QStringLiteral("\n\n") + details;
+            }
+            if (!adopted.failed.isEmpty())
+                summary = adopted.failed.join(QStringLiteral("\n\n"))
+                        + QStringLiteral("\n\n") + summary;
+            ui::info(self->m_shell.dialogParent(), T("deploy_title"), summary, details);
             self->updateDeployHint();  // a manifest exists now; banner comes down
             // Data/ just changed, so which plugins can load may have too.
             self->refreshScriptExtenderFlags();
             self->m_shell.scanMissingMasters();
         });
+}
+
+void DeployFlow::adoptCreations(const creations::Paths &paths, const creations::Plan &plan,
+                                bool modal, std::function<void(const AdoptionReport &)> then)
+{
+    if (plan.adopt.isEmpty()) {
+        if (then) then({});
+        return;
+    }
+
+    // Where each one goes, decided here with the rows at hand: a re-download
+    // replaces the row's own folder, a first adoption gets a folder named
+    // after the Creation.
+    struct Job { QUuid rowId; creations::CatalogEntry entry; QString destDir; };
+    QList<Job> jobs;
+    QSet<QString> taken;
+    const QString modsDir = m_shell.modsDir();
+    for (const creations::Adoption &a : plan.adopt) {
+        Job j{a.rowId, a.entry, {}};
+        if (a.reinstall && !a.rowId.isNull()) {
+            const int row = m_shell.model().findByRowId(a.rowId);
+            if (row >= 0) j.destDir = m_shell.model().at(row).modPath;
+        }
+        if (j.destDir.isEmpty()) {
+            j.destDir = creations::destFolderFor(modsDir, a.entry.title);
+            while (taken.contains(j.destDir)) j.destDir += QLatin1Char('_');
+        }
+        taken.insert(j.destDir);
+        jobs << j;
+    }
+    QStringList names;
+    for (const Job &j : std::as_const(jobs)) names << j.entry.title;
+    const QString caption = T("creations_moving").arg(namesAndMore(names, 3));
+
+    // Progress as a percentage in one atomic the worker writes and a UI-side
+    // timer reads; the worker captures values only (async_guarded.h says why).
+    auto percent = std::make_shared<std::atomic<int>>(0);
+    QPointer<QDialog> dialog;
+    QPointer<QProgressBar> bar;
+    if (modal && m_shell.dialogParent()) {
+        // Modal to the window, so the list cannot change under the move. A
+        // plain dialog, as library_flow's: a QProgressDialog processes events
+        // from inside setValue() and re-enters itself.
+        auto *dlg = new QDialog(m_shell.dialogParent());
+        dlg->setWindowTitle(T("deploy_title"));
+        dlg->setWindowModality(Qt::WindowModal);
+        dlg->setMinimumWidth(420);
+        auto *layout = new QVBoxLayout(dlg);
+        layout->addWidget(new QLabel(caption, dlg));
+        auto *pb = new QProgressBar(dlg);
+        pb->setRange(0, 100);
+        layout->addWidget(pb);
+        dlg->show();
+        dialog = dlg;
+        bar    = pb;
+    } else if (ScanOverlay *overlay = m_shell.deployOverlay()) {
+        overlay->begin(caption);
+    }
+    if (!m_deployProgressTimer) {
+        m_deployProgressTimer = new QTimer(this);
+        m_deployProgressTimer->setInterval(100);
+    }
+    QObject::disconnect(m_deployProgressTimer, nullptr, nullptr, nullptr);
+    connect(m_deployProgressTimer, &QTimer::timeout, this, [this, percent, bar] {
+        const int p = percent->load(std::memory_order_relaxed);
+        if (bar) bar->setValue(p);
+        else if (ScanOverlay *overlay = m_shell.deployOverlay()) overlay->setPercent(p);
+    });
+    m_deployProgressTimer->start();
+    qCInfo(logging::lcLaunch) << "creations: moving" << names << "into" << modsDir;
+
+    struct Outcome { Job job; creations::MoveResult result; };
+    const QString dataDir = paths.dataDir;
+    async::guarded(this,
+        [jobs, dataDir, percent](DeployFlow *) -> QList<Outcome> {
+            QList<Outcome> out;
+            const int n = jobs.size();
+            for (int i = 0; i < n; ++i) {
+                const Job &j = jobs.at(i);
+                creations::MoveResult r = creations::moveCreationFiles(
+                    dataDir, j.entry.files, j.destDir,
+                    [percent, i, n](qint64 done, qint64 total) {
+                        const int own = total > 0 ? int(100 * done / total) : 0;
+                        percent->store((i * 100 + own) / n, std::memory_order_relaxed);
+                    });
+                out.append({j, r});
+            }
+            return out;
+        },
+        [then, dialog](DeployFlow *self, const QList<Outcome> &outcomes) {
+            if (self->m_deployProgressTimer) self->m_deployProgressTimer->stop();
+            if (dialog) dialog->deleteLater();
+            else if (ScanOverlay *overlay = self->m_shell.deployOverlay()) overlay->finish();
+
+            AdoptionReport report;
+            ModlistModel &model = self->m_shell.model();
+            const QString slug = creations::slugForProfile(self->m_shell.currentGameId());
+            bool changed = false;
+            for (const Outcome &o : outcomes) {
+                if (!o.result.failed.isEmpty()) {
+                    qCWarning(logging::lcLaunch) << "creations: could not move" << o.job.entry.title
+                                                 << o.result.failed << o.result.error;
+                    report.failed << T("deploy_creations_failed")
+                                         .arg(o.job.entry.title,
+                                              o.result.failed + QStringLiteral(": ") + o.result.error);
+                    continue;
+                }
+                const QString url = creations::canonicalUrl(
+                    creations::CreationRef{slug, o.job.entry.id, {}});
+                const int row = o.job.rowId.isNull() ? -1 : model.findByRowId(o.job.rowId);
+                ModEntry e = row >= 0 ? model.at(row) : ModEntry::named(o.job.entry.title);
+                creations::applyAdoption(e, o.job.entry, o.job.destDir, url);
+                if (row >= 0) model.update(row, e);
+                else          model.append(e);
+                changed = true;
+                report.added << o.job.entry.title;
+                for (const QString &f : o.result.moved)
+                    report.files << o.job.entry.title + QStringLiteral(": ") + f;
+            }
+            if (changed) self->m_shell.saveModList();
+            if (then) then(report);
+        });
+}
+
+void DeployFlow::scheduleCreationsCheck()
+{
+    if (!m_creationsTimer) {
+        m_creationsTimer = new QTimer(this);
+        m_creationsTimer->setSingleShot(true);
+        m_creationsTimer->setInterval(0);
+        connect(m_creationsTimer, &QTimer::timeout, this, &DeployFlow::checkCreations);
+    }
+    m_creationsTimer->start();
+}
+
+void DeployFlow::checkCreations()
+{
+    if (!m_shell.hasProfile()) return;
+    const QString id = m_shell.currentGameId();
+    const GameAdapter *adapter = GameAdapterRegistry::find(id);
+    if (!adapter || adapter->dataSubdir().isEmpty() || creations::slugForProfile(id).isEmpty())
+        return;
+    const QString dataDir = bethesdaResolveDataDir(m_shell.dialogParent(), id, adapter, /*allowPrompt=*/false);
+    if (dataDir.isEmpty()) return;
+    const creations::Paths paths = creationsPathsFor(id, adapter, dataDir, m_shell.modlistPath());
+    if (paths.catalogPath.isEmpty()) return;
+    const creations::Plan plan = planCreations(m_shell.model(), id, paths);
+
+    // Said once per download and session: the check rides every return to
+    // the window, and the download sits there until the next deploy.
+    QStringList told;
+    qint64 bytes = 0;
+    const auto tell = [&](const creations::CatalogEntry &entry) {
+        if (m_creationsTold.contains(entry.id)) return;
+        m_creationsTold.insert(entry.id);
+        told << entry.title;
+        bytes += entry.size;
+    };
+    if (!plan.unrequested.isEmpty() && Settings::creationsAutoRows(id)) {
+        const QString slug = creations::slugForProfile(id);
+        for (const creations::CatalogEntry &entry : plan.unrequested) {
+            ModEntry e = creations::waitingRow(creations::CreationRef{slug, entry.id, {}},
+                                               T("creations_row_tooltip"));
+            e.customName  = entry.title;
+            e.displayName = entry.title;
+            m_shell.model().append(e);
+            qCInfo(logging::lcLaunch) << "creations: row for the game's download" << entry.title;
+            tell(entry);
+        }
+        m_shell.saveModList();
+    }
+    for (const creations::Adoption &a : plan.adopt)
+        if (!a.reinstall) tell(a.entry);
+    if (told.isEmpty()) return;
+    const QString msg = T("creations_downloaded_status")
+                            .arg(namesAndMore(told, 3), QLocale().formattedDataSize(bytes));
+    m_shell.showStatus(msg, 10000);
+    if (NotifyBanner *notify = m_shell.notify()) notify->show(msg, QStringLiteral("#1a6fa8"));
 }
 
 // Experimental: undo a Bethesda deployment - take our files back out of Data/,
@@ -1693,20 +1990,28 @@ void DeployFlow::onUndeployBethesda()
 // the game starts.  Best-effort and silent - it must never block a launch, and
 // only fires when a manifest exists so it never surprises a user who hasn't
 // opted into deployment.
-void DeployFlow::maybeDeployBeforeLaunch(const QString &id)
+void DeployFlow::maybeDeployBeforeLaunch(const QString &id, std::function<void()> then)
 {
+    const auto go = [&then] { if (then) then(); };
     const GameAdapter *adapter = GameAdapterRegistry::find(id);
-    if (!adapter || adapter->dataSubdir().isEmpty()) return;
+    if (!adapter || adapter->dataSubdir().isEmpty()) { go(); return; }
     QString manifestPath, backupDir;
     bethesdaStatePaths(m_shell.modlistPath(), manifestPath, backupDir);
-    if (!QFileInfo::exists(manifestPath)) return;
+    if (!QFileInfo::exists(manifestPath)) { go(); return; }
     const QString dataDir = bethesdaResolveDataDir(m_shell.dialogParent(), id, adapter, /*allowPrompt=*/false);
-    if (dataDir.isEmpty()) return;
+    if (dataDir.isEmpty()) { go(); return; }
+    // Creations the game downloaded move into the library first, behind a
+    // progress dialog (a copy across devices takes a while), and the re-sync
+    // that follows links them back before the game starts.
+    const creations::Paths paths = creationsPathsFor(id, adapter, dataDir, m_shell.modlistPath());
+    const creations::Plan plan = planCreations(m_shell.model(), id, paths);
+    adoptCreations(paths, plan, /*modal=*/true,
+                   [this, id, adapter, dataDir, then](const AdoptionReport &adopted) {
     m_shell.reconcileLoadOrder();   // see onDeployBethesda
     m_shell.saveLoadOrder();
     const QList<int> order = m_shell.rowOrderForPersist();
     const auto sources = gatherBethesdaSources(m_shell.model(), order, adapter, m_shell.modsDir());
-    if (sources.isEmpty()) return;
+    if (sources.isEmpty()) { if (then) then(); return; }
     // No progress panel here: this is the pre-launch re-sync, it only runs when
     // a deployment already exists, and the user is on their way into the game
     // rather than watching the window.
@@ -1726,8 +2031,14 @@ void DeployFlow::maybeDeployBeforeLaunch(const QString &id)
     // Worth saying even on the way into the game: the mods changed folders.
     if (!movedFrom.isEmpty())
         m_shell.showStatus(T("deploy_moved_status").arg(QDir::toNativeSeparators(dataDir)), 10000);
+    if (!adopted.added.isEmpty())
+        m_shell.showStatus(T("deploy_creations_status").arg(namesAndMore(adopted.added, 3)), 10000);
+    else if (!adopted.failed.isEmpty())
+        m_shell.showStatus(adopted.failed.first(), 10000);
     refreshScriptExtenderFlags();
     m_shell.scanMissingMasters();
+    if (then) then();
+    });
 }
 
 // Read-only diagnostic for the experimental Bethesda deployment: shows every
@@ -1772,6 +2083,11 @@ void DeployFlow::onInspectDeployment()
     const QString pluginsTxt = dataDir.isEmpty() ? QString()
                                                  : resolveBethesdaPluginsTxt(id, adapter, dataDir);
     f.pluginsTxt = { pluginsTxt, !pluginsTxt.isEmpty() && QFileInfo::exists(pluginsTxt) };
+    if (!creations::slugForProfile(id).isEmpty()) {
+        f.showContentCatalog = true;
+        const QString catalog = resolveContentCatalog(id, adapter, dataDir);
+        f.contentCatalog = { catalog, !catalog.isEmpty() && QFileInfo::exists(catalog) };
+    }
 
     if (id == QLatin1String("oblivion") && !dataDir.isEmpty()) {
         f.showOblivionIni = true;
@@ -2477,10 +2793,18 @@ void DeployFlow::onLaunchGame()
         << " adapter=" << (adapter ? "yes" : "MISSING");
 
     // Deploy-on-launch: re-sync a previously-deployed Bethesda profile's Data/
-    // to the current list before the game starts (best-effort, never blocks).
-    maybeDeployBeforeLaunch(id);
+    // to the current list before the game starts (best-effort; it only waits
+    // when a Creation the game downloaded is being copied into the library,
+    // behind a progress dialog). The launch itself follows in launchGameNow.
+    maybeDeployBeforeLaunch(id, [this, id] { launchGameNow(id); });
+}
 
-    // Then look at what that put there. This button never asked before - the
+void DeployFlow::launchGameNow(const QString &id)
+{
+    const QString appId = GameProfileRegistry::steamAppId(id);
+    const GameAdapter *adapter = GameAdapterRegistry::find(id);
+
+    // Look at what the re-sync put there. This button never asked before - the
     // launch warnings existed and only the two OpenMW launchers called them -
     // which is how a profile whose every script-extender plugin predates the
     // game got started with nothing said, and found out from the game.

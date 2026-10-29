@@ -28,6 +28,13 @@ QString format(const Facts &f)
             ? QStringLiteral("*** NOT RESOLVED - run the game once via Steam so the prefix exists ***")
             : f.pluginsTxt.path + yn(f.pluginsTxt.exists)) + "\n\n";
 
+    if (f.showContentCatalog) {
+        r += "ContentCatalog.txt (the game's Creations downloads):\n  "
+           + (f.contentCatalog.path.isEmpty()
+                  ? QStringLiteral("(none yet - the game writes it when a Creation is downloaded)")
+                  : f.contentCatalog.path + yn(f.contentCatalog.exists)) + "\n\n";
+    }
+
     if (f.showOblivionIni) {
         r += "Oblivion.ini:\n  " + (f.oblivionIni.path.isEmpty()
                 ? QStringLiteral("*** NOT RESOLVED ***")

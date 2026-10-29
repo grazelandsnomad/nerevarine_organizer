@@ -97,6 +97,16 @@ struct DataFile {
 // Data/'s root files, keyed by lower-cased name.
 QHash<QString, DataFile> dataRootFiles(const QString &dataDir);
 
+// -- Where everything is ----------------------------------------------------
+
+// Filled by the flow from its path resolution; a test builds one by hand.
+struct Paths {
+    QString dataDir;        // the game's Data/
+    QString catalogPath;    // ContentCatalog.txt; empty while the game has none
+    QString gameRoot;       // where the *.ccc live
+    QString manifestPath;   // this profile's Data/ deploy manifest
+};
+
 // -- The decision -----------------------------------------------------------
 
 struct RowInfo {

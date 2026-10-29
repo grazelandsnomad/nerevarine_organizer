@@ -3,6 +3,7 @@
 // persistence and the status line, with no window and no dialog.
 
 #include "bethesda_deploy.h"
+#include "creations.h"
 #include "deploy_flow.h"
 #include "import_flow.h"
 #include "library_flow.h"
@@ -309,6 +310,100 @@ void testLibraryFlowMovesFoldersAndRepointsRows()
 
 } // namespace
 
+// A waiting Creation row plus the game's download of it in Data/: the adopt
+// step moves the files into the library, the row turns installed there, and
+// Creation Club content in the same catalog is left alone.
+void testDeployFlowAdoptsCreationsFromTheGamesDownloads()
+{
+    std::cout << "testDeployFlowAdoptsCreationsFromTheGamesDownloads\n";
+    QTemporaryDir tmp;
+    const QString mods = tmp.path() + "/mods";
+    const QString game = tmp.path() + "/Fallout 4";
+    const QString data = game + "/Data";
+    QDir().mkpath(mods);
+    QDir().mkpath(data);
+    writeFile(data + "/ccgcafo4003-factionws03bos - main.ba2", QString(2048, QLatin1Char('b')));
+    writeFile(data + "/ccgcafo4003-factionws03bos - textures.ba2", "t");
+    writeFile(data + "/ccgcafo4003-factionws03bos.esl", "p");
+    writeFile(data + "/cczzz.esl", "cc");
+    writeFile(game + "/Fallout4.ccc", "cczzz.esl\n");
+    const QString catalogPath = tmp.path() + "/ContentCatalog.txt";
+    writeFile(catalogPath, R"({
+  "CSV2_098ac89d-37fd-43cf-89dd-3aeba370dff0" : {
+    "Files" : ["ccgcafo4003-factionws03bos - Main.ba2",
+               "ccgcafo4003-factionws03bos - Textures.ba2",
+               "ccgcafo4003-factionws03bos.esl"],
+    "FilesSize" : 2050, "Timestamp" : 1788982035,
+    "Title" : "Weapon Paint Job - Brotherhood of Steel", "Version" : "1762391102.1.0.0" },
+  "CSV2_19361ca7-8ae7-4f67-9671-39620c50a8b4" : {
+    "Files" : ["cczzz.esl"], "Title" : "A Creation Club item", "Version" : "1" }
+})");
+
+    FakeShell shell;
+    shell.gameId       = QStringLiteral("fallout4");
+    shell.modsDirValue = mods;
+    const auto ref = creations::parseCreationUrl(
+        "https://creations.bethesda.net/en/fallout4/details/098ac89d-37fd-43cf-89dd-3aeba370dff0/Paint");
+    check("the link parses", ref.has_value());
+    if (!ref) return;
+    shell.model().append(creations::waitingRow(*ref, "tip"));
+    const QUuid rowId = shell.model().rowId(0);
+
+    // The plan as the flow would build it (planCreations is file-local).
+    QFile cf(catalogPath);
+    check("catalog readable", cf.open(QIODevice::ReadOnly));
+    const auto catalog = creations::parseContentCatalog(cf.readAll());
+    QHash<QString, creations::RowInfo> rows;
+    rows.insert(ref->id, creations::RowInfo{rowId, false, {}, {}, "Paint"});
+    const creations::Plan plan = creations::planAdoption(
+        catalog, rows, creations::dataRootFiles(data), creations::cccPlugins(game), {}, {});
+    check("one adoption, the Creation Club item left alone",
+          plan.adopt.size() == 1 && plan.unrequested.isEmpty() && plan.adopt.first().rowId == rowId);
+
+    DeployFlow flow(shell);
+    const creations::Paths paths{data, catalogPath, game, mods + "/deploy_manifest_modlist.json"};
+    DeployFlow::AdoptionReport got;
+    bool done = false;
+    QEventLoop loop;
+    QTimer::singleShot(20000, &loop, &QEventLoop::quit);
+    flow.adoptCreations(paths, plan, /*modal=*/false,
+                        [&](const DeployFlow::AdoptionReport &r) { got = r; done = true; loop.quit(); });
+    loop.exec();
+
+    const QString dest = mods + "/Weapon Paint Job - Brotherhood of Steel";
+    check("the step finished and reported the Creation",
+          done && got.failed.isEmpty()
+          && got.added == QStringList{"Weapon Paint Job - Brotherhood of Steel"}
+          && got.files.size() == 3);
+    check("files in the library, Data's spelling kept",
+          QFileInfo(dest + "/ccgcafo4003-factionws03bos - main.ba2").size() == 2048
+          && QFileInfo::exists(dest + "/ccgcafo4003-factionws03bos.esl"));
+    check("gone from Data, the Creation Club file still there",
+          !QFileInfo::exists(data + "/ccgcafo4003-factionws03bos.esl")
+          && QFileInfo::exists(data + "/cczzz.esl"));
+    const ModEntry row = shell.model().at(0);
+    check("the row is installed there, named and versioned from the catalog",
+          row.rowId == rowId && row.installStatus == int(InstallStatus::Installed)
+          && row.modPath == dest && row.customName == "Weapon Paint Job - Brotherhood of Steel"
+          && row.creationVersion == "1762391102.1.0.0" && row.checked
+          && shell.model().count() == 1);
+    check("the list was saved", shell.saves >= 1);
+
+    // Nothing left to take over: ours now, same version.
+    rows.clear();
+    rows.insert(ref->id, creations::RowInfo{rowId, true, row.creationVersion, row.modPath,
+                                             row.customName});
+    const creations::Plan again = creations::planAdoption(
+        catalog, rows, creations::dataRootFiles(data), creations::cccPlugins(game), {}, {});
+    check("a second plan has nothing", again.adopt.isEmpty() && again.notYet.isEmpty()
+                                        && again.unrequested.isEmpty());
+
+    // An empty plan runs the continuation at once.
+    bool ran = false;
+    flow.adoptCreations(paths, {}, false, [&](const DeployFlow::AdoptionReport &) { ran = true; });
+    check("an empty plan continues straight away", ran);
+}
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
@@ -322,6 +417,7 @@ int main(int argc, char **argv)
     testImportFlowRoutesANerevarineFileToTheLoader();
     testDeployFlowFingerprintAndQuietPaths();
     testLibraryFlowMovesFoldersAndRepointsRows();
+    testDeployFlowAdoptsCreationsFromTheGamesDownloads();
 
     std::cout << "\n";
     if (s_failed == 0)
