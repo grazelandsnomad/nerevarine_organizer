@@ -142,6 +142,7 @@ set(CORE_SOURCES
     src/root_routes.cpp
     src/bethesda_archives.cpp
     src/bethesda_custom_ini.cpp
+    src/creations.cpp
     src/extract_errors.cpp
     src/archive_magic.cpp
     src/archive_policy.cpp

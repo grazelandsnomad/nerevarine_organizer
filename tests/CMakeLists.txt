@@ -47,6 +47,8 @@ endfunction()
 #   test_flows                  the flows over a fake window shell (imports)
 #   test_nxm                    nxm:// URL parsing; its networked sub-tests are
 #                               the integration variant registered below
+#   test_creations              Bethesda.net Creations: the link, the game's
+#                               catalog, what to take over, the move
 set(UNIT_TESTS
     test_openmw_config
     test_fomod
@@ -76,6 +78,7 @@ set(UNIT_TESTS
     test_modlist_views
     test_flows
     test_nxm
+    test_creations
 )
 foreach(t IN LISTS UNIT_TESTS)
     nrv_test(${t})
