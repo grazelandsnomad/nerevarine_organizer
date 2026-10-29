@@ -1659,10 +1659,16 @@ void DeployFlow::onDeployBethesda()
                             .arg(shared.join(QStringLiteral(", ")), dataDir)))
         return;
 
-    QString confirmText = deployText(adapter, "deploy_confirm").arg(sources.size()).arg(dataDir);
+    // The downloads taken over first count as folders too: they are ones
+    // by the time the deploy proper gathers its sources.
+    int folders = int(sources.size());
+    QStringList names;
+    for (const creations::Adoption &a : plan.adopt) {
+        names << a.entry.title;
+        if (!a.reinstall) ++folders;
+    }
+    QString confirmText = deployText(adapter, "deploy_confirm").arg(folders).arg(dataDir);
     if (!plan.adopt.isEmpty()) {
-        QStringList names;
-        for (const creations::Adoption &a : plan.adopt) names << a.entry.title;
         confirmText += QStringLiteral("\n\n") + T("deploy_confirm_creations").arg(namesAndMore(names, 3));
     }
     if (!ui::confirm(m_shell.dialogParent(), T("deploy_title"), confirmText))
