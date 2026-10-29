@@ -27,6 +27,7 @@ ModEntry makeSharedRow(const ModEntry &source, bool copyConfig)
     e.dateAdded   = source.dateAdded;
     e.videoUrl    = source.videoUrl;
     e.sourceUrl   = source.sourceUrl;
+    e.creationVersion = source.creationVersion;
     e.installStatus = 1;            // files already exist on disk
 
     if (copyConfig) {

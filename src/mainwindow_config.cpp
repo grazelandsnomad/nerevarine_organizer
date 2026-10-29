@@ -1541,6 +1541,7 @@ void MainWindow::loadModList(const QString &path,
         m.bainChoices     = e.bainChoices;
         m.videoUrl        = e.videoUrl;
         m.sourceUrl       = e.sourceUrl;
+        m.creationVersion = e.creationVersion;
 
         // Same install-status probe as before: an empty directory is
         // treated as not-installed so the missing-master scan and the

@@ -125,6 +125,7 @@ QJsonObject modToJson(const ModEntry &e)
     if (!e.bainChoices.isEmpty())    o.insert(QStringLiteral("bain"),     e.bainChoices);
     if (!e.videoUrl.isEmpty())       o.insert(QStringLiteral("video"),    e.videoUrl);
     if (!e.sourceUrl.isEmpty())      o.insert(QStringLiteral("source"),   e.sourceUrl);
+    if (!e.creationVersion.isEmpty()) o.insert(QStringLiteral("creation_version"), e.creationVersion);
     return o;
 }
 
@@ -215,6 +216,7 @@ ModEntry modFromJson(const QJsonObject &o)
     e.bainChoices     = o.value(QStringLiteral("bain")).toString();
     e.videoUrl        = o.value(QStringLiteral("video")).toString();
     e.sourceUrl       = o.value(QStringLiteral("source")).toString();
+    e.creationVersion = o.value(QStringLiteral("creation_version")).toString();
 
     // No custom name: displayName falls back to modPath's basename, same as
     // loadModList always has.

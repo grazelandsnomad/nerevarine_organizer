@@ -332,6 +332,7 @@ static void testMakeSharedRowCopyConfig()
     src.mergeTargetPath = "/merge";
     src.hasConflict  = true;
     src.nexusFileId  = 1000068816;
+    src.creationVersion = "1.1";
 
     const ModEntry e = mod_sharing::makeSharedRow(src, /*copyConfig=*/true);
     check("modPath kept (shared folder)", e.modPath == src.modPath);
@@ -349,6 +350,8 @@ static void testMakeSharedRowCopyConfig()
     check("prevModPath reset",  e.prevModPath.isEmpty());
     check("mergeTargetPath reset", e.mergeTargetPath.isEmpty());
     check("transient conflict reset", !e.hasConflict);
+    check("creation version kept - the folder holds the same download",
+          e.creationVersion == "1.1");
 }
 
 static void testMakeSharedRowDefault()

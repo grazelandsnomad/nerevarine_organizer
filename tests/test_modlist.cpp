@@ -568,6 +568,7 @@ static void testV2ModRoundTrip()
     m.fomodChoices    = QStringLiteral("0:0:1;0:1:0;1:0:2");
     m.videoUrl        = QStringLiteral("https://www.youtube.com/watch?v=abc");
     m.sourceUrl       = QStringLiteral("https://github.com/user/repo");
+    m.creationVersion = QStringLiteral("1762391102.1.0.0");
 
     const QString text = modlist_serializer::serializeModlist({m});
     check("output starts with v2 schema header",
@@ -589,7 +590,15 @@ static void testV2ModRoundTrip()
     check("fomodChoices round-trips",   g.fomodChoices     == m.fomodChoices);
     check("videoUrl round-trips",       g.videoUrl         == m.videoUrl);
     check("sourceUrl round-trips",      g.sourceUrl        == m.sourceUrl);
+    check("creationVersion round-trips", g.creationVersion == m.creationVersion);
     check("checked round-trips",        g.checked          == m.checked);
+
+    // A row written before the field existed reads as a plain row.
+    const QList<ModEntry> older = modlist_serializer::parseModlist(
+        QStringLiteral("{\"format\":\"nerevarine_modlist\",\"version\":2}\n"
+                       "{\"type\":\"mod\",\"path\":\"/games/mods/Old\",\"enabled\":true}\n"));
+    check("creation_version absent reads empty",
+          older.size() == 1 && older.first().creationVersion.isEmpty());
 }
 
 // Tab inside a custom name must survive serialize/parse. v1 shredded

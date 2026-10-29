@@ -97,6 +97,10 @@ struct ModEntry {
     // download page (GitHub release, generic hosting). Persisted in the modlist.
     QString videoUrl;
     QString sourceUrl;
+    // Bethesda.net Creation adopted from the game's downloads: the catalog's
+    // Version at adoption, so a re-download (new version) is noticed. Empty
+    // for every other row. Persisted in the modlist.
+    QString creationVersion;
     // Set when handleNxmUrl reuses an existing INSTALLED row as the placeholder
     // for a re-install/update; holds the old ModPath so addModFromPath can drop
     // the stale folder once the new install lands. Transient, not persisted.
