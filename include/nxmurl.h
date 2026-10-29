@@ -38,6 +38,11 @@ struct NexusModRef {
 // nullopt when not a mod-page shape or the id isn't numeric. game is lowercased.
 std::optional<NexusModRef> parseNexusModUrl(const QString &rawUrl);
 
+// True when the stored page URL is a Nexus mod page. A row's URL can also be
+// a Bethesda.net Creation page (creations.h), which no Nexus action fits:
+// every Nexus-only entry point asks this, not "is the URL non-empty".
+bool isNexusModUrl(const QString &rawUrl);
+
 // Inverse of parseNexusModUrl, and the one home for the
 // "https://www.nexusmods.com/%1/mods/%2" template.
 QString nexusModUrl(const QString &game, int modId);

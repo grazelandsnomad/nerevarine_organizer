@@ -226,6 +226,17 @@ static void testGameMatch()
           classify("starfield", blank, 0).verdict == Verdict::Unknown);
 }
 
+static void testIsNexusModUrl()
+{
+    std::cout << "\n[isNexusModUrl]\n";
+    check("a mod page", isNexusModUrl("https://www.nexusmods.com/morrowind/mods/12345"));
+    check("a mod page with a tab", isNexusModUrl("https://www.nexusmods.com/fallout4/mods/108580?tab=files"));
+    check("empty is not", !isNexusModUrl(QString()));
+    check("a Bethesda.net Creation page is not",
+          !isNexusModUrl("https://creations.bethesda.net/en/fallout4/details/dc957ebd-da4c-40ee-ac6e-9be933d553f5/FEVer_Dreams"));
+    check("a GitHub release is not", !isNexusModUrl("https://github.com/user/repo/releases"));
+}
+
 int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
@@ -238,6 +249,7 @@ int main(int argc, char *argv[])
     testInvalidUrls();
     testNexusModUrlParsing();
     testNexusModUrlBuild();
+    testIsNexusModUrl();
     testGameMatch();
 
     // integration tests need KIO protocol files + outbound HTTPS; skip in

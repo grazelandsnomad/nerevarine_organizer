@@ -51,6 +51,11 @@ std::optional<NexusModRef> parseNexusModUrl(const QString &rawUrl)
     return NexusModRef{parts[0].toLower(), modId};
 }
 
+bool isNexusModUrl(const QString &rawUrl)
+{
+    return parseNexusModUrl(rawUrl).has_value();
+}
+
 QString nexusModUrl(const QString &game, int modId)
 {
     return QStringLiteral("https://www.nexusmods.com/%1/mods/%2")

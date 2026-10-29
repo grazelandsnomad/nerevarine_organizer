@@ -2,6 +2,7 @@
 // view-sorts, section counts. Split for parallel compilation; same class.
 
 #include "mainwindow.h"
+#include "creations.h"
 #include "deploy_flow.h"
 #include "variant_picker.h"
 #include "plugin_strings.h"
@@ -1132,7 +1133,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
 
                 // Reinstall: only meaningful when we know the Nexus source.
                 QString nexusUrl = item->data(ModRole::NexusUrl).toString();
-                if (!nexusUrl.isEmpty()) {
+                if (isNexusModUrl(nexusUrl)) {
                     auto *reinstallAct =
                     menu.addAction(T("ctx_reinstall"), this, [this, item]{
                         QString name = item->data(ModRole::CustomName).toString();
@@ -1267,7 +1268,8 @@ void MainWindow::onContextMenu(const QPoint &pos)
             }
             if (installStatus == InstallStatus::NotInstalled) {
                 QString nexusUrl = item->data(ModRole::NexusUrl).toString();
-                if (!nexusUrl.isEmpty()) {
+                const bool creation = creations::parseCreationUrl(nexusUrl).has_value();
+                if (isNexusModUrl(nexusUrl)) {
                     // Bulk install: if multiple rows are selected, queue them
                     // all at once instead of forcing one-at-a-time clicks.
                     // The clicked row is always included even if it wasn't in
@@ -1279,7 +1281,7 @@ void MainWindow::onContextMenu(const QPoint &pos)
                         if (!it || bulkSet.contains(it)) return;
                         if (!mod_row::isMod(it)) return;
                         if (mod_row::installStatusOf(it) != InstallStatus::NotInstalled) return;
-                        if (it->data(ModRole::NexusUrl).toString().isEmpty()) return;
+                        if (!isNexusModUrl(it->data(ModRole::NexusUrl).toString())) return;
                         bulk << mod_row::rowId(it);
                         bulkSet.insert(it);
                     };
@@ -1299,7 +1301,10 @@ void MainWindow::onContextMenu(const QPoint &pos)
                 }
 
                 // Non-Nexus placeholder: offer a Nexus search + local-file install.
-                if (installStatus == InstallStatus::NotInstalled && nexusUrl.isEmpty()) {
+                // A Bethesda.net Creation gets neither: the game downloads it
+                // (its page action is added below, at every status).
+                if (installStatus == InstallStatus::NotInstalled && !isNexusModUrl(nexusUrl)
+                    && !creation) {
                     const QString srcUrl = item->data(ModRole::SourceUrl).toString();
                     if (!srcUrl.isEmpty()) {
                         // Known non-Nexus URL (GitHub release, etc.) stored on import.
@@ -1335,12 +1340,19 @@ void MainWindow::onContextMenu(const QPoint &pos)
             }
             QString nexusUrl = item->data(ModRole::NexusUrl).toString();
             if (!nexusUrl.isEmpty()) {
-                menu.addAction(T("ctx_copy_nexus_url"), this, [nexusUrl]{
-                    QApplication::clipboard()->setText(nexusUrl);
-                });
-                menu.addAction(T("ctx_view_changelog"), this, [this, item]{
-                    onViewChangelog(item);
-                });
+                const bool nexus = isNexusModUrl(nexusUrl);
+                menu.addAction(nexus ? T("ctx_copy_nexus_url") : T("ctx_copy_url"), this,
+                               [nexusUrl]{ QApplication::clipboard()->setText(nexusUrl); });
+                if (creations::parseCreationUrl(nexusUrl)) {
+                    menu.addAction(T("ctx_open_creation_page"), this, [nexusUrl]{
+                        QDesktopServices::openUrl(QUrl(nexusUrl));
+                    });
+                }
+                if (nexus) {
+                    menu.addAction(T("ctx_view_changelog"), this, [this, item]{
+                        onViewChangelog(item);
+                    });
+                }
             }
             if (installStatus == InstallStatus::Installing) {
                 // Download phase (queued or transferring) is the queue's to
@@ -1502,7 +1514,10 @@ void MainWindow::onItemDoubleClicked(ModRow item)
         if (!nexusUrl.isEmpty() || startedHere > 0 || transSource) {
             auto *extraRow = new QHBoxLayout;
             if (!nexusUrl.isEmpty()) {
-                auto *visitBtn = new QPushButton(T("mod_edit_visit_page"));
+                const QString label = isNexusModUrl(nexusUrl) ? T("mod_edit_visit_page")
+                    : creations::parseCreationUrl(nexusUrl) ? T("ctx_open_creation_page")
+                                                           : T("ctx_open_url");
+                auto *visitBtn = new QPushButton(label);
                 connect(visitBtn, &QPushButton::clicked, &dlg, [nexusUrl]{
                     QDesktopServices::openUrl(QUrl(nexusUrl));
                 });

@@ -1,4 +1,5 @@
 #include "bulk_install_queue.h"
+#include "nxmurl.h"
 
 #include <QSet>
 #include <QString>
@@ -51,7 +52,7 @@ void BulkInstallQueue::processTick()
         if (!item) continue;
         if (!mod_row::isMod(item)) continue;
         if (mod_row::installStatusOf(item) != InstallStatus::NotInstalled) continue;
-        if (item->data(ModRole::NexusUrl).toString().isEmpty()) continue;
+        if (!isNexusModUrl(item->data(ModRole::NexusUrl).toString())) continue;
         m_installFn(item);
         break; // one per tick
     }
