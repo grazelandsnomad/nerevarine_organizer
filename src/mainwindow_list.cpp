@@ -540,6 +540,20 @@ void MainWindow::onRemoveSelected()
             const QString nu = item->data(ModRole::NexusUrl).toString();
             if (!nu.isEmpty() && m_groundcoverApproved.remove(nu))
                 gcChanged = true;
+            // A Creation row removed before the game's download reached it:
+            // the download stays the game's, and no row comes back for it
+            // until the link is pasted again.
+            if (mod_row::installStatusOf(item) == InstallStatus::NotInstalled
+                && !m_profiles->isEmpty()) {
+                if (const auto ref = creations::parseCreationUrl(nu)) {
+                    const QString gid = currentProfile().id;
+                    QStringList ignored = Settings::ignoredCreationIds(gid);
+                    if (!ignored.contains(ref->id)) {
+                        ignored << ref->id;
+                        Settings::setIgnoredCreationIds(gid, ignored);
+                    }
+                }
+            }
         }
         if (gcChanged) {
             Settings::setGroundcoverApproved(

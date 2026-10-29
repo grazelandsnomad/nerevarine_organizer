@@ -4,6 +4,7 @@
 // QListWidget subclass (used only when building the central widget) lives here.
 
 #include "mainwindow.h"
+#include "creations.h"
 #include "deploy_flow.h"
 #include "library_flow.h"
 #include "import_flow.h"
@@ -154,6 +155,13 @@ void MainWindow::onLocalFilesDropped(const QStringList &paths)
         if (isImportFileSuffix(p)) m_importFlow->handleDroppedImportFile(p);
 }
 
+void MainWindow::onWebLinksDropped(const QStringList &urls)
+{
+    // Only a Bethesda.net Creation page means anything dropped here.
+    for (const QString &u : urls)
+        if (creations::parseCreationUrl(u)) addCreationRow(u);
+}
+
 void MainWindow::setupMenuBar()
 {
     auto *fileMenu = menuBar()->addMenu(T("menu_file"));
@@ -172,6 +180,8 @@ void MainWindow::setupMenuBar()
     modsMenu->addAction(T("menu_add_separator"),  this, &MainWindow::onAddSeparator);
     modsMenu->addAction(T("menu_add_mod_folder"), this, &MainWindow::onAddMod);
     modsMenu->addAction(T("menu_install_archive"), this, &MainWindow::onInstallArchive);
+    m_actAddFromBethesdaNet = modsMenu->addAction(T("menu_add_from_bethesda"), this,
+                                                  &MainWindow::onAddFromBethesdaNet);
     modsMenu->addSeparator();
     modsMenu->addAction(T("menu_sort_date_asc"),  this, [this]{ m_dateSortAsc = true;  onSortByDate(); });
     modsMenu->addAction(T("menu_sort_date_desc"), this, [this]{ m_dateSortAsc = false; onSortByDate(); });
@@ -211,6 +221,8 @@ void MainWindow::setupMenuBar()
         m_actDeployBethesda->setVisible(deployable);
         m_actUndeployBethesda->setVisible(deployable);
         m_actInspectDeployment->setVisible(deployable);
+        m_actAddFromBethesdaNet->setVisible(
+            deployable && !creations::slugForProfile(currentProfile().id).isEmpty());
     }
     modsMenu->addAction(T("menu_cleanup_folders"), m_libraryFlow, &LibraryFlow::onCleanUpModFolders);
     modsMenu->addAction(T("menu_log_triage"),      this, &MainWindow::onTriageOpenMWLog);
@@ -769,6 +781,8 @@ void MainWindow::setupCentralWidget()
     m_modList->setModel(&m_model);
     connect(m_modList, &ModListView::localFilesDropped,
             this, &MainWindow::onLocalFilesDropped);
+    connect(m_modList, &ModListView::webLinksDropped,
+            this, &MainWindow::onWebLinksDropped);
 
     m_zoom = new ZoomController(m_modList, this);
     m_zoom->loadPrefs();
@@ -1774,6 +1788,10 @@ void MainWindow::updateGameButton()
         m_actUndeployBethesda->setVisible(adapter && !adapter->dataSubdir().isEmpty());
     if (m_actInspectDeployment)
         m_actInspectDeployment->setVisible(adapter && !adapter->dataSubdir().isEmpty());
+    // The Creations site serves Fallout 4, Skyrim and Starfield only.
+    if (m_actAddFromBethesdaNet)
+        m_actAddFromBethesdaNet->setVisible(adapter && !adapter->dataSubdir().isEmpty()
+                                            && !creations::slugForProfile(gp.id).isEmpty());
 
     // Featured Modlists dropdown is parked behind a "Work in progress"
     // dialog (see setupToolbar). When the feature is revived, restore the

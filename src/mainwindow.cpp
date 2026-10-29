@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "creations.h"
 #include "deploy_flow.h"
 #include "library_flow.h"
 #include "import_flow.h"
@@ -436,6 +437,14 @@ MainWindow::MainWindow(QWidget *parent)
     // is behind from the moment the window opens, and waiting for the user to
     // press Start to say so is how they find out from the game instead.
     m_deployFlow->refreshScriptExtenderFlags();
+    // And rows for the Creations the game downloaded since last time: now,
+    // and whenever the window comes back to the front, since the game's own
+    // menu downloads them while the user is away from here.
+    m_deployFlow->scheduleCreationsCheck();
+    connect(qApp, &QGuiApplication::applicationStateChanged, this,
+            [this](Qt::ApplicationState state) {
+        if (state == Qt::ApplicationActive) m_deployFlow->scheduleCreationsCheck();
+    });
 
     // saveModList debounce (see scheduleSaveModList()). closeEvent stops it
     // before the synchronous flush.
@@ -632,6 +641,16 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
                 && !m_modList->selectedItems().isEmpty()) {
             onItemDoubleClicked(m_modList->selectedItems().first());
             return true;
+        }
+        // A Bethesda.net Creation page on the clipboard becomes a row; any
+        // other paste is nobody's here and goes on untouched.
+        if (ke->matches(QKeySequence::Paste)) {
+            const QClipboard *cb = QApplication::clipboard();
+            const QString text = cb ? cb->text().trimmed() : QString();
+            if (creations::parseCreationUrl(text)) {
+                addCreationRow(text);
+                return true;
+            }
         }
     }
     if (obj == m_modList->viewport() && event->type() == QEvent::Wheel) {
@@ -1692,6 +1711,69 @@ void MainWindow::onAddMod()
     saveModList();
 }
 
+bool MainWindow::addCreationRow(const QString &url)
+{
+    const auto ref = creations::parseCreationUrl(url);
+    if (!ref) {
+        statusBar()->showMessage(T("creations_not_a_url"), 5000);
+        return false;
+    }
+    const QString here = m_profiles->isEmpty() ? QString() : currentProfile().id;
+    const QStringList forSlug = creations::profileIdsForSlug(ref->gameSlug);
+    if (!forSlug.contains(here)) {
+        QString theirs = ref->gameSlug;
+        if (!forSlug.isEmpty())
+            if (const GameAdapter *a = GameAdapterRegistry::find(forSlug.first()))
+                theirs = a->displayName();
+        const QString ours = m_profiles->isEmpty() ? QString() : currentProfile().displayName;
+        ui::warn(this, T("creations_add_title"), T("creations_wrong_game").arg(theirs, ours));
+        return false;
+    }
+    // Already listed: the same id, whatever the slug or language segment.
+    for (int i = 0; i < m_model.count(); ++i) {
+        const ModEntry &e = m_model.at(i);
+        if (!e.isMod()) continue;
+        const auto have = creations::parseCreationUrl(e.nexusUrl);
+        if (!have || have->id != ref->id) continue;
+        const ModRow row = m_modList->item(i);
+        m_modList->setCurrentItem(row);
+        m_modList->scrollToItem(row);
+        statusBar()->showMessage(T("creations_row_exists").arg(e.displayName), 4000);
+        return true;
+    }
+
+    m_undoStack->pushUndo();
+    const ModEntry e = creations::waitingRow(*ref, T("creations_row_tooltip"));
+    const int cur = m_modList->currentRow();
+    const ModRow item = m_modList->insertItem(cur < 0 ? m_modList->count() : cur + 1, e);
+    m_modList->setCurrentItem(item);
+    // Pasted again after its row was removed: wanted after all.
+    QStringList ignored = Settings::ignoredCreationIds(here);
+    if (ignored.removeAll(ref->id) > 0) Settings::setIgnoredCreationIds(here, ignored);
+    saveModList();
+    statusBar()->showMessage(T("creations_row_added").arg(e.displayName), 6000);
+    // The game may have downloaded it already.
+    m_deployFlow->scheduleCreationsCheck();
+    return true;
+}
+
+void MainWindow::onAddFromBethesdaNet()
+{
+    QString seed;
+    if (const QClipboard *cb = QApplication::clipboard())
+        if (creations::parseCreationUrl(cb->text())) seed = cb->text().trimmed();
+    bool ok = false;
+    const QString url = QInputDialog::getText(this, T("creations_add_title"),
+                                              T("creations_add_prompt"), QLineEdit::Normal,
+                                              seed, &ok);
+    if (!ok || url.trimmed().isEmpty()) return;
+    if (!creations::parseCreationUrl(url)) {
+        ui::warn(this, T("creations_add_title"), T("creations_not_a_url"));
+        return;
+    }
+    addCreationRow(url);
+}
+
 void MainWindow::onInstallArchive()
 {
     // The menu / toolbar way to what dropping an archive on the window does.
@@ -2431,7 +2513,14 @@ void MainWindow::dragEnterEvent(QDragEnterEvent *event)
 {
     if (!event->mimeData()->hasUrls()) return;
     for (const QUrl &u : event->mimeData()->urls()) {
-        if (!u.isLocalFile()) continue;
+        if (!u.isLocalFile()) {
+            // A Creation page dragged from the browser's address bar.
+            if (creations::parseCreationUrl(u.toString())) {
+                event->acceptProposedAction();
+                return;
+            }
+            continue;
+        }
         const QString local = u.toLocalFile();
         if (isInstallableArchiveSuffix(local) || isImportFileSuffix(local)) {
             event->acceptProposedAction();
@@ -2461,8 +2550,12 @@ void MainWindow::dropEvent(QDropEvent *event)
     // runs on the next event-loop tick.
     QStringList toInstall;
     QStringList toImport;
+    QStringList toLink;
     for (const QUrl &u : event->mimeData()->urls()) {
-        if (!u.isLocalFile()) continue;
+        if (!u.isLocalFile()) {
+            if (creations::parseCreationUrl(u.toString())) toLink << u.toString();
+            continue;
+        }
         QString local = u.toLocalFile();
         if (isInstallableArchiveSuffix(local))
             toInstall << local;
@@ -2482,6 +2575,11 @@ void MainWindow::dropEvent(QDropEvent *event)
         QMetaObject::invokeMethod(this, [self, p]{
             if (!self) return;
             self->m_importFlow->handleDroppedImportFile(p);
+        }, Qt::QueuedConnection);
+    }
+    for (const QString &u : toLink) {
+        QMetaObject::invokeMethod(this, [self, u]{
+            if (self) self->addCreationRow(u);
         }, Qt::QueuedConnection);
     }
 }
@@ -3130,6 +3228,7 @@ void MainWindow::switchToModlistProfile(int idx)
     m_stickyKind = StickyKind::ViewSort;
     m_deployFlow->updateDeployHint();
     m_deployFlow->refreshScriptExtenderFlags();
+    m_deployFlow->scheduleCreationsCheck();
     resetUntranslatedNotices();
 
     statusBar()->showMessage(

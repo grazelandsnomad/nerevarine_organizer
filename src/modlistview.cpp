@@ -197,7 +197,7 @@ void ModListView::dragEnterEvent(QDragEnterEvent *event)
     // dragEnter/dragMove must acceptProposedAction or the drop never fires.
     if (event->source() != this && event->mimeData()->hasUrls()) {
         for (const QUrl &u : event->mimeData()->urls()) {
-            if (u.isLocalFile()) {
+            if (u.isLocalFile() || u.scheme().startsWith(QLatin1String("http"))) {
                 event->acceptProposedAction();
                 return;
             }
@@ -222,12 +222,16 @@ void ModListView::dropEvent(QDropEvent *event)
         // cursor position to the deepest widget - this one - and an install
         // started from in here recursed until the stack overflowed (Wayland,
         // a TTF for OpenMW dropped on the list).
-        QStringList paths;
-        for (const QUrl &u : event->mimeData()->urls())
+        QStringList paths, links;
+        for (const QUrl &u : event->mimeData()->urls()) {
             if (u.isLocalFile()) paths << u.toLocalFile();
+            else if (u.scheme().startsWith(QLatin1String("http"))) links << u.toString();
+        }
         event->acceptProposedAction();
         if (!paths.isEmpty())
             QTimer::singleShot(0, this, [this, paths] { emit localFilesDropped(paths); });
+        if (!links.isEmpty())
+            QTimer::singleShot(0, this, [this, links] { emit webLinksDropped(links); });
         return;
     }
 

@@ -72,6 +72,8 @@ signals:
     void itemDoubleClicked(const ModRow &row);
     // Local files dropped from outside, one tick after the drop.
     void localFilesDropped(const QStringList &paths);
+    // Web links (http/https) dropped from outside, a tick later as well.
+    void webLinksDropped(const QStringList &urls);
     // Around every reorder of the rows: a drag between rows (one pair however
     // many rows it moves - Qt moves them one at a time), a selection dropped
     // onto a separator, a programmatic model move. The window takes one undo

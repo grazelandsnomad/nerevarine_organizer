@@ -115,11 +115,18 @@ public slots:
                              const QString &nexusUrlHint = {});
     // Files dropped on the list from outside: archives install, lists import.
     void onLocalFilesDropped(const QStringList &paths);
+    // Web links dropped on the list: a Bethesda.net Creation page becomes a row.
+    void onWebLinksDropped(const QStringList &urls);
+    // A Bethesda.net Creation page's address (pasted, dropped or typed) as a
+    // waiting row: the game downloads it, the next Deploy or Start takes the
+    // files over (creations.h). True when a row was added or selected.
+    bool addCreationRow(const QString &url);
 
 private slots:
     void onAddSeparator();
     void onAddMod();
     void onInstallArchive();   // file picker -> installLocalArchive, what a drop does
+    void onAddFromBethesdaNet();   // a Creation page's address -> addCreationRow
     // Shared insert for onAddSeparator (append) and "Add separator above".
     // targetRow clamped to [0, count]. Never spawn collapsed - it'd land between
     // a collapsed neighbour and its hidden children and swallow that section.
@@ -891,6 +898,7 @@ private:
     QAction               *m_actDeployBethesda        = nullptr;  // "Deploy to game" - Bethesda titles only (Mods menu)
     QAction               *m_actUndeployBethesda      = nullptr;  // "Remove deployed mods" - Bethesda titles only (Mods menu)
     QAction               *m_actInspectDeployment     = nullptr;  // "Inspect deployment" diagnostics - Bethesda titles only
+    QAction               *m_actAddFromBethesdaNet    = nullptr;  // "Add from Bethesda.net" - games the Creations site serves
 
     // User-customizable toolbar actions - registry/visibility/customize-dialog
     // logic in ToolbarCustomization.
