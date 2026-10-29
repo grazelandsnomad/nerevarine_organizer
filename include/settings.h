@@ -49,6 +49,14 @@ struct Settings {
     static void    setMovedFromDataDir(const QString &gameId, const QString &dir);
     static QString pluginsTxtPath(const QString &gameId);
     static void    setPluginsTxtPath(const QString &gameId, const QString &path);
+    // Bethesda.net Creations the game downloaded: whether a download with no
+    // row becomes a row on its own (default yes; no UI, the key is the switch),
+    // and the ids of waiting rows the user removed, which stay out until the
+    // link is pasted again.
+    static bool        creationsAutoRows(const QString &gameId);
+    static void        setCreationsAutoRows(const QString &gameId, bool on);
+    static QStringList ignoredCreationIds(const QString &gameId);
+    static void        setIgnoredCreationIds(const QString &gameId, const QStringList &ids);
 
     // -- Modlist profiles within a game ---
     // List + active selector

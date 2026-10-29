@@ -225,6 +225,27 @@ void Settings::setPluginsTxtPath(const QString &gameId, const QString &path)
 
 // -- Modlist profiles ---
 
+bool Settings::creationsAutoRows(const QString &gameId)
+{
+    return QSettings().value(gameKey(gameId, "creations_auto_rows"), true).toBool();
+}
+
+void Settings::setCreationsAutoRows(const QString &gameId, bool on)
+{
+    QSettings().setValue(gameKey(gameId, "creations_auto_rows"), on);
+}
+
+QStringList Settings::ignoredCreationIds(const QString &gameId)
+{
+    return QSettings().value(gameKey(gameId, "creations_ignored")).toStringList();
+}
+
+void Settings::setIgnoredCreationIds(const QString &gameId, const QStringList &ids)
+{
+    if (ids.isEmpty()) QSettings().remove(gameKey(gameId, "creations_ignored"));
+    else               QSettings().setValue(gameKey(gameId, "creations_ignored"), ids);
+}
+
 QStringList Settings::modlistProfileNames(const QString &gameId)
 {
     return QSettings().value(gameKey(gameId, "profiles")).toStringList();
