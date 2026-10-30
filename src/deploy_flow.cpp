@@ -1934,8 +1934,9 @@ void DeployFlow::checkCreations()
     if (!plan.unrequested.isEmpty() && Settings::creationsAutoRows(id)) {
         const QString slug = creations::slugForProfile(id);
         for (const creations::CatalogEntry &entry : plan.unrequested) {
+            // Its files are already there, so the row says what happens next.
             ModEntry e = creations::waitingRow(creations::CreationRef{slug, entry.id, {}},
-                                               T("creations_row_tooltip"));
+                                               T("creations_ready_tip"));
             e.customName  = entry.title;
             e.displayName = entry.title;
             m_shell.model().append(e);
@@ -1944,8 +1945,18 @@ void DeployFlow::checkCreations()
         }
         m_shell.saveModList();
     }
-    for (const creations::Adoption &a : plan.adopt)
-        if (!a.reinstall) tell(a.entry);
+    for (const creations::Adoption &a : plan.adopt) {
+        if (a.reinstall) continue;
+        tell(a.entry);
+        // The waiting row's download has arrived: "not installed" alone would
+        // read as if nothing had happened, so its tooltip says what is next.
+        const int row = m_shell.model().findByRowId(a.rowId);
+        if (row < 0) continue;
+        ModEntry e = m_shell.model().at(row);
+        if (e.toolTip == T("creations_ready_tip")) continue;
+        e.toolTip = T("creations_ready_tip");
+        m_shell.model().update(row, e);
+    }
     if (told.isEmpty()) return;
     const QString msg = T("creations_downloaded_status")
                             .arg(namesAndMore(told, 3), QLocale().formattedDataSize(bytes));
