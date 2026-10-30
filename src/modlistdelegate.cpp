@@ -688,6 +688,12 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
             statusText  = "● installed";
             statusColor = sel ? option.palette.color(QPalette::HighlightedText)
                               : (updateRow ? QColor(Qt::white) : QColor(40, 160, 40));
+        } else if (index.data(ModRole::CreationDownloaded).toBool()) {
+            // The game has downloaded this Creation; the next Deploy or Start
+            // takes it over. "not installed" reads as a failure here.
+            statusText  = T("status_pending_deploy");
+            statusColor = sel ? option.palette.color(QPalette::HighlightedText)
+                              : (updateRow ? QColor(Qt::white) : QColor(210, 130, 0));
         } else {
             statusText  = "○ not installed";
             statusColor = sel ? option.palette.color(QPalette::HighlightedText)

@@ -338,6 +338,10 @@ static void testRows()
     check("version recorded", e.creationVersion == "1762391102.1.0.0");
     check("url kept", e.nexusUrl == QString::fromLatin1(kFever));
     check("still ticked", e.checked);
+    ModEntry pending = waitingRow(*ref, "tip");
+    pending.creationDownloaded = true;
+    applyAdoption(pending, c, "/mods/F2", "");
+    check("adoption clears the pending mark", !pending.creationDownloaded);
 
     ModEntry fresh = ModEntry::named("x");
     applyAdoption(fresh, c, "/mods/F", "https://creations.bethesda.net/en/fallout4/details/x");

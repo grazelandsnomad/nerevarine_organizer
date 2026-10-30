@@ -373,6 +373,7 @@ void applyAdoption(ModEntry &e, const CatalogEntry &entry, const QString &destDi
     placeholder_state::markInstalled(e, destDir);
     if (e.nexusUrl.isEmpty()) e.nexusUrl = url;
     e.creationVersion = entry.version;
+    e.creationDownloaded = false;   // ours now
     e.toolTip         = destDir;
 }
 

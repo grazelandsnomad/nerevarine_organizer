@@ -120,6 +120,7 @@ struct ModEntry {
     qint64      pendingFileId = 0;         // ModRole::PendingFileId
     bool        awaitingUpdateDownload = false;
     bool        updateFoundThisSession = false; // ModRole::UpdateFoundThisSession
+    bool        creationDownloaded = false;     // ModRole::CreationDownloaded
     bool        sepHasUpdate = false;      // separator only
     QString     nexusFileName;             // ModRole::NexusFileName
     qint64      sortAnchor = -1;           // ModRole::SortAnchor; -1 = never stamped

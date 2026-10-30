@@ -75,6 +75,7 @@ const RoleField kRoleTable[] = {
     NRV_ROLE(ModRole::DownloadProgress, downloadProgress, toInt),
     NRV_ROLE(ModRole::UpdateAvailable,  updateAvailable,  toBool),
     NRV_ROLE(ModRole::UpdateFoundThisSession, updateFoundThisSession, toBool),
+    NRV_ROLE(ModRole::CreationDownloaded, creationDownloaded, toBool),
     NRV_ROLE(ModRole::ConfirmedCurrentAt, confirmedCurrentAt, toDateTime),
     NRV_ROLE(ModRole::ExpectedMd5,      expectedMd5,      toString),
     NRV_ROLE(ModRole::ExpectedSize,     expectedSize,     toLongLong),

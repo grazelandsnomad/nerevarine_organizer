@@ -1937,6 +1937,7 @@ void DeployFlow::checkCreations()
             // Its files are already there, so the row says what happens next.
             ModEntry e = creations::waitingRow(creations::CreationRef{slug, entry.id, {}},
                                                T("creations_ready_tip"));
+            e.creationDownloaded = true;
             e.customName  = entry.title;
             e.displayName = entry.title;
             m_shell.model().append(e);
@@ -1953,7 +1954,8 @@ void DeployFlow::checkCreations()
         const int row = m_shell.model().findByRowId(a.rowId);
         if (row < 0) continue;
         ModEntry e = m_shell.model().at(row);
-        if (e.toolTip == T("creations_ready_tip")) continue;
+        if (e.creationDownloaded && e.toolTip == T("creations_ready_tip")) continue;
+        e.creationDownloaded = true;
         e.toolTip = T("creations_ready_tip");
         m_shell.model().update(row, e);
     }

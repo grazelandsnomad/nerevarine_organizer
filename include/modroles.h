@@ -89,6 +89,11 @@ namespace ModRole {
     // fails or is cancelled keeps its arrow but is not counted again. An
     // UpdateAvailable saved by an earlier session never has it. Session-only.
     constexpr int UpdateFoundThisSession = Qt::UserRole + 64; // bool
+    // A Bethesda.net Creation row whose download the game has made: its files
+    // sit in Data/ and the next Deploy or Start takes them over, so the row
+    // reads "pending deployment" rather than "not installed". Set by the
+    // Creations check, cleared when the row is adopted. Session-only.
+    constexpr int CreationDownloaded = Qt::UserRole + 66; // bool
     // When an update without a picker found the installed file still the
     // newest on its page (file_status::updateTarget, AlreadyNewest). Check
     // Updates compares the page's date with the later of this and DateAdded,
