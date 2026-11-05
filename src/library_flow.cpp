@@ -272,6 +272,14 @@ void LibraryFlow::onMoveModsDir()
         ui::warn(m_shell.dialogParent(), T("move_mods_title"), T("move_mods_err_downloads"));
         return;
     }
+    // Nor may a row still be installing: its folder is being written this
+    // moment, and with a toolbar button the move is one click away from it.
+    for (const ModEntry &it : m_shell.model().all()) {
+        if (it.isInstalling()) {
+            ui::warn(m_shell.dialogParent(), T("move_mods_title"), T("move_mods_err_installing"));
+            return;
+        }
+    }
 
     // Refresh sizes so the "X GB will be moved" figure is honest.
     m_shell.scheduleSizeScan();

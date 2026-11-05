@@ -189,6 +189,10 @@ void MainWindow::setModsDir(const QString &dir)
     m_modsDir = dir;
     if (m_downloadQueue) m_downloadQueue->setModsDir(m_modsDir);
     if (m_profiles) m_profiles->setActiveModsDir(dir);
+    // A library that moved is a deployment pointing at the old place: the
+    // paths are in the fingerprint, so the hint reads stale from here on. The
+    // move's done step lands here once the rows are repointed.
+    if (m_deployFlow) m_deployFlow->updateDeployHint();
 }
 
 void MainWindow::setOpenmwPath(const QString &path)

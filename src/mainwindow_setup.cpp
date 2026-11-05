@@ -224,6 +224,10 @@ void MainWindow::setupMenuBar()
         m_actAddFromBethesdaNet->setVisible(
             deployable && !creations::slugForProfile(currentProfile().id).isEmpty());
     }
+    // The library move used to live only behind the Modlist Summary dialog's
+    // button. A menu entry makes it findable; the toolbar twin (opt-in:
+    // View > Move Mod Library button) makes it one click.
+    modsMenu->addAction(T("menu_move_mods"),       m_libraryFlow, &LibraryFlow::onMoveModsDir);
     modsMenu->addAction(T("menu_cleanup_folders"), m_libraryFlow, &LibraryFlow::onCleanUpModFolders);
     modsMenu->addAction(T("menu_log_triage"),      this, &MainWindow::onTriageOpenMWLog);
     modsMenu->addAction(T("menu_diag_bundle"),     this, &MainWindow::onCreateDiagnosticBundle);
@@ -576,6 +580,15 @@ void MainWindow::setupToolbar()
     auto *actRestore = tb->addAction(T("toolbar_restore_backup"),
                                       this, [this]{ m_backups->showRestoreBackupDialog(this); });
 
+    // Opt-in (View > Move Mod Library button, or Customize Toolbar): the bar
+    // is full at 1920 px as it is, and a whole library moves disk to disk
+    // rarely enough that the Mods entry serves the rest of the time.
+    auto *actMoveMods = tb->addAction(T("toolbar_move_mods"),
+                                       m_libraryFlow, &LibraryFlow::onMoveModsDir);
+    actMoveMods->setToolTip(T("toolbar_move_mods_tip"));
+    if (auto *btn = qobject_cast<QToolButton *>(tb->widgetForAction(actMoveMods)))
+        btn->setStyleSheet("color: #8a4a1a; font-weight: bold;");
+
     auto *actSummary = tb->addAction(T("toolbar_modlist_summary"),
                                       this, &MainWindow::onModlistSummary);
     if (auto *btn = qobject_cast<QToolButton *>(tb->widgetForAction(actSummary)))
@@ -650,6 +663,7 @@ void MainWindow::setupToolbar()
     if (actFeatured)
         m_tbCustom->registerAction("featured_modlists", actFeatured,              T("toolbar_featured_modlists"),    /*defaultVisible=*/false);
     m_tbCustom->registerAction("add_mod",               actAddMod,                T("toolbar_add_mod"),              /*defaultVisible=*/false);
+    m_tbCustom->registerAction("move_mods",             actMoveMods,              T("toolbar_move_mods"),            /*defaultVisible=*/false);
     m_tbCustom->registerAction("modlist_summary",       actSummary,               T("toolbar_modlist_summary"));
     m_tbCustom->registerAction("diag_bundle",           actDiagBundle,            T("toolbar_diag_bundle"),          /*defaultVisible=*/false);
 
