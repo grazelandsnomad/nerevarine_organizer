@@ -22,6 +22,7 @@
 #include "mainwindow_internal.h"
 #include "modlist_model.h"
 #include "user_state_paths.h"
+#include "scan_overlay.h"
 #include "settings.h"
 #include "theme.h"
 #include "separatordialog.h"
@@ -187,6 +188,9 @@ void MainWindow::resetUntranslatedNotices()
 {
     if (!m_untranslatedNotices) return;
     m_untranslatedNotices = false;
+    // A panel still up (a scan running, or its result waiting for OK) is
+    // about the notices just switched off, so it goes with them.
+    if (m_translationOverlay) m_translationOverlay->finish();
     if (m_delegate) m_delegate->setUntranslatedNoticesVisible(false);
     updateUntranslatedButton();
     clearTranslationMarks();

@@ -3841,7 +3841,8 @@ void MainWindow::closeEvent(QCloseEvent *event)
     qCInfo(logging::lcApp).nospace()
         << "closeEvent ms total=" << closeTimer.elapsed()
         << " save=" << ms_saveSched
-        << " flush=" << ms_flush;
+        << " flush=" << ms_flush
+        << " spontaneous=" << event->spontaneous();
 
     QMainWindow::closeEvent(event);
 }
