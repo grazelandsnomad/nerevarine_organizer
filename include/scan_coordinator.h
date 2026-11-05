@@ -12,6 +12,7 @@
 #include <QStringList>
 
 #include <functional>
+#include <memory>
 
 class QTimer;
 
@@ -78,9 +79,16 @@ private:
     RowsProvider  m_rows;
     QTimer       *m_sizeScanTimer = nullptr;
 
-    // modPath -> (folder mtime ms, total bytes). mtime -1 = unknown.
-    QHash<QString, QPair<qint64, qint64>> m_sizeCache;
-    mutable QMutex                        m_sizeCacheMu;
+    // modPath -> (folder mtime ms, total bytes). mtime -1 = unknown. Shared
+    // with the size worker rather than a member: the walk of a big library
+    // outlives a window closed meanwhile, and a member would be gone under
+    // the worker's feet (the crash the masters scan had, see
+    // LoadOrderController::MastersCache).
+    struct SizeCache {
+        QMutex                                mu;
+        QHash<QString, QPair<qint64, qint64>> byPath;
+    };
+    std::shared_ptr<SizeCache>            m_sizeCache = std::make_shared<SizeCache>();
     bool                                  m_sizeScanInFlight = false;
     bool                                  m_sizeScanPending  = false;
 

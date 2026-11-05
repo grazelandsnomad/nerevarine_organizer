@@ -33,6 +33,7 @@
 #include <QString>
 #include <QStringList>
 #include <QTemporaryDir>
+#include <QThreadPool>
 
 #include <iostream>
 
@@ -580,9 +581,33 @@ void testExtensionFilter()
 
 } // namespace sc_test
 
+// The size scan's cache is shared with its worker for the same reason as
+// LoadOrderController's masters cache: a coordinator deleted mid-walk (the
+// window closed) must not leave the worker writing into freed memory. The
+// sanitizer build is the witness.
+void testSizeScanOutlivesCoordinator()
+{
+    std::cout << "\n[deleting the coordinator while a size scan runs]\n";
+    QTemporaryDir tmp;
+    SC_QVERIFY_EXIT(tmp.isValid(), 1);
+    QStringList files;
+    for (int i = 0; i < 20000; ++i) files << QStringLiteral("f%1.dds").arg(i);
+    ModEntry row;
+    row.modPath       = sc_test::makeMod(tmp.path(), "Big", files, {});
+    row.installStatus = 1;
+    row.checked       = true;
+    auto *sc = new ScanCoordinator([row] { return QList<ModEntry>{row}; });
+    sc->scheduleSizeScan();
+    sc_test::waitFor([] { return false; }, 210);   // past the 200 ms debounce: the walk is on
+    delete sc;
+    QThreadPool::globalInstance()->waitForDone(20000);
+    check("the worker finishes against the shared cache after the coordinator is gone", true);
+}
+
 static void run_scan_coordinator()
 {
     std::cout << "=== ScanCoordinator ===\n";
+    testSizeScanOutlivesCoordinator();
     sc_test::testCachedDataFolders_returnsAndCaches();
     sc_test::testCachedBsaFiles_basicAndCacheHit();
     sc_test::testInvalidateClearsBoth();

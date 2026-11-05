@@ -339,7 +339,7 @@ private:
 };
 
 LoadOrderController::LoadOrderController(QObject *parent)
-    : QObject(parent), m_stringsCacheMu(new QMutex), m_mastersCacheMu(new QMutex) {}
+    : QObject(parent), m_stringsCacheMu(new QMutex) {}
 
 LoadOrderController::~LoadOrderController()
 {
@@ -356,7 +356,6 @@ LoadOrderController::~LoadOrderController()
             w->wait();
         }
     }
-    delete m_mastersCacheMu;
     delete m_stringsCacheMu;
 }
 
@@ -491,7 +490,7 @@ void LoadOrderController::scanMissingMasters(
     m_mastersScanInFlight = true;
 
     async::guarded(this,
-        [enabledMods, availableLower](LoadOrderController *self)
+        [enabledMods, availableLower, cache = m_mastersCache](LoadOrderController *)
             -> QHash<QString, QPair<bool, QStringList>> {
         // Base Morrowind masters live in no mod; treat as always available or
         // the scan flags them.
@@ -509,16 +508,17 @@ void LoadOrderController::scanMissingMasters(
                 const QString &pluginName = plug.second;
 
                 // mtime-keyed cache: don't re-read plugins unchanged since
-                // the last scan.  m_mastersCacheMu makes the cache the one
-                // thread-safe member the worker may touch.
+                // the last scan.  Shared ownership (MastersCache): the one
+                // piece of state this worker touches, alive even when the
+                // controller is not.
                 const qint64 mtime = QFileInfo(pluginPath)
                                         .lastModified().toMSecsSinceEpoch();
                 QStringList masters;
                 bool hit = false;
                 {
-                    QMutexLocker lk(self->m_mastersCacheMu);
-                    auto it = self->m_mastersCache.constFind(pluginPath);
-                    if (it != self->m_mastersCache.constEnd()
+                    QMutexLocker lk(&cache->mu);
+                    auto it = cache->byPath.constFind(pluginPath);
+                    if (it != cache->byPath.constEnd()
                      && it.value().first == mtime) {
                         masters = it.value().second;
                         hit = true;
@@ -528,8 +528,8 @@ void LoadOrderController::scanMissingMasters(
                     // Both header formats: Morrowind's, and the Bethesda
                     // games' since the scan covers them too.
                     masters = plugins::readMasters(pluginPath).names;
-                    QMutexLocker lk(self->m_mastersCacheMu);
-                    self->m_mastersCache.insert(pluginPath, { mtime, masters });
+                    QMutexLocker lk(&cache->mu);
+                    cache->byPath.insert(pluginPath, { mtime, masters });
                 }
 
                 QStringList missing;

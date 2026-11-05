@@ -2,6 +2,7 @@
 
 #include <QHash>
 #include <QList>
+#include <QMutex>
 #include <QObject>
 #include <QPair>
 #include <QSet>
@@ -11,6 +12,8 @@
 #include "conflict_direction.h"
 #include "plugin_records.h"
 #include "plugin_strings.h"
+
+#include <memory>
 
 // LoadOrderController - owns the off-thread file-system scans that feed the
 // delegate's conflict / missing-master icon strip.  No Qt Widgets, no ModRole
@@ -183,11 +186,19 @@ private:
     QTimer                             *m_translationProgressTimer = nullptr;
 
     // Missing-master scan state.  mtime-keyed cache so unchanged plugins
-    // skip the disk reread.  Mutex guards the cache across the worker
-    // thread and the UI thread (a new scan can be scheduled while the
-    // previous one still holds a read lock).
-    QHash<QString, QPair<qint64, QStringList>>  m_mastersCache;
-    QMutex                                     *m_mastersCacheMu = nullptr;
+    // skip the disk reread.  The mutex guards it across the worker thread
+    // and the UI thread (a new scan can be scheduled while the previous
+    // one still holds a read lock).  Shared with the worker rather than a
+    // plain member: a scan can still be filling it when this object dies
+    // (the window closed right after a profile switch), and a member
+    // would be gone under the worker's feet - that was a crash inside
+    // ~QGuiApplication, from a pooled thread inserting into a hash whose
+    // owner had been destroyed.
+    struct MastersCache {
+        QMutex                                      mu;
+        QHash<QString, QPair<qint64, QStringList>>  byPath;
+    };
+    std::shared_ptr<MastersCache>  m_mastersCache = std::make_shared<MastersCache>();
     bool m_mastersScanInFlight = false;
     bool m_mastersScanPending  = false;
     // When a call comes in while a scan is already running, we stash the

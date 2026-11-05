@@ -50,9 +50,9 @@ qint64 ScanCoordinator::sizeOf(const QString &path) const
 {
     if (path.isEmpty()) return 0;
     {
-        QMutexLocker lk(&m_sizeCacheMu);
-        auto it = m_sizeCache.constFind(path);
-        if (it != m_sizeCache.constEnd() && it.value().second >= 0)
+        QMutexLocker lk(&m_sizeCache->mu);
+        auto it = m_sizeCache->byPath.constFind(path);
+        if (it != m_sizeCache->byPath.constEnd() && it.value().second >= 0)
             return it.value().second;
     }
     return computeDirSize(path);
@@ -221,7 +221,7 @@ void ScanCoordinator::runSizeScan()
     m_sizeScanInFlight = true;
 
     async::guarded(this,
-        [inputs](ScanCoordinator *self) -> QHash<QString, qint64> {
+        [inputs, cache = m_sizeCache](ScanCoordinator *) -> QHash<QString, qint64> {
             QHash<QString, qint64> results;
             for (const Input &in : inputs) {
                 if (!in.installed || in.modPath.isEmpty()) continue;
@@ -229,9 +229,9 @@ void ScanCoordinator::runSizeScan()
                 qint64 cachedMt  = -1;
                 qint64 cachedSz  = -1;
                 {
-                    QMutexLocker lk(&self->m_sizeCacheMu);
-                    auto it = self->m_sizeCache.constFind(in.modPath);
-                    if (it != self->m_sizeCache.constEnd()) {
+                    QMutexLocker lk(&cache->mu);
+                    auto it = cache->byPath.constFind(in.modPath);
+                    if (it != cache->byPath.constEnd()) {
                         cachedMt = it.value().first;
                         cachedSz = it.value().second;
                     }
@@ -242,9 +242,8 @@ void ScanCoordinator::runSizeScan()
                     size = cachedSz;                         // cache hit
                 } else if (in.folderMtime >= 0) {
                     size = computeDirSize(in.modPath);       // slow path
-                    QMutexLocker lk(&self->m_sizeCacheMu);
-                    self->m_sizeCache.insert(in.modPath,
-                                              { in.folderMtime, size });
+                    QMutexLocker lk(&cache->mu);
+                    cache->byPath.insert(in.modPath, { in.folderMtime, size });
                 }
                 if (size >= 0) results.insert(in.modPath, size);
             }

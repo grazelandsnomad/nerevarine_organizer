@@ -22,6 +22,7 @@
 #include <QFile>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QThreadPool>
 
 #include <iostream>
 
@@ -143,6 +144,32 @@ void testShutdownDuringScan()
     check("the controller goes away without taking the process with it", true);
 }
 
+// The masters scan runs on the thread pool, not on a QThread the destructor
+// can wait for, so its cache is shared with the worker: a controller deleted
+// mid-scan (the window closed right after a profile switch) leaves the worker
+// writing into memory that is still alive. The sanitizer build is the real
+// witness: with a member cache this was a use-after-free, and the user's
+// build dumped core from it three times in a week.
+void testMastersScanOutlivesController()
+{
+    std::cout << "\n[deleting the controller while a masters scan runs]\n";
+    QTemporaryDir t;
+    LoadOrderController::MastersInput in;
+    in.modPath = t.filePath(QStringLiteral("Mod"));
+    for (int i = 0; i < 3000; ++i) {
+        const QString name = QStringLiteral("p%1.esp").arg(i);
+        const QString path = t.filePath(QStringLiteral("Mod/") + name);
+        touch(path);
+        in.plugins.append({path, name});
+    }
+    auto *c = new LoadOrderController;
+    c->scanMissingMasters({in}, {});
+    QThread::msleep(2);
+    delete c;
+    QThreadPool::globalInstance()->waitForDone(20000);
+    check("the worker finishes against the shared cache after the controller is gone", true);
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -153,6 +180,7 @@ int main(int argc, char **argv)
     testRequestMidScanIsServed();
     testTranslationRequestInTheGap();
     testShutdownDuringScan();
+    testMastersScanOutlivesController();
     std::cout << "\n" << s_passed << " passed, " << s_failed << " failed\n";
     return s_failed == 0 ? 0 : 1;
 }
