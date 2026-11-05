@@ -41,6 +41,10 @@ Installers stopped choosing for a setup they could not see:
   now loads after its own masters.
 - **The welcome wizard comes back after a first run that was cut short**, and
   Qt's own buttons (Next, Finish, Yes, No) speak the app's language.
+- **A View menu** switches the translation tools off for people who don't
+  translate mods, and shows a Move Mod Library button on the toolbar for
+  moving a whole library to another disk. Closing the window while a scan
+  still ran no longer crashes at exit.
 - **Importing an MO2 modlist links mods to their Nexus pages**, undo after a
   drag goes back to before the drag, and moving the mod library no longer
   freezes the window.
