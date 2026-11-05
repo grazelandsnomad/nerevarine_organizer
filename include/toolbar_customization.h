@@ -33,6 +33,15 @@ public:
     // QAction::setProperty changes done outside of registerAction.
     void applyAll();
 
+    // The user's half of the gate for one entry, by id. userVisible() reads
+    // the registered action's property, or the saved preference for an id
+    // nothing has registered yet; setUserVisible() saves it and applies it
+    // to the action if there is one. The View menu's toggle uses these and
+    // the Customize dialog goes through setUserVisible() too, so the two can
+    // never disagree about what toolbar/<id> says.
+    bool userVisible(const QString &id) const;
+    void setUserVisible(const QString &id, bool on);
+
     // Modal dialog with a checkbox per registered entry. On OK, persists the
     // toolbar/<id> keys and applies the new visibility.
     void showCustomizeDialog(QWidget *parent);

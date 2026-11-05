@@ -46,6 +46,22 @@ void ToolbarCustomization::applyAll()
     for (QAction *a : std::as_const(m_actions)) applyVisibility(a);
 }
 
+bool ToolbarCustomization::userVisible(const QString &id) const
+{
+    if (QAction *act = m_actions.value(id))
+        return act->property("nerev_user_visible").toBool();
+    return Settings::toolbarActionVisible(id, false);
+}
+
+void ToolbarCustomization::setUserVisible(const QString &id, bool on)
+{
+    Settings::setToolbarActionVisible(id, on);
+    if (QAction *act = m_actions.value(id)) {
+        act->setProperty("nerev_user_visible", on);
+        applyVisibility(act);
+    }
+}
+
 void ToolbarCustomization::showCustomizeDialog(QWidget *parent)
 {
     QDialog dlg(parent);
@@ -91,12 +107,7 @@ void ToolbarCustomization::showCustomizeDialog(QWidget *parent)
 
     for (int i = 0; i < list->count(); ++i) {
         QListWidgetItem *it = list->item(i);
-        QString id = it->data(Qt::UserRole).toString();
-        bool checked = (it->checkState() == Qt::Checked);
-        Settings::setToolbarActionVisible(id, checked);
-        if (QAction *act = m_actions.value(id)) {
-            act->setProperty("nerev_user_visible", checked);
-            applyVisibility(act);
-        }
+        setUserVisible(it->data(Qt::UserRole).toString(),
+                       it->checkState() == Qt::Checked);
     }
 }

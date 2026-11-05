@@ -38,6 +38,7 @@ constexpr auto kTranslateLocalApiKey   = "translate/local_api_key";
 constexpr auto kUiUtilityExplainer    = "ui/utility_explainer_seen";
 constexpr auto kUiDarkMode            = "ui/dark_mode";
 constexpr auto kUiConflictNotices     = "ui/conflict_notices";
+constexpr auto kUiTranslationTools    = "ui/translation_tools";
 constexpr auto kDownloadsWatch       = "downloads/watch_folder";
 
 constexpr auto kLootBannerDisabled  = "loot/banner_disabled";
@@ -499,6 +500,16 @@ bool Settings::conflictNoticesVisible()
 void Settings::setConflictNoticesVisible(bool visible)
 {
     QSettings().setValue(kUiConflictNotices, visible);
+}
+
+bool Settings::translationToolsVisible()
+{
+    return QSettings().value(kUiTranslationTools, true).toBool();
+}
+
+void Settings::setTranslationToolsVisible(bool visible)
+{
+    QSettings().setValue(kUiTranslationTools, visible);
 }
 
 bool Settings::watchDownloads()

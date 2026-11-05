@@ -164,6 +164,13 @@ struct Settings {
     // lives on MainWindow and is not persisted: the scan reads and
     // decompresses plugin record bodies, and quietly doing that at startup
     // because of a click from last week is not what the button asked for.
+    // Whether the translation tools are shown at all IS here (View >
+    // Translation tools): the untranslated toggle on the toolbar, the
+    // Translate entries in a row's menu, the translation settings. Default
+    // true; off is for users who never translate a mod.
+    static bool    translationToolsVisible();    // default true
+    static void    setTranslationToolsVisible(bool visible);
+
     // Watch the browser's download folder and offer what lands there. Only
     // ever runs for a game with no mod-manager download route at all (see
     // GameAdapter::manualDownloadsOnly), so the default is on: for those games
