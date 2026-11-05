@@ -194,6 +194,19 @@ void MainWindow::resetUntranslatedNotices()
         m_modList->viewport()->update();
 }
 
+// View > Translation tools. Each surface is hidden where it lives: the
+// Settings entries and the toolbar toggle here, the row menu and the edit
+// dialog by reading the setting when they are built. Off also puts the
+// notices back to off, so nothing the tools painted stays on screen.
+void MainWindow::applyTranslationToolsVisibility()
+{
+    const bool on = Settings::translationToolsVisible();
+    if (m_translationLangMenu) m_translationLangMenu->menuAction()->setVisible(on);
+    if (m_actTranslateProvider) m_actTranslateProvider->setVisible(on);
+    if (m_actUntranslatedToggle) m_actUntranslatedToggle->setVisible(on);
+    if (!on) resetUntranslatedNotices();
+}
+
 void MainWindow::onToggleUntranslatedNotices()
 {
     const bool on = !m_untranslatedNotices;
@@ -989,123 +1002,127 @@ void MainWindow::onContextMenu(const QPoint &pos)
                     QString path = item->data(ModRole::ModPath).toString();
                     subprocess::startDetached("xdg-open", {path});
                 });
-                // Only on translations built here. Packaging is for
-                // publishing your own work; offering it on a mod someone else
-                // wrote is an invitation to re-upload it.
-                if (item->data(ModRole::IsGeneratedTranslation).toBool()) {
-                    menu.addAction(T("ctx_package_mod"), this, [this, item]{
-                        onPackageMod(item);
-                    });
-                }
-
-                // A mod the scan flagged red carries text nothing translates -
-                // so the fix is offered on the spot, named for the language it
-                // would fix it in, bold so it reads as the answer to the red
-                // caption directly above the cursor. The generic entry stays
-                // for every other installed mod (state 1 = no translation).
-                // Work already started outranks the scan's verdict: "create"
-                // reads as "make a second one" to somebody four hundred strings
-                // in, and what they came for is the way back to it.
-                //
-                // Asked of the FILE, not ModRole::TranslationInProgress. That
-                // role is cleared whenever the untranslated-notices toggle goes
-                // off, and a menu entry disappearing because of a display
-                // setting - while the work and the editor are both fine - is a
-                // different bargain from a row losing its tint.
-                // A translation is not something to translate. Offering
-                // "Create translation" on "Glass Revamp - Spanish
-                // (Nerevarine)" is an offer to translate a Spanish mod into
-                // Spanish, and on Morrowind the scan reaches that state on its
-                // own - the near-verbatim guard refuses a lightly translated
-                // plugin as its own partner, so the row reads "no
-                // translation" and gets the bold create entry.
-                //
-                // The way back in is the SOURCE mod's editor: that is where
-                // the answers live, and building from there updates this very
-                // folder rather than making a second one.
-                if (ModRow src = translationSourceRowFor(item)) {
-                    QAction *act = menu.addAction(
-                        T("translate_review_source").arg(src->text().trimmed()),
-                        this, [this, src]{ onTranslateMod(src); });
-                    QFont f = act->font();
-                    f.setBold(true);
-                    act->setFont(f);
-                } else if (translation_mod::sourceModOf(item->text().trimmed()).isEmpty()
-                           && !item->data(ModRole::IsGeneratedTranslation).toBool()) {
-
-                const auto tp = translationProgressStateFor(item);
-                // Gated on `saved`, shown as `done`. A mod whose rows the
-                // machine filled but nobody has read yet has plenty of work on
-                // file and zero of it vouched for; gating on `done` would make
-                // the way back into that work disappear.
-                if (tp.saved > 0) {
-                    // Built already: the way back in is to REVIEW it, not to
-                    // carry on with it, and "Create" would suggest a second
-                    // one when Create updates the mod already built.
-                    QAction *act = menu.addAction(
-                        (tp.built ? T("translate_review")
-                                  : T("translate_continue"))
-                            .arg(tp.done).arg(tp.total),
-                        this, [this, item]{ onTranslateMod(item); });
-                    QFont f = act->font();
-                    f.setBold(true);
-                    act->setFont(f);
-                } else if (item->data(ModRole::TranslationState).toInt() == 1) {
-                    // No language in the label. Naming one here meant naming
-                    // the app's UI language, which is the language the mod is
-                    // already in; the editor names the real target instead.
-                    QAction *act = menu.addAction(
-                        T("translate_create_here"),
-                        this, [this, item]{ onTranslateMod(item); });
-                    QFont f = act->font();
-                    f.setBold(true);
-                    act->setFont(f);
-                } else {
-                    menu.addAction(T("translate_menu"), this, [this, item]{
-                        onTranslateMod(item);
-                    });
-                }
-                // else: a translation whose source is gone. Nothing
-                // translation-related is offered, because translating a
-                // translation is never the answer - the row is still
-                // openable and still packageable.
-                }
-
-                // Say by hand what the scan could not work out - a translation
-                // shipped under a name nothing matches, or a pairing it read
-                // backwards. Persisted, and it wins over the scan.
-                menu.addSeparator();
-                if (!item->data(ModRole::TranslationOf).toString().isEmpty()) {
-                    menu.addAction(T("translate_not_a_translation"), this,
-                                   [this, item] {
-                        item->setData(ModRole::TranslationOf, QVariant());
-                        item->setData(ModRole::TranslationPartner,   QVariant());
-                        item->setData(ModRole::IsTranslationOfOther, false);
-                        saveModList();
-                        m_modList->viewport()->update();
-                    });
-                } else {
-                    QMenu *of = menu.addMenu(T("translate_is_translation_of"));
-                    const QString selfPath = item->data(ModRole::ModPath).toString();
-                    int offered = 0;
-                    for (int r = 0; r < m_modList->count() && offered < 200; ++r) {
-                        ModRow cand = m_modList->item(r);
-                        if (cand == item) continue;
-                        if (!mod_row::isMod(cand))
-                            continue;
-                        const QString path = cand->data(ModRole::ModPath).toString();
-                        if (path.isEmpty() || path == selfPath) continue;
-                        const QString custom = cand->data(ModRole::CustomName).toString();
-                        const QString label  = custom.isEmpty() ? cand->text().trimmed()
-                                                                : custom;
-                        of->addAction(label, this, [this, item, path] {
-                            item->setData(ModRole::TranslationOf, path);
-                            saveModList();
-                            runTranslationScan();
+                // View > Translation tools: with the tools hidden none of this
+                // is offered. The data stays; the entries go.
+                if (Settings::translationToolsVisible()) {
+                    // Only on translations built here. Packaging is for
+                    // publishing your own work; offering it on a mod someone else
+                    // wrote is an invitation to re-upload it.
+                    if (item->data(ModRole::IsGeneratedTranslation).toBool()) {
+                        menu.addAction(T("ctx_package_mod"), this, [this, item]{
+                            onPackageMod(item);
                         });
-                        ++offered;
                     }
-                    of->setEnabled(offered > 0);
+
+                    // A mod the scan flagged red carries text nothing translates -
+                    // so the fix is offered on the spot, named for the language it
+                    // would fix it in, bold so it reads as the answer to the red
+                    // caption directly above the cursor. The generic entry stays
+                    // for every other installed mod (state 1 = no translation).
+                    // Work already started outranks the scan's verdict: "create"
+                    // reads as "make a second one" to somebody four hundred strings
+                    // in, and what they came for is the way back to it.
+                    //
+                    // Asked of the FILE, not ModRole::TranslationInProgress. That
+                    // role is cleared whenever the untranslated-notices toggle goes
+                    // off, and a menu entry disappearing because of a display
+                    // setting - while the work and the editor are both fine - is a
+                    // different bargain from a row losing its tint.
+                    // A translation is not something to translate. Offering
+                    // "Create translation" on "Glass Revamp - Spanish
+                    // (Nerevarine)" is an offer to translate a Spanish mod into
+                    // Spanish, and on Morrowind the scan reaches that state on its
+                    // own - the near-verbatim guard refuses a lightly translated
+                    // plugin as its own partner, so the row reads "no
+                    // translation" and gets the bold create entry.
+                    //
+                    // The way back in is the SOURCE mod's editor: that is where
+                    // the answers live, and building from there updates this very
+                    // folder rather than making a second one.
+                    if (ModRow src = translationSourceRowFor(item)) {
+                        QAction *act = menu.addAction(
+                            T("translate_review_source").arg(src->text().trimmed()),
+                            this, [this, src]{ onTranslateMod(src); });
+                        QFont f = act->font();
+                        f.setBold(true);
+                        act->setFont(f);
+                    } else if (translation_mod::sourceModOf(item->text().trimmed()).isEmpty()
+                               && !item->data(ModRole::IsGeneratedTranslation).toBool()) {
+
+                    const auto tp = translationProgressStateFor(item);
+                    // Gated on `saved`, shown as `done`. A mod whose rows the
+                    // machine filled but nobody has read yet has plenty of work on
+                    // file and zero of it vouched for; gating on `done` would make
+                    // the way back into that work disappear.
+                    if (tp.saved > 0) {
+                        // Built already: the way back in is to REVIEW it, not to
+                        // carry on with it, and "Create" would suggest a second
+                        // one when Create updates the mod already built.
+                        QAction *act = menu.addAction(
+                            (tp.built ? T("translate_review")
+                                      : T("translate_continue"))
+                                .arg(tp.done).arg(tp.total),
+                            this, [this, item]{ onTranslateMod(item); });
+                        QFont f = act->font();
+                        f.setBold(true);
+                        act->setFont(f);
+                    } else if (item->data(ModRole::TranslationState).toInt() == 1) {
+                        // No language in the label. Naming one here meant naming
+                        // the app's UI language, which is the language the mod is
+                        // already in; the editor names the real target instead.
+                        QAction *act = menu.addAction(
+                            T("translate_create_here"),
+                            this, [this, item]{ onTranslateMod(item); });
+                        QFont f = act->font();
+                        f.setBold(true);
+                        act->setFont(f);
+                    } else {
+                        menu.addAction(T("translate_menu"), this, [this, item]{
+                            onTranslateMod(item);
+                        });
+                    }
+                    // else: a translation whose source is gone. Nothing
+                    // translation-related is offered, because translating a
+                    // translation is never the answer - the row is still
+                    // openable and still packageable.
+                    }
+
+                    // Say by hand what the scan could not work out - a translation
+                    // shipped under a name nothing matches, or a pairing it read
+                    // backwards. Persisted, and it wins over the scan.
+                    menu.addSeparator();
+                    if (!item->data(ModRole::TranslationOf).toString().isEmpty()) {
+                        menu.addAction(T("translate_not_a_translation"), this,
+                                       [this, item] {
+                            item->setData(ModRole::TranslationOf, QVariant());
+                            item->setData(ModRole::TranslationPartner,   QVariant());
+                            item->setData(ModRole::IsTranslationOfOther, false);
+                            saveModList();
+                            m_modList->viewport()->update();
+                        });
+                    } else {
+                        QMenu *of = menu.addMenu(T("translate_is_translation_of"));
+                        const QString selfPath = item->data(ModRole::ModPath).toString();
+                        int offered = 0;
+                        for (int r = 0; r < m_modList->count() && offered < 200; ++r) {
+                            ModRow cand = m_modList->item(r);
+                            if (cand == item) continue;
+                            if (!mod_row::isMod(cand))
+                                continue;
+                            const QString path = cand->data(ModRole::ModPath).toString();
+                            if (path.isEmpty() || path == selfPath) continue;
+                            const QString custom = cand->data(ModRole::CustomName).toString();
+                            const QString label  = custom.isEmpty() ? cand->text().trimmed()
+                                                                    : custom;
+                            of->addAction(label, this, [this, item, path] {
+                                item->setData(ModRole::TranslationOf, path);
+                                saveModList();
+                                runTranslationScan();
+                            });
+                            ++offered;
+                        }
+                        of->setEnabled(offered > 0);
+                    }
                 }
 
                 // Undeclared variant chooser (Main Menu Redone's
@@ -1515,9 +1532,12 @@ void MainWindow::onItemDoubleClicked(ModRow item)
         // Same question the context menu asks, same answer. On a translation
         // row the button reviews what it translates rather than offering to
         // translate a Spanish mod into Spanish.
-        ModRow const transSource = translationSourceRowFor(item);
+        // With the translation tools hidden (View menu) neither button is
+        // built, and the row below carries the page link alone.
+        const bool translating = Settings::translationToolsVisible();
+        ModRow const transSource = translating ? translationSourceRowFor(item) : ModRow();
         const auto tpHere =
-            (!transSource && mod_row::isInstalled(item))
+            (translating && !transSource && mod_row::isInstalled(item))
                 ? translationProgressStateFor(item)
                 : TranslationProgressState{};
         const int startedHere = tpHere.saved;

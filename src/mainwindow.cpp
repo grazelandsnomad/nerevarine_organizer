@@ -352,6 +352,9 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_loadCtl, &LoadOrderController::translationScanProgress,
             this, [this](int percent) {
         if (!m_translationOverlay) return;
+        // Switched off while this scan ran (the toggle, or View > Translation
+        // tools): its progress is nobody's business any more.
+        if (!m_untranslatedNotices) return;
         // A scan buffered mid-flight re-fires from inside the controller, not
         // from runTranslationScan, so its panel would never be put up - the
         // second pass would run invisibly, which is the exact complaint the
@@ -407,8 +410,10 @@ MainWindow::MainWindow(QWidget *parent)
     MainWindow::loadModList();
     // The translate editor's first open builds the vanilla-text table - a walk
     // of Morrowind's masters, ~94 MB. Start it on a worker now, in the shadow
-    // of the modlist load, so that first open finds it already built.
-    warmVanillaTextAsync();
+    // of the modlist load, so that first open finds it already built. Only
+    // while the translation tools are shown: hidden, nothing opens the editor,
+    // and switching them on (View menu) warms it then.
+    if (Settings::translationToolsVisible()) warmVanillaTextAsync();
     loadLoadOrder();
     absorbExternalLoadOrder(); // respect reorders done in OpenMW Launcher
     m_downloadQueue->cleanStaleDownloads();
@@ -3562,6 +3567,14 @@ void MainWindow::onTranslationsScanned(
     int modsWithoutPlugins,
     const QHash<QString, QString> &pairs)
 {
+    // Switched off while the scan ran: the rows were wiped on the click, and
+    // re-stamping them from a result nobody wants would undo that. Any panel
+    // the progress put up comes down with it.
+    if (!m_untranslatedNotices) {
+        m_translationResultWanted = false;
+        if (m_translationOverlay) m_translationOverlay->finish();
+        return;
+    }
     applyTranslationPairs(pairs);
 
     int flagged = 0, noTranslation = 0, inProgress = 0;

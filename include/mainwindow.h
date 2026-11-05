@@ -745,6 +745,14 @@ private:
     // Put the untranslated notices back to off (game/profile switch).
     void resetUntranslatedNotices();
     void updateUntranslatedButton();
+    // View > Translation tools: show or hide every translation surface at
+    // once. The Settings entries and the toolbar toggle are hidden here; the
+    // row menu and the edit dialog read the setting when they are built. Off
+    // also puts the untranslated notices back to off.
+    void applyTranslationToolsVisibility();
+    // Read the two View toggles' settings into their checkmarks (the Customize
+    // Toolbar dialog writes one of them behind the menu's back).
+    void refreshViewMenu();
     // Repaint m_themeBtn to name the theme it switches TO.
     void updateThemeButton();
     // Check Updates, green; or "Update All (N)", red, while N of the last
@@ -885,6 +893,16 @@ private:
     // built once in setupMenuBar() and never rebuilt, while the checkmark it
     // shows belongs to whichever modlist profile is active.
     QMenu                 *m_translationLangMenu     = nullptr;
+    // View menu: its two toggles, and the separator the download-queue toggle
+    // is inserted before (the queue is set up after the menus). The provider
+    // entry and the toolbar action behind m_untranslatedBtn are kept so the
+    // translation-tools switch can hide them.
+    QMenu                 *m_viewMenu                = nullptr;
+    QAction               *m_viewMenuTail            = nullptr;
+    QAction               *m_actViewTranslationTools = nullptr;
+    QAction               *m_actViewMoveModsBtn      = nullptr;
+    QAction               *m_actTranslateProvider    = nullptr;
+    QAction               *m_actUntranslatedToggle   = nullptr;
     QLabel                *m_profileLbl              = nullptr;  // "Profile:" prefix
     QAction               *m_actLaunchOpenMW          = nullptr;
     QAction               *m_actLaunchLauncher        = nullptr;

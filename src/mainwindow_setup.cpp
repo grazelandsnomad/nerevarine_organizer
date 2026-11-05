@@ -233,6 +233,48 @@ void MainWindow::setupMenuBar()
     modsMenu->addAction(T("menu_diag_bundle"),     this, &MainWindow::onCreateDiagnosticBundle);
     modsMenu->addAction(T("menu_edit_load_order"), this, &MainWindow::onEditLoadOrder);
 
+    // View: what is shown, as opposed to how things work (Settings). Built
+    // before the toolbar exists like the rest of this: the handlers run on
+    // clicks only and applyTranslationToolsVisibility() null-checks.
+    m_viewMenu = menuBar()->addMenu(T("menu_view"));
+    m_viewMenu->setToolTipsVisible(true);
+    m_actViewTranslationTools = m_viewMenu->addAction(T("view_translation_tools"));
+    m_actViewTranslationTools->setCheckable(true);
+    m_actViewTranslationTools->setChecked(Settings::translationToolsVisible());
+    m_actViewTranslationTools->setToolTip(T("view_translation_tools_tip"));
+    // triggered, not toggled: refreshViewMenu() sets the checkmarks from the
+    // settings on every open, and that must not count as a click.
+    connect(m_actViewTranslationTools, &QAction::triggered, this, [this](bool on) {
+        Settings::setTranslationToolsVisible(on);
+        applyTranslationToolsVisibility();
+        // Startup only warms the editor's vanilla-text table while the tools
+        // are shown, so a switch-on warms it now rather than at the first open.
+        if (on) warmVanillaTextAsync();
+    });
+    m_actViewMoveModsBtn = m_viewMenu->addAction(T("view_move_mods_button"));
+    m_actViewMoveModsBtn->setCheckable(true);
+    m_actViewMoveModsBtn->setChecked(m_tbCustom->userVisible(QStringLiteral("move_mods")));
+    m_actViewMoveModsBtn->setToolTip(T("view_move_mods_button_tip"));
+    connect(m_actViewMoveModsBtn, &QAction::triggered, this, [this](bool on) {
+        m_tbCustom->setUserVisible(QStringLiteral("move_mods"), on);
+    });
+    m_viewMenu->addSeparator();
+
+    // Columns submenu - actions live on m_columnHeader; we just attach them.
+    auto *colMenu = m_viewMenu->addMenu(T("menu_columns"));
+    colMenu->addAction(m_columnHeader->colStatusAction());
+    colMenu->addAction(m_columnHeader->colDateAction());
+    colMenu->addAction(m_columnHeader->colRelTimeAction());
+    colMenu->addAction(m_columnHeader->colAnnotAction());
+    colMenu->addAction(m_columnHeader->colSizeAction());
+    colMenu->addAction(m_columnHeader->colVideoReviewAction());
+    // The download-queue toggle goes in before this separator once the queue
+    // exists (setupDownloadQueue).
+    m_viewMenuTail = m_viewMenu->addSeparator();
+    m_viewMenu->addAction(T("menu_customize_toolbar"), this,
+                          [this]{ m_tbCustom->showCustomizeDialog(this); });
+    connect(m_viewMenu, &QMenu::aboutToShow, this, &MainWindow::refreshViewMenu);
+
     auto *settingsMenu = menuBar()->addMenu(T("menu_settings"));
     settingsMenu->addAction(T("menu_api_key"),  this, &MainWindow::onSetApiKey);
     settingsMenu->addAction(T("menu_mods_dir"), this, &MainWindow::onSetModsDir);
@@ -273,16 +315,6 @@ void MainWindow::setupMenuBar()
             updateGameButton();
         });
     }
-    settingsMenu->addSeparator();
-
-    // Columns submenu - actions live on m_columnHeader; we just attach them.
-    auto *colMenu = settingsMenu->addMenu(T("menu_columns"));
-    colMenu->addAction(m_columnHeader->colStatusAction());
-    colMenu->addAction(m_columnHeader->colDateAction());
-    colMenu->addAction(m_columnHeader->colRelTimeAction());
-    colMenu->addAction(m_columnHeader->colAnnotAction());
-    colMenu->addAction(m_columnHeader->colSizeAction());
-    colMenu->addAction(m_columnHeader->colVideoReviewAction());
     settingsMenu->addSeparator();
 
     // UI Scale submenu
@@ -339,8 +371,8 @@ void MainWindow::setupMenuBar()
     // blocks by IP and the block sticks for hours; a LibreTranslate-compatible
     // server on this very machine has no limit at all. The dialog carries the
     // one-liner to start one.
-    settingsMenu->addAction(T("menu_translate_provider"), this,
-                            &MainWindow::onSetTranslateProvider);
+    m_actTranslateProvider = settingsMenu->addAction(T("menu_translate_provider"), this,
+                                                     &MainWindow::onSetTranslateProvider);
 
     // Only meaningful for a game with no mod-manager download route, so it is
     // shown only while such a profile is active rather than sitting in the
@@ -355,9 +387,6 @@ void MainWindow::setupMenuBar()
     });
 
     settingsMenu->addSeparator();
-    settingsMenu->addAction(T("menu_customize_toolbar"), this,
-                            [this]{ m_tbCustom->showCustomizeDialog(this); });
-    settingsMenu->addSeparator();
     // Diagnostics - opens the folder containing log.txt + rotated backups
     // so users handing us a bug report can grab the latest one quickly.
     settingsMenu->addAction(T("menu_open_log_folder"), this, [this]{
@@ -369,6 +398,16 @@ void MainWindow::setupMenuBar()
     settingsMenu->addSeparator();
     settingsMenu->addAction(T("menu_forbidden_mods"), this,
                             [this]{ m_forbidden->showManageDialog(this); });
+}
+
+// The Customize Toolbar dialog writes the Move Mod Library button's gate
+// behind this menu's back, so both checkmarks are read fresh on every open.
+void MainWindow::refreshViewMenu()
+{
+    if (m_actViewTranslationTools)
+        m_actViewTranslationTools->setChecked(Settings::translationToolsVisible());
+    if (m_actViewMoveModsBtn && m_tbCustom)
+        m_actViewMoveModsBtn->setChecked(m_tbCustom->userVisible(QStringLiteral("move_mods")));
 }
 
 namespace {
@@ -550,7 +589,9 @@ void MainWindow::setupToolbar()
     m_untranslatedBtn->setToolButtonStyle(Qt::ToolButtonTextOnly);
     connect(m_untranslatedBtn, &QToolButton::clicked,
             this, &MainWindow::onToggleUntranslatedNotices);
-    tb->addWidget(m_untranslatedBtn);
+    // The QAction, not the button: a toolbar widget is only ever hidden through
+    // the action addWidget() returns (View > Translation tools).
+    m_actUntranslatedToggle = tb->addWidget(m_untranslatedBtn);
     updateUntranslatedButton();
 
     restyleToolbarTextButtons();   // bake concrete colours from the live palette
@@ -671,6 +712,7 @@ void MainWindow::setupToolbar()
     updateGameButton(); // sets game button text/menu + shows correct launch button(s)
     updateProfileButton();
     m_tbCustom->applyAll();
+    applyTranslationToolsVisibility();   // View > Translation tools, as saved
 }
 
 // Filled, so it reads the same on either theme: green for Check Updates, red

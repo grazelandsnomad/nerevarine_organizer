@@ -452,20 +452,10 @@ void MainWindow::setupDownloadQueue()
 
     QAction *toggleAct = m_downloadQueue->setup(this);
 
-    // Insert the visibility toggle into the Settings menu.
-    if (menuBar()) {
-        QMenu *settingsMenu = nullptr;
-        for (QAction *a : menuBar()->actions()) {
-            if (a->menu() && a->text().contains("ettings")) {
-                settingsMenu = a->menu();
-                break;
-            }
-        }
-        if (settingsMenu) {
-            settingsMenu->addSeparator();
-            settingsMenu->addAction(toggleAct);
-        }
-    }
+    // The visibility toggle joins the View menu, above its last separator. By
+    // pointer: this used to find the Settings menu by matching its title text,
+    // which no translation of that title is obliged to satisfy.
+    if (m_viewMenu) m_viewMenu->insertAction(m_viewMenuTail, toggleAct);
 }
 
 void MainWindow::fetchNexusTitle(const QString &game, int modId, ModRow item,
