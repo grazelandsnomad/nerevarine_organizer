@@ -2,6 +2,8 @@
 
 #include "plugin_strings.h"
 
+#include <memory>
+#include <map>
 #include <QDir>
 #include <QMutex>
 #include <QFileInfo>
@@ -135,17 +137,22 @@ const Table &cached(const QString &dataFolder)
     // Keyed by folder rather than a single slot: a profile switch can point at
     // a different install, and answering from the previous one would be worse
     // than rebuilding. In practice there is one entry.
+    //
+    // Each table in its own allocation: the reference handed out is used after
+    // the lock is released (the editor's gather, the coverage worker), and a
+    // QHash moves its values when it grows. A table never moves once built.
     static QMutex mu;
-    static QHash<QString, Table> tables;
+    static std::map<QString, std::unique_ptr<Table>> tables;
 
     QMutexLocker lock(&mu);
-    auto it = tables.constFind(dataFolder);
-    if (it != tables.constEnd()) return it.value();
-    // Built under the lock: a second caller waits for the first rather than
-    // walking 94 MB of masters again, which is the whole point of caching it.
-    Table &t = tables[dataFolder];
-    t.load(dataFolder);
-    return t;
+    std::unique_ptr<Table> &slot = tables[dataFolder];
+    if (!slot) {
+        // Built under the lock: a second caller waits for the first rather
+        // than walking 94 MB of masters again, which is the point of caching.
+        slot = std::make_unique<Table>();
+        slot->load(dataFolder);
+    }
+    return *slot;
 }
 
 } // namespace vanilla_text

@@ -23,6 +23,7 @@
 #include <QMutexLocker>
 #include <QObject>
 #include <QThread>
+#include <QThreadPool>
 
 #include <atomic>
 #include <iostream>
@@ -130,6 +131,34 @@ static void testDeadObjectDropsThen()
     // `gate` as it unwinds, and this is a one-shot test process.
 }
 
+static void testOwnersDeletedWhileWorkersFinish()
+{
+    std::cout << "testOwnersDeletedWhileWorkersFinish\n";
+    // The second hop goes to qApp and tests the owner there, so an owner
+    // deleted between the worker's own check and the post is never reached.
+    // A thousand owners, each deleted while its worker is finishing; under
+    // the sanitizer build a post to a dead owner would be a use-after-free.
+    static std::atomic<int> thenRuns{0};
+    static std::atomic<int> started{0};
+    QList<Probe *> owners;
+    for (int i = 0; i < 1000; ++i) {
+        auto *q = new Probe;
+        owners.append(q);
+        async::guarded(q,
+            [](Probe *) -> int { started.fetch_add(1); return 1; },
+            [](Probe *, int) { thenRuns.fetch_add(1); });
+    }
+    // Delete them while the pool is chewing through the work.
+    spinUntil([] { return started.load() > 300; }, 2000);
+    qDeleteAll(owners);
+    QThreadPool::globalInstance()->waitForDone(10000);
+    spinUntil([] { return false; }, 100);   // let every posted hop run
+    check("no epilogue ran for an owner deleted before its hop",
+          thenRuns.load() <= started.load());
+    check("and every worker finished", started.load() == 1000,
+          QString::number(started.load()));
+}
+
 // SaveQueue - the single-thread serialized write queue that replaced the
 // "waitForFinished() before every save" UI stall. Verifies the two properties
 // the save path leans on: (a) drain() runs every posted task to completion
@@ -172,6 +201,7 @@ int main(int argc, char **argv)
     testResultHopsBackToOwnerThread();
     testVoidWorkEpilogue();
     testDeadObjectDropsThen();
+    testOwnersDeletedWhileWorkersFinish();
     testSaveQueueSerializesAndDrains();
     std::cout << "\n" << s_passed << " passed, " << s_failed << " failed\n";
     return s_failed == 0 ? 0 : 1;

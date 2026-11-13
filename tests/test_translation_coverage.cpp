@@ -547,11 +547,29 @@ static void testDirectedPairs()
           p.size() == 1 && p.value(0, -1) == 2);
 }
 
+// vanilla_text::cached hands out a reference that callers keep using after
+// its lock is released. Each table now lives in its own allocation, so
+// caching more folders never moves one already handed out (a QHash moves its
+// values when it grows - past ~48 entries here).
+static void testCachedTablesStayPut()
+{
+    std::cout << "\n[cached vanilla tables do not move]\n";
+    const QString firstFolder = QStringLiteral("/nonexistent/first");
+    const vanilla_text::Table *first = &vanilla_text::cached(firstFolder);
+    for (int i = 0; i < 200; ++i) {
+        const QString folder = QStringLiteral("/nonexistent/%1").arg(i);
+        (void)vanilla_text::cached(folder);
+    }
+    check("a table handed out earlier is still the same object",
+          &vanilla_text::cached(firstFolder) == first);
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
 
     testTheDaedricMaulShape();
+    testCachedTablesStayPut();
     testAModWhoseOnlyStringIsAName();
     testThePairNamesItsTranslation();
     testTheNearVerbatimRejectorStillGuards();

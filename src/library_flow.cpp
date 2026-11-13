@@ -226,11 +226,12 @@ void LibraryFlow::moveModFolders(const QList<FolderMove> &moves, const QString &
                     run->outcomes.append(std::move(out));
                 }
                 // Let the row land while the next folder moves. The window
-                // may be gone by then; the queued call checks first.
-                if (guard)
-                    QMetaObject::invokeMethod(guard.data(), [guard, drain] {
-                        if (guard) drain();
-                    }, Qt::QueuedConnection);
+                // may be gone by then: posted to qApp and checked there, on
+                // the GUI thread, never posted to a flow that may be deleted
+                // between a check here and the post (see async_guarded.h).
+                QMetaObject::invokeMethod(QCoreApplication::instance(), [guard, drain] {
+                    if (guard) drain();
+                }, Qt::QueuedConnection);
             }
         },
         [this, drain, dlg, tally, title, done](LibraryFlow *) {

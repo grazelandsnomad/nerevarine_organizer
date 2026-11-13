@@ -116,6 +116,28 @@ static void run_plugin_parser()
         check("missing file returns empty masters",
               plugins::readTes3Masters(root.filePath("nope.esm")).isEmpty());
     }
+    {
+        // A subrecord size near 4 GiB: in 32 bits `pos + size` wrapped, the
+        // bound check passed and the walk went back to the start - forever.
+        QString f = root.filePath("wrapping_size.esp");
+        QFile g(f);
+        if (g.open(QIODevice::WriteOnly)) {
+            QByteArray body;
+            body += "HEDR";
+            const quint32 huge = 0xFFFFFFF8u;
+            body += QByteArray(reinterpret_cast<const char *>(&huge), 4);
+            body += QByteArray(8, '\0');
+            QByteArray head = "TES3";
+            const quint32 size = quint32(body.size());
+            head += QByteArray(reinterpret_cast<const char *>(&size), 4);
+            head += QByteArray(8, '\0');
+            g.write(head + body);
+            g.close();
+        }
+        const auto m = plugins::readMasters(f);
+        check("a subrecord size that overruns the header stops the walk",
+              m.ok && m.names.isEmpty() && plugins::readTes3Masters(f).isEmpty());
+    }
 
     // collectDataFolders: modB/fomod/ skipped, modC nesting found.
     {

@@ -28,6 +28,11 @@
 //     across the hop, never copying it.
 //   * If `obj` dies before either hop, the result is dropped silently - which is
 //     exactly what every hand-rolled site wanted (nobody left to deliver to).
+//   * `obj` lives on the GUI thread (every owner does: the window and its
+//     children). The second hop is posted to qApp, not to `obj`, and the
+//     QPointer is tested there, on the thread where owners are deleted. A
+//     post to `obj` itself, after a check made on the worker, could reach an
+//     object deleted in between - a use-after-free inside Qt.
 //
 // work may also return void, for a pure off-thread job with a UI-thread
 // epilogue; then `then` takes just (self).
@@ -35,8 +40,10 @@
 // Qt Core only (QtConcurrent + QPointer + QMetaObject); no Widgets, so callers
 // in the moc-free controllers can use it too.
 
+#include <QCoreApplication>
 #include <QMetaObject>
 #include <QPointer>
+#include <QThread>
 #include <QtConcurrent/QtConcurrent>
 
 #include <type_traits>
@@ -47,30 +54,30 @@ namespace async {
 template <typename Obj, typename Work, typename Then>
 void guarded(Obj *obj, Work work, Then then)
 {
+    Q_ASSERT(obj && obj->thread() == QCoreApplication::instance()->thread());
     QPointer<Obj> safe(obj);
     (void)QtConcurrent::run(
         [safe, work = std::move(work), then = std::move(then)]() mutable {
             using Result = std::invoke_result_t<Work &, Obj *>;
 
             // Object already gone before the worker even started: nothing to
-            // deliver to, so skip the (possibly expensive) work entirely.
+            // deliver to, so skip the (possibly expensive) work entirely. A
+            // shortcut only - the check that counts is the one in the hop.
             if (!safe) return;
 
             if constexpr (std::is_void_v<Result>) {
                 work(safe.data());
-                if (!safe) return;                 // died during work
-                QMetaObject::invokeMethod(safe.data(),
+                QMetaObject::invokeMethod(QCoreApplication::instance(),
                     [safe, then = std::move(then)]() mutable {
-                        if (!safe) return;         // died before the queued call ran
+                        if (!safe) return;         // died before the hop ran
                         then(safe.data());
                     }, Qt::QueuedConnection);
             } else {
                 Result result = work(safe.data());
-                if (!safe) return;                 // died during work
-                QMetaObject::invokeMethod(safe.data(),
+                QMetaObject::invokeMethod(QCoreApplication::instance(),
                     [safe, result = std::move(result),
                      then = std::move(then)]() mutable {
-                        if (!safe) return;         // died before the queued call ran
+                        if (!safe) return;         // died before the hop ran
                         then(safe.data(), std::move(result));
                     }, Qt::QueuedConnection);
             }

@@ -142,14 +142,18 @@ std::optional<QStringList> tes3Masters(QFile &f)
     QByteArray body = f.read(recSize);
     if (static_cast<quint32>(body.size()) < recSize) return std::nullopt;
 
+    // 64-bit offsets: in 32 bits `pos + subSize` wrapped for a size near
+    // 4 GiB, the bound check passed and `pos` went backwards - a malformed
+    // plugin looped forever on the startup scans.
     QStringList masters;
-    quint32 pos = 0;
-    while (pos + 8 <= recSize) {
+    const qint64 total = recSize;
+    qint64 pos = 0;
+    while (pos + 8 <= total) {
         QByteArray tag = body.mid(pos, 4);
         quint32 subSize;
         std::memcpy(&subSize, body.constData() + pos + 4, 4);
         pos += 8;
-        if (pos + subSize > recSize) break;
+        if (qint64(subSize) > total - pos) break;
         if (tag == "MAST") {
             QByteArray raw = body.mid(pos, subSize);
             int end = raw.indexOf('\0');
