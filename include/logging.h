@@ -38,6 +38,22 @@ QString logDirectory();
 // otherwise. Returns the path of the active log file.
 QString initialize(const QString &appVersion);
 
+// The running binary in one line: version, git commit, ELF build id and the
+// executable's load base. Written at session start and into every crash
+// block, so a frame's absolute address can be turned into a file:line with
+// `addr2line -e <that binary> <address - base>` - or with a rebuild of that
+// commit once the binary itself is gone.
+QString buildIdentity(const QString &appVersion);
+
+// The ELF build id of the running executable, lower-case hex; empty when the
+// binary has none.
+QString buildId();
+
+// Install the crash handlers (SEGV, BUS, ABRT, FPE, ILL), writing a block to
+// `logPath` that carries `identity`. initialize() calls it; public for the
+// crash-report test, which installs it in a forked child.
+void installCrashHandler(const QString &logPath, const QString &identity);
+
 } // namespace logging
 
 #endif // LOGGING_H

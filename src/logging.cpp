@@ -1,5 +1,7 @@
 #include "logging.h"
 
+#include "build_info.h"   // NR_GIT_SHA, generated per build
+
 #include <QByteArray>
 #include <QCoreApplication>
 #include <QDateTime>
@@ -11,14 +13,17 @@
 #include <QStandardPaths>
 #include <QTextStream>
 
+#include <algorithm>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 #ifdef Q_OS_UNIX
+#  include <ctime>
 #  include <execinfo.h>
 #  include <fcntl.h>
+#  include <link.h>       // dl_iterate_phdr, ElfW, NT_GNU_BUILD_ID
 #  include <unistd.h>
 #endif
 
@@ -113,32 +118,121 @@ void writeAll(int fd, const char *s, size_t n)
     }
 }
 
-// Signal-safe: no Qt inside a signal handler. Write straight to the log fd via
-// backtrace_symbols_fd, then re-raise.
-void crashSignalHandler(int sig)
+// Everything the handler writes is prepared here, at install time: inside a
+// signal handler only write(2)-level calls are safe - no allocation, no Qt,
+// not even snprintf.
+char   g_crashPath[4096]  = {};
+char   g_crashIdent[512]  = {};
+size_t g_crashIdentLen    = 0;
+// The main thread's alternate stack, so a stack overflow there still gets a
+// block. Per thread by nature: a worker's overflow dies without one.
+char   g_altStack[64 * 1024];
+
+// A crash-block line under construction, in a fixed buffer.
+struct LineBuf {
+    char   buf[192];
+    size_t n = 0;
+    void add(const char *s)
+    {
+        while (*s && n < sizeof(buf)) buf[n++] = *s++;
+    }
+    void addNumber(unsigned long long v, unsigned base)
+    {
+        char tmp[24];
+        size_t k = 0;
+        do { tmp[k++] = "0123456789abcdef"[v % base]; v /= base; } while (v && k < sizeof(tmp));
+        while (k > 0 && n < sizeof(buf)) buf[n++] = tmp[--k];
+    }
+};
+
+void crashSignalHandler(int sig, siginfo_t *info, void *)
 {
     const char *name = "SIGNAL";
+    bool hasAddr = true;
     switch (sig) {
         case SIGSEGV: name = "SIGSEGV"; break;
-        case SIGABRT: name = "SIGABRT"; break;
+        case SIGBUS:  name = "SIGBUS";  break;
         case SIGFPE:  name = "SIGFPE";  break;
         case SIGILL:  name = "SIGILL";  break;
-        case SIGBUS:  name = "SIGBUS";  break;
+        case SIGABRT: name = "SIGABRT"; hasAddr = false; break;
     }
-    const QByteArray path = g_logPath.toLocal8Bit();
-    int fd = ::open(path.constData(), O_WRONLY | O_APPEND | O_CREAT, 0644);
-    if (fd >= 0) {
-        const char hdr1[] = "\n==== CRASH: ";
-        writeAll(fd, hdr1, sizeof(hdr1) - 1);
-        writeAll(fd, name, std::strlen(name));
-        writeAll(fd, " ====\n", 6);
-        void *frames[64];
-        int n = backtrace(frames, 64);
-        backtrace_symbols_fd(frames, n, fd);
-        ::close(fd);
+    int fd = g_crashPath[0]
+        ? ::open(g_crashPath, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0644) : -1;
+    const int out = fd >= 0 ? fd : STDERR_FILENO;
+
+    // "==== CRASH: SIGSEGV at 0x10 thread 1234 time 1789000000 ===="
+    LineBuf line;
+    line.add("\n==== CRASH: ");
+    line.add(name);
+    if (info && info->si_code <= 0) {
+        // Sent, not a fault (kill, raise, abort): si_addr holds nothing,
+        // and who sent it is the useful part.
+        line.add(" from pid ");
+        line.addNumber(static_cast<unsigned long long>(info->si_pid), 10);
+    } else if (hasAddr && info) {
+        line.add(" at 0x");
+        line.addNumber(reinterpret_cast<unsigned long long>(info->si_addr), 16);
     }
-    ::signal(sig, SIG_DFL);
+    line.add(" thread ");
+    line.addNumber(static_cast<unsigned long long>(::gettid()), 10);
+    line.add(" time ");
+    line.addNumber(static_cast<unsigned long long>(std::time(nullptr)), 10);
+    line.add(" ====\n");
+    writeAll(out, line.buf, line.n);
+    writeAll(out, g_crashIdent, g_crashIdentLen);
+
+    void *frames[64];
+    const int count = backtrace(frames, 64);
+    backtrace_symbols_fd(frames, count, out);
+    if (fd >= 0) ::close(fd);
+    // SA_RESETHAND put the default action back: this ends the process with
+    // the original signal, and a fault inside the handler cannot loop.
     ::raise(sig);
+}
+
+// The running executable's build id and load base, from its program headers.
+struct ExeInfo {
+    QByteArray buildId;   // hex
+    quintptr   base = 0;
+};
+
+int readExeInfo(dl_phdr_info *info, size_t, void *data)
+{
+    auto *exe = static_cast<ExeInfo *>(data);
+    // The program itself comes first; one call is all this needs.
+    exe->base = info->dlpi_addr;
+    for (int i = 0; i < info->dlpi_phnum; ++i) {
+        const ElfW(Phdr) &ph = info->dlpi_phdr[i];
+        if (ph.p_type != PT_NOTE) continue;
+        const size_t align = ph.p_align >= 8 ? 8 : 4;
+        const auto pad = [align](size_t v) { return (v + align - 1) & ~(align - 1); };
+        const char *p   = reinterpret_cast<const char *>(info->dlpi_addr + ph.p_vaddr);
+        const char *end = p + ph.p_memsz;
+        while (p + sizeof(ElfW(Nhdr)) <= end) {
+            const auto *note = reinterpret_cast<const ElfW(Nhdr) *>(p);
+            const char *noteName = p + sizeof(ElfW(Nhdr));
+            const char *desc     = noteName + pad(note->n_namesz);
+            const char *next     = desc + pad(note->n_descsz);
+            if (next > end) break;
+            if (note->n_type == NT_GNU_BUILD_ID && note->n_namesz == 4
+                && std::memcmp(noteName, "GNU", 4) == 0) {
+                exe->buildId = QByteArray(desc, int(note->n_descsz)).toHex();
+                return 1;
+            }
+            p = next;
+        }
+    }
+    return 1;
+}
+
+ExeInfo exeInfo()
+{
+    static const ExeInfo info = [] {
+        ExeInfo e;
+        dl_iterate_phdr(readExeInfo, &e);
+        return e;
+    }();
+    return info;
 }
 #endif
 
@@ -146,6 +240,63 @@ void crashSignalHandler(int sig)
 
 QString currentLogPath() { return g_logPath; }
 QString logDirectory()   { return g_logDir; }
+
+QString buildId()
+{
+#ifdef Q_OS_UNIX
+    return QString::fromLatin1(exeInfo().buildId);
+#else
+    return {};
+#endif
+}
+
+QString buildIdentity(const QString &appVersion)
+{
+    QString s = QStringLiteral("v%1 %2").arg(appVersion, QStringLiteral(NR_GIT_SHA));
+#ifdef Q_OS_UNIX
+    const ExeInfo exe = exeInfo();
+    s += QStringLiteral(" build-id %1 base 0x%2")
+             .arg(exe.buildId.isEmpty() ? QStringLiteral("none")
+                                        : QString::fromLatin1(exe.buildId))
+             .arg(QString::number(quint64(exe.base), 16));
+#endif
+    return s;
+}
+
+void installCrashHandler(const QString &logPath, const QString &identity)
+{
+#ifdef Q_OS_UNIX
+    const QByteArray path = logPath.toLocal8Bit();
+    const size_t pathLen = std::min(size_t(path.size()), sizeof(g_crashPath) - 1);
+    std::memcpy(g_crashPath, path.constData(), pathLen);
+    g_crashPath[pathLen] = '\0';
+
+    const QByteArray ident = ("binary: " + identity + '\n').toUtf8();
+    g_crashIdentLen = std::min(size_t(ident.size()), sizeof(g_crashIdent));
+    std::memcpy(g_crashIdent, ident.constData(), g_crashIdentLen);
+
+    // backtrace() loads libgcc_s on its first call, which allocates; do that
+    // now rather than inside a handler.
+    void *warm[2];
+    (void)backtrace(warm, 2);
+
+    stack_t ss{};
+    ss.ss_sp    = g_altStack;
+    ss.ss_size  = sizeof(g_altStack);
+    ss.ss_flags = 0;
+    ::sigaltstack(&ss, nullptr);
+
+    struct sigaction sa{};
+    sa.sa_sigaction = crashSignalHandler;
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESETHAND;
+    sigemptyset(&sa.sa_mask);
+    for (int s : {SIGSEGV, SIGBUS, SIGABRT, SIGFPE, SIGILL})
+        ::sigaction(s, &sa, nullptr);
+#else
+    Q_UNUSED(logPath);
+    Q_UNUSED(identity);
+#endif
+}
 
 QString initialize(const QString &appVersion)
 {
@@ -166,14 +317,12 @@ QString initialize(const QString &appVersion)
 
     qInstallMessageHandler(qtMessageHandler);
 
-    writeLogLine(QString("==== session start (v%1, pid %2) ====")
-                     .arg(appVersion)
+    const QString identity = buildIdentity(appVersion);
+    writeLogLine(QString("==== session start (%1, pid %2) ====")
+                     .arg(identity)
                      .arg(QCoreApplication::applicationPid()));
 
-#ifdef Q_OS_UNIX
-    for (int s : {SIGSEGV, SIGABRT, SIGFPE, SIGILL, SIGBUS})
-        ::signal(s, crashSignalHandler);
-#endif
+    installCrashHandler(g_logPath, identity);
 
     return g_logPath;
 }

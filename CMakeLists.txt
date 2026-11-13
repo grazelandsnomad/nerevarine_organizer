@@ -1,6 +1,15 @@
 cmake_minimum_required(VERSION 3.16)
 project(NerevarineOrganizer VERSION 0.73 LANGUAGES CXX)
 
+# A build configured without a type gets RelWithDebInfo: optimised, with line
+# tables, so the frames of a crash block in the log resolve to file:line
+# (addr2line -e <binary> <address - base>). Without a type the dev binary was
+# -O0 with no debug info, and a crash named a function at best. CI and the
+# release scripts name their build type explicitly.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
+endif()
+
 # C++23 covers everything actually used here (std::expected, std::println).
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -48,6 +57,19 @@ add_custom_command(
 )
 add_custom_target(translation_keys_header
     DEPENDS ${TRANSLATION_ENUM_HEADER}
+)
+
+# -- Build identity ---------------------------------------------------
+# <build>/generated/build_info.h: the git commit this binary is built from,
+# for the log's session line and crash blocks (logging.cpp). Re-run on every
+# build; the script rewrites the header only when the commit changes.
+set(BUILD_INFO_HEADER ${CMAKE_BINARY_DIR}/generated/build_info.h)
+add_custom_target(build_info_header
+    COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR} -DOUT=${BUILD_INFO_HEADER}
+            -P ${CMAKE_SOURCE_DIR}/cmake/build_info.cmake
+    BYPRODUCTS ${BUILD_INFO_HEADER}
+    COMMENT "Recording the git commit in build_info.h"
+    VERBATIM
 )
 
 # Optional: qt6keychain for secure API-key storage (libsecret / KWallet /
@@ -337,7 +359,7 @@ target_include_directories(nerevarine_core PUBLIC
     include
     ${CMAKE_BINARY_DIR}/generated
 )
-add_dependencies(nerevarine_core translation_keys_header)
+add_dependencies(nerevarine_core translation_keys_header build_info_header)
 target_link_libraries(nerevarine_core PUBLIC
     Qt6::Core
     Qt6::Widgets
@@ -347,6 +369,11 @@ target_link_libraries(nerevarine_core PUBLIC
 
 add_executable(nerevarine_organizer main.cpp resources.qrc)
 nrv_warnings(nerevarine_organizer)
+# The line tables a RelWithDebInfo build carries take the binary from 16 to
+# 135 MB; zlib-compressed at link time they cost a third of that, and
+# addr2line and gdb read them as they are.
+target_link_options(nerevarine_organizer PRIVATE
+    $<$<CONFIG:RelWithDebInfo>:-Wl,--compress-debug-sections=zlib>)
 target_link_libraries(nerevarine_organizer PRIVATE nerevarine_core)
 
 # Single-source the app version: main.cpp reads NR_APP_VERSION instead of

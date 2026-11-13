@@ -11,7 +11,10 @@ R='\033[0m'
 cd "$(dirname "$(readlink -f "$0")")"
 
 echo -e "${G}-- Configuring ---${R}"
-cmake -S . -B build
+# RelWithDebInfo by name, not just CMake's default for an untyped build:
+# scripts/release-smoke.sh configures build/ as Release, and a cached type
+# beats the default. Line tables are what make a crash block readable.
+cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
 
 echo ""
 echo -e "${G}-- Building ---${R}"
