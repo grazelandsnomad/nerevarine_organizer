@@ -40,7 +40,7 @@ void ModListView::setModel(QAbstractItemModel *model)
         if (!m_dropAnnounced) { m_dropAnnounced = true; emit aboutToReorderRows(); }
     });
     connect(m_model, &QAbstractItemModel::rowsMoved, this, [this] {
-        if (!m_inDrop) emit rowsReordered();
+        if (!m_inDrop) emit rowsReordered({});
         else m_dropMoved = true;
     });
     // A reset forgets the view's hidden rows; an insert may bring a hidden one.
@@ -178,6 +178,38 @@ QList<ModRow> ModListView::moveRowsTo(QList<int> rows, int insertAt)
     return moved;
 }
 
+QList<int> ModListView::visibleSelectedRows() const
+{
+    // QListView::selectedIndexes() leaves hidden rows out, unlike the
+    // selection model's: a row folded away under a collapsed separator is
+    // not part of what the user is dragging.
+    QList<int> rows;
+    for (const QModelIndex &idx : selectedIndexes()) rows.append(idx.row());
+    std::sort(rows.begin(), rows.end());
+    rows.erase(std::unique(rows.begin(), rows.end()), rows.end());
+    return rows;
+}
+
+QList<ModRow> ModListView::dropSelectionOnSeparator(int sepRow)
+{
+    if (!m_model || sepRow < 0 || sepRow >= m_model->count()
+        || !m_model->at(sepRow).isSeparator())
+        return {};
+    // Mods only: a separator in the selection is a section header, and moving
+    // the header alone would hand its mods to the section above.
+    QList<int> rows = visibleSelectedRows();
+    rows.removeIf([this](int r) { return !m_model->at(r).isMod(); });
+    if (rows.isEmpty()) return {};
+    // The block lands right under the header, counted in the list without
+    // the rows that are moving.
+    int insertAt = sepRow + 1;
+    for (int r : rows) if (r < sepRow) --insertAt;
+    emit aboutToReorderRows();
+    const QList<ModRow> moved = moveRowsTo(rows, insertAt);
+    emit rowsReordered(moved);
+    return moved;
+}
+
 ModEntry ModListView::takeItem(int row) { return m_model ? m_model->takeAt(row) : ModEntry(); }
 
 void ModListView::removeRow(int row) { if (m_model) m_model->removeAt(row); }
@@ -240,20 +272,17 @@ void ModListView::dropEvent(QDropEvent *event)
         && m_model->at(target.row()).isSeparator()) {
         // Dropped onto a section header: the selection joins that section,
         // right under the header, in its own top-to-bottom order.
-        int sepRow = target.row();
-        QList<int> rows;
-        for (const QModelIndex &idx : selectionModel()->selectedIndexes())
-            if (idx.row() != sepRow) rows.append(idx.row());
-        if (rows.isEmpty()) { event->ignore(); return; }
-        std::sort(rows.begin(), rows.end());
-        // The block lands right under the header, counted in the list
-        // without the rows that are moving.
-        int insertAt = sepRow + 1;
-        for (int r : rows) if (r < sepRow) --insertAt;
-        emit aboutToReorderRows();
-        moveRowsTo(rows, insertAt);
-        emit rowsReordered();
+        if (dropSelectionOnSeparator(target.row()).isEmpty()) { event->ignore(); return; }
         event->acceptProposedAction();
+        // Then QListView sees the drop, already accepted. That is the one
+        // place Qt learns a subclass moved the rows itself (it sets
+        // dropEventMoved; 6.4 and 6.12 alike); it skips its own move and
+        // resets the drag state. Skipped, QAbstractItemView::startDrag reads
+        // the MoveAction as unhandled once QDrag::exec returns and removes
+        // the current selection - which follows the moved rows, so it deleted
+        // exactly the mods just dropped, and the next save made it stick
+        // (GitHub issue #3).
+        QListView::dropEvent(event);
         return;
     }
     // A drag between rows: Qt calls moveRow once per selected row. Report
@@ -264,5 +293,10 @@ void ModListView::dropEvent(QDropEvent *event)
     m_dropMoved = false;
     QListView::dropEvent(event);
     m_inDrop = false;
-    if (m_dropMoved) emit rowsReordered();
+    if (m_dropMoved) {
+        // Qt moved the visible selection and the selection followed it.
+        QList<ModRow> moved;
+        for (int r : visibleSelectedRows()) moved.append(item(r));
+        emit rowsReordered(moved);
+    }
 }

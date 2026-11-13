@@ -1804,7 +1804,7 @@ void MainWindow::onMoveUp()
     if (row <= 0) return;
     dropViewSortKeepingOrder();   // a manual move commits the current display as saved order
     m_undoStack->pushUndo();
-    m_modList->moveRowsTo({row}, row - 1);
+    revealMovedRows(m_modList->moveRowsTo({row}, row - 1));
     m_modList->setCurrentRow(row - 1);
     scheduleSaveModList();   // debounced - hold Alt+↑ rapid-fires moves
 }
@@ -1815,7 +1815,7 @@ void MainWindow::onMoveDown()
     if (row < 0 || row >= m_modList->count() - 1) return;
     dropViewSortKeepingOrder();   // a manual move commits the current display as saved order
     m_undoStack->pushUndo();
-    m_modList->moveRowsTo({row}, row + 1);
+    revealMovedRows(m_modList->moveRowsTo({row}, row + 1));
     m_modList->setCurrentRow(row + 1);
     scheduleSaveModList();   // debounced - hold Alt+↓ rapid-fires moves
 }

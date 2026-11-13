@@ -381,6 +381,10 @@ private:
     void checkNxmHandlerRegistration();
     void checkDesktopShortcut();
     void collapseSection(ModRow sep, bool collapse);
+    // A row the user just moved stays in view: a collapsed section it landed
+    // in opens. Hidden rows keep their flag when they move, so without this a
+    // mod moved under a "+" header looks fine until the next load hides it.
+    void revealMovedRows(const QList<ModRow> &rows);
     void onEditSeparator(ModRow item);
 
     // (installLocalArchive is public: so the inline ModListWidget drop handler

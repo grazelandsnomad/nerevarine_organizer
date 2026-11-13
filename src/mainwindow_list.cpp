@@ -263,6 +263,19 @@ void MainWindow::collapseSection(ModRow sep, bool collapse)
     updateModCount();
 }
 
+void MainWindow::revealMovedRows(const QList<ModRow> &rows)
+{
+    for (const ModRow &r : rows) {
+        if (!mod_row::isMod(r)) continue;
+        for (int i = m_modList->row(r) - 1; i >= 0; --i) {
+            ModRow it = m_modList->item(i);
+            if (!mod_row::isSeparator(it)) continue;
+            if (it->data(ModRole::Collapsed).toBool()) collapseSection(it, false);
+            break;
+        }
+    }
+}
+
 void MainWindow::onEditSeparator(ModRow item)
 {
     SeparatorDialog dlg(this);
@@ -830,6 +843,7 @@ void MainWindow::sendSelectedToSeparator(ModRow sep)
     for (const ModRow &it : picked) m_modList->setRowSelected(it, true);
     if (!picked.isEmpty())
         m_modList->setCurrentItem(picked.first(), QItemSelectionModel::NoUpdate);
+    revealMovedRows(picked);
 
     saveModList();
     scheduleConflictScan();

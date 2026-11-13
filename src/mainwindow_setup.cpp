@@ -675,6 +675,8 @@ void MainWindow::setupToolbar()
     connect(&m_model, &QAbstractItemModel::modelReset,   this, &MainWindow::scheduleCheckButtonRefresh);
     connect(&m_model, &QAbstractItemModel::rowsInserted, this, &MainWindow::scheduleCheckButtonRefresh);
     connect(&m_model, &QAbstractItemModel::rowsRemoved,  this, &MainWindow::scheduleCheckButtonRefresh);
+    // The status bar's "N / M mods active" too: a removal changes M.
+    connect(&m_model, &QAbstractItemModel::rowsRemoved,  this, [this] { updateModCount(); });
 
     // Register every customizable toolbar entry so the "Customize toolbar…"
     // dialog can show and persist a checkbox per item.  The game selector
@@ -960,10 +962,11 @@ void MainWindow::setupCentralWidget()
     const auto beforeReorder = [this]() {
         if (!m_undoStack->isApplyingState()) m_undoStack->pushUndo();
     };
-    const auto afterReorder = [this]() {
+    const auto afterReorder = [this](const QList<ModRow> &moved) {
         // A drag-drop reorder commits the current display as the saved order,
         // ending any temporary view sort.
         dropViewSortKeepingOrder();
+        revealMovedRows(moved);
         // Debounced - a multi-row drag fires N rowsMoved signals; coalescing
         // them into one saveModList avoids N redundant writes on the save queue.
         scheduleSaveModList();

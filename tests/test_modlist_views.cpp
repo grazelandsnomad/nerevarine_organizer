@@ -389,6 +389,70 @@ void testSizeOrderKeepsSeparatorsAsDividers()
           && modlist_sort::orderByDate({}, true).isEmpty());
 }
 
+// A selection dropped onto a separator (GitHub issue #3). The view's drop
+// handler hands the accepted drop on to QListView so Qt knows the rows moved;
+// without that, QAbstractItemView::startDrag removed the selection after the
+// drag - the very mods just dropped. A synthesized QDropEvent cannot reach
+// that branch (source() needs a live QDrag), so the move itself is tested
+// here and the real drag is checked under Xvfb.
+void testDropOnSeparatorMovesAndKeepsEveryRow()
+{
+    std::cout << "\n[a selection dropped onto a separator]\n";
+    ModlistModel m;
+    ModListView view;
+    view.setModel(&m);
+    view.setSelectionMode(QAbstractItemView::ExtendedSelection);
+    const auto names = [&] {
+        QStringList out;
+        for (int i = 0; i < m.count(); ++i) out << m.at(i).displayName;
+        return out.join(QLatin1Char(' '));
+    };
+    view.addItem(mkSep(QStringLiteral("S1")));
+    const ModRow a = view.addItem(mkMod(QStringLiteral("A")));
+    const ModRow h = view.addItem(mkMod(QStringLiteral("H")));
+    view.addItem(mkMod(QStringLiteral("B")));
+    view.addItem(mkSep(QStringLiteral("S2")));
+    const ModRow c = view.addItem(mkMod(QStringLiteral("C")));   // S1 A H B S2 C
+    m.setHidden(2, true);                                         // H folded away
+
+    int before = 0, after = 0;
+    QList<ModRow> reported;
+    QObject::connect(&view, &ModListView::aboutToReorderRows, &view, [&] { ++before; });
+    QObject::connect(&view, &ModListView::rowsReordered, &view,
+                     [&](const QList<ModRow> &moved) { ++after; reported = moved; });
+
+    view.setRowSelected(view.item(0), true);   // a separator
+    view.setRowSelected(a, true);
+    view.setRowSelected(h, true);              // hidden
+    const QList<ModRow> moved = view.dropSelectionOnSeparator(4);
+    check("only the visible selected mod moves, right under the header",
+          names() == QStringLiteral("S1 H B S2 A C"), names());
+    check("no row is lost", m.count() == 6);
+    check("the hidden row stays hidden where it was", m.at(1).hidden && view.isRowHidden(1));
+    check("one reorder is reported, naming the moved row",
+          before == 1 && after == 1 && reported.size() == 1 && reported.first() == a
+          && moved == reported,
+          QStringLiteral("%1/%2/%3").arg(before).arg(after).arg(reported.size()));
+    check("the moved row is still selected",
+          view.selectionModel()->isSelected(view.indexFromItem(a)));
+
+    view.clearSelection();
+    view.setRowSelected(c, true);
+    view.dropSelectionOnSeparator(0);
+    check("a row from below lands under a header above it",
+          names() == QStringLiteral("S1 C H B S2 A"), names());
+
+    view.clearSelection();
+    view.setRowSelected(view.item(4), true);   // only a separator
+    view.setRowSelected(h, true);              // and a hidden mod
+    before = after = 0;
+    check("nothing movable selected: nothing moves, nothing is reported",
+          view.dropSelectionOnSeparator(0).isEmpty() && before == 0 && after == 0
+          && names() == QStringLiteral("S1 C H B S2 A"));
+    check("and a target that is not a separator is refused",
+          view.dropSelectionOnSeparator(1).isEmpty() && m.count() == 6);
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -402,6 +466,7 @@ int main(int argc, char **argv)
     testDependencySnapshotKeepsRowIndicesAndSections();
     testDateOrderSendsSeparatorsAndDatelessToTheEnd();
     testSizeOrderKeepsSeparatorsAsDividers();
+    testDropOnSeparatorMovesAndKeepsEveryRow();
 
     std::cout << "\n" << s_passed << " passed, " << s_failed << " failed\n";
     return s_failed == 0 ? 0 : 1;
