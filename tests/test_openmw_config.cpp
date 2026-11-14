@@ -645,6 +645,29 @@ static void testPreambleBsaDuplicateDropped()
           count == 1);
 }
 
+// Unticking a BSA-packed mod has to unregister its archive too, or its packed
+// textures keep loading and the checkbox looks broken (GitHub issue #2). The
+// recording loop used to sit below the enabled gate, so a disabled mod never
+// reached it and a preamble line for its BSA was kept.
+static void testDisabledModBsaScrubbedFromPreamble()
+{
+    std::cout << "testDisabledModBsaScrubbedFromPreamble\n";
+
+    const QString existing =
+        "fallback-archive=Morrowind.bsa\n"
+        "fallback-archive=Authentic Signs IT.bsa\n";
+
+    ConfigMod m = plugin("/mods/AS", {"AS.esp"}, /*enabled=*/false);
+    m.bsaFiles = {"Authentic Signs IT.bsa"};
+
+    const QString out = renderOpenMWConfig({m}, {"AS.esp"}, existing);
+
+    check("the unticked mod's BSA is gone from the preamble",
+          !out.contains("fallback-archive=Authentic Signs IT.bsa"), out);
+    check("and the game's own BSA is left alone",
+          out.contains("fallback-archive=Morrowind.bsa"));
+}
+
 static void testBsaIdempotent()
 {
     std::cout << "testBsaIdempotent\n";
@@ -796,6 +819,7 @@ static void run_config_writer()
     testDisabledModBsaNotEmitted();
     testVanillaFallbackArchivePreserved();
     testPreambleBsaDuplicateDropped();
+    testDisabledModBsaScrubbedFromPreamble();
     testBsaIdempotent();
     testParseConfigEntries_basic();
     testParseConfigEntries_emptyAndComments();
@@ -1226,6 +1250,58 @@ void testOrphanContentScrubbed()
           out.effectiveLoadOrder == QStringList{"MyMod.esp"});
 }
 
+// The Launcher promotes managed data= lines into the preamble (the code says
+// so in two places). Left there, an unticked mod kept loading from outside the
+// managed block and only removing the row helped - GitHub issue #2.
+void testDisabledModExternalDataScrubbed()
+{
+    std::cout << "\n[data= outside the managed block for an unticked mod → dropped]\n";
+    QTemporaryDir tmp;
+    QVERIFY_EXIT(tmp.isValid(), 1);
+    const QString modsRoot = tmp.path() + "/mods";
+    const QString offPath  = modsRoot + "/TurnedOff";
+    const QString onPath   = modsRoot + "/StillOn";
+    writePlugin(offPath, "TurnedOff.esp");
+    writePlugin(onPath,  "StillOn.esp");
+
+    openmw::SyncPrepareInputs in;
+    in.modsRoot         = modsRoot;
+    in.managedModPaths  = { QDir::cleanPath(offPath), QDir::cleanPath(onPath) };
+    in.disabledModPaths = { QDir::cleanPath(offPath) };
+    in.mods             = { modWith(offPath, {"TurnedOff.esp"}, /*enabled=*/false),
+                            modWith(onPath,  {"StillOn.esp"}) };
+    in.loadOrder        = { "TurnedOff.esp", "StillOn.esp" };
+    // Both promoted into the preamble, as the Launcher leaves them.
+    in.existingCfg      =
+        "data=\"" + offPath + "\"\n"
+        "data=\"" + onPath  + "\"\n"
+        "content=TurnedOff.esp\n"
+        "content=StillOn.esp\n";
+
+    auto out = openmw::prepareForSync(in);
+
+    check("the unticked mod's data= line is dropped",
+          !out.scrubbedExisting.contains(offPath), out.scrubbedExisting);
+    check("its content= line goes with it",
+          !out.scrubbedExisting.contains("content=TurnedOff.esp"));
+    check("the ticked mod keeps both of its lines",
+          out.scrubbedExisting.contains(onPath)
+          && out.scrubbedExisting.contains("content=StillOn.esp"));
+    check("its place in the load order is kept, for when it is ticked again",
+          out.persistLoadOrder == QStringList({"TurnedOff.esp", "StillOn.esp"}),
+          out.persistLoadOrder.join(QStringLiteral(", ")));
+    check("dropping it is not reported as an orphan - it is simply off",
+          out.droppedOrphans == 0, QString::number(out.droppedOrphans));
+
+    // End to end: the file the game reads must not load it either.
+    const QString cfg = openmw::renderOpenMWConfig(out.mods, out.effectiveLoadOrder,
+                                                   out.scrubbedExisting);
+    check("the written config does not load the unticked mod",
+          !cfg.contains("content=TurnedOff.esp") && !cfg.contains(offPath), cfg);
+    check("and still loads the ticked one",
+          cfg.contains("content=StillOn.esp") && cfg.contains(onPath));
+}
+
 void testRecasedContentIsNotAnOrphan()
 {
     std::cout << "\n[content= in another case is the provided plugin, not an orphan]\n";
@@ -1567,6 +1643,7 @@ static void run_sync_prep()
 {
     std::cout << "=== openmw::prepareForSync ===\n";
     testOrphanContentScrubbed();
+    testDisabledModExternalDataScrubbed();
     testOrphanDataPathScrubbed();
     testRecasedContentIsNotAnOrphan();
     testOrphanRescuePreservesPluginsOnDisk();

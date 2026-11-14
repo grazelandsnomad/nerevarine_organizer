@@ -133,10 +133,19 @@ SyncPrepareResult prepareForSync(const SyncPrepareInputs &in)
 
     // Build providedPlugins, then drop content= lines no data= dir provides,
     // else OpenMW aborts: "Failed loading X.esp: the content file does not exist".
+    // providedPlugins: any installed mod we manage, ticked or not, so an
+    // unticked mod keeps its plugins' places in the load order and gets them
+    // back when it is ticked again. enabledProvided is the subset the game is
+    // actually allowed to load; a content= line only the unticked half
+    // provides is dropped below, quietly - it is not an orphan, it is off.
     QSet<QString> providedPlugins;
+    QSet<QString> enabledProvided;
     for (const auto &cm : out.mods) {
         for (const auto &p : cm.pluginDirs)
-            for (const QString &cf : p.second) providedPlugins.insert(cf);
+            for (const QString &cf : p.second) {
+                providedPlugins.insert(cf);
+                if (cm.enabled) enabledProvided.insert(cf);
+            }
     }
     auto isOrphanedManagedPath = [&](const QString &rawPath) -> bool {
         if (modsRootForRescue.isEmpty()) return false;
@@ -144,6 +153,10 @@ SyncPrepareResult prepareForSync(const SyncPrepareInputs &in)
         if (p != modsRootForRescue
             && !p.startsWith(modsRootForRescue + "/")) return false;
         if (rescuedManagedPaths.contains(p)) return false;
+        // Ours and unticked: an external data= line for it is stale by the
+        // user's own decision, so it goes with the rest of the mod.
+        for (const QString &mp : in.disabledModPaths)
+            if (p == mp || p.startsWith(mp + "/")) return true;
         for (const QString &mp : in.managedModPaths)
             if (p == mp || p.startsWith(mp + "/")) return false;
         return true;
@@ -164,8 +177,13 @@ SyncPrepareResult prepareForSync(const SyncPrepareInputs &in)
             if (!d.exists()) continue;
             QStringList filters;
             for (const QString &ext : contentExts) filters << "*" + ext;
-            for (const QString &f : d.entryList(filters, QDir::Files))
+            for (const QString &f : d.entryList(filters, QDir::Files)) {
                 providedPlugins.insert(f);
+                // This data= line survives the scrub, so whatever it holds is
+                // loadable: a rescued folder whose row is gone, the game's own
+                // Data Files, anything the user added by hand.
+                enabledProvided.insert(f);
+            }
         }
     }
 
@@ -224,6 +242,9 @@ SyncPrepareResult prepareForSync(const SyncPrepareInputs &in)
     QSet<QString> providedFolded;
     for (const QString &cf : std::as_const(providedPlugins))
         providedFolded.insert(cf.toLower());
+    QSet<QString> enabledFolded;
+    for (const QString &cf : std::as_const(enabledProvided))
+        enabledFolded.insert(cf.toLower());
 
     QStringList scrubbedLines;
     for (QString line : existing.split('\n')) {
@@ -236,10 +257,14 @@ SyncPrepareResult prepareForSync(const SyncPrepareInputs &in)
             if (isOrphanedManagedPath(path)) continue;
         }
         if (probe.startsWith(QStringLiteral("content="))) {
-            if (!providedFolded.contains(probe.mid(8).toLower())) {
+            const QString cf = probe.mid(8).toLower();
+            if (!providedFolded.contains(cf)) {
                 ++out.droppedOrphans;
                 continue;
             }
+            // Ours, but its mod is unticked: the data= line is going too, and
+            // a content= without one makes OpenMW refuse to start.
+            if (!enabledFolded.contains(cf)) continue;
         }
         if (probe.startsWith(QStringLiteral("groundcover="))) {
             if (!providedFolded.contains(probe.mid(12).toLower())) continue;
@@ -340,6 +365,12 @@ QString renderOpenMWConfig(const QList<ConfigMod> &mods,
                     allManagedContent.insert(folded(cf));
             }
 
+        // Record BSAs for every installed mod, enabled or not, so Pass 2 drops
+        // a stale preamble fallback-archive= when a mod is unticked. This used
+        // to sit below the gate, where a disabled mod never reached it, and its
+        // packed textures kept loading (GitHub issue #2).
+        for (const QString &b : m.bsaFiles) allManagedArchives.insert(b);
+
         if (!m.enabled) continue;
 
         if (!m.pluginDirs.isEmpty()) {
@@ -368,11 +399,8 @@ QString renderOpenMWConfig(const QList<ConfigMod> &mods,
                 dataLines << "data=\"" + r + "\"";
         }
 
-        // Record BSAs for every installed mod (so Pass 2 drops stale entries
-        // even from disabled ones), but only emit for enabled - like content=.
+        // Emitted for enabled mods only, like content=; recorded above.
         for (const QString &b : m.bsaFiles) {
-            allManagedArchives.insert(b);
-            if (!m.enabled) continue;
             if (archiveSeen.contains(b)) continue;
             archiveSeen.insert(b);
             archiveOrdered << b;

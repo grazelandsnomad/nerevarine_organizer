@@ -29,6 +29,8 @@
 
 #include <iostream>
 
+#include "mainwindow_internal.h"
+
 #include "test_harness.h"
 
 // === mod_naming ===
@@ -1374,6 +1376,48 @@ static void run_placeholder_state()
     testMarkInstalledKeepsAnUpdatesCheckbox();
 }
 
+// Where a dropped path goes. A folder dropped on the mod list used to match
+// neither predicate and vanish without a word (GitHub issue #2); the list
+// accepts any local path, so the "matched nothing" case has to be visible.
+static void run_drop_routing()
+{
+    std::cout << "\n=== drop routing ===\n";
+    QTemporaryDir tmp;
+    if (!tmp.isValid()) { check("temp dir", false); return; }
+    const QDir root(tmp.path());
+    const auto make = [&](const QString &name) {
+        QFile f(root.filePath(name));
+        if (f.open(QIODevice::WriteOnly)) { f.write("x"); f.close(); }
+        return root.filePath(name);
+    };
+    const QString folder = root.filePath(QStringLiteral("A Mod Folder"));
+    QDir().mkpath(folder);
+    const QString zipDir = root.filePath(QStringLiteral("Trap.zip"));
+    QDir().mkpath(zipDir);                       // a folder that looks like an archive
+    const QString zip   = make(QStringLiteral("mod.zip"));
+    const QString seven = make(QStringLiteral("mod.7z"));
+    const QString wj    = make(QStringLiteral("list.wabbajack"));
+    const QString txt   = make(QStringLiteral("modlist.txt"));
+    const QString esp   = make(QStringLiteral("loose.esp"));
+    const QString img   = make(QStringLiteral("screenshot.png"));
+
+    const DroppedPaths r = routeDroppedPaths(
+        {folder, zipDir, zip, seven, wj, txt, esp, img});
+
+    check("a folder is registered as a mod",
+          r.folders == QStringList({folder, zipDir}), r.folders.join(", "));
+    check("archives are installed",
+          r.archives == QStringList({zip, seven}), r.archives.join(", "));
+    check("modlists are imported",
+          r.imports == QStringList({wj, txt}), r.imports.join(", "));
+    check("anything else is reported, never dropped on the floor",
+          r.ignored == QStringList({esp, img}), r.ignored.join(", "));
+    check("nothing is lost or counted twice",
+          r.folders.size() + r.archives.size() + r.imports.size()
+              + r.ignored.size() == 8);
+    check("an empty drop routes nowhere", routeDroppedPaths({}).folders.isEmpty());
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -1393,6 +1437,8 @@ int main(int argc, char **argv)
     run_mod_row();
     std::cout << "\n=== row_caption ===\n";
     testRowCaptionPrecedence();
+
+    run_drop_routing();
 
     std::cout << "\n"
               << s_passed << " passed, "

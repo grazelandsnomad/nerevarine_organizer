@@ -114,6 +114,11 @@ struct SyncPrepareInputs {
     QString          launcherCfgText;    // launcher.cfg text (empty = absent)
     QList<ConfigMod> mods;               // built from modlist UI state
     QSet<QString>    managedModPaths;    // paths Nerevarine manages
+    // Of those, the ones the user has unticked. A data= line for one of them
+    // outside the managed block is ours to remove: the Launcher promotes our
+    // lines into the preamble, and left there an unticked mod kept loading,
+    // so only removing the row appeared to work (GitHub issue #2).
+    QSet<QString>    disabledModPaths;
     QString          modsRoot;           // m_modsDir, QDir::cleanPath'd
     QStringList      loadOrder;          // current managed load order
 };

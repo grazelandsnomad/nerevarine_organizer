@@ -395,7 +395,14 @@ private:
     // "Send to -> Top / Bottom".
     void sendSelectedToEdge(bool toBeginning);
     void updateModCount() override;
-    void addModFromPath(const QString &dirPath, ModRow placeholder = nullptr);
+    // adoptInPlace: the folder is already on disk and replaces nothing (a
+    // dropped folder, an imported openmw.cfg data path), so the same-name
+    // sibling cleanup - which exists for a re-downloaded archive landing
+    // beside its own older copy - must stay out of it.
+    void addModFromPath(const QString &dirPath, ModRow placeholder = nullptr,
+                        bool adoptInPlace = false);
+    // A folder dropped on the window or the list becomes a row where it lies.
+    void registerDroppedFolder(const QString &dirPath);
     void purgeDuplicatePlaceholders(ModRow installed);
 
     // Optional prompts addModFromPath fires once a mod is registered. Each is

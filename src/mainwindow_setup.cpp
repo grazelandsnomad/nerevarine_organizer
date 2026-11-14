@@ -148,11 +148,19 @@ static QString locateOpenMWBinary(const QString &profileHint) ;
 
 void MainWindow::onLocalFilesDropped(const QStringList &paths)
 {
-    // Archives first, then lists, the way the old drop handler queued them.
-    for (const QString &p : paths)
-        if (isInstallableArchiveSuffix(p)) installLocalArchive(p);
-    for (const QString &p : paths)
-        if (isImportFileSuffix(p)) m_importFlow->handleDroppedImportFile(p);
+    // Archives first, then lists, the way the old drop handler queued them,
+    // then folders. The list accepts any local path (modlistview.cpp), so
+    // anything these three miss used to vanish without a word - a folder
+    // dropped on the list looked accepted and did nothing (GitHub issue #2).
+    const DroppedPaths routed = routeDroppedPaths(paths);
+    for (const QString &p : routed.archives) installLocalArchive(p);
+    for (const QString &p : routed.imports)  m_importFlow->handleDroppedImportFile(p);
+    for (const QString &p : routed.folders)  registerDroppedFolder(p);
+    if (!routed.ignored.isEmpty()) {
+        QStringList names;
+        for (const QString &p : routed.ignored) names << QFileInfo(p).fileName();
+        statusBar()->showMessage(T("status_drop_unsupported").arg(names.join(", ")), 6000);
+    }
 }
 
 void MainWindow::onWebLinksDropped(const QStringList &urls)

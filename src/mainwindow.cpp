@@ -214,7 +214,33 @@ void MainWindow::repaintList()
     if (m_modList && m_modList->viewport()) m_modList->viewport()->update();
 }
 
-void MainWindow::installFolderAsMod(const QString &dirPath) { addModFromPath(dirPath, nullptr); }
+// Adoption, not installation: the folder is already on disk and replaces
+// nothing, so addModFromPath must not treat same-named neighbours as leftovers
+// of an earlier download of it.
+void MainWindow::installFolderAsMod(const QString &dirPath)
+{
+    addModFromPath(dirPath, nullptr, /*adoptInPlace=*/true);
+}
+
+// A folder dropped on the window or the list. Registered where it lies, the
+// way Mods > Add Mod Folder does it: a drop should never start copying
+// gigabytes the user did not ask to move, and Mods > Consolidate exists for
+// pulling strays into the library afterwards.
+void MainWindow::registerDroppedFolder(const QString &dirPath)
+{
+    const QFileInfo fi(dirPath);
+    if (!fi.isDir()) return;
+    for (const ModEntry &e : m_model.all()) {
+        if (!e.isMod() || e.modPath.isEmpty()) continue;
+        if (QDir::cleanPath(e.modPath) == QDir::cleanPath(fi.absoluteFilePath())) {
+            statusBar()->showMessage(T("status_folder_already_listed").arg(fi.fileName()), 4000);
+            return;
+        }
+    }
+    m_undoStack->pushUndo();
+    installFolderAsMod(fi.absoluteFilePath());
+    statusBar()->showMessage(T("status_mod_added").arg(fi.fileName()), 4000);
+}
 
 bool MainWindow::downloadsIdle() const { return !m_downloadQueue || m_downloadQueue->isEmpty(); }
 
@@ -2518,6 +2544,21 @@ bool isImportFileSuffix(const QString &path)
         || suf == QLatin1String("txt");
 }
 
+DroppedPaths routeDroppedPaths(const QStringList &paths)
+{
+    DroppedPaths out;
+    for (const QString &p : paths) {
+        const QFileInfo fi(p);
+        // Asked before the suffixes: a folder named "Something.zip" is still a
+        // folder, and the extractor refuses it.
+        if (fi.isDir())                        out.folders  << p;
+        else if (isInstallableArchiveSuffix(p)) out.archives << p;
+        else if (isImportFileSuffix(p))         out.imports  << p;
+        else                                    out.ignored  << p;
+    }
+    return out;
+}
+
 void MainWindow::dragEnterEvent(QDragEnterEvent *event)
 {
     if (!event->mimeData()->hasUrls()) return;
@@ -2531,7 +2572,10 @@ void MainWindow::dragEnterEvent(QDragEnterEvent *event)
             continue;
         }
         const QString local = u.toLocalFile();
-        if (isInstallableArchiveSuffix(local) || isImportFileSuffix(local)) {
+        // A folder is a mod as it stands: registered where it lies, like
+        // Mods > Add Mod Folder. Asked for in GitHub issue #2.
+        if (QFileInfo(local).isDir() || isInstallableArchiveSuffix(local)
+            || isImportFileSuffix(local)) {
             event->acceptProposedAction();
             return;
         }
@@ -2557,20 +2601,16 @@ void MainWindow::dropEvent(QDropEvent *event)
     // Defer via QueuedConnection so the drop fully completes, the list
     // widget restores its internal state, and THEN the install pipeline
     // runs on the next event-loop tick.
-    QStringList toInstall;
-    QStringList toImport;
+    QStringList locals;
     QStringList toLink;
     for (const QUrl &u : event->mimeData()->urls()) {
-        if (!u.isLocalFile()) {
-            if (creations::parseCreationUrl(u.toString())) toLink << u.toString();
-            continue;
-        }
-        QString local = u.toLocalFile();
-        if (isInstallableArchiveSuffix(local))
-            toInstall << local;
-        else if (isImportFileSuffix(local))
-            toImport << local;
+        if (u.isLocalFile()) { locals << u.toLocalFile(); continue; }
+        if (creations::parseCreationUrl(u.toString())) toLink << u.toString();
     }
+    const DroppedPaths routed = routeDroppedPaths(locals);
+    const QStringList &toInstall  = routed.archives;
+    const QStringList &toImport   = routed.imports;
+    const QStringList &toRegister = routed.folders;
     event->acceptProposedAction();
 
     QPointer<MainWindow> self(this);
@@ -2589,6 +2629,12 @@ void MainWindow::dropEvent(QDropEvent *event)
     for (const QString &u : toLink) {
         QMetaObject::invokeMethod(this, [self, u]{
             if (self) self->addCreationRow(u);
+        }, Qt::QueuedConnection);
+    }
+    if (!toRegister.isEmpty()) {
+        QMetaObject::invokeMethod(this, [self, toRegister]{
+            if (!self) return;
+            for (const QString &p : toRegister) self->registerDroppedFolder(p);
         }, Qt::QueuedConnection);
     }
 }

@@ -813,7 +813,8 @@ void MainWindow::onInstallFromNexus(ModRow item)
     checkModDependencies(game, modId, item);
 }
 
-void MainWindow::addModFromPath(const QString &dirPath, ModRow placeholder)
+void MainWindow::addModFromPath(const QString &dirPath, ModRow placeholder,
+                                bool adoptInPlace)
 {
     QElapsedTimer addTimer;
     addTimer.start();
@@ -924,7 +925,10 @@ void MainWindow::addModFromPath(const QString &dirPath, ModRow placeholder)
         const QString parentDir = newInfo.absolutePath();
         const QString cleanMods = m_modsDir.isEmpty()
             ? QString() : QDir::cleanPath(m_modsDir);
-        if (!cleanMods.isEmpty()
+        // Adoption never replaces anything: the folder was already there, so
+        // a neighbour sharing its name is a separate mod, not the leftovers of
+        // an earlier download of this one.
+        if (!adoptInPlace && !cleanMods.isEmpty()
             && QDir::cleanPath(parentDir) == cleanMods)
         {
             QDir parent(parentDir);

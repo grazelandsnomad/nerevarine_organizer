@@ -1150,6 +1150,7 @@ void MainWindow::syncOpenMWConfig()
     // data= lines - paths still under m_modsDir but no longer matching a managed
     // mod (mod removed, or launcher promoted a pre-upgrade data= into preamble).
     QSet<QString> managedModPaths;
+    QSet<QString> disabledModPaths;   // installed, but unticked right now
     // Display names of all currently-installed mods.  Used by the patch-skip
     // filter a few lines below so that FOMOD-style "01 X for Y" subfolders
     // (e.g. Ashfront's "01 Grass for Remiros' Groundcover") get dropped when
@@ -1205,8 +1206,10 @@ void MainWindow::syncOpenMWConfig()
 
         if (cm.installed) {
             const QString modPath = item->data(ModRole::ModPath).toString();
-            if (!modPath.isEmpty())
+            if (!modPath.isEmpty()) {
                 managedModPaths.insert(QDir::cleanPath(modPath));
+                if (!cm.enabled) disabledModPaths.insert(QDir::cleanPath(modPath));
+            }
             cm.pluginDirs = m_scans->cachedDataFolders(modPath, contentExts);
 
             // Register BSA archives this mod ships as fallback-archive= entries.
@@ -1322,6 +1325,7 @@ void MainWindow::syncOpenMWConfig()
     prep.launcherCfgText  = std::move(launcherCfgText);
     prep.mods             = std::move(mods);
     prep.managedModPaths  = std::move(managedModPaths);
+    prep.disabledModPaths = std::move(disabledModPaths);
     prep.modsRoot         = m_modsDir.isEmpty() ? QString()
                                                 : QDir::cleanPath(m_modsDir);
     prep.loadOrder        = m_loadOrder;

@@ -58,3 +58,16 @@ bool opengothicResolvePaths(QWidget *parent, const QString &gameId,
 bool isInstallableArchiveSuffix(const QString &path);
 bool isImportFileSuffix(const QString &path);
 
+// Where each dropped local path goes. A folder is a mod as it stands; an
+// archive is installed; a .txt/.wabbajack is a modlist to import. Anything
+// else lands in `ignored` and is reported, because the list accepts any local
+// path on a drop and silently discarded whatever these rules missed - a
+// dropped folder looked accepted and did nothing (GitHub issue #2).
+struct DroppedPaths {
+    QStringList folders;
+    QStringList archives;
+    QStringList imports;
+    QStringList ignored;
+};
+DroppedPaths routeDroppedPaths(const QStringList &paths);
+
