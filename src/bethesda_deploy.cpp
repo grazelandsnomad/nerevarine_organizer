@@ -350,6 +350,21 @@ QString sourceFingerprint(const QStringList &mods, const QStringList &loadOrder)
         QCryptographicHash::hash(joined.toUtf8(), QCryptographicHash::Sha1).toHex());
 }
 
+QString existingSpelling(const QString &dir, const QString &name)
+{
+    if (dir.isEmpty() || name.isEmpty()) return {};
+    const QDir      d(dir);
+    const QFileInfo exact(d.filePath(name));
+    if (exact.isFile()) return exact.filePath();
+    if (!d.exists()) return {};
+    // The same name in another case: a Linux disk keeps case, and the game
+    // asks for its files as Windows does, without it.
+    const QStringList names = d.entryList(QDir::Files | QDir::Hidden);
+    for (const QString &n : names)
+        if (n.compare(name, Qt::CaseInsensitive) == 0) return d.filePath(n);
+    return {};
+}
+
 QString missingGameExe(const QString &gameRoot, const QStringList &exeNames)
 {
     const QDir root(gameRoot);
@@ -358,14 +373,7 @@ QString missingGameExe(const QString &gameRoot, const QStringList &exeNames)
         if (rel.isEmpty()) continue;
         if (first.isEmpty()) first = rel;
         const QFileInfo fi(root.filePath(rel));
-        if (fi.isFile()) return {};
-        // The same name in another case: a Linux disk keeps case, and the
-        // game asks for its files as Windows does, without it.
-        const QDir dir = fi.dir();
-        if (!dir.exists()) continue;
-        const QStringList names = dir.entryList(QDir::Files | QDir::Hidden);
-        for (const QString &n : names)
-            if (n.compare(fi.fileName(), Qt::CaseInsensitive) == 0) return {};
+        if (!existingSpelling(fi.path(), fi.fileName()).isEmpty()) return {};
     }
     return first;
 }

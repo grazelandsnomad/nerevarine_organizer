@@ -24,9 +24,16 @@ QString format(const Facts &f)
                 : f.scriptExtender + " [found]") + "\n\n";
     }
 
-    r += "Plugins.txt:\n  " + (f.pluginsTxt.path.isEmpty()
-            ? QStringLiteral("*** NOT RESOLVED - run the game once via Steam so the prefix exists ***")
-            : f.pluginsTxt.path + yn(f.pluginsTxt.exists)) + "\n\n";
+    r += "Plugins.txt:\n  " +
+         (f.pluginsTxt.path.isEmpty()
+              ? QStringLiteral("*** NOT RESOLVED - run the game once via Steam so the "
+                               "prefix exists ***")
+              : f.pluginsTxt.path + yn(f.pluginsTxt.exists)) +
+         "\n";
+    if (!f.pluginsTxtTwin.isEmpty())
+        r += "  *** a second spelling sits beside it, and the game may read that one: " +
+             f.pluginsTxtTwin + " - the next deploy settles on the game's ***\n";
+    r += "\n";
 
     if (f.showContentCatalog) {
         r += "ContentCatalog.txt (the game's Creations downloads):\n  "

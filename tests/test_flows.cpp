@@ -11,8 +11,12 @@
 #include "modentry.h"
 #include "modlist_model.h"
 #include "modroles.h"
+#include "settings.h"
+#include "user_state_paths.h"
 
 #include <QApplication>
+#include <QSettings>
+#include <QStandardPaths>
 #include <QDateTime>
 #include <QEventLoop>
 #include <QTimer>
@@ -404,10 +408,89 @@ void testDeployFlowAdoptsCreationsFromTheGamesDownloads()
     check("an empty plan continues straight away", ran);
 }
 
+// New Vegas keeps its own `plugins.txt`, lower-case, and asks for it the
+// Windows way, without case. The pre-launch re-sync writes the active list
+// into that file rather than making a `Plugins.txt` beside it, and a twin an
+// earlier deploy left behind is dropped in favour of the game's.
+void testDeployFlowWritesThePluginListWhereTheGameSpelledIt()
+{
+    std::cout << "testDeployFlowWritesThePluginListWhereTheGameSpelledIt\n";
+    QSettings().clear();
+    QTemporaryDir tmp;
+    const QString lib  = tmp.path() + "/steamapps";
+    const QString game = lib + "/common/Fallout New Vegas";
+    const QString data = game + "/Data";
+    const QString local =
+        lib + "/compatdata/22380/pfx/drive_c/users/steamuser/AppData/Local/FalloutNV";
+    const QString mods = tmp.path() + "/mods";
+    writeFile(game + "/FalloutNV.exe", "MZ");
+    writeFile(data + "/FalloutNV.esm", "TES4");
+    writeFile(local + "/plugins.txt", "FalloutNV.esm\r\n");
+    writeFile(mods + "/Test/Test.esp", "TES4");
+
+    FakeShell shell;
+    shell.gameId         = QStringLiteral("falloutnewvegas");
+    shell.modsDirValue   = mods;
+    shell.loadOrderValue = {QStringLiteral("FalloutNV.esm"), QStringLiteral("Test.esp")};
+    ModEntry e           = ModEntry::named(QStringLiteral("Test"));
+    e.modPath            = mods + "/Test";
+    e.installStatus      = 1;
+    e.checked            = true;
+    shell.modelStore.append(e);
+    Settings::setDataDir(shell.gameId, data);
+
+    // The re-sync only runs over an existing deployment; the state files sit
+    // beside the test binary and are removed at the end.
+    const QString manifest = resolveUserStatePath("deploy_manifest_modlist.json");
+    const QString backup   = resolveUserStatePath("deploy_backup_modlist");
+    writeFile(manifest, "{}");
+
+    DeployFlow flow(shell);
+    const auto sync = [&] {
+        bool ran = false;
+        flow.maybeDeployBeforeLaunch(shell.gameId, [&] { ran = true; });
+        return ran;
+    };
+    const auto read = [](const QString &p) {
+        QFile f(p);
+        return f.open(QIODevice::ReadOnly) ? QString::fromUtf8(f.readAll()) : QString();
+    };
+    check("the re-sync ran through to its continuation", sync());
+    check("the plugin is in Data", QFileInfo::exists(data + "/Test.esp"));
+    check("the list went into the game's own lower-case file",
+          read(local + "/plugins.txt").contains("Test.esp"),
+          read(local + "/plugins.txt"));
+    check("the game's original list was backed up beside it",
+          read(local + "/plugins.txt.nerevarine-bak") == "FalloutNV.esm\r\n");
+    check("no second spelling was made", !QFileInfo::exists(local + "/Plugins.txt"));
+    check("the path is remembered as the game spells it",
+          Settings::pluginsTxtPath(shell.gameId) == local + "/plugins.txt",
+          Settings::pluginsTxtPath(shell.gameId));
+
+    // A twin an earlier deploy made: remembered, no backup beside it (it was
+    // not there before us), with the game's own file next to it.
+    writeFile(local + "/Plugins.txt", "stale\r\n");
+    Settings::setPluginsTxtPath(shell.gameId, local + "/Plugins.txt");
+    check("the re-sync ran again", sync());
+    check("the twin is gone and the game's file holds the list",
+          !QFileInfo::exists(local + "/Plugins.txt") &&
+              read(local + "/plugins.txt").contains("Test.esp") &&
+              Settings::pluginsTxtPath(shell.gameId) == local + "/plugins.txt",
+          Settings::pluginsTxtPath(shell.gameId));
+
+    QFile::remove(manifest);
+    QFile::remove(resolveUserStatePath("deploy_manifest_modlist.fingerprint"));
+    QDir(backup).removeRecursively();
+    QSettings().clear();
+}
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
     QApplication app(argc, argv);
+    QCoreApplication::setOrganizationName("nerevarine-test");
+    QCoreApplication::setApplicationName("flows-test");
+    QStandardPaths::setTestModeEnabled(true); // isolate QSettings access
 
     testMO2LinesAndRows();
     testMO2Instance();
@@ -418,6 +501,7 @@ int main(int argc, char **argv)
     testDeployFlowFingerprintAndQuietPaths();
     testLibraryFlowMovesFoldersAndRepointsRows();
     testDeployFlowAdoptsCreationsFromTheGamesDownloads();
+    testDeployFlowWritesThePluginListWhereTheGameSpelledIt();
 
     std::cout << "\n";
     if (s_failed == 0)

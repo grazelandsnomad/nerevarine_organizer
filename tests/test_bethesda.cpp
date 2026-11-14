@@ -394,6 +394,35 @@ static void testMissingGameExe()
                                   && missingGameExe(root, {""}).isEmpty());
 }
 
+static void testExistingSpelling()
+{
+    std::cout << "\n[existingSpelling: the file as the game spelled it]\n";
+    QTemporaryDir tmp;
+    const QString dir  = tmp.path();
+    const auto    make = [&](const QString &rel) {
+        QDir().mkpath(QFileInfo(dir + "/" + rel).absolutePath());
+        QFile f(dir + "/" + rel);
+        if (f.open(QIODevice::WriteOnly)) f.close();
+    };
+    check("nothing there is empty", existingSpelling(dir, "Plugins.txt").isEmpty());
+    check("a missing folder is empty",
+          existingSpelling(dir + "/none", "Plugins.txt").isEmpty());
+    make("plugins.txt");
+    check("the game's lower-case file is found under the capitalised name",
+          existingSpelling(dir, "Plugins.txt") == dir + "/plugins.txt",
+          existingSpelling(dir, "Plugins.txt"));
+    make("Plugins.txt");
+    check("with both spellings the exact one wins",
+          existingSpelling(dir, "Plugins.txt") == dir + "/Plugins.txt");
+    check("and the other exact one wins the other way",
+          existingSpelling(dir, "plugins.txt") == dir + "/plugins.txt");
+    make("Other/x");
+    check("a folder of that name is not the file",
+          existingSpelling(dir, "other").isEmpty());
+    check("empty arguments are empty", existingSpelling("", "Plugins.txt").isEmpty() &&
+                                           existingSpelling(dir, "").isEmpty());
+}
+
 } // namespace deploy_section
 
 static void run_bethesda_deploy()
@@ -407,6 +436,7 @@ static void run_bethesda_deploy()
     deploy_section::testManifestRoundTrip();
     deploy_section::testSourceFingerprint();
     deploy_section::testMissingGameExe();
+    deploy_section::testExistingSpelling();
     deploy_section::testOneSpellingPerPath();
     deploy_section::testRedeployMergesOldTwins();
     deploy_section::testFollowMovedGame();

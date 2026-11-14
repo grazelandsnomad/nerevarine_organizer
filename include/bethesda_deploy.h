@@ -134,6 +134,14 @@ Manifest manifestFromJson(const QString &json);
 // ones that change nothing, like switching games or quitting.
 QString sourceFingerprint(const QStringList &mods, const QStringList &loadOrder);
 
+// The file called `name` in `dir`, spelled as it is on disk: the exact
+// spelling when that file exists, else the one file whose name matches it in
+// another case, else empty. A Linux disk keeps case and a Windows game asks
+// without it, so the game's own spelling of a file is the one to read and
+// write - writing `Plugins.txt` beside the `plugins.txt` the game created
+// leaves Wine to pick one of the two. A folder of that name is not the file.
+QString existingSpelling(const QString &dir, const QString &name);
+
 // Whether the game itself is in `gameRoot`: empty when one of `exeNames`
 // (paths relative to it - the adapter's Steam and GOG executables) is there,
 // else the first of them, the file that is missing.

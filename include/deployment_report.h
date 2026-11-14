@@ -33,6 +33,7 @@ struct Facts {
     bool        installDirKnown = false;   // gates the script-extender line
 
     PathState   pluginsTxt;
+    QString     pluginsTxtTwin;               // a second spelling beside it; empty = none
     bool        showContentCatalog = false;   // games whose menu downloads Creations
     PathState   contentCatalog;               // ContentCatalog.txt; empty path = none yet
     bool        showOblivionIni = false;

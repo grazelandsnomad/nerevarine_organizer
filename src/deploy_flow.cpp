@@ -502,23 +502,68 @@ static root_routes::Routes bethesdaRoutes(const GameAdapter *adapter)
 // Resolve the prefix Plugins.txt path (active set / order).  Manual override
 // wins; else AppData/Local/<localAppDataName>/Plugins.txt under the first prefix
 // that exists; else the best-guess derived path (caller mkpaths the parent).
+// A file beside `path` that differs from it in case only, else empty. Oblivion,
+// Fallout 3 and New Vegas write their own `plugins.txt` and ask for it as
+// Windows does, without case; a `Plugins.txt` written beside it on a disk
+// that keeps case leaves Wine to pick one of the two.
+static QString otherSpellingBeside(const QString &path)
+{
+    if (path.isEmpty()) return {};
+    const QFileInfo fi(path);
+    const QDir      dir = fi.dir();
+    if (!dir.exists()) return {};
+    for (const QString &n : dir.entryList(QDir::Files | QDir::Hidden))
+        if (n != fi.fileName() && n.compare(fi.fileName(), Qt::CaseInsensitive) == 0)
+            return dir.filePath(n);
+    return {};
+}
+
+// Undo a twin an earlier deploy made: the remembered Plugins.txt is one we
+// wrote (only a successful write records it), no backup beside it means the
+// file was not there before us, and another spelling beside it is therefore
+// the game's own list. Drop ours and forget it, so the next resolution lands
+// on the game's file. Only the deploy and undeploy call this: resolution
+// itself stays read-only for Inspect.
+static void dropPluginsTxtTwin(const QString &id)
+{
+    const QString ours = Settings::pluginsTxtPath(id);
+    if (ours.isEmpty() || !QFileInfo::exists(ours)) return;
+    if (QFileInfo::exists(ours + QStringLiteral(".nerevarine-bak"))) return;
+    const QString theirs = otherSpellingBeside(ours);
+    if (theirs.isEmpty()) return;
+    qCInfo(logging::lcLaunch).noquote()
+        << "deploy: the game keeps its plugin list as" << QFileInfo(theirs).fileName()
+        << "- dropping the" << QFileInfo(ours).fileName()
+        << "an earlier deploy made beside it";
+    QFile::remove(ours);
+    Settings::setPluginsTxtPath(id, {});
+}
+
 static QString resolveBethesdaPluginsTxt(const QString &id,
                                          const GameAdapter *adapter,
                                          const QString &dataDir)
 {
+    // A remembered path is one a deploy wrote; it stays while the file does.
     const QString override = Settings::pluginsTxtPath(id);
-    if (!override.isEmpty()) return override;
-    if (adapter && adapter->pluginsTxtInDataDir())
-        return dataDir.isEmpty() ? QString() : QDir(dataDir).filePath(QStringLiteral("Plugins.txt"));
+    if (!override.isEmpty() && QFileInfo::exists(override)) return override;
+    // The file as the game spelled it, where the game already made one.
+    static const QString kName = QStringLiteral("Plugins.txt");
+    if (adapter && adapter->pluginsTxtInDataDir()) {
+        if (dataDir.isEmpty()) return {};
+        const QString own = bethesda_deploy::existingSpelling(dataDir, kName);
+        return own.isEmpty() ? QDir(dataDir).filePath(kName) : own;
+    }
     const QString name = adapter ? adapter->localAppDataName() : QString();
     if (name.isEmpty()) return {};
 
     QString firstCandidate;
     for (const QString &pu : bethesdaPrefixUserDirs(adapter, dataDir)) {
         const QString dir = proton::localAppData(pu, name);
-        const QString plugins = dir + "/Plugins.txt";
+        const QString plugins = dir + "/" + kName;
         if (firstCandidate.isEmpty()) firstCandidate = plugins;
-        if (QFileInfo::exists(plugins) || QDir(dir).exists())
+        const QString own = bethesda_deploy::existingSpelling(dir, kName);
+        if (!own.isEmpty()) return own;
+        if (QDir(dir).exists())
             return plugins;   // prefix exists: the game has run at least once
     }
     return firstCandidate;    // best guess; caller mkpaths the parent
@@ -811,6 +856,7 @@ static QString bethesdaApplyUndeploy(const QString &id, const GameAdapter *adapt
         QFile::remove(QDir(dataDir).filePath(QStringLiteral("system/")
                                              + opengothic::generatedIniName()));
 
+    dropPluginsTxtTwin(id);
     const QString pluginsTxt = resolveBethesdaPluginsTxt(id, adapter, dataDir);
     if (!pluginsTxt.isEmpty()) restoreNerevarineBak(pluginsTxt);
     if (id == QLatin1String("oblivion")) {
@@ -1050,6 +1096,7 @@ static ActivateResult bethesdaActivate(const QString &id, const GameAdapter *ada
     }
     if (ordered.isEmpty()) return result;
 
+    dropPluginsTxtTwin(id);
     const QString pluginsTxt = resolveBethesdaPluginsTxt(id, adapter, dataDir);
     int activated = 0;
     QString body;
@@ -2102,6 +2149,7 @@ void DeployFlow::onInspectDeployment()
     const QString pluginsTxt = dataDir.isEmpty() ? QString()
                                                  : resolveBethesdaPluginsTxt(id, adapter, dataDir);
     f.pluginsTxt = { pluginsTxt, !pluginsTxt.isEmpty() && QFileInfo::exists(pluginsTxt) };
+    f.pluginsTxtTwin = otherSpellingBeside(pluginsTxt);
     if (!creations::slugForProfile(id).isEmpty()) {
         f.showContentCatalog = true;
         const QString catalog = resolveContentCatalog(id, adapter, dataDir);
