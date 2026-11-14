@@ -169,6 +169,10 @@ the app. Back up your mods directory, modlist file and game configs
 before major version bumps or running "Move mod library", INI-tuning,
 or auto-sort.
 
+## AI disclosure
+
+This tool was programmed with assistance of Claude and other AI tools.
+
 ## Credits
 
 - App icon: [Crystal](https://opengameart.org/content/crystal) by
