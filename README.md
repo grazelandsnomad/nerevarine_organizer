@@ -2,10 +2,21 @@
 
 A native Linux mod manager for OpenMW.
 
-## 0.74 - in development
+## 0.75 - in development
 
 The next release, built from `main`. Its notes grow in
-[`docs/release-notes/0.74.md`](docs/release-notes/0.74.md) as changes land.
+[`docs/release-notes/0.75.md`](docs/release-notes/0.75.md) as changes land.
+
+### Latest release: 0.74
+
+Download: [AppImage or plain Linux
+binary](https://github.com/grazelandsnomad/nerevarine_organizer/releases/tag/v0.74).
+The AppImage is portable and runs on most distros, Steam Deck included. It
+needs FUSE 2 (`libfuse2t64` or `libfuse2` on Ubuntu and Debian, `fuse2` on
+Arch); without it, start it with `--appimage-extract-and-run`. The plain
+binary keeps its mod lists and settings next to itself, so unpack a new
+version over the old folder to keep them.
+
 It brings, among the rest:
 
 - **A FOMOD's "recommended when you have mod X" is answered from your mod
@@ -38,16 +49,6 @@ It brings, among the rest:
 - **Importing an MO2 modlist links mods to their Nexus pages**, undo after a
   drag goes back to before the drag, and moving the mod library no longer
   freezes the window.
-
-### Latest release: 0.72
-
-Download: [AppImage or plain Linux
-binary](https://github.com/grazelandsnomad/nerevarine_organizer/releases/tag/v0.72).
-The AppImage is portable and runs on most distros, Steam Deck included. It
-needs FUSE 2 (`libfuse2t64` or `libfuse2` on Ubuntu and Debian, `fuse2` on
-Arch); without it, start it with `--appimage-extract-and-run`. The plain
-binary keeps its mod lists and settings next to itself, so unpack a new
-version over the old folder to keep them.
 
 Guides: [mod conflicts and how to fix each kind](docs/conflicts.md).
 
