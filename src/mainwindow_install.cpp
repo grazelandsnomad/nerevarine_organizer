@@ -1434,7 +1434,13 @@ void MainWindow::installLocalArchive(const QString &archivePath,
     // and hand that copy off.  If the source already IS inside m_modsDir
     // (e.g. user downloaded manually and dropped from there), we use it in
     // place - same net effect.
+    // Where the archive will be worked on. The copy itself waits until the
+    // row exists and then runs on a worker: a 2 GB archive dragged in from
+    // the downloads folder used to be copied here, on the GUI thread, before
+    // anything was on screen - the window simply stopped responding, with no
+    // row, no progress and no cursor (GitHub issue #2).
     QString workingArchive;
+    bool    mustCopy = false;
     QString modsRootAbs = QFileInfo(m_modsDir).absoluteFilePath();
     if (srcFi.absoluteFilePath().startsWith(modsRootAbs + "/")) {
         workingArchive = srcFi.absoluteFilePath();
@@ -1453,11 +1459,8 @@ void MainWindow::installLocalArchive(const QString &archivePath,
                                      .arg(++suffix).arg(ext);
             candidate = QDir(m_modsDir).filePath(rebuilt);
         }
-        if (!QFile::copy(srcFi.absoluteFilePath(), candidate)) {
-            ui::warn(this, T("file_error_title"), T("file_error_write").arg(candidate));
-            return;
-        }
         workingArchive = candidate;
+        mustCopy       = true;
     }
 
     // Match against an existing row when the archive filename embeds a Nexus
@@ -1503,12 +1506,52 @@ void MainWindow::installLocalArchive(const QString &archivePath,
         placeholder->setData(ModRole::NexusUrl, nexusUrlHint);
     saveModList();
 
-    statusBar()->showMessage(
-        T("status_downloaded_extracting").arg(srcFi.fileName()), 4000);
-    if (const auto r = extractAndAdd(workingArchive, placeholder); !r) {
-        qCWarning(logging::lcInstall)
-            << "extractAndAdd for dropped/reinstalled archive failed:" << r.error();
+    if (!mustCopy) {
+        statusBar()->showMessage(
+            T("status_downloaded_extracting").arg(srcFi.fileName()), 4000);
+        if (const auto r = extractAndAdd(workingArchive, placeholder); !r) {
+            qCWarning(logging::lcInstall)
+                << "extractAndAdd for dropped/reinstalled archive failed:" << r.error();
+        }
+        return;
     }
+
+    // Taking a copy, because extractAndAdd deletes the archive it works on and
+    // that one is the user's own file. Off the GUI thread; the row shows its
+    // spinner meanwhile.
+    statusBar()->showMessage(T("status_copying_archive").arg(srcFi.fileName()), 0);
+    const QUuid rowId   = mod_row::rowId(placeholder);
+    const QString src   = srcFi.absoluteFilePath();
+    const QString dest  = workingArchive;
+    const QString shown = srcFi.fileName();
+    async::guarded(this,
+        [src, dest](MainWindow *) { return QFile::copy(src, dest); },
+        [rowId, dest, shown](MainWindow *self, bool ok) {
+            ModRow row = self->rowById(rowId);
+            if (!ok) {
+                self->statusBar()->clearMessage();
+                ui::warn(self, T("file_error_title"), T("file_error_write").arg(dest));
+                // Leave no half-written copy behind for the next install to
+                // trip over, and give the row back to the user.
+                QFile::remove(dest);
+                if (row) {
+                    if (!placeholder_state::restoreInstalled(row))
+                        placeholder_state::resetToNotInstalled(row, shown);
+                    self->saveModList();
+                }
+                return;
+            }
+            if (!row) {            // the row went away while the copy ran
+                QFile::remove(dest);
+                return;
+            }
+            self->statusBar()->showMessage(
+                T("status_downloaded_extracting").arg(shown), 4000);
+            if (const auto r = self->extractAndAdd(dest, row); !r) {
+                qCWarning(logging::lcInstall)
+                    << "extractAndAdd for dropped/reinstalled archive failed:" << r.error();
+            }
+        });
 }
 
 
