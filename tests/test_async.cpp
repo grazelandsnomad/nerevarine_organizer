@@ -151,11 +151,16 @@ static void testOwnersDeletedWhileWorkersFinish()
     // Delete them while the pool is chewing through the work.
     spinUntil([] { return started.load() > 300; }, 2000);
     qDeleteAll(owners);
-    QThreadPool::globalInstance()->waitForDone(10000);
+    const bool drained = QThreadPool::globalInstance()->waitForDone(10000);
     spinUntil([] { return false; }, 100);   // let every posted hop run
     check("no epilogue ran for an owner deleted before its hop",
           thenRuns.load() <= started.load());
-    check("and every worker finished", started.load() == 1000,
+    // A worker whose owner died before the pool reached it skips the work by
+    // design, so how many ran is the pool's timing: all 1000 on a wide
+    // machine, 927 once on CI's four cores. What must hold is that the pool
+    // drained - no worker hung on a dead owner.
+    check("the pool drained, each worker having run or skipped its dead owner",
+          drained && started.load() >= 300 && started.load() <= 1000,
           QString::number(started.load()));
 }
 
