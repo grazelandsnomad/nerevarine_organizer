@@ -4,22 +4,9 @@ A native Linux mod manager for OpenMW.
 
 ## 0.74 - in development
 
-Changes for the next release are collected in
-[`docs/release-notes/0.74.md`](docs/release-notes/0.74.md) as they land.
-
-Guides: [mod conflicts and how to fix each kind](docs/conflicts.md).
-
-### Latest release: 0.73
-
-Download: [AppImage or plain Linux
-binary](https://github.com/grazelandsnomad/nerevarine_organizer/releases/tag/v0.73).
-The AppImage is portable and runs on most distros, Steam Deck included. It
-needs FUSE 2 (`libfuse2t64` or `libfuse2` on Ubuntu and Debian, `fuse2` on
-Arch); without it, start it with `--appimage-extract-and-run`. The plain
-binary keeps its mod lists and settings next to itself, so unpack a new
-version over the old folder to keep them.
-
-Installers stopped choosing for a setup they could not see:
+The next release, built from `main`. Its notes grow in
+[`docs/release-notes/0.74.md`](docs/release-notes/0.74.md) as changes land.
+It brings, among the rest:
 
 - **A FOMOD's "recommended when you have mod X" is answered from your mod
   list and your game.** Options for mods you don't have are no longer
@@ -41,6 +28,9 @@ Installers stopped choosing for a setup they could not see:
   now loads after its own masters.
 - **The welcome wizard comes back after a first run that was cut short**, and
   Qt's own buttons (Next, Finish, Yes, No) speak the app's language.
+- **Mods that ship several folders can be told which to load**, a folder can
+  be dropped straight onto the list, and folders you make in the mods
+  directory yourself can be added to it from Clean Up Mod Folders.
 - **A View menu** switches the translation tools off for people who don't
   translate mods, and shows a Move Mod Library button on the toolbar for
   moving a whole library to another disk. Closing the window while a scan
@@ -49,7 +39,19 @@ Installers stopped choosing for a setup they could not see:
   drag goes back to before the drag, and moving the mod library no longer
   freezes the window.
 
-Full notes: [`docs/release-notes/0.73.md`](docs/release-notes/0.73.md)
+### Latest release: 0.72
+
+Download: [AppImage or plain Linux
+binary](https://github.com/grazelandsnomad/nerevarine_organizer/releases/tag/v0.72).
+The AppImage is portable and runs on most distros, Steam Deck included. It
+needs FUSE 2 (`libfuse2t64` or `libfuse2` on Ubuntu and Debian, `fuse2` on
+Arch); without it, start it with `--appimage-extract-and-run`. The plain
+binary keeps its mod lists and settings next to itself, so unpack a new
+version over the old folder to keep them.
+
+Guides: [mod conflicts and how to fix each kind](docs/conflicts.md).
+
+Full notes: [`docs/release-notes/0.74.md`](docs/release-notes/0.74.md)
 (prior: [0.72](docs/release-notes/0.72.md), [0.71](docs/release-notes/0.71.md),
 [0.70](docs/release-notes/0.70.md))
 

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(NerevarineOrganizer VERSION 0.73 LANGUAGES CXX)
+project(NerevarineOrganizer VERSION 0.74 LANGUAGES CXX)
 
 # A build configured without a type gets RelWithDebInfo: optimised, with line
 # tables, so the frames of a crash block in the log resolve to file:line
@@ -132,6 +132,7 @@ set(CORE_SOURCES
     src/fomod_path.cpp
     src/fomod_scripts.cpp
     src/bain.cpp
+    src/data_folder_choice.cpp
     src/bainwizard.cpp
     src/load_order_merge.cpp
     src/modentry.cpp
