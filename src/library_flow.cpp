@@ -6,6 +6,7 @@
 #include "modlist_model.h"
 #include "modrow.h"
 #include "prompts.h"
+#include "pluginparser.h"
 #include "report_dialog.h"
 #include "safe_fs.h"
 #include "translator.h"
@@ -469,6 +470,20 @@ void LibraryFlow::onConsolidateModsIntoActiveProfile()
 // Deliberately manual and preview-first: it is a recursive delete over the
 // user's mod library, so it never runs on its own and never deletes without an
 // explicit confirm.
+namespace {
+
+// Worth offering to the modlist: the folder holds something a game would
+// load. The same two scans the config writer uses to decide what a mod
+// contributes, so a folder that would register nothing is not offered.
+bool folderHoldsGameData(const QString &path)
+{
+    if (!plugins::collectDataFolders(path, plugins::contentExtensions()).isEmpty())
+        return true;
+    return !plugins::collectResourceFolders(path).isEmpty();
+}
+
+} // namespace
+
 void LibraryFlow::onCleanUpModFolders()
 {
     // An in-flight download's extract dir is not in the modlist yet, so it would
@@ -536,14 +551,16 @@ void LibraryFlow::onCleanUpModFolders()
         ui::info(m_shell.dialogParent(), T("cleanup_folders_title"), T("cleanup_folders_none"));
         return;
     }
-    // A modlist that failed to parse looks exactly like a huge pile-up. Refuse
-    // rather than act on it. (Calibration: the observed real case was 26%.)
-    if (!onDisk.isEmpty() && orphans.size() * 100 / onDisk.size() > 60) {
+    // A modlist that failed to parse looks exactly like a huge pile-up, so
+    // deleting is off the table. (Calibration: the observed real case was
+    // 26%.) Adding the folders to the list stays available: it is reversible,
+    // and a user who keeps many spare folders looks the same from here.
+    const bool suspicious =
+        !onDisk.isEmpty() && orphans.size() * 100 / onDisk.size() > 60;
+    if (suspicious)
         ui::warn(m_shell.dialogParent(), T("cleanup_folders_title"),
                  T("cleanup_folders_suspicious")
                      .arg(orphans.size()).arg(onDisk.size()));
-        return;
-    }
 
     QList<QPair<qint64, QString>> sized;
     qint64 totalBytes = 0;
@@ -555,18 +572,46 @@ void LibraryFlow::onCleanUpModFolders()
     std::sort(sized.begin(), sized.end(),
               [](const auto &a, const auto &b) { return a.first > b.first; });
 
+    // A folder holding something a game would load can join the modlist
+    // instead of being deleted - the MO2 habit of making a mod folder by hand
+    // and having it picked up (GitHub issue #2). One marked "+" per line.
+    QStringList adoptable;
+    for (const auto &e : sized)
+        if (folderHoldsGameData(QDir(modsRoot).filePath(e.second)))
+            adoptable << e.second;
+
     QString body;
     for (const auto &e : sized)
-        body += QStringLiteral("%1  %2\n")
+        body += QStringLiteral("%1  %2  %3\n")
+                    .arg(adoptable.contains(e.second) ? QStringLiteral("+")
+                                                      : QStringLiteral(" "))
                     .arg(cleanupFmtBytes(e.first), 10).arg(e.second);
 
-    const QString summary = T("cleanup_folders_summary")
-                                .arg(orphans.size())
-                                .arg(cleanupFmtBytes(totalBytes));
-    if (!ui::confirmMonospaceReport(m_shell.dialogParent(), T("cleanup_folders_title"), body,
-                                    720, 480, summary,
-                                    T("cleanup_folders_accept").arg(orphans.size())))
+    QString summary = T("cleanup_folders_summary")
+                          .arg(orphans.size())
+                          .arg(cleanupFmtBytes(totalBytes));
+    if (!adoptable.isEmpty())
+        summary += QLatin1Char('\n') + T("cleanup_folders_adoptable").arg(adoptable.size());
+
+    const ui::ReportChoice choice = ui::chooseMonospaceReport(
+        m_shell.dialogParent(), T("cleanup_folders_title"), body, 720, 480, summary,
+        adoptable.isEmpty() ? QString()
+                            : T("cleanup_folders_adopt").arg(adoptable.size()),
+        suspicious ? QString() : T("cleanup_folders_accept").arg(orphans.size()));
+
+    if (choice == ui::ReportChoice::Safe) {
+        if (m_shell.undo()) m_shell.undo()->pushUndo();
+        for (const QString &name : adoptable)
+            m_shell.installFolderAsMod(QDir(modsRoot).filePath(name));
+        m_shell.saveModList();
+        m_shell.updateModCount();
+        m_shell.updateSectionCounts();
+        m_shell.scheduleConflictScan();
+        m_shell.scheduleSizeScan();
+        m_shell.showStatus(T("cleanup_folders_adopted").arg(adoptable.size()), 8000);
         return;
+    }
+    if (choice != ui::ReportChoice::Destructive) return;
 
     QStringList toDelete;
     for (const auto &e : sized)

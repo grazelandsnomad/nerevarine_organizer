@@ -22,6 +22,7 @@
 #include "loadordercontroller.h" // TranslationCoverage likewise
 #include "modlist_model.h"
 #include "modlistview.h"
+#include "data_folder_choice.h"
 #include "modrow.h"
 #include "window_shell.h"
 #include "downloadqueue.h"
@@ -385,6 +386,11 @@ private:
     // in opens. Hidden rows keep their flag when they move, so without this a
     // mod moved under a "+" header looks fine until the next load hides it.
     void revealMovedRows(const QList<ModRow> &rows);
+    // Which folders of one mod the game is told to load, and the dialog that
+    // lets the user switch them off one by one.
+    [[nodiscard]] QList<data_folder_choice::Folder>
+        dataFoldersOf(const QString &modPath) const;
+    void chooseDataFolders(const QString &modPath);
     void onEditSeparator(ModRow item);
 
     // (installLocalArchive is public: so the inline ModListWidget drop handler

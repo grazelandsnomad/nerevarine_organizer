@@ -24,4 +24,16 @@ bool confirmMonospaceReport(QWidget *parent, const QString &title,
                             const QString &text, int minWidth, int minHeight,
                             const QString &summary, const QString &acceptLabel);
 
+// Same again with two answers, for a preview that fronts one safe action and
+// one destructive one (the unused-folders sweep: add them, or delete them).
+// `safeLabel` is the default button and may be empty, which leaves only the
+// destructive one; `destructiveLabel` may be empty too. Cancel is always
+// there, and is the default whenever the safe button is absent.
+enum class ReportChoice { Cancel, Safe, Destructive };
+ReportChoice chooseMonospaceReport(QWidget *parent, const QString &title,
+                                   const QString &text, int minWidth, int minHeight,
+                                   const QString &summary,
+                                   const QString &safeLabel,
+                                   const QString &destructiveLabel);
+
 } // namespace ui

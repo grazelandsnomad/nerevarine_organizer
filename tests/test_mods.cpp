@@ -29,6 +29,7 @@
 
 #include <iostream>
 
+#include "data_folder_choice.h"
 #include "mainwindow_internal.h"
 
 #include "test_harness.h"
@@ -1418,6 +1419,61 @@ static void run_drop_routing()
     check("an empty drop routes nowhere", routeDroppedPaths({}).folders.isEmpty());
 }
 
+// Which folders of one mod the game is told about, and which the user has
+// switched off. The key format has to keep matching what the patch prompt
+// wrote before this existed (GitHub issue #2).
+static void run_data_folder_choice()
+{
+    std::cout << "\n=== data folder choice ===\n";
+    const QString mod = QStringLiteral("/mods/Compilation");
+
+    check("a top-level folder keys on its name, as it always did",
+          data_folder_choice::key(mod, mod + "/00 Core")
+              == mod + QStringLiteral("\t00 Core"),
+          data_folder_choice::key(mod, mod + "/00 Core"));
+    check("a nested folder keys on its path, so two textures/ differ",
+          data_folder_choice::key(mod, mod + "/01 Alt/textures")
+              != data_folder_choice::key(mod, mod + "/02 Alt/textures"));
+    check("a trailing slash or a dotted path does not make a new key",
+          data_folder_choice::key(mod, mod + "/00 Core/")
+              == data_folder_choice::key(mod, mod + "/./00 Core"));
+
+    const QList<QPair<QString, QStringList>> dirs = {
+        {mod + "/00 Core",   {"Core.esp"}},
+        {mod + "/01 Hi-res", {}},
+        {mod + "/02 Lo-res", {"Extra.esp", "More.esp"}},
+    };
+    const QSet<QString> declined = { data_folder_choice::key(mod, mod + "/02 Lo-res") };
+
+    const auto f = data_folder_choice::folders(mod, dirs, {}, declined);
+    check("every plugin folder is listed, in the order the writer emits them",
+          f.size() == 3 && f.at(0).label == QStringLiteral("00 Core")
+          && f.at(1).label == QStringLiteral("01 Hi-res")
+          && f.at(2).label == QStringLiteral("02 Lo-res"));
+    check("each carries the plugins found in it",
+          f.at(0).plugins == QStringList{"Core.esp"} && f.at(1).plugins.isEmpty()
+          && f.at(2).plugins.size() == 2);
+    check("the switched-off one is marked, the others are not",
+          f.at(0).registered && f.at(1).registered && !f.at(2).registered);
+
+    // A mod with no plugins at all: the game hears about its resource roots
+    // instead, and only then.
+    const QStringList roots = { mod + "/1024", mod + "/2048" };
+    const auto r = data_folder_choice::folders(mod, {}, roots,
+                       { data_folder_choice::key(mod, mod + "/2048") });
+    check("resource roots are offered when nothing holds a plugin",
+          r.size() == 2 && r.at(0).label == QStringLiteral("1024")
+          && !r.at(1).registered);
+    check("and ignored when a plugin folder exists, as the writer ignores them",
+          data_folder_choice::folders(mod, dirs, roots, {}).size() == 3);
+    check("the same folder twice is listed once",
+          data_folder_choice::folders(mod, {{mod + "/A", {}}, {mod + "/A/", {}}},
+                                      {}, {}).size() == 1);
+    check("a folder outside the mod still gets a label",
+          data_folder_choice::folders(mod, {{"/elsewhere/Loose", {}}}, {}, {})
+              .at(0).label == QStringLiteral("Loose"));
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -1439,6 +1495,7 @@ int main(int argc, char **argv)
     testRowCaptionPrecedence();
 
     run_drop_routing();
+    run_data_folder_choice();
 
     std::cout << "\n"
               << s_passed << " passed, "

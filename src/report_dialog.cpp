@@ -84,4 +84,40 @@ bool confirmMonospaceReport(QWidget *parent, const QString &title,
     return dlg.exec() == QDialog::Accepted;
 }
 
+ReportChoice chooseMonospaceReport(QWidget *parent, const QString &title,
+                                   const QString &text, int minWidth, int minHeight,
+                                   const QString &summary,
+                                   const QString &safeLabel,
+                                   const QString &destructiveLabel)
+{
+    QDialog dlg(parent);
+    QVBoxLayout *v = buildReportBody(dlg, title, text, minWidth, minHeight, summary);
+
+    auto *btns = new QDialogButtonBox(QDialogButtonBox::Cancel, &dlg);
+    QPushButton *safe = safeLabel.isEmpty()
+        ? nullptr : btns->addButton(safeLabel, QDialogButtonBox::AcceptRole);
+    QPushButton *destructive = destructiveLabel.isEmpty()
+        ? nullptr : btns->addButton(destructiveLabel, QDialogButtonBox::DestructiveRole);
+    // Enter takes the harmless answer where there is one; with only the
+    // destructive button left it must take Cancel, as confirmMonospaceReport does.
+    if (safe) safe->setDefault(true);
+    else      btns->button(QDialogButtonBox::Cancel)->setDefault(true);
+    if (destructive) destructive->setAutoDefault(false);
+
+    ReportChoice picked = ReportChoice::Cancel;
+    if (safe)
+        QObject::connect(safe, &QPushButton::clicked, &dlg, [&] {
+            picked = ReportChoice::Safe; dlg.accept();
+        });
+    if (destructive)
+        QObject::connect(destructive, &QPushButton::clicked, &dlg, [&] {
+            picked = ReportChoice::Destructive; dlg.accept();
+        });
+    QObject::connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    v->addWidget(btns);
+
+    dlg.exec();
+    return picked;
+}
+
 } // namespace ui

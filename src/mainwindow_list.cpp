@@ -263,6 +263,76 @@ void MainWindow::collapseSection(ModRow sep, bool collapse)
     updateModCount();
 }
 
+// The folders this mod offers the game, in the order the config writer emits
+// them, each marked with whether it is still switched on.
+QList<data_folder_choice::Folder> MainWindow::dataFoldersOf(const QString &modPath) const
+{
+    if (modPath.isEmpty() || !m_scans) return {};
+    static const QStringList contentExts{".esp", ".esm", ".omwaddon", ".omwscripts"};
+    const auto pluginDirs = m_scans->cachedDataFolders(modPath, contentExts);
+    QStringList resourceRoots;
+    if (pluginDirs.isEmpty()) {
+        resourceRoots = plugins::collectResourceFolders(modPath);
+        if (resourceRoots.isEmpty()) resourceRoots << modPath;
+    }
+    return data_folder_choice::folders(modPath, pluginDirs, resourceRoots,
+                                       m_declinedPatches);
+}
+
+void MainWindow::chooseDataFolders(const QString &modPath)
+{
+    const auto folders = dataFoldersOf(modPath);
+    if (folders.isEmpty()) return;
+
+    QDialog dlg(this);
+    dlg.setWindowTitle(T("data_folders_title"));
+    auto *lay = new QVBoxLayout(&dlg);
+    auto *intro = new QLabel(T("data_folders_body").arg(QFileInfo(modPath).fileName()), &dlg);
+    intro->setWordWrap(true);
+    lay->addWidget(intro);
+
+    auto *list = new QListWidget(&dlg);
+    for (const auto &f : folders) {
+        QString text = f.label;
+        if (!f.plugins.isEmpty())
+            text += QStringLiteral("    ") + f.plugins.join(QStringLiteral(", "));
+        auto *row = new QListWidgetItem(text, list);
+        row->setFlags(row->flags() | Qt::ItemIsUserCheckable);
+        row->setCheckState(f.registered ? Qt::Checked : Qt::Unchecked);
+        row->setData(Qt::UserRole, f.path);
+    }
+    lay->addWidget(list);
+
+    auto *box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    connect(box, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(box, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    lay->addWidget(box);
+    dlg.resize(620, 420);
+    if (dlg.exec() != QDialog::Accepted) return;
+
+    bool changed = false;
+    int on = 0;
+    for (int i = 0; i < list->count(); ++i) {
+        const QListWidgetItem *row = list->item(i);
+        const QString key = data_folder_choice::key(
+            modPath, row->data(Qt::UserRole).toString());
+        if (row->checkState() == Qt::Checked) {
+            ++on;
+            if (m_declinedPatches.remove(key)) changed = true;
+        } else if (!m_declinedPatches.contains(key)) {
+            m_declinedPatches.insert(key);
+            changed = true;
+        }
+    }
+    if (!changed) return;
+    Settings::setDeclinedPatches(
+        QStringList(m_declinedPatches.begin(), m_declinedPatches.end()));
+    syncGameConfig();
+    scheduleConflictScan();
+    statusBar()->showMessage(
+        T("data_folders_applied").arg(on).arg(list->count()), 5000);
+}
+
 void MainWindow::revealMovedRows(const QList<ModRow> &rows)
 {
     for (const ModRow &r : rows) {
@@ -1140,6 +1210,20 @@ void MainWindow::onContextMenu(const QPoint &pos)
                             ++offered;
                         }
                         of->setEnabled(offered > 0);
+                    }
+                }
+
+                // Which of this mod's folders the game is told to load. A
+                // compilation, an all-packages BAIN install or a texture pack
+                // with 1024/ and 2048/ registers every one of them, and until
+                // now that was invisible and unchangeable (GitHub issue #2).
+                // Only worth offering when there is a choice to make.
+                {
+                    const QString modPath = item->data(ModRole::ModPath).toString();
+                    const auto picked = dataFoldersOf(modPath);
+                    if (picked.size() >= 2) {
+                        menu.addAction(T("ctx_choose_data_folders"), this,
+                                       [this, modPath]{ chooseDataFolders(modPath); });
                     }
                 }
 

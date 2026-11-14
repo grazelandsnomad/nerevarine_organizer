@@ -33,6 +33,7 @@
 #include "conflict_inspector.h"
 #include "report_dialog.h"
 #include "toolbar_customization.h"
+#include "data_folder_choice.h"
 #include "scan_coordinator.h"
 #include "backup_manager.h"
 #include "bulk_install_queue.h"
@@ -1226,20 +1227,27 @@ void MainWindow::syncOpenMWConfig()
             // installed, addModFromPath re-prompts; accepting clears the declined
             // flag and the next sync reinstates the data= line.
             for (int pi = cm.pluginDirs.size() - 1; pi >= 0; --pi) {
-                const QString folder =
-                    QFileInfo(cm.pluginDirs[pi].first).fileName();
-                const QString declinedKey = modPath + '\t' + folder;
-                if (m_declinedPatches.contains(declinedKey)) {
+                const QString dir = cm.pluginDirs[pi].first;
+                if (m_declinedPatches.contains(
+                        data_folder_choice::key(modPath, dir))) {
                     cm.pluginDirs.removeAt(pi);
                     continue;
                 }
-                const QString target = detectPatchTarget(folder);
+                const QString target =
+                    detectPatchTarget(QFileInfo(dir).fileName());
                 if (!target.isEmpty() && !patchTargetInstalled(target))
                     cm.pluginDirs.removeAt(pi);
             }
             if (cm.enabled && cm.pluginDirs.isEmpty()) {
                 cm.resourceRoots = plugins::collectResourceFolders(modPath);
                 if (cm.resourceRoots.isEmpty()) cm.resourceRoots << modPath;
+                // A mod with no plugins at all answers to the same switch:
+                // a texture pack shipping 1024/ and 2048/ is exactly the case
+                // the chooser exists for.
+                for (int ri = cm.resourceRoots.size() - 1; ri >= 0; --ri)
+                    if (m_declinedPatches.contains(
+                            data_folder_choice::key(modPath, cm.resourceRoots[ri])))
+                        cm.resourceRoots.removeAt(ri);
             }
             // Groundcover plugins: emit as groundcover= instead of content=
             // so OpenMW renders them as instanced grass/flora.
