@@ -42,6 +42,7 @@ endfunction()
 #   test_translation_coverage   the "no translation" verdict
 #   test_qt_strings             Qt's own dialog strings follow the app's language
 #   test_launch_warnings        the launch-blocking rules
+#   test_launch_watch           did the game Start launched actually run
 #   test_queues                 the install queues and rows that vanish mid-flight
 #   test_modlist_views          the model, the row handle and the view, the sort orders
 #   test_flows                  the flows over a fake window shell (imports)
@@ -76,6 +77,7 @@ set(UNIT_TESTS
     test_loadorder_controller
     test_translation_coverage
     test_launch_warnings
+    test_launch_watch
     test_queues
     test_modlist_views
     test_flows

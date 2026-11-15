@@ -236,6 +236,7 @@ set(CORE_SOURCES
     src/bulk_install_queue.cpp
     src/review_updates_dialog.cpp
     src/launch_warnings.cpp
+    src/launch_watch.cpp
     src/modlist_sort.cpp
     src/send_to_dialog.cpp
     src/logging.cpp

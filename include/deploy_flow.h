@@ -123,8 +123,16 @@ private:
     // Run a script-extender loader through Proton once Steam is up - starting
     // Steam and waiting for it, behind a small dialog, when it is not
     // (steam_client.h says why it has to be).
-    void launchWhenSteamReady(const QString &appId, const QString &loader);
+    void              launchWhenSteamReady(const QString &appId, const QString &loader,
+                                           const QString &gameExe);
     QPointer<QDialog> m_steamWait;   // the wait in progress, if any
+
+    // Watch what Start just started: poll /proc for `gameExe` and, when the
+    // game never appears or is gone again within seconds, say so with what the
+    // script extender's log and any crash log hold (launch_watch.h). Silent
+    // when the game ran. One watch at a time; a second launch replaces it.
+    void    watchLaunch(const QString &gameExe);
+    QTimer *m_launchWatchTimer = nullptr;
 
     WindowShell &m_shell;
     QTimer      *m_deployProgressTimer = nullptr;

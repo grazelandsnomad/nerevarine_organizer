@@ -46,6 +46,7 @@
 #include "bulk_install_queue.h"
 #include "review_updates_dialog.h"
 #include "launch_warnings.h"
+#include "launch_watch.h"
 #include "modlist_sort.h"
 #include "send_to_dialog.h"
 #include "prompts.h"
@@ -2615,17 +2616,23 @@ static bool launchViaProton(QWidget *parent, const QString &appId,
     return ok;
 }
 
-void DeployFlow::launchWhenSteamReady(const QString &appId, const QString &loader)
+void DeployFlow::launchWhenSteamReady(const QString &appId, const QString &loader,
+                                      const QString &gameExe)
 {
     QWidget *parent = m_shell.dialogParent();
     // Falls back to the plain Steam launch when no Proton command can be built
-    // - never worse than before, as onLaunchGame always did.
-    const auto run = [parent, appId, loader] {
-        if (launchViaProton(parent, appId, loader)) return;
+    // - never worse than before, as onLaunchGame always did. The watch starts
+    // once something has actually been launched, not before: a wait for Steam
+    // can take a minute and would eat the window the game has to appear in.
+    const auto run = [this, parent, appId, loader, gameExe] {
+        if (launchViaProton(parent, appId, loader)) {
+            watchLaunch(gameExe);
+            return;
+        }
         qCWarning(logging::lcLaunch)
             << "launch game: found" << loader
             << "but could not build a Proton command - falling back to Steam";
-        dispatchSteamUrl(parent, "steam://rungameid/" + appId);
+        if (dispatchSteamUrl(parent, "steam://rungameid/" + appId)) watchLaunch(gameExe);
     };
 
     const steam_client::State now = steam_client::state();
@@ -2866,6 +2873,126 @@ void DeployFlow::onLaunchGame()
     maybeDeployBeforeLaunch(id, [this, id] { launchGameNow(id); });
 }
 
+void DeployFlow::watchLaunch(const QString &gameExe)
+{
+    if (gameExe.isEmpty() || !m_shell.notify()) return; // no window to tell
+    const QString      id      = m_shell.currentGameId();
+    const GameAdapter *adapter = GameAdapterRegistry::find(id);
+    if (!adapter) return;
+
+    // Where the script extender and any crash logger write, inside the
+    // prefix: the same "Documents/My Games/<game>" the ini tuner resolves.
+    launch_watch::ExtenderLog logNames;
+    for (const QString &loader : adapter->scriptExtenderLoaders()) {
+        logNames = launch_watch::extenderLogFor(loader);
+        if (!logNames.dirName.isEmpty()) break;
+    }
+    QString logDir, logPath;
+    if (!logNames.dirName.isEmpty()) {
+        const QString dataDir =
+            bethesdaResolveDataDir(nullptr, id, adapter, /*allowPrompt=*/false);
+        const QString iniDir =
+            dataDir.isEmpty() ? QString() : resolveBethesdaIniDir(id, adapter, dataDir);
+        if (!iniDir.isEmpty()) {
+            logDir  = QDir(iniDir).filePath(logNames.dirName);
+            logPath = QDir(logDir).filePath(logNames.fileName);
+        }
+    }
+
+    struct Watch {
+        QString       exe, gameName, logPath, logDir;
+        qint64        logSizeAtStart = -1;
+        QStringList   crashBefore;
+        QElapsedTimer clock;
+        bool          seen        = false;
+        qint64        firstSeenMs = -1, lastSeenMs = -1;
+    };
+    auto w      = std::make_shared<Watch>();
+    w->exe      = gameExe;
+    w->gameName = m_shell.currentGameName();
+    w->logPath  = logPath;
+    w->logDir   = logDir;
+    if (!logPath.isEmpty() && QFileInfo::exists(logPath))
+        w->logSizeAtStart = QFileInfo(logPath).size();
+    if (!logDir.isEmpty())
+        w->crashBefore = QDir(logDir).entryList(
+            QStringList{QStringLiteral("crash-*.log")}, QDir::Files);
+    w->clock.start();
+
+    if (m_launchWatchTimer)
+        m_launchWatchTimer->stop();
+    else {
+        m_launchWatchTimer = new QTimer(this);
+        m_launchWatchTimer->setInterval(3000);
+    }
+    // A cold Proton start compiles shaders before the game's window exists, so
+    // "it never appeared" is only said after a generous wait.
+    constexpr qint64 kGiveUpMs = 150000;
+
+    disconnect(m_launchWatchTimer, &QTimer::timeout, nullptr, nullptr);
+    connect(m_launchWatchTimer, &QTimer::timeout, this, [this, w] {
+        const bool alive =
+            launch_watch::processRunning(launch_watch::runningCommandLines(), w->exe);
+        const qint64 now = w->clock.elapsed();
+        if (alive) {
+            if (!w->seen) {
+                w->seen        = true;
+                w->firstSeenMs = now;
+            }
+            w->lastSeenMs = now;
+        }
+        const bool giveUp = now >= kGiveUpMs;
+        // Done when the game has come and gone, or when it never came.
+        if (alive && !giveUp) return;
+        if (!w->seen && !giveUp) return;
+        m_launchWatchTimer->stop();
+
+        launch_watch::Observation o;
+        o.gameName      = w->gameName;
+        o.everSeen      = w->seen;
+        o.stillAlive    = alive;
+        o.secondsWaited = int(now / 1000);
+        if (w->seen) o.secondsAlive = int((w->lastSeenMs - w->firstSeenMs) / 1000);
+
+        if (!w->logPath.isEmpty() && QFileInfo::exists(w->logPath)) {
+            o.extenderLogFound = true;
+            o.extenderLogGrew  = QFileInfo(w->logPath).size() > w->logSizeAtStart;
+            QFile f(w->logPath);
+            if (f.open(QIODevice::ReadOnly))
+                o.extenderTail =
+                    launch_watch::tailLines(QString::fromUtf8(f.readAll()), 8);
+        }
+        if (!w->logDir.isEmpty()) {
+            for (const QString &c : QDir(w->logDir).entryList(
+                     QStringList{QStringLiteral("crash-*.log")}, QDir::Files))
+                if (!w->crashBefore.contains(c))
+                    o.newCrashLogs << QDir(w->logDir).filePath(c);
+        }
+
+        const launch_watch::Verdict v = launch_watch::judge(o);
+        if (v == launch_watch::Verdict::Ran) return;
+
+        qCInfo(logging::lcLaunch).noquote()
+            << "launch watch:" << w->exe
+            << (v == launch_watch::Verdict::NeverStarted ? "never appeared"
+                                                         : "died early")
+            << "- seen" << o.everSeen << "alive" << o.secondsAlive << "s";
+
+        if (v == launch_watch::Verdict::NeverStarted) {
+            // Soft on purpose: a very slow first start would otherwise be
+            // called a failure. The banner goes away on its own.
+            m_shell.notify()->show(T("launch_watch_never_started").arg(o.gameName),
+                                   QStringLiteral("#8a4a12"));
+            m_shell.showStatus(T("launch_watch_never_started").arg(o.gameName), 10000);
+            return;
+        }
+        ui::info(m_shell.dialogParent(), T("launch_watch_title"),
+                 T("launch_watch_died").arg(o.gameName).arg(o.secondsAlive),
+                 launch_watch::details(o));
+    });
+    m_launchWatchTimer->start();
+}
+
 void DeployFlow::launchGameNow(const QString &id)
 {
     const QString appId = GameProfileRegistry::steamAppId(id);
@@ -2927,11 +3054,13 @@ void DeployFlow::launchGameNow(const QString &id)
         // than before.
         const QString loader =
             findScriptExtenderLoader(adapter, QFileInfo(steamExe).path());
+        const QString gameExe = QFileInfo(steamExe).fileName();
         if (!loader.isEmpty()) {
-            launchWhenSteamReady(appId, loader);
+            launchWhenSteamReady(appId, loader, gameExe);
             return;
         }
-        dispatchSteamUrl(m_shell.dialogParent(), "steam://rungameid/" + appId);
+        if (dispatchSteamUrl(m_shell.dialogParent(), "steam://rungameid/" + appId))
+            watchLaunch(gameExe);
         return;
     }
 
