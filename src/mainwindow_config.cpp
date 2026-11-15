@@ -23,6 +23,7 @@
 #include "undo_stack.h"
 #include "zoom_controller.h"
 #include "filter_bar.h"
+#include "library_flow.h"
 #include "notify_banner.h"
 #include "column_header.h"
 #include "forbidden_mods.h"
@@ -1606,6 +1607,12 @@ void MainWindow::loadModList(const QString &path,
         }
         m_scans->warmDataFoldersCache(paths);
     }
+
+    // Folders the user put in the mods directory themselves get offered here,
+    // once per load: MO2 picks them up on a refresh, and a profile load is
+    // this app's equivalent moment. The scan itself runs on a worker.
+    if (m_libraryFlow)
+        QTimer::singleShot(0, m_libraryFlow, &LibraryFlow::offerAdoptableFolders);
 }
 
 void MainWindow::saveModListFor(const QString &profileKey,

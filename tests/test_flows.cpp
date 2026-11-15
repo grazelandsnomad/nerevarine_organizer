@@ -312,6 +312,84 @@ void testLibraryFlowMovesFoldersAndRepointsRows()
                                           && shell.reports.first().first == QStringLiteral("Move"));
 }
 
+// The folders nothing in any modlist points at, and which of them hold
+// something a game would load - the scan behind Clean Up Mod Folders and
+// behind the offer a profile load makes.
+void testLibraryFlowFindsFoldersNoModlistPointsAt()
+{
+    std::cout << "testLibraryFlowFindsFoldersNoModlistPointsAt\n";
+    QTemporaryDir tmp;
+    const QString mods = tmp.path() + "/mods";
+    // Two folders rows point at, one of them through a dive-into wrapper.
+    writeFile(mods + "/Used/Used.esp", QStringLiteral("TES3"));
+    writeFile(mods + "/Used2/Used2.esp", QStringLiteral("TES3"));
+    writeFile(mods + "/Wrapper/Inner/Inner.esp", QStringLiteral("TES3"));
+    // Made by hand: a plugin at the root, and a bare retexture.
+    writeFile(mods + "/HandMade/HandMade.esp", QStringLiteral("TES3"));
+    writeFile(mods + "/Retexture/textures/rock.dds", QStringLiteral("DDS "));
+    // An orphan holding nothing a game would load.
+    writeFile(mods + "/Junk/readme.txt", QStringLiteral("hello"));
+    // Already staged for deletion by the sweep: not a folder any more.
+    writeFile(mods + "/Old.__deleting__1700000000/x.esp", QStringLiteral("TES3"));
+
+    FakeShell shell;
+    shell.modsDirValue = mods;
+    auto installed     = [&](const QString &path) {
+        ModEntry e      = ModEntry::named(path.section('/', -1));
+        e.modPath       = path;
+        e.installStatus = 1;
+        e.checked       = true;
+        shell.modelStore.append(e);
+    };
+    installed(mods + "/Used");
+    installed(mods + "/Used2");
+    installed(mods + "/Wrapper/Inner");
+    LibraryFlow flow(shell);
+
+    const LibraryFlow::OrphanInputs in = flow.orphanInputs();
+    check("the mods root is resolved and every row's path is a reference",
+          in.modsRoot == QFileInfo(mods).absoluteFilePath() && in.referenced.size() >= 3,
+          QStringLiteral("root=%1 refs=%2").arg(in.modsRoot).arg(in.referenced.size()));
+
+    const LibraryFlow::OrphanScan scan = LibraryFlow::scanOrphans(in);
+    check(
+        "a folder staged for deletion is not listed at all",
+        scan.onDisk.size() == 6 &&
+            !scan.onDisk.join(QLatin1Char('|')).contains(QStringLiteral("__deleting__")),
+        scan.onDisk.join(QLatin1Char('|')));
+    QStringList orphans = scan.orphans;
+    orphans.sort();
+    check("the wrapper of a dive-into install counts as used, the three others do not",
+          orphans == QStringList{QStringLiteral("HandMade"), QStringLiteral("Junk"),
+                                 QStringLiteral("Retexture")},
+          orphans.join(QLatin1Char('|')));
+    QStringList adoptable = scan.adoptable;
+    adoptable.sort();
+    check("a plugin or a resource folder makes one adoptable, a readme does not",
+          adoptable ==
+              QStringList{QStringLiteral("HandMade"), QStringLiteral("Retexture")},
+          adoptable.join(QLatin1Char('|')));
+    check("three of six is not suspicious", !scan.suspicious);
+
+    // A modlist that failed to load names nothing, so everything reads unused.
+    LibraryFlow::OrphanInputs blind = in;
+    blind.referenced.clear();
+    const LibraryFlow::OrphanScan all = LibraryFlow::scanOrphans(blind);
+    check("with no references at all the scan says so instead of offering six folders",
+          all.orphans.size() == 6 && all.suspicious);
+
+    // No mods dir: nothing is ever scanned, so nothing can be offered.
+    shell.modsDirValue.clear();
+    check("without a mods directory there are no inputs and no scan",
+          flow.orphanInputs().modsRoot.isEmpty() &&
+              LibraryFlow::scanOrphans(flow.orphanInputs()).orphans.isEmpty());
+
+    // The offer needs a banner to raise; the fake shell has none, so this is
+    // the "no window" path - it must not scan or crash.
+    flow.offerAdoptableFolders();
+    check("the offer is quiet without a window", shell.sticky == StickyKind::ViewSort);
+}
+
 } // namespace
 
 // A waiting Creation row plus the game's download of it in Data/: the adopt
@@ -500,6 +578,7 @@ int main(int argc, char **argv)
     testImportFlowRoutesANerevarineFileToTheLoader();
     testDeployFlowFingerprintAndQuietPaths();
     testLibraryFlowMovesFoldersAndRepointsRows();
+    testLibraryFlowFindsFoldersNoModlistPointsAt();
     testDeployFlowAdoptsCreationsFromTheGamesDownloads();
     testDeployFlowWritesThePluginListWhereTheGameSpelledIt();
 

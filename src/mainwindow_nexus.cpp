@@ -147,7 +147,17 @@ using plugins::readTes3Masters;
 #include <QMimeData>
 using fsutils::sanitizeFolderName;
 
-void MainWindow::checkNxmHandlerRegistration()
+void MainWindow::onRegisterNxmHandler()
+{
+    // Registering again is idempotent, so the entry does not ask: it registers
+    // and reports. Turning the setting on too, or the next launch's re-check
+    // would skip the exec-path repair this just did.
+    Settings::setRegisterNxmHandler(true);
+    if (checkNxmHandlerRegistration())
+        ui::info(this, T("nxm_register_title"), T("nxm_register_done"));
+}
+
+bool MainWindow::checkNxmHandlerRegistration()
 {
     // KDE/KIO needs a per-scheme .protocol file whose `exec=` points at the
     // current binary. If the binary moves (rebuild path, packaging, Flatpak
@@ -227,13 +237,14 @@ void MainWindow::checkNxmHandlerRegistration()
     if (readFile(desktopPath) != wantDesktop) {
         if (!writeFile(desktopPath, wantDesktop)) {
             ui::warn(this, T("registration_failed_title"), T("registration_failed_body").arg(desktopPath));
-            return;
+            return false;
         }
         changed = true;
     }
 
-    if (!changed) return; // everything already correct - skip the expensive
-                          // xdg-mime / sycoca rebuild
+    if (!changed)
+        return true; // everything already correct - skip the
+                     // expensive xdg-mime / sycoca rebuild
 
     // -- Re-register the mime type association and refresh the caches ---
     QProcess reg;
@@ -253,6 +264,7 @@ void MainWindow::checkNxmHandlerRegistration()
     subprocess::execute("kbuildsycoca5", {"--noincremental"});
 
     statusBar()->showMessage(T("status_registered_nxm"), 4000);
+    return true;
 }
 
 void MainWindow::handleNxmUrl(const QString &url)

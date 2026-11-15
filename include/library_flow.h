@@ -42,8 +42,37 @@ public slots:
     // from "remove but keep files". Previews everything with sizes and deletes
     // only on explicit confirm. Refuses mid-download or mid-install.
     void onCleanUpModFolders();
+    // Offer the folders the user made in the mods directory themselves,
+    // without making them go to the menu for it ("please make it so it
+    // automatically rescans mods folder for added mods", MaxYari on Nexus).
+    // Runs the scan on a worker and raises the sticky banner when something
+    // is worth adding; clicking the banner opens Clean Up Mod Folders, which
+    // previews the same folders and holds the Add button. Silent mid-download
+    // or mid-install, when half-built folders exist by definition.
+    void offerAdoptableFolders();
 
 public:
+    // Which folders under the mods dir nothing points at any more, and which
+    // of those hold something a game would load.
+    //
+    // Split in two so the filesystem half can run on a worker: `orphanInputs`
+    // reads the model and the game config and must run on the GUI thread,
+    // `scanOrphans` touches only its argument and the disk.
+    struct OrphanInputs {
+        QString     modsRoot;   // absolute; empty = nothing to scan
+        QStringList referenced; // every path any profile or the game names
+    };
+    struct OrphanScan {
+        QStringList onDisk;    // folder names directly under modsRoot
+        QStringList orphans;   // those `referenced` does not cover
+        QStringList adoptable; // orphans holding plugins or resource dirs
+        // So many folders came back unused that a modlist probably failed to
+        // load. Deleting is withheld, and the load-time offer stays quiet.
+        bool suspicious = false;
+    };
+    OrphanInputs      orphanInputs() const;
+    static OrphanScan scanOrphans(const OrphanInputs &in);
+
     // The checks both moves share before asking: enough free space under
     // destRoot (10% headroom, since a cross-filesystem move copies first) and
     // no folder of the same name already there. Tells the user and returns

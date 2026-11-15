@@ -285,6 +285,8 @@ void MainWindow::setupMenuBar()
 
     auto *settingsMenu = menuBar()->addMenu(T("menu_settings"));
     settingsMenu->addAction(T("menu_api_key"),  this, &MainWindow::onSetApiKey);
+    settingsMenu->addAction(T("menu_register_nxm"), this,
+                            &MainWindow::onRegisterNxmHandler);
     settingsMenu->addAction(T("menu_mods_dir"), this, &MainWindow::onSetModsDir);
     settingsMenu->addSeparator();
     settingsMenu->addAction(T("menu_set_openmw_path"), this, [this]{
@@ -1038,6 +1040,13 @@ void MainWindow::setupCentralWidget()
             if (!path.isEmpty()) onDownloadCaught(path);
             return;
         }
+        case StickyKind::UnusedFolders:
+            // The sweep previews the same folders and carries the Add button,
+            // so the banner is a shortcut to it rather than a second dialog.
+            // It re-scans, which is right: the banner may have been up a while.
+            m_stickyKind = StickyKind::ViewSort;
+            m_libraryFlow->onCleanUpModFolders();
+            return;
         case StickyKind::ViewSort:
             break;
         }

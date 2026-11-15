@@ -379,7 +379,15 @@ private:
     bool confirmReplaceModList() override;
     void onViewChangelog(ModRow item);
     void onNewModList();
-    void checkNxmHandlerRegistration();
+    // Make this app the handler for nxm:// links, rewriting the .protocol and
+    // .desktop files when they are missing or name a binary that moved.
+    // False means the handler is NOT in place and the user has been told why.
+    bool checkNxmHandlerRegistration();
+    // Settings -> Register nxm:// handler: the same thing on demand, with an
+    // answer either way. The wizard's checkbox was the only way in before, so
+    // clearing it (or a desktop that lost the association) left the website's
+    // "Mod Manager Download" button doing nothing and no way to put it back.
+    void onRegisterNxmHandler();
     void checkDesktopShortcut();
     void collapseSection(ModRow sep, bool collapse);
     // A row the user just moved stays in view: a collapsed section it landed

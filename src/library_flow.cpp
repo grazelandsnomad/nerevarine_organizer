@@ -5,6 +5,7 @@
 #include "mod_cleanup.h"
 #include "modlist_model.h"
 #include "modrow.h"
+#include "notify_banner.h"
 #include "prompts.h"
 #include "pluginparser.h"
 #include "report_dialog.h"
@@ -484,79 +485,134 @@ bool folderHoldsGameData(const QString &path)
 
 } // namespace
 
+LibraryFlow::OrphanInputs LibraryFlow::orphanInputs() const
+{
+    OrphanInputs in;
+    if (m_shell.modsDir().isEmpty() || !QDir(m_shell.modsDir()).exists()) return in;
+    in.modsRoot = QFileInfo(m_shell.modsDir()).absoluteFilePath();
+
+    // Three independent reference sources, so one unreadable file cannot make
+    // the sweep think the library is empty.
+    for (const ModEntry &e : m_shell.model().all()) {
+        if (!e.isMod()) continue;
+        for (const QString &p : {e.modPath, e.intendedModPath,
+                                 e.mergeTargetPath, e.prevModPath})
+            if (!p.isEmpty()) in.referenced << p;
+    }
+    for (const auto &prof : m_shell.otherProfileModlists())
+        for (const ModEntry &e : prof.second)
+            if (!e.modPath.isEmpty()) in.referenced << e.modPath;
+    {   // data= lines the game config still points at
+        QFile cfg(QDir::homePath() + QStringLiteral("/.config/openmw/openmw.cfg"));
+        if (cfg.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            QTextStream ts(&cfg);
+            while (!ts.atEnd()) {
+                const QString line = ts.readLine().trimmed();
+                if (!line.startsWith(QStringLiteral("data="))) continue;
+                QString p = line.mid(5).trimmed();
+                if (p.startsWith('"') && p.endsWith('"') && p.size() >= 2)
+                    p = p.mid(1, p.size() - 2);
+                if (!p.isEmpty()) in.referenced << p;
+            }
+        }
+    }
+    return in;
+}
+
+LibraryFlow::OrphanScan LibraryFlow::scanOrphans(const OrphanInputs &in)
+{
+    OrphanScan out;
+    if (in.modsRoot.isEmpty()) return out;
+
+    const QDir root(in.modsRoot);
+    for (const QFileInfo &fi : root.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        if (fi.isSymLink()) continue; // never recurse out of the mods dir
+        // Already staged for deletion by removeModFoldersAsync.
+        if (fi.fileName().contains(QStringLiteral(".__deleting__"))) continue;
+        out.onDisk << fi.fileName();
+    }
+
+    out.orphans =
+        mod_cleanup::unreferencedFolders(in.modsRoot, out.onDisk, in.referenced);
+    // A modlist that failed to parse looks exactly like a huge pile-up, so
+    // deleting is off the table. (Calibration: the observed real case was
+    // 26%.) Adding the folders to the list stays available: it is reversible,
+    // and a user who keeps many spare folders looks the same from here.
+    out.suspicious =
+        !out.onDisk.isEmpty() && out.orphans.size() * 100 / out.onDisk.size() > 60;
+
+    for (const QString &name : std::as_const(out.orphans))
+        if (folderHoldsGameData(root.filePath(name))) out.adoptable << name;
+    return out;
+}
+
+void LibraryFlow::offerAdoptableFolders()
+{
+    NotifyBanner *notify = m_shell.notify();
+    if (!notify || !m_shell.hasProfile()) return;
+    // Half-built folders exist by definition while something is being fetched
+    // or unpacked, and an extract dir is in no modlist yet.
+    if (!m_shell.downloadsIdle()) return;
+    const QList<ModEntry> rows = m_shell.model().all();
+    for (int i = 0; i < rows.size(); ++i)
+        if (rows.at(i).isInstalling()) return;
+
+    const OrphanInputs in = orphanInputs();
+    if (in.modsRoot.isEmpty()) return;
+
+    // The per-folder data scans are bounded directory walks, but there can be
+    // dozens of folders on a slow disk, and this runs right after a profile
+    // load: off the GUI thread, and the banner appears when it lands.
+    async::guarded(
+        this, [in](LibraryFlow *) { return scanOrphans(in); },
+        [](LibraryFlow *self, const OrphanScan &scan) {
+            if (scan.adoptable.isEmpty() || scan.suspicious) return;
+            NotifyBanner *banner = self->m_shell.notify();
+            if (!banner) return;
+            // Never over a banner that is already saying something about an
+            // ongoing state the user has to act on.
+            if (self->m_shell.stickyKind() != StickyKind::ViewSort) return;
+            self->m_shell.setStickyKind(StickyKind::UnusedFolders);
+            banner->showSticky(
+                T("cleanup_folders_unused_hint").arg(scan.adoptable.size()),
+                QStringLiteral("#8a4a12"));
+        });
+}
+
 void LibraryFlow::onCleanUpModFolders()
 {
     // An in-flight download's extract dir is not in the modlist yet, so it would
     // read as an orphan. Same for an extraction still running behind a
     // still-spinning row.
     if (!m_shell.downloadsIdle()) {
-        ui::warn(m_shell.dialogParent(), T("cleanup_folders_title"), T("move_mods_err_downloads"));
+        ui::warn(m_shell.dialogParent(), T("cleanup_folders_title"),
+                 T("move_mods_err_downloads"));
         return;
     }
     const QList<ModEntry> modRows = m_shell.model().all();
     for (int i = 0; i < modRows.size(); ++i) {
         if (modRows.at(i).isInstalling()) {
-            ui::warn(m_shell.dialogParent(), T("cleanup_folders_title"), T("move_mods_err_downloads"));
+            ui::warn(m_shell.dialogParent(), T("cleanup_folders_title"),
+                     T("move_mods_err_downloads"));
             return;
         }
     }
     if (m_shell.modsDir().isEmpty() || !QDir(m_shell.modsDir()).exists()) {
-        ui::warn(m_shell.dialogParent(), T("cleanup_folders_title"), T("cleanup_folders_no_dir"));
+        ui::warn(m_shell.dialogParent(), T("cleanup_folders_title"),
+                 T("cleanup_folders_no_dir"));
         return;
     }
 
-    const QString modsRoot = QFileInfo(m_shell.modsDir()).absoluteFilePath();
-
-    // Three independent reference sources, so one unreadable file cannot make
-    // the sweep think the library is empty.
-    QStringList referenced;
-    for (const ModEntry &e : m_shell.model().all()) {
-        if (!e.isMod()) continue;
-        for (const QString &p : {e.modPath, e.intendedModPath,
-                                 e.mergeTargetPath, e.prevModPath})
-            if (!p.isEmpty()) referenced << p;
-    }
-    for (const auto &prof : m_shell.otherProfileModlists())
-        for (const ModEntry &e : prof.second)
-            if (!e.modPath.isEmpty()) referenced << e.modPath;
-    {   // data= lines the game config still points at
-        QFile cfg(QDir::homePath() + QStringLiteral("/.config/openmw/openmw.cfg"));
-        if (cfg.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            QTextStream in(&cfg);
-            while (!in.atEnd()) {
-                const QString line = in.readLine().trimmed();
-                if (!line.startsWith(QStringLiteral("data="))) continue;
-                QString p = line.mid(5).trimmed();
-                if (p.startsWith('"') && p.endsWith('"') && p.size() >= 2)
-                    p = p.mid(1, p.size() - 2);
-                if (!p.isEmpty()) referenced << p;
-            }
-        }
-    }
-
-    QStringList onDisk;
-    {
-        const QDir root(modsRoot);
-        for (const QFileInfo &fi : root.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot)) {
-            if (fi.isSymLink()) continue;   // never recurse out of the mods dir
-            // Already staged for deletion by removeFoldersAsync.
-            if (fi.fileName().contains(QStringLiteral(".__deleting__"))) continue;
-            onDisk << fi.fileName();
-        }
-    }
-
-    const QStringList orphans =
-        mod_cleanup::unreferencedFolders(modsRoot, onDisk, referenced);
+    const OrphanInputs inputs   = orphanInputs();
+    const QString      modsRoot = inputs.modsRoot;
+    const OrphanScan   scan     = scanOrphans(inputs);
+    const QStringList &orphans  = scan.orphans;
     if (orphans.isEmpty()) {
         ui::info(m_shell.dialogParent(), T("cleanup_folders_title"), T("cleanup_folders_none"));
         return;
     }
-    // A modlist that failed to parse looks exactly like a huge pile-up, so
-    // deleting is off the table. (Calibration: the observed real case was
-    // 26%.) Adding the folders to the list stays available: it is reversible,
-    // and a user who keeps many spare folders looks the same from here.
-    const bool suspicious =
-        !onDisk.isEmpty() && orphans.size() * 100 / onDisk.size() > 60;
+    const QStringList &onDisk     = scan.onDisk;
+    const bool         suspicious = scan.suspicious;
     if (suspicious)
         ui::warn(m_shell.dialogParent(), T("cleanup_folders_title"),
                  T("cleanup_folders_suspicious")
@@ -575,10 +631,7 @@ void LibraryFlow::onCleanUpModFolders()
     // A folder holding something a game would load can join the modlist
     // instead of being deleted - the MO2 habit of making a mod folder by hand
     // and having it picked up (GitHub issue #2). One marked "+" per line.
-    QStringList adoptable;
-    for (const auto &e : sized)
-        if (folderHoldsGameData(QDir(modsRoot).filePath(e.second)))
-            adoptable << e.second;
+    const QStringList &adoptable = scan.adoptable;
 
     QString body;
     for (const auto &e : sized)
@@ -624,4 +677,3 @@ void LibraryFlow::onCleanUpModFolders()
                                       cleanupFmtBytes(totalBytes)),
         8000);
 }
-
