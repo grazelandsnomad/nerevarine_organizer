@@ -11,6 +11,7 @@
 // Qt Core only (no Widgets) so both are unit-testable against a QTemporaryDir.
 
 #include <QString>
+#include <QStringList>
 
 #include <expected>
 #include <functional>
@@ -108,6 +109,45 @@ bool forceRemoveRecursively(const QString &path);
 // Returns the new path, or "" when `dir` does not exist or cannot be renamed
 // (the caller deletes it where it is).
 QString setAside(const QString &dir);
+
+// Can `dir` be moved to the desktop Trash, so the user could put it back?
+//
+// Asked BEFORE a delete the user has not confirmed yet, so it has to be
+// read-only: it creates nothing and moves nothing. It answers the only
+// question that decides the outcome - is there a trash directory on the same
+// KERNEL device as `dir` - because trashing is a rename, and Qt's fallback
+// for a cross-device move copies file by file and so cannot move a directory
+// at all (it returns false and leaves the folder where it was).
+//
+// st_dev, not QStorageInfo::device(): measured on this machine, ~/.cache sits
+// on its own btrfs subvolume, which reports the same block device as the home
+// trash and a different st_dev - and QFile::moveToTrash fails there. Matching
+// on the block device would promise a trash that is not reachable.
+//
+// Mirrors the freedesktop lookup Qt itself performs: the home trash first,
+// then a sticky <topdir>/.Trash/<uid>, then <topdir>/.Trash-<uid>, which Qt
+// creates when the top of the filesystem is writable.
+bool trashable(const QString &dir);
+
+// What became of a batch of folders.
+struct RemovedFolders {
+    QStringList trashed; // in the desktop Trash, restorable
+    QStringList deleted; // gone for good
+    QStringList failed;  // still on disk, and the caller must say so
+};
+
+// Remove `paths`, preferring the Trash when `preferTrash`.
+//
+// Never silently escalates: a folder the caller was told would be trashed is
+// NEVER deleted outright when the move fails - it lands in `failed` instead.
+// Consenting to something restorable is not consent to lose it. With
+// `preferTrash` false this is the old behaviour, a setAside rename plus a
+// byte-delete, which is what install leftovers want: trashing those would
+// quietly fill the user's trash on every install.
+//
+// Blocking - the renames and the per-folder .trashinfo writes are syscalls on
+// a possibly slow mount, so callers run it on a worker.
+RemovedFolders removeFolders(const QStringList &paths, bool preferTrash);
 
 // Flush what has been written to the filesystem holding `path`, in one go.
 // fomod_copy copies without syncing each file (see copyFile); an install

@@ -238,6 +238,12 @@ void MainWindow::registerDroppedFolder(const QString &dirPath)
         }
     }
     m_undoStack->pushUndo();
+    // Putting a folder back by hand undoes having taken it out before, or the
+    // automatic pass would decline to offer it ever again.
+    const QString abs     = QDir::cleanPath(fi.absoluteFilePath());
+    QStringList   ignored = Settings::ignoredModFolders(currentGameId());
+    if (ignored.removeAll(abs) > 0)
+        Settings::setIgnoredModFolders(currentGameId(), ignored);
     installFolderAsMod(fi.absoluteFilePath());
     statusBar()->showMessage(T("status_mod_added").arg(fi.fileName()), 4000);
 }
@@ -478,8 +484,14 @@ MainWindow::MainWindow(QWidget *parent)
     m_deployFlow->scheduleCreationsCheck();
     connect(qApp, &QGuiApplication::applicationStateChanged, this,
             [this](Qt::ApplicationState state) {
-        if (state == Qt::ApplicationActive) m_deployFlow->scheduleCreationsCheck();
-    });
+                if (state != Qt::ApplicationActive) return;
+                m_deployFlow->scheduleCreationsCheck();
+                // And folders the user made in the file manager while they were away.
+                // This is the moment MO2's refresh covers; it costs one stat unless
+                // the mods directory has actually changed (LibraryFlow keeps its
+                // mtime), so it is cheap enough to do on every activation.
+                if (m_libraryFlow) m_libraryFlow->adoptNewFolders();
+            });
 
     // saveModList debounce (see scheduleSaveModList()). closeEvent stops it
     // before the synchronous flush.
@@ -3154,8 +3166,9 @@ QList<QPair<QString, QList<ModEntry>>> MainWindow::otherProfileModlists() const
     if (!m_profiles || m_profiles->isEmpty()) return others;
     const QString activeKey = currentProfileKey();
 
-    // Only called on cold paths (deletes, the cleanup sweep), so the
-    // per-profile file reads are fine.
+    // Called on the cleanup sweep and before auto-adopting a folder, so the
+    // per-profile file reads are warm-ish but still small.
+    m_unreadableProfiles = 0;
     for (const GameProfile &gp : m_profiles->games()) {
         for (const ModlistProfile &mp : gp.modlistProfiles) {
             const QString key = gp.id + QStringLiteral("__") + mp.name;
@@ -3163,12 +3176,23 @@ QList<QPair<QString, QList<ModEntry>>> MainWindow::otherProfileModlists() const
             const QString file = modlistPathFor(key);
             if (file.isEmpty()) continue;
             QFile in(file);
-            if (!in.open(QIODevice::ReadOnly | QIODevice::Text)) continue;
+            if (!in.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                // A profile that was never saved has no file, which is not a
+                // failure. One whose file is there and will not open is: its
+                // mods would read as belonging to nobody.
+                if (QFileInfo::exists(file)) ++m_unreadableProfiles;
+                continue;
+            }
             others.append({ key, modlist_serializer::parseModlist(
                                      QString::fromUtf8(in.readAll())) });
         }
     }
     return others;
+}
+
+int MainWindow::unreadableProfileModlists() const
+{
+    return m_unreadableProfiles;
 }
 
 bool MainWindow::modPathReferencedByOtherProfile(const QString &cleanPath) const

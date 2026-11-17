@@ -7,6 +7,7 @@
 // behind a cancellable progress dialog, repointing each row as its folder
 // lands; the window is reached through WindowShell only.
 
+#include <QDateTime>
 #include <QList>
 #include <QObject>
 #include <QString>
@@ -42,14 +43,25 @@ public slots:
     // from "remove but keep files". Previews everything with sizes and deletes
     // only on explicit confirm. Refuses mid-download or mid-install.
     void onCleanUpModFolders();
-    // Offer the folders the user made in the mods directory themselves,
-    // without making them go to the menu for it ("please make it so it
-    // automatically rescans mods folder for added mods", MaxYari on Nexus).
-    // Runs the scan on a worker and raises the sticky banner when something
-    // is worth adding; clicking the banner opens Clean Up Mod Folders, which
-    // previews the same folders and holds the Add button. Silent mid-download
-    // or mid-install, when half-built folders exist by definition.
-    void offerAdoptableFolders();
+    // Take in the folders the user made in the mods directory themselves -
+    // the MO2 habit of building or copying a mod folder by hand and having it
+    // picked up on the next refresh (GitHub issue #2, MaxYari).
+    //
+    // No dialog and no button: rows appear by themselves, UNTICKED, so a
+    // folder that turns up can never change what the game loads. Run after a
+    // profile load and whenever the window comes back to the front, which is
+    // the moment right after the user made the folder in their file manager.
+    //
+    // Deliberately far away from anything that deletes: the first answer to
+    // this request put the Add button in the Clean Up dialog, next to Delete,
+    // and the reporter said - fairly - that he was afraid to go near it.
+    // Adoption also protects those folders from the sweep, because a folder
+    // that has become a row is in use and is no longer an orphan.
+    //
+    // Silent while a download or an install runs (half-built folders exist by
+    // definition then), when the references are incomplete, and when so many
+    // folders read as unused that a modlist has probably failed to load.
+    void adoptNewFolders();
 
 public:
     // Which folders under the mods dir nothing points at any more, and which
@@ -61,14 +73,24 @@ public:
     struct OrphanInputs {
         QString     modsRoot;   // absolute; empty = nothing to scan
         QStringList referenced; // every path any profile or the game names
+        // Every reference source was read. False when a sibling profile's
+        // modlist or the game config exists and would not open - then the
+        // folders they name look unused, and nothing may act on that.
+        bool referencesComplete = true;
+        // Measuring every orphan folder is a recursive stat of possibly tens
+        // of thousands of files; only the delete preview needs it.
+        bool wantSizes = false;
     };
     struct OrphanScan {
         QStringList onDisk;    // folder names directly under modsRoot
         QStringList orphans;   // those `referenced` does not cover
         QStringList adoptable; // orphans holding plugins or resource dirs
         // So many folders came back unused that a modlist probably failed to
-        // load. Deleting is withheld, and the load-time offer stays quiet.
+        // load. Deleting is withheld, and adoption stays quiet.
         bool suspicious = false;
+        // With wantSizes: every orphan as (bytes, name), largest first.
+        QList<QPair<qint64, QString>> sized;
+        qint64                        totalBytes = 0;
     };
     OrphanInputs      orphanInputs() const;
     static OrphanScan scanOrphans(const OrphanInputs &in);
@@ -93,5 +115,27 @@ signals:
     void movesFinished(int movedOk, int failed);
 
 private:
+    // The second half of adoptNewFolders, once the scan is back on the GUI
+    // thread: prune the ignore list, drop what is ignored or has become a row
+    // meanwhile, and append what is left as unticked rows.
+    void applyAdoption(const OrphanScan &scan, const QString &modsRoot,
+                       const QDateTime &stamp, const QString &gameId);
+    // The report half of onCleanUpModFolders, once its scan is back.
+    void showCleanUpReport(const OrphanScan &scan, const QString &modsRoot);
+
     WindowShell &m_shell;
+    // A scan runs on a worker while the user can still switch profiles, and
+    // this object outlives every switch (it is made once and never destroyed,
+    // so the QPointer in async::guarded never fires). Each pass carries the
+    // counter's value and drops its result if the counter moved on - without
+    // it, profile A's folders land in profile B's list.
+    quint64 m_scanEpoch       = 0;
+    bool    m_adoptScanning   = false;
+    bool    m_cleanupScanning = false;
+    // The mods directory's own mtime at the last adoption pass. A folder
+    // added or removed changes it, so an unchanged stamp means the whole
+    // scan can be skipped - which is what makes running on every window
+    // activation cost one stat instead of a directory walk.
+    QString   m_lastAdoptRoot;
+    QDateTime m_lastAdoptStamp;
 };

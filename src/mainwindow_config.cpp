@@ -1608,11 +1608,12 @@ void MainWindow::loadModList(const QString &path,
         m_scans->warmDataFoldersCache(paths);
     }
 
-    // Folders the user put in the mods directory themselves get offered here,
-    // once per load: MO2 picks them up on a refresh, and a profile load is
-    // this app's equivalent moment. The scan itself runs on a worker.
+    // Folders the user put in the mods directory themselves become rows here:
+    // MO2 picks them up on a refresh, and a profile load is this app's
+    // equivalent moment (the window coming back to the front is the other).
+    // The scan itself runs on a worker.
     if (m_libraryFlow)
-        QTimer::singleShot(0, m_libraryFlow, &LibraryFlow::offerAdoptableFolders);
+        QTimer::singleShot(0, m_libraryFlow, &LibraryFlow::adoptNewFolders);
 }
 
 void MainWindow::saveModListFor(const QString &profileKey,

@@ -383,11 +383,133 @@ void testLibraryFlowFindsFoldersNoModlistPointsAt()
     check("without a mods directory there are no inputs and no scan",
           flow.orphanInputs().modsRoot.isEmpty() &&
               LibraryFlow::scanOrphans(flow.orphanInputs()).orphans.isEmpty());
+}
 
-    // The offer needs a banner to raise; the fake shell has none, so this is
-    // the "no window" path - it must not scan or crash.
-    flow.offerAdoptableFolders();
-    check("the offer is quiet without a window", shell.sticky == StickyKind::ViewSort);
+// Folders the user made by hand become rows on their own, unticked - and the
+// cases where that must NOT happen, which are the dangerous half: a folder
+// taken out of the list on purpose, a half-read set of references, a modlist
+// that did not parse, and a library being written into.
+void testLibraryFlowAdoptsNewFoldersByItself()
+{
+    std::cout << "testLibraryFlowAdoptsNewFoldersByItself\n";
+    QSettings().clear();
+    QTemporaryDir tmp;
+    const QString mods = tmp.path() + "/mods";
+    for (const QString &n : {QStringLiteral("Listed1"), QStringLiteral("Listed2"),
+                             QStringLiteral("Listed3")})
+        writeFile(mods + "/" + n + "/" + n + ".esp", QStringLiteral("TES3"));
+    writeFile(mods + "/HandMade/HandMade.esp", QStringLiteral("TES3"));
+    writeFile(mods + "/Retexture/textures/r.dds", QStringLiteral("DDS "));
+    writeFile(mods + "/JustNotes/readme.txt", QStringLiteral("hi"));
+
+    FakeShell shell;
+    shell.modsDirValue = mods;
+    auto listed        = [&](const QString &name) {
+        ModEntry e      = ModEntry::named(name);
+        e.modPath       = mods + "/" + name;
+        e.installStatus = 1;
+        e.checked       = true;
+        shell.modelStore.append(e);
+    };
+    listed(QStringLiteral("Listed1"));
+    listed(QStringLiteral("Listed2"));
+    listed(QStringLiteral("Listed3"));
+
+    LibraryFlow flow(shell);
+    const auto  settle = [] {
+        QEventLoop loop;
+        QTimer::singleShot(800, &loop, &QEventLoop::quit);
+        loop.exec();
+    };
+
+    flow.adoptNewFolders();
+    settle();
+    check("the two folders holding mod files became rows, the readme-only one did not",
+          shell.modelStore.count() == 5, QString::number(shell.modelStore.count()));
+    QStringList added;
+    bool        allOff = true;
+    for (int i = 3; i < shell.modelStore.count(); ++i) {
+        added << shell.modelStore.at(i).effectiveName();
+        if (shell.modelStore.at(i).checked) allOff = false;
+    }
+    added.sort();
+    check("they are the right two",
+          added == QStringList{QStringLiteral("HandMade"), QStringLiteral("Retexture")},
+          added.join(QLatin1Char('|')));
+    check("and they arrive SWITCHED OFF, so nothing changes what the game loads", allOff);
+    check("each is installed where it lies",
+          shell.modelStore.at(3).installStatus == int(InstallStatus::Installed) &&
+              shell.modelStore.at(3).modPath.startsWith(mods + "/"));
+    check("the list was saved once and the user was told",
+          shell.saves >= 1 && !shell.statuses.isEmpty(),
+          shell.statuses.join(QLatin1Char('|')));
+
+    const int savesAfterFirst = shell.saves;
+    flow.adoptNewFolders();
+    settle();
+    check("a second pass over an unchanged directory does nothing at all",
+          shell.modelStore.count() == 5 && shell.saves == savesAfterFirst);
+
+    // Taken out of the list while keeping the files: it must not come back.
+    Settings::setIgnoredModFolders(shell.gameId, {mods + "/HandMade"});
+    shell.modelStore.removeAt(3);
+    writeFile(mods + "/Later/Later.esp", QStringLiteral("TES3")); // bumps the mtime
+    flow.adoptNewFolders();
+    settle();
+    QStringList names;
+    for (int i = 0; i < shell.modelStore.count(); ++i)
+        names << shell.modelStore.at(i).effectiveName();
+    check("the new folder is taken in and the declined one stays out",
+          names.contains(QStringLiteral("Later")) &&
+              !names.contains(QStringLiteral("HandMade")),
+          names.join(QLatin1Char('|')));
+
+    // A modlist that did not parse leaves everything looking unused. Adopting
+    // then would write that over the real list.
+    QSettings().clear();
+    FakeShell blind;
+    blind.modsDirValue = mods;
+    LibraryFlow blindFlow(blind);
+    blindFlow.adoptNewFolders();
+    settle();
+    check("with every folder unused, nothing is adopted",
+          blind.modelStore.count() == 0 && blind.saves == 0);
+
+    // A sibling profile whose file would not open names mods we cannot see.
+    FakeShell partial;
+    partial.modsDirValue       = mods;
+    partial.unreadableProfiles = 1;
+    for (const QString &n : {QStringLiteral("Listed1"), QStringLiteral("Listed2"),
+                             QStringLiteral("Listed3")}) {
+        ModEntry e      = ModEntry::named(n);
+        e.modPath       = mods + "/" + n;
+        e.installStatus = 1;
+        e.checked       = true;
+        partial.modelStore.append(e);
+    }
+    LibraryFlow partialFlow(partial);
+    partialFlow.adoptNewFolders();
+    settle();
+    check("an unreadable sibling profile stops adoption dead",
+          partial.modelStore.count() == 3 && partial.saves == 0);
+
+    // And nothing is taken in while the library is being written into.
+    FakeShell busy;
+    busy.modsDirValue = mods;
+    busy.idle         = false;
+    for (const QString &n : {QStringLiteral("Listed1"), QStringLiteral("Listed2"),
+                             QStringLiteral("Listed3")}) {
+        ModEntry e      = ModEntry::named(n);
+        e.modPath       = mods + "/" + n;
+        e.installStatus = 1;
+        e.checked       = true;
+        busy.modelStore.append(e);
+    }
+    LibraryFlow busyFlow(busy);
+    busyFlow.adoptNewFolders();
+    settle();
+    check("a download in flight stops it too", busy.modelStore.count() == 3);
+    QSettings().clear();
 }
 
 } // namespace
@@ -579,6 +701,7 @@ int main(int argc, char **argv)
     testDeployFlowFingerprintAndQuietPaths();
     testLibraryFlowMovesFoldersAndRepointsRows();
     testLibraryFlowFindsFoldersNoModlistPointsAt();
+    testLibraryFlowAdoptsNewFoldersByItself();
     testDeployFlowAdoptsCreationsFromTheGamesDownloads();
     testDeployFlowWritesThePluginListWhereTheGameSpelledIt();
 

@@ -757,6 +757,27 @@ void MainWindow::onRemoveSelected()
                      T("share_remove_kept_shared").arg(keptShared));
     }
 
+    // A folder still sitting in the mods directory would be adopted straight
+    // back as a row (LibraryFlow::adoptNewFolders), so taking a row out while
+    // keeping its files has to mean "stop listing this". Only direct children
+    // of the mods directory get remembered: those are the only ones adoption
+    // ever offers, so anything else has no key worth storing.
+    if (!m_modsDir.isEmpty() && !installedPaths.isEmpty()) {
+        const QString modsRootAbs = QDir::cleanPath(QDir(m_modsDir).absolutePath());
+        const QString gameId      = currentGameId();
+        QStringList   ignored     = Settings::ignoredModFolders(gameId);
+        bool          changed     = false;
+        for (const QString &p : std::as_const(installedPaths)) {
+            const QString abs = QDir::cleanPath(QFileInfo(p).absoluteFilePath());
+            if (!QFileInfo::exists(abs)) continue; // deleted; nothing to ignore
+            if (QDir::cleanPath(QFileInfo(abs).absolutePath()) != modsRootAbs) continue;
+            if (ignored.contains(abs)) continue;
+            ignored << abs;
+            changed = true;
+        }
+        if (changed) Settings::setIgnoredModFolders(gameId, ignored);
+    }
+
     saveModList();
     updateModCount();
     scheduleConflictScan();

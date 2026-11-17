@@ -1040,13 +1040,6 @@ void MainWindow::setupCentralWidget()
             if (!path.isEmpty()) onDownloadCaught(path);
             return;
         }
-        case StickyKind::UnusedFolders:
-            // The sweep previews the same folders and carries the Add button,
-            // so the banner is a shortcut to it rather than a second dialog.
-            // It re-scans, which is right: the banner may have been up a while.
-            m_stickyKind = StickyKind::ViewSort;
-            m_libraryFlow->onCleanUpModFolders();
-            return;
         case StickyKind::ViewSort:
             break;
         }

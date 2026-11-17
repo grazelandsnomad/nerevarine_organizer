@@ -226,6 +226,29 @@ void Settings::setPluginsTxtPath(const QString &gameId, const QString &path)
 
 // -- Modlist profiles ---
 
+bool Settings::autoAdoptFolders(const QString &gameId)
+{
+    return QSettings().value(gameKey(gameId, "auto_adopt_folders"), true).toBool();
+}
+
+void Settings::setAutoAdoptFolders(const QString &gameId, bool on)
+{
+    QSettings().setValue(gameKey(gameId, "auto_adopt_folders"), on);
+}
+
+QStringList Settings::ignoredModFolders(const QString &gameId)
+{
+    return QSettings().value(gameKey(gameId, "folders_ignored")).toStringList();
+}
+
+void Settings::setIgnoredModFolders(const QString &gameId, const QStringList &paths)
+{
+    if (paths.isEmpty())
+        QSettings().remove(gameKey(gameId, "folders_ignored"));
+    else
+        QSettings().setValue(gameKey(gameId, "folders_ignored"), paths);
+}
+
 bool Settings::creationsAutoRows(const QString &gameId)
 {
     return QSettings().value(gameKey(gameId, "creations_auto_rows"), true).toBool();

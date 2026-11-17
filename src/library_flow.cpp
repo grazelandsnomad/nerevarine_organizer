@@ -7,9 +7,11 @@
 #include "modrow.h"
 #include "notify_banner.h"
 #include "prompts.h"
+#include "placeholder_state.h"
 #include "pluginparser.h"
 #include "report_dialog.h"
 #include "safe_fs.h"
+#include "settings.h"
 #include "translator.h"
 #include "undo_stack.h"
 #include "window_shell.h"
@@ -502,8 +504,14 @@ LibraryFlow::OrphanInputs LibraryFlow::orphanInputs() const
     for (const auto &prof : m_shell.otherProfileModlists())
         for (const ModEntry &e : prof.second)
             if (!e.modPath.isEmpty()) in.referenced << e.modPath;
+    // A sibling profile whose file is there and would not open names mods we
+    // cannot see, and every one of them then reads as unused. Nothing may act
+    // on that picture; the caller decides how loudly to say so.
+    if (m_shell.unreadableProfileModlists() > 0) in.referencesComplete = false;
     {   // data= lines the game config still points at
         QFile cfg(QDir::homePath() + QStringLiteral("/.config/openmw/openmw.cfg"));
+        if (cfg.exists() && !cfg.isOpen() && !QFileInfo(cfg.fileName()).isReadable())
+            in.referencesComplete = false;
         if (cfg.open(QIODevice::ReadOnly | QIODevice::Text)) {
             QTextStream ts(&cfg);
             while (!ts.atEnd()) {
@@ -543,40 +551,147 @@ LibraryFlow::OrphanScan LibraryFlow::scanOrphans(const OrphanInputs &in)
 
     for (const QString &name : std::as_const(out.orphans))
         if (folderHoldsGameData(root.filePath(name))) out.adoptable << name;
+
+    // Measuring is what the delete preview shows and sorts by, and it is the
+    // expensive half - a recursive stat of every file of every orphan. It
+    // stays here, on the worker, and only when someone asked for it.
+    if (in.wantSizes) {
+        for (const QString &name : std::as_const(out.orphans)) {
+            const qint64 b = folderSizeBytes(root.filePath(name));
+            out.sized.append({b, name});
+            out.totalBytes += b;
+        }
+        std::sort(out.sized.begin(), out.sized.end(),
+                  [](const auto &a, const auto &b) { return a.first > b.first; });
+    }
     return out;
 }
 
-void LibraryFlow::offerAdoptableFolders()
+namespace {
+
+// Nothing may be added while the library is being written into: an extract
+// dir, a staged BAIN tree or a half-unpacked install is in no modlist yet and
+// would read as a folder the user made by hand.
+bool libraryIsSettled(const WindowShell &shell)
 {
-    NotifyBanner *notify = m_shell.notify();
-    if (!notify || !m_shell.hasProfile()) return;
-    // Half-built folders exist by definition while something is being fetched
-    // or unpacked, and an extract dir is in no modlist yet.
-    if (!m_shell.downloadsIdle()) return;
-    const QList<ModEntry> rows = m_shell.model().all();
+    if (!shell.downloadsIdle()) return false;
+    const QList<ModEntry> rows = const_cast<WindowShell &>(shell).model().all();
     for (int i = 0; i < rows.size(); ++i)
-        if (rows.at(i).isInstalling()) return;
+        if (rows.at(i).isInstalling()) return false;
+    return true;
+}
 
-    const OrphanInputs in = orphanInputs();
+// At most this many folders join the list in one pass. A library whose
+// modlist is half-parsed can hand back a hundred perfectly real-looking
+// folders, and a hundred rows appearing at once is indistinguishable from a
+// bug; the rest come on the next pass, or through Clean Up Mod Folders.
+constexpr int kMaxAdoptedPerPass = 20;
+
+} // namespace
+
+void LibraryFlow::adoptNewFolders()
+{
+    if (!m_shell.hasProfile() || m_adoptScanning) return;
+    const QString gameId = m_shell.currentGameId();
+    if (!Settings::autoAdoptFolders(gameId)) return;
+    if (!libraryIsSettled(m_shell)) return;
+    if (m_shell.modsDir().isEmpty()) return;
+
+    // One stat, and usually the whole pass is over: the directory's mtime
+    // changes when a folder is added or removed, so an unchanged stamp means
+    // there is nothing new to find. This is what lets the window-activation
+    // hook be free in the common case.
+    const QString   root  = QFileInfo(m_shell.modsDir()).absoluteFilePath();
+    const QDateTime stamp = QFileInfo(root).lastModified();
+    if (root == m_lastAdoptRoot && stamp.isValid() && stamp == m_lastAdoptStamp) return;
+
+    OrphanInputs in = orphanInputs();
     if (in.modsRoot.isEmpty()) return;
+    // An incomplete picture is not evidence that anything is unused. Say
+    // nothing and leave the stamp alone, so the next pass tries again.
+    if (!in.referencesComplete) return;
+    in.wantSizes = false;
 
-    // The per-folder data scans are bounded directory walks, but there can be
-    // dozens of folders on a slow disk, and this runs right after a profile
-    // load: off the GUI thread, and the banner appears when it lands.
+    m_adoptScanning           = true;
+    const quint64 epoch       = ++m_scanEpoch;
+    const QString listAtStart = m_shell.modlistPath();
+
     async::guarded(
         this, [in](LibraryFlow *) { return scanOrphans(in); },
-        [](LibraryFlow *self, const OrphanScan &scan) {
-            if (scan.adoptable.isEmpty() || scan.suspicious) return;
-            NotifyBanner *banner = self->m_shell.notify();
-            if (!banner) return;
-            // Never over a banner that is already saying something about an
-            // ongoing state the user has to act on.
-            if (self->m_shell.stickyKind() != StickyKind::ViewSort) return;
-            self->m_shell.setStickyKind(StickyKind::UnusedFolders);
-            banner->showSticky(
-                T("cleanup_folders_unused_hint").arg(scan.adoptable.size()),
-                QStringLiteral("#8a4a12"));
+        [epoch, root, stamp, listAtStart, gameId](LibraryFlow      *self,
+                                                  const OrphanScan &scan) {
+            self->m_adoptScanning = false;
+            // The user can switch profile while a walk of a slow mount runs;
+            // everything below was decided about a list that may be gone.
+            if (epoch != self->m_scanEpoch) return;
+            if (self->m_shell.modlistPath() != listAtStart) return;
+            if (self->m_shell.currentGameId() != gameId) return;
+            if (QFileInfo(self->m_shell.modsDir()).absoluteFilePath() != root) return;
+            // And a download may have started during it.
+            if (!libraryIsSettled(self->m_shell)) return;
+            if (scan.suspicious) return;
+            self->applyAdoption(scan, root, stamp, gameId);
         });
+}
+
+void LibraryFlow::applyAdoption(const OrphanScan &scan, const QString &modsRoot,
+                                const QDateTime &stamp, const QString &gameId)
+{
+    // Folders the user took out of the list while keeping the files. Entries
+    // whose folder is gone are dropped here rather than growing forever.
+    const QStringList remembered = Settings::ignoredModFolders(gameId);
+    QStringList       stillThere;
+    for (const QString &p : remembered)
+        if (QFileInfo::exists(p)) stillThere << p;
+    if (stillThere != remembered) Settings::setIgnoredModFolders(gameId, stillThere);
+    const QSet<QString> ignored(stillThere.begin(), stillThere.end());
+
+    // A row may have appeared for one of these while the scan ran.
+    QSet<QString> alreadyRows;
+    for (const ModEntry &e : m_shell.model().all())
+        if (e.isMod() && !e.modPath.isEmpty())
+            alreadyRows.insert(QDir::cleanPath(QFileInfo(e.modPath).absoluteFilePath()));
+
+    QStringList fresh;
+    for (const QString &name : scan.adoptable) {
+        const QString path = QDir::cleanPath(QDir(modsRoot).absoluteFilePath(name));
+        if (ignored.contains(path)) continue;
+        if (alreadyRows.contains(path)) continue;
+        if (!QFileInfo(path).isDir()) continue; // gone since the scan
+        fresh << path;
+    }
+
+    // Nothing to do, but the directory has been looked at: remember the stamp
+    // so the next activation costs one stat.
+    m_lastAdoptRoot  = modsRoot;
+    m_lastAdoptStamp = stamp;
+    if (fresh.isEmpty()) return;
+
+    const int held = qMax(0, int(fresh.size()) - kMaxAdoptedPerPass);
+    if (held > 0) fresh = fresh.mid(0, kMaxAdoptedPerPass);
+
+    for (const QString &path : std::as_const(fresh)) {
+        ModEntry e = ModEntry::named(QFileInfo(path).fileName());
+        placeholder_state::markInstalled(e, path);
+        // Unticked, and set BEFORE the row exists. Unchecking a live row
+        // emits a check-state change, which the window answers with the
+        // "these mods depend on it, disable them too?" dialog - at startup,
+        // for a mod nothing has ever depended on.
+        e.checked = false;
+        m_shell.model().append(e);
+    }
+    m_shell.saveModList();
+    m_shell.updateModCount();
+    m_shell.updateSectionCounts();
+    m_shell.scheduleConflictScan();
+    m_shell.scheduleSizeScan();
+
+    const QString msg = held > 0 ? T("folders_adopted_capped").arg(fresh.size()).arg(held)
+                                 : T("folders_adopted").arg(fresh.size());
+    m_shell.showStatus(msg, 10000);
+    // The banner is the visible half, but there is no window in a test.
+    if (NotifyBanner *banner = m_shell.notify())
+        banner->show(msg, QStringLiteral("#8a4a12"));
 }
 
 void LibraryFlow::onCleanUpModFolders()
@@ -584,78 +699,108 @@ void LibraryFlow::onCleanUpModFolders()
     // An in-flight download's extract dir is not in the modlist yet, so it would
     // read as an orphan. Same for an extraction still running behind a
     // still-spinning row.
-    if (!m_shell.downloadsIdle()) {
+    if (!libraryIsSettled(m_shell)) {
         ui::warn(m_shell.dialogParent(), T("cleanup_folders_title"),
                  T("move_mods_err_downloads"));
         return;
-    }
-    const QList<ModEntry> modRows = m_shell.model().all();
-    for (int i = 0; i < modRows.size(); ++i) {
-        if (modRows.at(i).isInstalling()) {
-            ui::warn(m_shell.dialogParent(), T("cleanup_folders_title"),
-                     T("move_mods_err_downloads"));
-            return;
-        }
     }
     if (m_shell.modsDir().isEmpty() || !QDir(m_shell.modsDir()).exists()) {
         ui::warn(m_shell.dialogParent(), T("cleanup_folders_title"),
                  T("cleanup_folders_no_dir"));
         return;
     }
+    if (m_cleanupScanning) return; // the menu and a second click
 
-    const OrphanInputs inputs   = orphanInputs();
-    const QString      modsRoot = inputs.modsRoot;
-    const OrphanScan   scan     = scanOrphans(inputs);
-    const QStringList &orphans  = scan.orphans;
+    OrphanInputs inputs = orphanInputs();
+    if (inputs.modsRoot.isEmpty()) return;
+    // Sizes are what this dialog shows and sorts by, so they are wanted here -
+    // and they are why the whole scan has to be off the GUI thread: measuring
+    // every orphan is a recursive stat of possibly tens of thousands of files
+    // on a mount that can be slow, and it used to freeze the window outright.
+    inputs.wantSizes = true;
+
+    m_cleanupScanning         = true;
+    const quint64 epoch       = ++m_scanEpoch;
+    const QString listAtStart = m_shell.modlistPath();
+    const QString root        = inputs.modsRoot;
+    m_shell.showStatus(T("cleanup_folders_scanning"), 0);
+
+    async::guarded(
+        this, [inputs](LibraryFlow *) { return scanOrphans(inputs); },
+        [epoch, root, listAtStart](LibraryFlow *self, const OrphanScan &scan) {
+            self->m_cleanupScanning = false;
+            if (epoch != self->m_scanEpoch) return;
+            if (self->m_shell.modlistPath() != listAtStart) return;
+            // A download can have started while a slow mount was walked, and
+            // its extract dir would be in the list about to be deleted.
+            if (!libraryIsSettled(self->m_shell)) {
+                self->m_shell.showStatus(T("move_mods_err_downloads"), 8000);
+                return;
+            }
+            self->showCleanUpReport(scan, root);
+        });
+}
+
+void LibraryFlow::showCleanUpReport(const OrphanScan &scan, const QString &modsRoot)
+{
+    m_shell.showStatus(QString(), 1);
+    const QStringList &orphans = scan.orphans;
     if (orphans.isEmpty()) {
-        ui::info(m_shell.dialogParent(), T("cleanup_folders_title"), T("cleanup_folders_none"));
+        ui::info(m_shell.dialogParent(), T("cleanup_folders_title"),
+                 T("cleanup_folders_none"));
         return;
     }
-    const QStringList &onDisk     = scan.onDisk;
-    const bool         suspicious = scan.suspicious;
-    if (suspicious)
-        ui::warn(m_shell.dialogParent(), T("cleanup_folders_title"),
-                 T("cleanup_folders_suspicious")
-                     .arg(orphans.size()).arg(onDisk.size()));
-
-    QList<QPair<qint64, QString>> sized;
-    qint64 totalBytes = 0;
-    for (const QString &name : orphans) {
-        const qint64 b = folderSizeBytes(QDir(modsRoot).filePath(name));
-        sized.append({ b, name });
-        totalBytes += b;
-    }
-    std::sort(sized.begin(), sized.end(),
-              [](const auto &a, const auto &b) { return a.first > b.first; });
+    if (scan.suspicious)
+        ui::warn(
+            m_shell.dialogParent(), T("cleanup_folders_title"),
+            T("cleanup_folders_suspicious").arg(orphans.size()).arg(scan.onDisk.size()));
 
     // A folder holding something a game would load can join the modlist
     // instead of being deleted - the MO2 habit of making a mod folder by hand
     // and having it picked up (GitHub issue #2). One marked "+" per line.
+    // Most of these now become rows on their own before anyone opens this
+    // dialog; what is left here is the rest.
     const QStringList &adoptable = scan.adoptable;
 
     QString body;
-    for (const auto &e : sized)
+    for (const auto &e : scan.sized)
         body += QStringLiteral("%1  %2  %3\n")
                     .arg(adoptable.contains(e.second) ? QStringLiteral("+")
                                                       : QStringLiteral(" "))
                     .arg(cleanupFmtBytes(e.first), 10).arg(e.second);
 
-    QString summary = T("cleanup_folders_summary")
+    // What deleting will actually do, decided before the user agrees to it.
+    const bool toTrash = safefs::trashable(modsRoot);
+    QString    summary = T("cleanup_folders_summary")
                           .arg(orphans.size())
-                          .arg(cleanupFmtBytes(totalBytes));
+                          .arg(cleanupFmtBytes(scan.totalBytes));
     if (!adoptable.isEmpty())
         summary += QLatin1Char('\n') + T("cleanup_folders_adoptable").arg(adoptable.size());
+    summary += QLatin1Char('\n') + (toTrash ? T("cleanup_folders_will_trash")
+                                            : T("cleanup_folders_will_delete"));
 
     const ui::ReportChoice choice = ui::chooseMonospaceReport(
         m_shell.dialogParent(), T("cleanup_folders_title"), body, 720, 480, summary,
         adoptable.isEmpty() ? QString()
                             : T("cleanup_folders_adopt").arg(adoptable.size()),
-        suspicious ? QString() : T("cleanup_folders_accept").arg(orphans.size()));
+        scan.suspicious ? QString()
+                        : (toTrash ? T("cleanup_folders_accept_trash").arg(orphans.size())
+                                   : T("cleanup_folders_accept").arg(orphans.size())));
 
     if (choice == ui::ReportChoice::Safe) {
         if (m_shell.undo()) m_shell.undo()->pushUndo();
-        for (const QString &name : adoptable)
-            m_shell.installFolderAsMod(QDir(modsRoot).filePath(name));
+        // Asking for a folder back undoes having sent it away before.
+        const QString gameId  = m_shell.currentGameId();
+        QStringList   ignored = Settings::ignoredModFolders(gameId);
+        bool          changed = false;
+        for (const QString &name : adoptable) {
+            const QString path = QDir(modsRoot).filePath(name);
+            if (ignored.removeAll(QDir::cleanPath(QFileInfo(path).absoluteFilePath())) >
+                0)
+                changed = true;
+            m_shell.installFolderAsMod(path);
+        }
+        if (changed) Settings::setIgnoredModFolders(gameId, ignored);
         m_shell.saveModList();
         m_shell.updateModCount();
         m_shell.updateSectionCounts();
@@ -667,13 +812,42 @@ void LibraryFlow::onCleanUpModFolders()
     if (choice != ui::ReportChoice::Destructive) return;
 
     QStringList toDelete;
-    for (const auto &e : sized)
-        toDelete << QDir(modsRoot).filePath(e.second);
-    removeModFoldersAsync(toDelete);
+    for (const auto &e : scan.sized) toDelete << QDir(modsRoot).filePath(e.second);
 
-    m_shell.scheduleSizeScan();
-    m_shell.showStatus(
-        T("cleanup_folders_done").arg(QString::number(orphans.size()),
-                                      cleanupFmtBytes(totalBytes)),
-        8000);
+    // Trashing writes a .trashinfo and renames per folder; deleting walks the
+    // trees. Neither belongs on the thread drawing the window.
+    const qint64 bytes = scan.totalBytes;
+    async::guarded(
+        this,
+        [toDelete, toTrash](LibraryFlow *) {
+            return safefs::removeFolders(toDelete, toTrash);
+        },
+        [bytes, toTrash](LibraryFlow *self, const safefs::RemovedFolders &out) {
+            self->m_shell.scheduleSizeScan();
+            QString msg;
+            if (!out.trashed.isEmpty())
+                msg = T("cleanup_folders_trashed")
+                          .arg(out.trashed.size())
+                          .arg(cleanupFmtBytes(bytes));
+            else if (!out.deleted.isEmpty())
+                msg =
+                    T("cleanup_folders_done")
+                        .arg(QString::number(out.deleted.size()), cleanupFmtBytes(bytes));
+            // A folder that could not be moved is still on disk. Saying so is
+            // the whole point: it was never deleted as a consolation prize.
+            if (!out.failed.isEmpty()) {
+                const QString left =
+                    T("cleanup_folders_not_removed").arg(out.failed.size());
+                msg = msg.isEmpty() ? left : msg + QLatin1Char(' ') + left;
+                QStringList names;
+                for (const QString &p : out.failed) names << QFileInfo(p).fileName();
+                if (names.size() > 5)
+                    names = names.mid(0, 5)
+                            << QStringLiteral("… (+%1)").arg(names.size() - 5);
+                ui::warn(self->m_shell.dialogParent(), T("cleanup_folders_title"),
+                         left + QLatin1Char('\n') + names.join(QStringLiteral("\n  ")));
+            }
+            Q_UNUSED(toTrash);
+            if (!msg.isEmpty()) self->m_shell.showStatus(msg, 10000);
+        });
 }

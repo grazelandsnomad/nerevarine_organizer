@@ -58,6 +58,21 @@ struct Settings {
     static QStringList ignoredCreationIds(const QString &gameId);
     static void        setIgnoredCreationIds(const QString &gameId, const QStringList &ids);
 
+    // Folders the user made in the mods directory themselves become rows on
+    // their own. `autoAdoptFolders` is the one-line way to switch that off;
+    // deliberately no UI, exactly as with creationsAutoRows above.
+    //
+    // `ignoredModFolders` holds ABSOLUTE folder paths the user has removed
+    // from the list while keeping the files, so they are never offered again.
+    // Paths, not bare names: two profiles of one game can have different mods
+    // directories, and a name like "Textures" would otherwise silence a
+    // different folder of the same name forever. Entries whose folder is gone
+    // are pruned on each pass.
+    static bool        autoAdoptFolders(const QString &gameId);
+    static void        setAutoAdoptFolders(const QString &gameId, bool on);
+    static QStringList ignoredModFolders(const QString &gameId);
+    static void setIgnoredModFolders(const QString &gameId, const QStringList &paths);
+
     // -- Modlist profiles within a game ---
     // List + active selector
     static QStringList modlistProfileNames(const QString &gameId);

@@ -31,7 +31,7 @@ class ScanOverlay;
 class UndoStack;
 
 // Which sticky banner is up, so a click on it routes to the right action.
-enum class StickyKind { ViewSort, DeployHint, CaughtDownload, UnusedFolders };
+enum class StickyKind { ViewSort, DeployHint, CaughtDownload };
 
 class WindowShell {
 public:
@@ -54,6 +54,12 @@ public:
     virtual QList<int>      rowOrderForPersist() const = 0;
     virtual QList<ModEntry> snapshotEntriesForPersist() const = 0;
     virtual QList<QPair<QString, QList<ModEntry>>> otherProfileModlists() const = 0;
+    // How many of those modlists exist on disk and could NOT be read, as of
+    // the last call above. A profile that has never been saved has no file
+    // and does not count. Anything that decides a folder is unused needs
+    // this: a sibling profile whose file failed to open makes every folder it
+    // owns look like nobody's.
+    virtual int                    unreadableProfileModlists() const          = 0;
     virtual UndoStack             *undo() = 0;
     virtual ForbiddenModsRegistry *forbidden() = 0;
     virtual QString openmwPath() const = 0;

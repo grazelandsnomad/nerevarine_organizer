@@ -10,9 +10,13 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QString>
+#include <QStandardPaths>
+#include <QStorageInfo>
 #include <QTemporaryDir>
 #include <QThread>
 #include <QTime>
+
+#include <unistd.h>
 
 #include <iostream>
 
@@ -674,8 +678,103 @@ static void run_is_complete_download()
           !safefs::isCompleteDownload(dir.filePath("adir"), 1000));
 }
 
+// Can a folder go to the Trash, and does a batch removal say honestly what
+// became of each one? The predicate is what a delete dialog promises the user
+// BEFORE they confirm, so being wrong either way is a bug: promising a trash
+// that is not reachable, or deleting outright what was promised restorable.
+static void testTrashablePredicateMatchesQt()
+{
+    std::cout << "\n[trashable: the prediction matches what Qt then does]\n";
+    QTemporaryDir tmp;
+    // A directory under the home area, where the home trash lives.
+    const QString dir = tmp.path() + "/probe";
+    QDir().mkpath(dir + "/sub");
+    writeFile(dir + "/sub/a.esp", "TES3");
+
+    const bool predicted = safefs::trashable(dir);
+    QString    inTrash;
+    const bool actual = QFile::moveToTrash(dir, &inTrash);
+    check("the prediction is what actually happens", predicted == actual,
+          QStringLiteral("predicted=%1 actual=%2").arg(predicted).arg(actual));
+    if (actual && !inTrash.isEmpty()) {
+        check("a directory really does go to the Trash whole",
+              QFileInfo(inTrash).isDir() && QFileInfo::exists(inTrash + "/sub/a.esp"));
+        // Leave the tester's trash as we found it, both halves of the entry.
+        QDir(inTrash).removeRecursively();
+        QFile::remove(QFileInfo(inTrash).absolutePath().chopped(5) + "info/" +
+                      QFileInfo(inTrash).fileName() + ".trashinfo");
+    }
+    check("a path that is not there is never trashable",
+          !safefs::trashable(tmp.path() + "/gone") && !safefs::trashable(QString()));
+}
+
+static void testRemoveFoldersReportsWhatHappened()
+{
+    std::cout << "\n[removeFolders: every folder accounted for]\n";
+    QTemporaryDir tmp;
+    auto          make = [&](const QString &name) {
+        const QString d = tmp.path() + "/" + name;
+        QDir().mkpath(d);
+        writeFile(d + "/x.esp", "TES3");
+        return d;
+    };
+    const QString a = make("a"), b = make("b");
+
+    const safefs::RemovedFolders out =
+        safefs::removeFolders({a, b, tmp.path() + "/never-existed", QString()},
+                              /*preferTrash=*/false);
+    check("both folders are gone from where they were",
+          !QFileInfo::exists(a) && !QFileInfo::exists(b));
+    check("each one is reported exactly once, and a missing path is not invented",
+          out.deleted.size() == 2 && out.trashed.isEmpty() && out.failed.isEmpty(),
+          QStringLiteral("deleted=%1 trashed=%2 failed=%3")
+              .arg(out.deleted.size())
+              .arg(out.trashed.size())
+              .arg(out.failed.size()));
+    check("no staging husk is left behind",
+          QDir(tmp.path())
+              .entryList(QStringList{QStringLiteral("*.__deleting__*")},
+                         QDir::Dirs | QDir::NoDotAndDotDot)
+              .isEmpty());
+
+    // The trash arm, only where this machine can actually trash: a folder it
+    // cannot move must be left ON DISK and reported, never deleted instead.
+    const QString                c = make("c");
+    const safefs::RemovedFolders t = safefs::removeFolders({c}, /*preferTrash=*/true);
+    if (safefs::trashable(tmp.path())) {
+        check("a trashed folder is reported as trashed, not as deleted",
+              t.trashed.size() == 1 && t.deleted.isEmpty() && !QFileInfo::exists(c));
+        // Leave the tester's trash as we found it. Which trash was used
+        // depends on the device the temp dir landed on, so both candidates
+        // are swept - missing one is how a test suite quietly fills a trash.
+        for (const QString &p : t.trashed) {
+            const QString leaf = QFileInfo(p).fileName();
+            QStringList   roots{
+                QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) +
+                    QStringLiteral("/Trash"),
+                QStorageInfo(tmp.path()).rootPath() + QStringLiteral("/.Trash-") +
+                    QString::number(::getuid()),
+            };
+            for (const QString &root : roots) {
+                QDir(root + "/files/" + leaf).removeRecursively();
+                QFile::remove(root + "/info/" + leaf + ".trashinfo");
+            }
+        }
+    } else {
+        check("where the Trash is out of reach the folder stays on disk",
+              t.failed.size() == 1 && t.deleted.isEmpty() && QFileInfo::exists(c),
+              QStringLiteral("failed=%1 deleted=%2 exists=%3")
+                  .arg(t.failed.size())
+                  .arg(t.deleted.size())
+                  .arg(QFileInfo::exists(c)));
+    }
+}
+
 static void run_safe_fs()
 {
+    testTrashablePredicateMatchesQt();
+    testRemoveFoldersReportsWhatHappened();
+
     testWritablePathFreeName();
     testWritablePathOverwritesExistingFile();
     testWritablePathDivertsAroundDirectory();

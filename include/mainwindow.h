@@ -355,6 +355,9 @@ private:
     // active profile is excluded because callers hold it live in m_modList,
     // where it may already differ from the file.
     QList<QPair<QString, QList<ModEntry>>> otherProfileModlists() const override;
+    int                                    unreadableProfileModlists() const override;
+    // Set by the call above; see its declaration in window_shell.h.
+    mutable int m_unreadableProfiles = 0;
     // Find an in-flight placeholder by InstallToken: m_modList first, then
     // m_strandedInstalls (parked across profile switches). When found in a
     // stranded bucket, `outProfileKey` (if non-null) gets the bucket key for

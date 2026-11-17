@@ -58,6 +58,8 @@ public:
     }
     QList<ModEntry> snapshotEntriesForPersist() const override { return modelStore.all(); }
     QList<QPair<QString, QList<ModEntry>>> otherProfileModlists() const override { return {}; }
+    int                                    unreadableProfiles = 0;
+    int unreadableProfileModlists() const override { return unreadableProfiles; }
     UndoStack             *undo() override { return &undoStack; }
     ForbiddenModsRegistry *forbidden() override { return nullptr; }
     QString openmwPath() const override { return openmw; }
