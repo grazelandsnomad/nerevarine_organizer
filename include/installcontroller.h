@@ -75,10 +75,15 @@ public:
     //     to clean up.
     //
     // The token is opaque - just echoed back.
+    //
+    // `folderNameHint` (the mod's page title) names the extract directory, so
+    // a mod is one folder called after the mod whether or not its archive
+    // shipped an installer. Empty falls back to the archive's own base name,
+    // which is what a hand-dropped file and the older installs have.
     void extractArchive(const QString &archivePath, const QString &modsDir,
-                        const QUuid &installToken,
-                        const QString &reuseHintPath = {},
-                        const QString &looseNameHint = {});
+                        const QUuid &installToken, const QString &reuseHintPath = {},
+                        const QString &looseNameHint  = {},
+                        const QString &folderNameHint = {});
 
     // User-initiated abort of a verify or extract in flight. Kills the live
     // extractor process if there is one; otherwise just flags the token so the

@@ -385,6 +385,7 @@ NexusClient::parseFilesList(const QByteArray &json)
         FileEntry f;
         f.fileId    = o["file_id"].toInt();
         f.name      = o["name"].toString();
+        f.fileName  = o["file_name"].toString();
         f.version   = o["version"].toString();
         f.category  = o["category_name"].toString();
         f.md5       = o["md5"].toString().trimmed().toLower();

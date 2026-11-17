@@ -1154,7 +1154,12 @@ MainWindow::extractAndAdd(const QString &archivePath, ModRow placeholder)
     }
     placeholder->setData(ModRole::NexusFileName, QVariant());  // consumed
 
-    m_installCtl->extractArchive(effectivePath, m_modsDir, token, reuseHint, looseHint);
+    // The same title the loose-file branch uses names the mod's FOLDER, so a
+    // plain archive lands in "<mod title>" exactly as a FOMOD/BAIN install
+    // already did - the inconsistency a user reported was these two paths
+    // disagreeing, not a bug in either.
+    m_installCtl->extractArchive(effectivePath, m_modsDir, token, reuseHint, looseHint,
+                                 looseHint);
     return {};
 }
 

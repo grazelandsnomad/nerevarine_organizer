@@ -1,11 +1,31 @@
 #include "install_layout.h"
 
+#include "fs_utils.h"
+
 #include <QDir>
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <QSet>
 
 namespace install_layout {
+
+QString folderFor(const QString &modsDir, const QString &name, const QString &fallback)
+{
+    QString base = fsutils::sanitizeFolderName(name);
+    if (base.isEmpty()) base = fsutils::sanitizeFolderName(fallback);
+    if (base.isEmpty()) return {};
+    const QDir mods(modsDir);
+    QString    out = base;
+    for (int n = 2; QFileInfo::exists(mods.filePath(out)); ++n)
+        out = base + QLatin1Char('_') + QString::number(n);
+    return mods.filePath(out);
+}
+
+bool isDataContainerName(const QString &folderName)
+{
+    const QString n = folderName.trimmed().toLower();
+    return n == QLatin1String("data") || n == QLatin1String("data files");
+}
 
 bool isDataRootName(const QString &folderName)
 {

@@ -121,7 +121,7 @@ void NexusController::fetchExpectedChecksum(const QUuid &row,
             siblings.reserve(int(files->size()));
             for (const auto &other : *files) siblings << other.name;
             emit modFileSiblings(row, f.name, siblings);
-            emit expectedChecksumFetched(row, fileId, f.name, f.md5, f.sizeBytes);
+            emit expectedChecksumFetched(row, fileId, f.fileName, f.md5, f.sizeBytes);
             return;
         }
     });

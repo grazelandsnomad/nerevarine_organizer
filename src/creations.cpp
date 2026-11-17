@@ -1,5 +1,7 @@
 #include "creations.h"
 
+#include "install_layout.h"
+
 #include "fs_utils.h"
 #include "modroles.h"
 #include "placeholder_state.h"
@@ -232,13 +234,7 @@ Plan planAdoption(const QList<CatalogEntry> &catalog,
 
 QString destFolderFor(const QString &modsDir, const QString &title)
 {
-    QString base = fsutils::sanitizeFolderName(title);
-    if (base.isEmpty()) base = QStringLiteral("Creation");
-    const QDir mods(modsDir);
-    QString name = base;
-    for (int n = 2; QFileInfo::exists(mods.filePath(name)); ++n)
-        name = base + QLatin1Char('_') + QString::number(n);
-    return mods.filePath(name);
+    return install_layout::folderFor(modsDir, title, QStringLiteral("Creation"));
 }
 
 namespace {

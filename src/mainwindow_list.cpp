@@ -23,6 +23,7 @@
 #include "modlist_model.h"
 #include "user_state_paths.h"
 #include "scan_overlay.h"
+#include "bulk_check.h"
 #include "settings.h"
 #include "theme.h"
 #include "separatordialog.h"
@@ -460,6 +461,63 @@ MainWindow::DepBreak MainWindow::confirmDependencyBreakage(
         return DepBreak::ProceedAndCascade;
     }
     return DepBreak::Proceed;
+}
+
+// Enable or disable the whole list.
+//
+// "Whole" means every mod row - EXCEPT while the filter box holds text, when
+// it means the rows that text leaves showing. Someone looking at twelve
+// filtered rows and reaching for "Disable all" does not mean the four hundred
+// they cannot see. Rows folded away inside a collapsed section are included
+// either way: they are part of the list, just not on screen.
+void MainWindow::setAllModsEnabled(bool enable)
+{
+    const bool filtering = m_filterBar && m_filterBar->hasText();
+    QList<int> rows;
+    for (int i = 0; i < m_modList->count(); ++i) {
+        if (!mod_row::isMod(m_modList->item(i))) continue;
+        if (filtering && m_modList->item(i)->isHidden()) continue;
+        rows.append(i);
+    }
+    applyCheckState(rows, enable);
+}
+
+// Turn a set of rows on or off in one go.
+//
+// The loop is wrapped in a QSignalBlocker and the three handlers are called
+// once afterwards, the way enterViewSort and checkPendingDisables already do
+// it. Without that, each row fires a mod-count refresh and a section recount
+// - a full pass over the list plus a copy of it, plus a viewport repaint -
+// so a few hundred rows is quadratic on the thread drawing the window. That
+// burst is what the comment in getNexusUpdateTargets calls "the conditions
+// for its worst crash".
+//
+// Blocking the VIEW still leaves the model's own dataChanged, which is what
+// feeds the disable warning - deliberately: its zero-shot timer coalesces the
+// whole batch into one "these mods depend on it" question instead of one per
+// row. pushUndo() runs before the first write, so a single Ctrl+Z puts back
+// everything, including whatever that dialog cascaded.
+void MainWindow::applyCheckState(const QList<int> &rows, bool enable)
+{
+    const QList<int> todo = bulk_check::rowsToSet(m_model.all(), rows, enable);
+    if (todo.isEmpty()) {
+        statusBar()->showMessage(T("bulk_check_nothing"), 4000);
+        return;
+    }
+    m_undoStack->pushUndo();
+    {
+        const QSignalBlocker blocker(m_modList);
+        for (int r : todo)
+            if (ModRow it = m_modList->item(r))
+                it->setCheckState(enable ? Qt::Checked : Qt::Unchecked);
+    }
+    updateModCount();
+    updateSectionCounts();
+    scheduleConflictScan();
+    saveModList();
+    statusBar()->showMessage(
+        (enable ? T("bulk_check_enabled") : T("bulk_check_disabled")).arg(todo.size()),
+        6000);
 }
 
 void MainWindow::checkPendingDisables()
@@ -1061,24 +1119,36 @@ void MainWindow::onContextMenu(const QPoint &pos)
                     saveModList();
                 });
 
-            auto toggleSection = [this, item](Qt::CheckState state) {
-                m_undoStack->pushUndo();
-                int start = m_modList->row(item) + 1;
-                for (int i = start; i < m_modList->count(); ++i) {
-                    ModRow it = m_modList->item(i);
-                    if (mod_row::isSeparator(it))
-                        break;
-                    if (it->flags() & Qt::ItemIsUserCheckable)
-                        it->setCheckState(state);
+            auto toggleSection = [this, item](bool enable) {
+                QList<int> rows;
+                for (int i = m_modList->row(item) + 1; i < m_modList->count(); ++i) {
+                    if (mod_row::isSeparator(m_modList->item(i))) break;
+                    rows.append(i);
                 }
-                saveModList();
-                scheduleConflictScan();
+                applyCheckState(rows, enable);
             };
-            menu.addAction(T("ctx_section_enable_all"),  this,
-                [toggleSection]{ toggleSection(Qt::Checked); });
+            menu.addAction(T("ctx_section_enable_all"), this,
+                           [toggleSection] { toggleSection(true); });
             menu.addAction(T("ctx_section_disable_all"), this,
-                [toggleSection]{ toggleSection(Qt::Unchecked); });
+                           [toggleSection] { toggleSection(false); });
         } else {
+            // Turn the selection on or off. Beside "all in section" above,
+            // which is the same action with a different reach.
+            {
+                QList<int> picked;
+                for (ModRow sel : m_modList->selectedItems())
+                    if (mod_row::isMod(sel)) picked.append(m_modList->row(sel));
+                if (picked.isEmpty() && mod_row::isMod(item))
+                    picked.append(m_modList->row(item));
+                if (!picked.isEmpty()) {
+                    menu.addAction(T("ctx_enable_selected").arg(picked.size()), this,
+                                   [this, picked] { applyCheckState(picked, true); });
+                    menu.addAction(T("ctx_disable_selected").arg(picked.size()), this,
+                                   [this, picked] { applyCheckState(picked, false); });
+                    menu.addSeparator();
+                }
+            }
+
             // -- "Send to" submenu ---
             //   · Separator…   (searchable picker, only if any separator exists)
             //   · Top of modlist

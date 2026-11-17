@@ -43,6 +43,26 @@ QString diveTarget(const QStringList &topSubdirs,
 // Case-insensitive.
 bool isDataRootName(const QString &folderName);
 
+// `<modsDir>/<name sanitised>`, with `_2`, `_3`... when that folder is taken.
+//
+// The one place a mod folder's name is decided from something human. Both
+// installers that knew a mod's title already did this by hand and only the
+// FOMOD/BAIN path ever ran - which is why a plain archive landed under its
+// download's name, a bare CDN id in the worst case, and the same mod could
+// be a readable folder or a UUID depending on whether it shipped an
+// installer. `fallback` names the folder when `name` sanitises to nothing.
+QString folderFor(const QString &modsDir, const QString &name, const QString &fallback);
+
+// True when `folderName` is a conventional CONTAINER for a mod's payload -
+// "Data" (Bethesda) or "Data Files" (Morrowind) - rather than a wrapper the
+// packer happened to add.
+//
+// The difference matters only when lifting a single top-level folder out of
+// the extract directory: a wrapper named after the mod is noise and comes
+// out, but a container is where the deploy and the config writer expect the
+// payload to sit, so it stays. Case-insensitive.
+bool isDataContainerName(const QString &folderName);
+
 // The folder a Bethesda deploy merges into Data/ for a mod stored at
 // `modPath`: its parent when the stored root is itself one of the folders
 // above, else `modPath`. Never `modsDir` itself - a top-level mod folder that

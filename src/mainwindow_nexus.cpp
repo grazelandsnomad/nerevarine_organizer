@@ -849,7 +849,7 @@ void MainWindow::onFileListFetched(const QUuid &rowKey,
     }
 
     auto stashChecksum = [](ModRow ph, const NexusClient::FileEntry &f) {
-        if (!f.name.isEmpty()) ph->setData(ModRole::NexusFileName, f.name);
+        if (!f.fileName.isEmpty()) ph->setData(ModRole::NexusFileName, f.fileName);
         if (!f.md5.isEmpty())  ph->setData(ModRole::ExpectedMd5,  f.md5);
         if (f.sizeBytes > 0)   ph->setData(ModRole::ExpectedSize, f.sizeBytes);
         // Which file these describe: a free account that ends up fetching

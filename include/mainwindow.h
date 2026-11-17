@@ -311,6 +311,14 @@ private:
 
     // Rows unticked since the last event-loop turn, checked in one batch.
     void checkPendingDisables();
+    // Turn `rows` on or off as one gesture: one undo step, one save, one
+    // dependency question, and the per-row count/recount burst suppressed.
+    // Rows already in the wanted state, and separators, are dropped first
+    // (bulk_check.h). Backs Enable/Disable All, Selected and per-section.
+    void applyCheckState(const QList<int> &rows, bool enable);
+    // Mods > Enable/Disable All. Acts on the rows a text filter leaves
+    // showing when one is active, on every mod row otherwise.
+    void setAllModsEnabled(bool enable);
 
     void setupMenuBar();
     void setupToolbar();

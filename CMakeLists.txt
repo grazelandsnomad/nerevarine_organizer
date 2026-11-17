@@ -164,6 +164,7 @@ set(CORE_SOURCES
     src/bethesda_loadorder.cpp
     src/root_routes.cpp
     src/bethesda_archives.cpp
+    src/bulk_check.cpp
     src/bethesda_custom_ini.cpp
     src/creations.cpp
     src/extract_errors.cpp

@@ -1,10 +1,15 @@
 #include "library_flow.h"
 
 #include "async_guarded.h"
+#include "fs_utils.h"
+#include "install_layout.h"
+#include "logging.h"
 #include "mainwindow_internal.h"
 #include "mod_cleanup.h"
+#include "mod_naming.h"
 #include "modlist_model.h"
 #include "modrow.h"
+#include "modroles.h"
 #include "notify_banner.h"
 #include "prompts.h"
 #include "placeholder_state.h"
@@ -14,6 +19,7 @@
 #include "settings.h"
 #include "translator.h"
 #include "undo_stack.h"
+#include "user_state_paths.h"
 #include "window_shell.h"
 
 #include <QDir>
@@ -692,6 +698,143 @@ void LibraryFlow::applyAdoption(const OrphanScan &scan, const QString &modsRoot,
     // The banner is the visible half, but there is no window in a test.
     if (NotifyBanner *banner = m_shell.notify())
         banner->show(msg, QStringLiteral("#8a4a12"));
+}
+
+QList<LibraryFlow::FolderRename>
+LibraryFlow::plannedRenames(const QList<ModEntry> &entries, const QString &modsRoot)
+{
+    QList<FolderRename> out;
+    if (modsRoot.isEmpty()) return out;
+    const QString root = QDir::cleanPath(QDir(modsRoot).absolutePath());
+    QSet<QString> taken; // names this batch has already claimed
+
+    for (const ModEntry &e : entries) {
+        if (!e.isMod() || e.modPath.isEmpty()) continue;
+        const QString abs = QDir::cleanPath(QFileInfo(e.modPath).absoluteFilePath());
+        if (!abs.startsWith(root + QLatin1Char('/'))) continue;
+
+        // The folder to rename is the one directly under the mods dir. A row
+        // whose path dives deeper (an old install that kept its wrapper)
+        // still renames its wrapper, which is the part with the bad name.
+        const QString rel = abs.mid(root.size() + 1);
+        const QString top = rel.section(QLatin1Char('/'), 0, 0);
+        if (top.isEmpty()) continue;
+        if (!mod_naming::folderNameLooksGeneric(top)) continue;
+
+        // What to call it. The page title first - the folder name itself is
+        // the thing being replaced, so it is never the answer.
+        QString want = e.nexusTitle.trimmed();
+        if (want.isEmpty()) want = e.customName.trimmed();
+        if (want.isEmpty() && rel.contains(QLatin1Char('/')))
+            want = rel.section(QLatin1Char('/'), 1, 1); // the inner folder's name
+        QString base = fsutils::sanitizeFolderName(want);
+        if (base.isEmpty()) continue;
+        // Free on disk AND not already claimed by an earlier entry in this
+        // same batch - two mods can genuinely carry the same page title, and
+        // the second must get its own folder rather than be dropped.
+        QString name = base;
+        for (int n = 2;
+             QFileInfo::exists(QDir(root).filePath(name)) || taken.contains(name); ++n)
+            name = base + QLatin1Char('_') + QString::number(n);
+
+        taken.insert(name);
+        out.append({e.rowId, QDir(root).filePath(top), QDir(root).filePath(name), name});
+    }
+    return out;
+}
+
+void LibraryFlow::onTidyFolderNames()
+{
+    if (!libraryIsSettled(m_shell)) {
+        ui::warn(m_shell.dialogParent(), T("tidy_folders_title"),
+                 T("move_mods_err_downloads"));
+        return;
+    }
+    if (m_shell.modsDir().isEmpty() || !QDir(m_shell.modsDir()).exists()) {
+        ui::warn(m_shell.dialogParent(), T("tidy_folders_title"),
+                 T("cleanup_folders_no_dir"));
+        return;
+    }
+    // A Bethesda deployment records absolute paths in its manifest; renaming
+    // a folder out from under one strands it. Undeploy first.
+    {
+        const QString key = QFileInfo(m_shell.modlistPath()).completeBaseName();
+        if (QFileInfo::exists(resolveUserStatePath(QStringLiteral("deploy_manifest_") +
+                                                   key + QStringLiteral(".json")))) {
+            ui::warn(m_shell.dialogParent(), T("tidy_folders_title"),
+                     T("tidy_folders_deployed"));
+            return;
+        }
+    }
+
+    const QString             root = QFileInfo(m_shell.modsDir()).absoluteFilePath();
+    const QList<FolderRename> plan = plannedRenames(m_shell.model().all(), root);
+    if (plan.isEmpty()) {
+        ui::info(m_shell.dialogParent(), T("tidy_folders_title"), T("tidy_folders_none"));
+        return;
+    }
+
+    QString body;
+    for (const FolderRename &r : plan)
+        body +=
+            QStringLiteral("%1\n    -> %2\n").arg(QFileInfo(r.from).fileName(), r.name);
+
+    if (ui::chooseMonospaceReport(m_shell.dialogParent(), T("tidy_folders_title"), body,
+                                  720, 480, T("tidy_folders_summary").arg(plan.size()),
+                                  T("tidy_folders_accept").arg(plan.size()),
+                                  QString()) != ui::ReportChoice::Safe)
+        return;
+
+    // Same-directory renames, so each is a cheap metadata move - but there
+    // can be a hundred of them on a slow mount, and the window should not
+    // stop while they run.
+    async::guarded(
+        this,
+        [plan](LibraryFlow *) {
+            QList<QPair<QUuid, QString>> done; // row -> the folder's new path
+            QStringList                  failed;
+            for (const FolderRename &r : plan) {
+                if (!QFileInfo(r.from).isDir() || QFileInfo::exists(r.to)) {
+                    failed << QFileInfo(r.from).fileName();
+                    continue;
+                }
+                if (QDir().rename(r.from, r.to))
+                    done.append({r.row, r.to});
+                else
+                    failed << QFileInfo(r.from).fileName();
+            }
+            return QPair<QList<QPair<QUuid, QString>>, QStringList>{done, failed};
+        },
+        [plan](LibraryFlow                                            *self,
+               const QPair<QList<QPair<QUuid, QString>>, QStringList> &out) {
+            // Repoint every row that lived under a folder that moved. A row
+            // may sit deeper than the folder itself, so the prefix is what is
+            // rewritten, not the whole path.
+            for (const auto &moved : out.first) {
+                for (const FolderRename &r : plan) {
+                    if (r.row != moved.first) continue;
+                    if (ModRow item = self->m_shell.rowById(moved.first)) {
+                        const QString old = item->data(ModRole::ModPath).toString();
+                        const QString rest =
+                            QDir::cleanPath(QFileInfo(old).absoluteFilePath())
+                                .mid(r.from.size());
+                        const QString now = moved.second + rest;
+                        item->setData(ModRole::ModPath, now);
+                        item->setToolTip(now);
+                    }
+                    break;
+                }
+            }
+            if (!out.first.isEmpty()) {
+                self->m_shell.saveModList();
+                self->m_shell.syncGameConfig();
+                self->m_shell.scheduleSizeScan();
+            }
+            QString msg = T("tidy_folders_done").arg(out.first.size());
+            if (!out.second.isEmpty())
+                msg += QLatin1Char(' ') + T("tidy_folders_failed").arg(out.second.size());
+            self->m_shell.showStatus(msg, 10000);
+        });
 }
 
 void LibraryFlow::onCleanUpModFolders()

@@ -7,6 +7,8 @@
 // behind a cancellable progress dialog, repointing each row as its folder
 // lands; the window is reached through WindowShell only.
 
+#include "modentry.h"
+
 #include <QDateTime>
 #include <QList>
 #include <QObject>
@@ -62,6 +64,15 @@ public slots:
     // definition then), when the references are incomplete, and when so many
     // folders read as unused that a modlist has probably failed to load.
     void adoptNewFolders();
+    // Rename the mod folders that carry no readable name - the bare download
+    // ids a Nexus CDN link leaves behind - to the mod they hold.
+    //
+    // Only ever offered, never automatic: it moves directories the user may
+    // have open elsewhere, and the preview is the point. One folder per mod
+    // is what new installs get on their own now (install_layout::folderFor);
+    // this is for the ones installed before that.
+    void onTidyFolderNames();
+
 
 public:
     // Which folders under the mods dir nothing points at any more, and which
@@ -92,6 +103,22 @@ public:
         QList<QPair<qint64, QString>> sized;
         qint64                        totalBytes = 0;
     };
+    // One folder the tidy would rename. Public for the test.
+    struct FolderRename {
+        QUuid   row;
+        QString from; // absolute, a direct child of the mods dir
+        QString to;   // absolute, free when the scan ran
+        QString name; // what it will be called
+    };
+    // What could be renamed, given the rows and the mods dir. Pure except for
+    // asking the filesystem whether a target name is free, so the rules are
+    // testable: a direct child of the mods dir, a name that reads as a
+    // download id rather than a mod, a better name known from the row, and a
+    // target nothing else has taken - including by an earlier entry in this
+    // same batch.
+    static QList<FolderRename> plannedRenames(const QList<ModEntry> &entries,
+                                              const QString         &modsRoot);
+
     OrphanInputs      orphanInputs() const;
     static OrphanScan scanOrphans(const OrphanInputs &in);
 

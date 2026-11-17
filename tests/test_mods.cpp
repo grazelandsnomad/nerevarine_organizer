@@ -4,6 +4,7 @@
 #include "modentry.h"
 #include "modlist_serializer.h"
 #include "modlist_summary.h"
+#include "bulk_check.h"
 #include "install_layout.h"
 #include "post_install.h"
 #include "variant_picker.h"
@@ -534,6 +535,93 @@ static void expectVariant(const char *name, const QString &fileName,
 {
     const auto got = install_layout::classifyOaabVariant(fileName);
     check(name, got == expected, QString::fromLatin1(variantName(got)));
+}
+
+// The mod's folder is named after the mod, collision-safe - the one place a
+// readable folder name comes from, and why a plain archive used to land under
+// its download's name (a bare CDN id in the worst case) while the same mod
+// with a FOMOD installer landed under its title.
+// Which rows a bulk enable/disable actually has to write to. Getting this
+// wrong is not a wrong answer but a slow one - every needless write costs a
+// full pass over the list and a copy of it.
+static void run_bulk_check()
+{
+    std::cout << "bulk_check::rowsToSet\n";
+    QList<ModEntry> entries;
+    auto            mod = [&](const QString &name, bool on) {
+        ModEntry e      = ModEntry::named(name);
+        e.modPath       = "/mods/" + name;
+        e.installStatus = 1;
+        e.checked       = on;
+        entries.append(e);
+    };
+    mod("On1", true);
+    mod("Off1", false);
+    ModEntry sep;
+    sep.itemType    = ItemType::Separator;
+    sep.displayName = QStringLiteral("Section");
+    entries.append(sep); // row 2
+    mod("On2", true);
+    mod("Off2", false);
+
+    const QList<int> all{0, 1, 2, 3, 4};
+    check("turning on touches only the ones that are off",
+          bulk_check::rowsToSet(entries, all, true) == QList<int>{1, 4},
+          QString::number(bulk_check::rowsToSet(entries, all, true).size()));
+    check("turning off touches only the ones that are on",
+          bulk_check::rowsToSet(entries, all, false) == QList<int>{0, 3});
+    check("a separator is never written to",
+          !bulk_check::rowsToSet(entries, all, true).contains(2) &&
+              !bulk_check::rowsToSet(entries, all, false).contains(2));
+    check("a separator on its own is nothing to do",
+          bulk_check::rowsToSet(entries, {2}, true).isEmpty());
+    check("rows already in the wanted state are nothing to do",
+          bulk_check::rowsToSet(entries, {0, 3}, true).isEmpty());
+    check("no candidates is nothing to do",
+          bulk_check::rowsToSet(entries, {}, true).isEmpty());
+    check("indices off the end are ignored rather than crashing",
+          bulk_check::rowsToSet(entries, {-1, 99, 1}, true) == QList<int>{1});
+    check("the caller's order is kept, so the count it reports is the count it set",
+          bulk_check::rowsToSet(entries, {4, 1}, true) == QList<int>{4, 1});
+}
+
+static void run_folder_naming()
+{
+    std::cout << "install_layout::folderFor / isDataContainerName\n";
+    QTemporaryDir tmp;
+    const QString mods = tmp.path();
+
+    check("a title becomes a folder beside the others",
+          install_layout::folderFor(mods, "OAAB Tel Mora", {}) ==
+              QDir(mods).filePath("OAAB Tel Mora"),
+          install_layout::folderFor(mods, "OAAB Tel Mora", {}));
+    check("characters a filesystem will not take are dropped",
+          !install_layout::folderFor(mods, "Mod: a/b*c?", {})
+               .section('/', -1)
+               .contains(QLatin1Char('/')));
+
+    QDir().mkpath(QDir(mods).filePath("Taken"));
+    check("a name already on disk gets _2, then _3",
+          install_layout::folderFor(mods, "Taken", {}) == QDir(mods).filePath("Taken_2"));
+    QDir().mkpath(QDir(mods).filePath("Taken_2"));
+    check("and keeps counting",
+          install_layout::folderFor(mods, "Taken", {}) == QDir(mods).filePath("Taken_3"));
+
+    check("a name that sanitises to nothing falls back",
+          install_layout::folderFor(mods, "///***", "Creation") ==
+              QDir(mods).filePath("Creation"));
+    check("and with no fallback there is no name to give",
+          install_layout::folderFor(mods, "///***", {}).isEmpty());
+
+    // Lifting a wrapper out is safe; lifting a payload container is not.
+    check("a wrapper named after the mod is not a container",
+          !install_layout::isDataContainerName("Watercraft") &&
+              !install_layout::isDataContainerName("My Cool Mod"));
+    check("Data and Data Files are containers, in any case",
+          install_layout::isDataContainerName("Data") &&
+              install_layout::isDataContainerName("data") &&
+              install_layout::isDataContainerName("Data Files") &&
+              install_layout::isDataContainerName("  DATA FILES  "));
 }
 
 static void run_install_layout()
@@ -1486,6 +1574,8 @@ int main(int argc, char **argv)
     run_mod_cleanup();
     run_variant_picker();
     run_mod_sharing();
+    run_bulk_check();
+    run_folder_naming();
     run_install_layout();
     run_post_install();
     run_modlist_summary();

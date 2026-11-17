@@ -166,11 +166,11 @@ void logExtractFailure(const char *prog, const QString &archivePath,
 }
 } // namespace
 
-void InstallController::extractArchive(const QString &archivePath,
-                                       const QString &modsDir,
-                                       const QUuid &installToken,
+void InstallController::extractArchive(const QString &archivePath, const QString &modsDir,
+                                       const QUuid   &installToken,
                                        const QString &reuseHintPath,
-                                       const QString &looseNameHint)
+                                       const QString &looseNameHint,
+                                       const QString &folderNameHint)
 {
     // Cancel landed between verified() and this queued call: bail before any
     // filesystem work (in particular before the reuse-wrapper wipe below).
@@ -181,7 +181,14 @@ void InstallController::extractArchive(const QString &archivePath,
 
     const QFileInfo fi(archivePath);
     const QString baseName = fi.completeBaseName();
-    QString extractDir = QDir(modsDir).filePath(baseName);
+    // Named after the mod when we know what the mod is called. Without this
+    // the folder is named after the downloaded FILE, and a Nexus CDN link
+    // can hand back a bare id with no name - which is how one mod landed in
+    // "OAAB Tel Mora" and the next in "1d17186d-e830-49dc-bae0-c51a74d8760f".
+    const QString titled = folderNameHint.trimmed().isEmpty()
+                               ? QString()
+                               : install_layout::folderFor(modsDir, folderNameHint, {});
+    QString extractDir   = titled.isEmpty() ? QDir(modsDir).filePath(baseName) : titled;
 
     // Stable-path reuse: if the caller has a prior wrapper for this
     // placeholder, extract back into it. Keeps cross-machine syncs on the same
@@ -210,9 +217,32 @@ void InstallController::extractArchive(const QString &archivePath,
         const QStringList subdirs = dir.entryList(QDir::Dirs  | QDir::NoDotAndDotDot);
         const QStringList files   = dir.entryList(QDir::Files | QDir::NoDotAndDotDot);
         const QString diveInto = install_layout::diveTarget(subdirs, files);
-        const QString modPath = diveInto.isEmpty()
-            ? extractDir
-            : dir.filePath(diveInto);
+        QString modPath = diveInto.isEmpty() ? extractDir : dir.filePath(diveInto);
+
+        // Lift that one folder out of our wrapper, so the mod is ONE folder
+        // rather than "<mod>/<whatever the archive called itself>". Two
+        // same-directory renames, and only when the wrapper holds nothing
+        // else at all - hidden entries included, since the husk is removed
+        // and anything left in it would go with it. Any failure leaves the
+        // dived path, which is what this did before.
+        //
+        // A "Data"/"Data Files" folder is NOT lifted: that one is where the
+        // deploy and the config writer expect a mod's payload to sit, so its
+        // position carries meaning. Only a wrapper the packer added comes out.
+        if (!diveInto.isEmpty() && !install_layout::isDataContainerName(diveInto) &&
+            dir.entryList(QDir::AllEntries | QDir::Hidden | QDir::System |
+                          QDir::NoDotAndDotDot)
+                    .size() == 1) {
+            const QString husk = extractDir + QStringLiteral(".__lift__");
+            if (!QFileInfo::exists(husk) && QDir().rename(extractDir, husk)) {
+                if (QDir().rename(QDir(husk).filePath(diveInto), extractDir)) {
+                    QDir().rmdir(husk);
+                    modPath = extractDir;
+                } else {
+                    QDir().rename(husk, extractDir); // put it back untouched
+                }
+            }
+        }
         emit extractionSucceeded(archivePath, extractDir, modPath, installToken);
     };
 

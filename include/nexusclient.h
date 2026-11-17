@@ -199,6 +199,13 @@ public:
     struct FileEntry {
         int     fileId   = 0;
         QString name;
+        // The archive's real name on disk ("OAAB Tel Mora-56321-1-0-….7z"),
+        // from "file_name". NOT `name`, which is the author's display label
+        // ("Main File") and carries no extension. A Nexus CDN link can hand
+        // back an opaque id with no name at all, and this is the only place
+        // the real one can be recovered from - the mod folder is named after
+        // the downloaded file, so without it a mod lands under a bare UUID.
+        QString fileName;
         QString version;
         QString category;       // "MAIN", "UPDATE", "PATCH", etc.
         QString md5;            // lowercase

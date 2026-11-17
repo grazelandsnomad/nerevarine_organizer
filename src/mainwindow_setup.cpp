@@ -198,6 +198,10 @@ void MainWindow::setupMenuBar()
     // Undo a temporary Size/Date view sort (no-op when none is active).
     modsMenu->addAction(T("menu_reset_order"), this, [this]{ resetToSavedOrder(); });
     modsMenu->addSeparator();
+    modsMenu->addAction(T("menu_enable_all"), this, [this] { setAllModsEnabled(true); });
+    modsMenu->addAction(T("menu_disable_all"), this,
+                        [this] { setAllModsEnabled(false); });
+    modsMenu->addSeparator();
     // Hidden for profiles LOOT doesn't support, matching the toolbar button's
     // per-profile visibility.
     m_actMenuSortLoot = modsMenu->addAction(T("menu_sort_loot"), this, [this]{
@@ -237,6 +241,8 @@ void MainWindow::setupMenuBar()
     // View > Move Mod Library button) makes it one click.
     modsMenu->addAction(T("menu_move_mods"),       m_libraryFlow, &LibraryFlow::onMoveModsDir);
     modsMenu->addAction(T("menu_cleanup_folders"), m_libraryFlow, &LibraryFlow::onCleanUpModFolders);
+    modsMenu->addAction(T("menu_tidy_folders"), m_libraryFlow,
+                        &LibraryFlow::onTidyFolderNames);
     modsMenu->addAction(T("menu_log_triage"),      this, &MainWindow::onTriageOpenMWLog);
     modsMenu->addAction(T("menu_diag_bundle"),     this, &MainWindow::onCreateDiagnosticBundle);
     modsMenu->addAction(T("menu_edit_load_order"), this, &MainWindow::onEditLoadOrder);

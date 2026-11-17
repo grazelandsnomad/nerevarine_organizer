@@ -512,6 +512,99 @@ void testLibraryFlowAdoptsNewFoldersByItself()
     QSettings().clear();
 }
 
+// Which folders the tidy would rename. The rules are the whole feature: it
+// moves directories, so anything it proposes wrongly is a mod the user has
+// to go and find.
+void testLibraryFlowPlansFolderRenames()
+{
+    std::cout << "testLibraryFlowPlansFolderRenames\n";
+    QTemporaryDir tmp;
+    const QString mods = tmp.path() + "/mods";
+    QDir().mkpath(mods);
+
+    auto row = [&](const QString &relPath, const QString &title,
+                   const QString &custom = {}) {
+        ModEntry e      = ModEntry::named(relPath.section('/', -1));
+        e.modPath       = mods + "/" + relPath;
+        e.installStatus = 1;
+        e.checked       = true;
+        e.nexusTitle    = title;
+        e.customName    = custom;
+        QDir().mkpath(e.modPath);
+        return e;
+    };
+    QList<ModEntry> entries;
+    const QString   uuidA = QStringLiteral("1d17186d-e830-49dc-bae0-c51a74d8760f");
+    const QString   uuidB = QStringLiteral("01e455ee-239c-436d-9921-05611317aa9a");
+    const QString   uuidC = QStringLiteral("03b5f872-205c-4662-9f44-47e4e2ec6a73");
+    entries << row(uuidA, QStringLiteral("Watercraft Overhaul"));
+    entries << row(uuidB + "/Daedric Repolish", QString()); // title unknown
+    entries << row(QStringLiteral("OAAB Tel Mora"), QStringLiteral("OAAB Tel Mora"));
+    entries << row(uuidC, QString()); // nothing to call it
+
+    const auto  plan = LibraryFlow::plannedRenames(entries, mods);
+    QStringList names;
+    for (const auto &r : plan) names << QFileInfo(r.from).fileName() + "->" + r.name;
+    names.sort();
+
+    check("a download id with a known title is renamed to the mod",
+          names.contains(uuidA + "->Watercraft Overhaul"), names.join(QLatin1Char('|')));
+    check("one that dived keeps its wrapper but takes the inner name",
+          names.contains(uuidB + "->Daedric Repolish"), names.join(QLatin1Char('|')));
+    check("a folder that already reads as a mod is left alone",
+          !names.join(QLatin1Char('|')).contains(QStringLiteral("OAAB Tel Mora->")));
+    check("and one with no name to give is skipped rather than guessed at",
+          !names.join(QLatin1Char('|')).contains(uuidC));
+
+    // A target already on disk must not be proposed twice or over something.
+    QDir().mkpath(mods + "/Watercraft Overhaul");
+    const auto second = LibraryFlow::plannedRenames(entries, mods);
+    for (const auto &r : second)
+        check("never proposes a name that is already taken",
+              QFileInfo(r.to).fileName() != QLatin1String("Watercraft Overhaul"), r.name);
+
+    // Two rows wanting the same name must not collide with each other.
+    QList<ModEntry> twins;
+    twins << row(QStringLiteral("aaaaaaaa-1111-2222-3333-444444444444"),
+                 QStringLiteral("Same Name"));
+    twins << row(QStringLiteral("bbbbbbbb-1111-2222-3333-444444444444"),
+                 QStringLiteral("Same Name"));
+    const auto both = LibraryFlow::plannedRenames(twins, mods);
+    check("two mods wanting one name get two different folders",
+          both.size() == 2 && both.at(0).to != both.at(1).to,
+          both.size() == 2 ? both.at(0).name + "|" + both.at(1).name
+                           : QStringLiteral("?"));
+
+    // The shape a real library has: one row carries the saved name, another
+    // dives and can only be named after its inner folder - and both want the
+    // same name.
+    QTemporaryDir tmp2;
+    const QString mods2 = tmp2.path() + "/mods";
+    QDir().mkpath(mods2);
+    auto row2 = [&](const QString &relPath, const QString &custom) {
+        ModEntry e      = ModEntry::named(relPath.section('/', -1));
+        e.modPath       = mods2 + "/" + relPath;
+        e.installStatus = 1;
+        e.checked       = true;
+        e.customName    = custom;
+        QDir().mkpath(e.modPath);
+        return e;
+    };
+    QList<ModEntry> real;
+    real << row2(uuidB, QStringLiteral("Daedric Repolish"));
+    real << row2(uuidC + "/Daedric Repolish", QString());
+    const auto  realPlan = LibraryFlow::plannedRenames(real, mods2);
+    QStringList realNames;
+    for (const auto &r : realPlan)
+        realNames << QFileInfo(r.from).fileName() + "->" + r.name;
+    check("both are renamed, the second to a name of its own",
+          realPlan.size() == 2 && realNames.at(0).endsWith("->Daedric Repolish") &&
+              realNames.at(1).endsWith("->Daedric Repolish_2"),
+          realNames.join(QLatin1Char('|')));
+
+    check("no mods dir, no plan", LibraryFlow::plannedRenames(entries, {}).isEmpty());
+}
+
 } // namespace
 
 // A waiting Creation row plus the game's download of it in Data/: the adopt
@@ -702,6 +795,7 @@ int main(int argc, char **argv)
     testLibraryFlowMovesFoldersAndRepointsRows();
     testLibraryFlowFindsFoldersNoModlistPointsAt();
     testLibraryFlowAdoptsNewFoldersByItself();
+    testLibraryFlowPlansFolderRenames();
     testDeployFlowAdoptsCreationsFromTheGamesDownloads();
     testDeployFlowWritesThePluginListWhereTheGameSpelledIt();
 
