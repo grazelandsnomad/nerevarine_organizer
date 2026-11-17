@@ -769,23 +769,23 @@ void LibraryFlow::showCleanUpReport(const OrphanScan &scan, const QString &modsR
                                                       : QStringLiteral(" "))
                     .arg(cleanupFmtBytes(e.first), 10).arg(e.second);
 
-    // What deleting will actually do, decided before the user agrees to it.
-    const bool toTrash = safefs::trashable(modsRoot);
-    QString    summary = T("cleanup_folders_summary")
+    QString summary = T("cleanup_folders_summary")
                           .arg(orphans.size())
                           .arg(cleanupFmtBytes(scan.totalBytes));
     if (!adoptable.isEmpty())
         summary += QLatin1Char('\n') + T("cleanup_folders_adoptable").arg(adoptable.size());
-    summary += QLatin1Char('\n') + (toTrash ? T("cleanup_folders_will_trash")
-                                            : T("cleanup_folders_will_delete"));
+    // What will be TRIED, not what will happen. Whether a folder can reach a
+    // trash is settled by the attempt and nothing else: a predicate for it was
+    // written and measured against Qt, and it was wrong in both directions on
+    // different machines. Anything that cannot be moved is asked about
+    // afterwards rather than deleted on the strength of a guess.
+    summary += QLatin1Char('\n') + T("cleanup_folders_removal_note");
 
     const ui::ReportChoice choice = ui::chooseMonospaceReport(
         m_shell.dialogParent(), T("cleanup_folders_title"), body, 720, 480, summary,
         adoptable.isEmpty() ? QString()
                             : T("cleanup_folders_adopt").arg(adoptable.size()),
-        scan.suspicious ? QString()
-                        : (toTrash ? T("cleanup_folders_accept_trash").arg(orphans.size())
-                                   : T("cleanup_folders_accept").arg(orphans.size())));
+        scan.suspicious ? QString() : T("cleanup_folders_accept").arg(orphans.size()));
 
     if (choice == ui::ReportChoice::Safe) {
         if (m_shell.undo()) m_shell.undo()->pushUndo();
@@ -819,35 +819,45 @@ void LibraryFlow::showCleanUpReport(const OrphanScan &scan, const QString &modsR
     const qint64 bytes = scan.totalBytes;
     async::guarded(
         this,
-        [toDelete, toTrash](LibraryFlow *) {
-            return safefs::removeFolders(toDelete, toTrash);
+        [toDelete](LibraryFlow *) {
+            return safefs::removeFolders(toDelete, /*preferTrash=*/true);
         },
-        [bytes, toTrash](LibraryFlow *self, const safefs::RemovedFolders &out) {
+        [bytes](LibraryFlow *self, const safefs::RemovedFolders &out) {
             self->m_shell.scheduleSizeScan();
-            QString msg;
             if (!out.trashed.isEmpty())
-                msg = T("cleanup_folders_trashed")
-                          .arg(out.trashed.size())
-                          .arg(cleanupFmtBytes(bytes));
-            else if (!out.deleted.isEmpty())
-                msg =
-                    T("cleanup_folders_done")
-                        .arg(QString::number(out.deleted.size()), cleanupFmtBytes(bytes));
-            // A folder that could not be moved is still on disk. Saying so is
-            // the whole point: it was never deleted as a consolation prize.
-            if (!out.failed.isEmpty()) {
-                const QString left =
-                    T("cleanup_folders_not_removed").arg(out.failed.size());
-                msg = msg.isEmpty() ? left : msg + QLatin1Char(' ') + left;
-                QStringList names;
-                for (const QString &p : out.failed) names << QFileInfo(p).fileName();
-                if (names.size() > 5)
-                    names = names.mid(0, 5)
-                            << QStringLiteral("… (+%1)").arg(names.size() - 5);
-                ui::warn(self->m_shell.dialogParent(), T("cleanup_folders_title"),
-                         left + QLatin1Char('\n') + names.join(QStringLiteral("\n  ")));
+                self->m_shell.showStatus(T("cleanup_folders_trashed")
+                                             .arg(out.trashed.size())
+                                             .arg(cleanupFmtBytes(bytes)),
+                                         10000);
+            if (out.failed.isEmpty()) return;
+
+            // No trash would take these, and they are still on disk - the move
+            // was never allowed to fall through to a delete. Losing them for
+            // good is a different thing to agree to, so it is asked for on its
+            // own, naming them.
+            QStringList names;
+            for (const QString &p : out.failed) names << QFileInfo(p).fileName();
+            if (names.size() > 10)
+                names = names.mid(0, 10)
+                        << QStringLiteral("… (+%1)").arg(names.size() - 10);
+            if (!ui::confirm(self->m_shell.dialogParent(), T("cleanup_folders_title"),
+                             T("cleanup_folders_trash_failed")
+                                 .arg(out.failed.size())
+                                 .arg(names.join(QStringLiteral("\n  "))))) {
+                self->m_shell.showStatus(
+                    T("cleanup_folders_not_removed").arg(out.failed.size()), 10000);
+                return;
             }
-            Q_UNUSED(toTrash);
-            if (!msg.isEmpty()) self->m_shell.showStatus(msg, 10000);
+            const QStringList stillThere = out.failed;
+            async::guarded(
+                self,
+                [stillThere](LibraryFlow *) {
+                    return safefs::removeFolders(stillThere, /*preferTrash=*/false);
+                },
+                [](LibraryFlow *me, const safefs::RemovedFolders &gone) {
+                    me->m_shell.scheduleSizeScan();
+                    me->m_shell.showStatus(
+                        T("cleanup_folders_deleted").arg(gone.deleted.size()), 10000);
+                });
         });
 }

@@ -7,11 +7,9 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QStandardPaths>
-#include <QStorageInfo>
 
 #ifdef Q_OS_LINUX
 #include <fcntl.h>    // open
-#include <sys/stat.h> // stat, S_ISVTX - st_dev decides whether a rename can work
 #include <unistd.h>   // syncfs, close
 #endif
 
@@ -120,57 +118,6 @@ QString setAside(const QString &dir)
     for (int n = 1; QFileInfo::exists(tomb); ++n)
         tomb = base + QString::number(n);
     return QDir().rename(dir, tomb) ? tomb : QString();
-}
-
-namespace {
-
-// The kernel's device id for `path`. Not QStorageInfo::device(): two btrfs
-// subvolumes of one partition share a block device and differ here, and it is
-// this number that decides whether a rename can work.
-bool deviceOf(const QString &path, dev_t &out)
-{
-    struct stat st;
-    if (::stat(QFile::encodeName(path).constData(), &st) != 0) return false;
-    out = st.st_dev;
-    return true;
-}
-
-} // namespace
-
-bool trashable(const QString &dir)
-{
-    dev_t want;
-    if (dir.isEmpty() || !deviceOf(dir, want)) return false;
-
-    // The home trash, when it is on this device. Probed through its parent,
-    // which exists even on a machine that has never trashed anything: Qt
-    // creates the Trash directory itself.
-    const QString share =
-        QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
-    dev_t shareDev;
-    if (!share.isEmpty() && deviceOf(share, shareDev) && shareDev == want) return true;
-
-    // Otherwise a trash at the top of this filesystem. The top has to BE this
-    // device: a nested subvolume reports its parent mount's root, which is
-    // somewhere a rename cannot reach.
-    const QString top = QStorageInfo(dir).rootPath();
-    dev_t         topDev;
-    if (top.isEmpty() || !deviceOf(top, topDev) || topDev != want) return false;
-
-    const QString uid = QString::number(::getuid());
-    // An administrator-made <top>/.Trash counts only when it is sticky and not
-    // a symlink - the spec's rule, so a world-writable trap cannot redirect a
-    // delete somewhere else.
-    const QFileInfo shared(top + QStringLiteral("/.Trash"));
-    if (shared.isDir() && !shared.isSymLink()) {
-        struct stat st;
-        if (::stat(QFile::encodeName(shared.filePath()).constData(), &st) == 0 &&
-            (st.st_mode & S_ISVTX))
-            return true;
-    }
-    const QFileInfo own(top + QStringLiteral("/.Trash-") + uid);
-    if (own.isDir()) return own.isWritable();
-    return QFileInfo(top).isWritable(); // Qt creates it
 }
 
 RemovedFolders removeFolders(const QStringList &paths, bool preferTrash)

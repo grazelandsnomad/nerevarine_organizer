@@ -110,25 +110,6 @@ bool forceRemoveRecursively(const QString &path);
 // (the caller deletes it where it is).
 QString setAside(const QString &dir);
 
-// Can `dir` be moved to the desktop Trash, so the user could put it back?
-//
-// Asked BEFORE a delete the user has not confirmed yet, so it has to be
-// read-only: it creates nothing and moves nothing. It answers the only
-// question that decides the outcome - is there a trash directory on the same
-// KERNEL device as `dir` - because trashing is a rename, and Qt's fallback
-// for a cross-device move copies file by file and so cannot move a directory
-// at all (it returns false and leaves the folder where it was).
-//
-// st_dev, not QStorageInfo::device(): measured on this machine, ~/.cache sits
-// on its own btrfs subvolume, which reports the same block device as the home
-// trash and a different st_dev - and QFile::moveToTrash fails there. Matching
-// on the block device would promise a trash that is not reachable.
-//
-// Mirrors the freedesktop lookup Qt itself performs: the home trash first,
-// then a sticky <topdir>/.Trash/<uid>, then <topdir>/.Trash-<uid>, which Qt
-// creates when the top of the filesystem is writable.
-bool trashable(const QString &dir);
-
 // What became of a batch of folders.
 struct RemovedFolders {
     QStringList trashed; // in the desktop Trash, restorable
@@ -138,12 +119,20 @@ struct RemovedFolders {
 
 // Remove `paths`, preferring the Trash when `preferTrash`.
 //
-// Never silently escalates: a folder the caller was told would be trashed is
-// NEVER deleted outright when the move fails - it lands in `failed` instead.
-// Consenting to something restorable is not consent to lose it. With
-// `preferTrash` false this is the old behaviour, a setAside rename plus a
-// byte-delete, which is what install leftovers want: trashing those would
-// quietly fill the user's trash on every install.
+// Never silently escalates: a folder that could not be moved to the Trash is
+// NEVER deleted outright instead - it lands in `failed`, still on disk, for
+// the caller to ask about separately. Consenting to something restorable is
+// not consent to lose it. With `preferTrash` false this is the old
+// behaviour, a setAside rename plus a byte-delete, which is what install
+// leftovers want: trashing those would fill the user's trash on every
+// install.
+//
+// There is deliberately no "will this work?" predicate to go with it. One
+// was written and measured against Qt, and it was wrong in BOTH directions
+// on different machines - it under-promised on a CI runner whose home trash
+// did not exist yet, and over-promised against a volume trash Qt then
+// declined to use. A dialog must not promise what only the attempt can
+// settle, so the caller says what it will TRY and reports what happened.
 //
 // Blocking - the renames and the per-folder .trashinfo writes are syscalls on
 // a possibly slow mount, so callers run it on a worker.
