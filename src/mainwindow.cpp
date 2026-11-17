@@ -300,6 +300,10 @@ MainWindow::MainWindow(QWidget *parent)
     {
         const QStringList gc = Settings::groundcoverApproved();
         m_groundcoverApproved = QSet<QString>(gc.begin(), gc.end());
+        {
+            const QStringList cp = Settings::contentPlugins();
+            m_contentPlugins     = QSet<QString>(cp.begin(), cp.end());
+        }
     }
 
     // Declined-patch keys: user said "no" to an auto-detected patch.
@@ -1612,6 +1616,15 @@ void MainWindow::runGroundcoverHelper(ModRow item, const QString &modRoot)
         m_groundcoverApproved.remove(modRoot);
         if (!nexusUrl.isEmpty())
             m_groundcoverApproved.remove(nexusUrl);
+        // Removing an approval is not a "no" - it is the same state as never
+        // having been asked, and the config writer guesses from the file name
+        // again on the very next save. Record the plugins instead, so the
+        // answer actually holds.
+        static const QStringList kGcContentExts{".esp", ".esm", ".omwaddon"};
+        for (const auto &p : m_scans->cachedDataFolders(modRoot, kGcContentExts))
+            for (const QString &cf : p.second) m_contentPlugins.insert(cf);
+        Settings::setContentPlugins(
+            QStringList(m_contentPlugins.begin(), m_contentPlugins.end()));
     }
     Settings::setGroundcoverApproved(
         QStringList(m_groundcoverApproved.begin(), m_groundcoverApproved.end()));

@@ -790,6 +790,37 @@ static void testLooksLikeGroundcover()
           !looksLikeGroundcover("/mods/Patch for Purists", "Patch for Purists"));
 }
 
+// A plugin whose name says it DELETES grass must never be classified as
+// grass: groundcover= plugins are dropped from the load order, so a remover
+// filed that way silently never runs - which is what Greenmote's
+// deleted_groundcover.omwaddon did.
+static void testNameSaysDeletesGroundcover()
+{
+    std::cout << "\n[nameSaysDeletesGroundcover]\n";
+    using post_install::nameSaysDeletesGroundcover;
+
+    check("the Greenmote/Groundcoverify output",
+          nameSaysDeletesGroundcover("deleted_groundcover.omwaddon"));
+    check("the other spellings a remover uses",
+          nameSaysDeletesGroundcover("delete_grass.esp") &&
+              nameSaysDeletesGroundcover("Removed Grass.esp") &&
+              nameSaysDeletesGroundcover("remove_groundcover.omwaddon") &&
+              nameSaysDeletesGroundcover("no_grass.esp"));
+    check("case does not matter", nameSaysDeletesGroundcover("DELETED_Groundcover.ESP"));
+
+    // The ones it must NOT swallow - these really are grass.
+    check("a real groundcover mod is not a remover",
+          !nameSaysDeletesGroundcover("Rem_AC.esp") &&
+              !nameSaysDeletesGroundcover("Remiros' Groundcover.esp") &&
+              !nameSaysDeletesGroundcover("Vurt's Groundcover - BC.esp") &&
+              !nameSaysDeletesGroundcover("Aesthesia Groundcover.esp"));
+    check("'Remiros' starts with 'rem' but is not 'remove'",
+          !nameSaysDeletesGroundcover("Remiros_Groundcover_Fixed.esp"));
+    check("a directory called deleted says nothing about the plugin",
+          !nameSaysDeletesGroundcover("/mods/deleted/Grass.esp"));
+    check("empty is not a remover", !nameSaysDeletesGroundcover(QString()));
+}
+
 static void testFindSplashDir()
 {
     std::cout << "\n[findSplashDir]\n";
@@ -853,6 +884,7 @@ static void run_post_install()
 {
     std::cout << "=== post_install ===\n";
     testLooksLikeGroundcover();
+    testNameSaysDeletesGroundcover();
     testFindSplashDir();
     testNormalizeModName();
     testBundledPatchMatchesMod();

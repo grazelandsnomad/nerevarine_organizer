@@ -1315,6 +1315,41 @@ void MainWindow::onContextMenu(const QPoint &pos)
                     if (picked.size() >= 2) {
                         menu.addAction(T("ctx_choose_data_folders"), this,
                                        [this, modPath]{ chooseDataFolders(modPath); });
+
+                        // A mod's grass is guessed from file and folder names, and
+                        // a wrong guess is invisible: a plugin emitted as
+                        // groundcover= is dropped from the load order, so it
+                        // simply never runs. This is the way back, per mod, and it
+                        // beats every rule.
+                        {
+                            static const QStringList kGcExts{".esp", ".esm", ".omwaddon"};
+                            QStringList              plugins;
+                            for (const auto &p : m_scans->cachedDataFolders(
+                                     item->data(ModRole::ModPath).toString(), kGcExts))
+                                for (const QString &cf : p.second) plugins << cf;
+                            if (!plugins.isEmpty()) {
+                                bool allForced = true;
+                                for (const QString &cf : plugins)
+                                    if (!m_contentPlugins.contains(cf)) allForced = false;
+                                auto *act = menu.addAction(T("ctx_not_groundcover"));
+                                act->setCheckable(true);
+                                act->setChecked(allForced);
+                                connect(
+                                    act, &QAction::triggered, this,
+                                    [this, plugins](bool on) {
+                                        for (const QString &cf : plugins) {
+                                            if (on)
+                                                m_contentPlugins.insert(cf);
+                                            else
+                                                m_contentPlugins.remove(cf);
+                                        }
+                                        Settings::setContentPlugins(
+                                            QStringList(m_contentPlugins.begin(),
+                                                        m_contentPlugins.end()));
+                                        saveModList(); // re-sync groundcover=/content=
+                                    });
+                            }
+                        }
                     }
                 }
 

@@ -237,6 +237,18 @@ struct Settings {
     static void        setDeclinedPatches(const QStringList &keys);
 
     // -- Groundcover-approved set ---
+    // Plugin file names the user has said are NOT grass, however they look.
+    //
+    // Groundcover is otherwise guessed from names, and a guess has no way to
+    // be wrong: a plugin emitted as groundcover= is dropped from the load
+    // order entirely, so a mod whose whole job is to DELETE grass
+    // ("deleted_groundcover.omwaddon") was classified as grass by its own
+    // name and never loaded. Declining the install-time prompt did not help -
+    // "no" was stored as the absence of an approval, which is the same thing
+    // as never having been asked.
+    static QStringList contentPlugins();
+    static void        setContentPlugins(const QStringList &names);
+
     static QStringList groundcoverApproved();
     static void        setGroundcoverApproved(const QStringList &keys);
 

@@ -883,6 +883,9 @@ private:
     // Mod paths approved for automatic groundcover= handling. In QSettings so
     // it survives restarts.
     QSet<QString>          m_groundcoverApproved;
+    // Plugin file names the user has said are NOT grass; beats every
+    // groundcover rule. See Settings::contentPlugins.
+    QSet<QString> m_contentPlugins;
 
     // Patch subfolders kept disabled even after the target mod is added.
     // Key = "<modPath>\t<subfolderName>", in QSettings. syncOpenMWConfig checks

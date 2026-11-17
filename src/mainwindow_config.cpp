@@ -2,6 +2,8 @@
 // save/load, and missing-master/-dependency scans. Split for parallel compile.
 
 #include "mainwindow.h"
+
+#include "post_install.h"
 #include "mainwindow_internal.h"
 #include "settings.h"
 #include "load_order_merge.h"
@@ -1266,10 +1268,17 @@ void MainWindow::syncOpenMWConfig()
             const bool modApproved =
                 m_groundcoverApproved.contains(modPath)
              || (!nexusUrl.isEmpty() && m_groundcoverApproved.contains(nexusUrl));
+            // The user's own word beats every rule below, including an
+            // approved mod: one remover inside an approved grass mod has to
+            // be rescuable, and a guess that cannot be corrected is the bug
+            // this exists for.
+            auto forcedContent = [this](const QString &cf) {
+                return m_contentPlugins.contains(cf);
+            };
             if (modApproved) {
                 for (const auto &p : cm.pluginDirs)
                     for (const QString &cf : p.second)
-                        cm.groundcoverFiles.insert(cf);
+                        if (!forcedContent(cf)) cm.groundcoverFiles.insert(cf);
             } else {
                 // Named grass mods whose folder doesn't literally say
                 // "grass"/"groundcover" - same list as the addModFromPath
@@ -1287,12 +1296,22 @@ void MainWindow::syncOpenMWConfig()
                  || hintMatches(item->text())
                  || hintMatches(item->data(ModRole::CustomName).toString());
                 for (const auto &p : cm.pluginDirs) {
-                    const bool dirIsGC =
-                        modNameIsGC
-                     || p.first.contains("groundcover", Qt::CaseInsensitive)
-                     || p.first.contains("grass", Qt::CaseInsensitive)
-                     || hintMatches(p.first);
+                    // The folder's OWN name, not the whole path: a library
+                    // living under any directory called "grass" used to mark
+                    // every plugin in every mod inside it.
+                    const QString dirName = QFileInfo(p.first).fileName();
+                    const bool    dirIsGC =
+                        modNameIsGC ||
+                        dirName.contains("groundcover", Qt::CaseInsensitive) ||
+                        dirName.contains("grass", Qt::CaseInsensitive) ||
+                        hintMatches(dirName);
                     for (const QString &cf : p.second) {
+                        if (forcedContent(cf)) continue;
+                        // A plugin named after the grass it DELETES is not
+                        // grass. Tools like Greenmote emit exactly that, and
+                        // classifying it as groundcover drops it from the
+                        // load order, so the deletions never happen.
+                        if (post_install::nameSaysDeletesGroundcover(cf)) continue;
                         if (dirIsGC
                             || cf.contains("groundcover", Qt::CaseInsensitive)
                             || kGroundcoverPlugin.match(cf).hasMatch())

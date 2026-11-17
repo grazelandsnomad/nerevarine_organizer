@@ -15,6 +15,18 @@ namespace post_install {
 // named grass mods containing neither word.
 bool looksLikeGroundcover(const QString &modPath, const QString &displayName);
 
+// True when a plugin's file name says it DELETES grass rather than being
+// grass - "deleted_groundcover.omwaddon" and friends, which tools like
+// Groundcoverify/Greenmote generate.
+//
+// It matters because the two are told apart by name and nothing else, and
+// the cost of guessing wrong is total: a plugin emitted as groundcover= is
+// dropped from the load order (openmwconfigwriter.cpp), so a remover
+// classified as grass never runs and the grass it was meant to delete stays.
+// A remover is named after what it removes, so the substring rule catches
+// every one of them.
+bool nameSaysDeletesGroundcover(const QString &pluginFileName);
+
 // Find a Splash/ dir of splash images in a mod. The mod root may BE the
 // Splash dir, or a Splash/ subdir may sit up to three levels down. Absolute
 // path, or empty if none.

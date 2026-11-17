@@ -44,6 +44,20 @@ bool looksLikeGroundcover(const QString &modPath, const QString &displayName)
         || containsAnyHint(displayName);
 }
 
+bool nameSaysDeletesGroundcover(const QString &pluginFileName)
+{
+    // The stem only: a directory called "deleted" says nothing about the
+    // plugin, and the extension never does.
+    const QString stem = QFileInfo(pluginFileName).completeBaseName().trimmed();
+    static const QStringList kRemoverPrefixes = {
+        QStringLiteral("deleted"), QStringLiteral("delete"), QStringLiteral("remove"),
+        QStringLiteral("removed"), QStringLiteral("no_"),    QStringLiteral("no-"),
+    };
+    for (const QString &p : kRemoverPrefixes)
+        if (stem.startsWith(p, Qt::CaseInsensitive)) return true;
+    return false;
+}
+
 QString findSplashDir(const QString &modRoot)
 {
     const QFileInfo fi(modRoot);

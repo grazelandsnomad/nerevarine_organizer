@@ -48,6 +48,7 @@ constexpr auto kSeparatorsHidden    = "separators/hidden_presets";
 constexpr auto kLaunchSkipReboot    = "launch/skip_reboot_check";
 constexpr auto kPatchesDeclined     = "patches/declined";
 constexpr auto kGroundcoverApproved = "groundcover/approved";
+constexpr auto kContentPlugins      = "groundcover/content_plugins";
 constexpr auto kWizardCompleted     = "wizard/completed";
 constexpr auto kSkipDesktopCheck    = "shortcuts/skipDesktopCheck";
 constexpr auto kRegisterNxmHandler  = "nxm/register_handler";
@@ -635,6 +636,19 @@ QStringList Settings::declinedPatches()
 void Settings::setDeclinedPatches(const QStringList &keys)
 {
     QSettings().setValue(kPatchesDeclined, keys);
+}
+
+QStringList Settings::contentPlugins()
+{
+    return QSettings().value(kContentPlugins).toStringList();
+}
+
+void Settings::setContentPlugins(const QStringList &names)
+{
+    if (names.isEmpty())
+        QSettings().remove(kContentPlugins);
+    else
+        QSettings().setValue(kContentPlugins, names);
 }
 
 QStringList Settings::groundcoverApproved()
