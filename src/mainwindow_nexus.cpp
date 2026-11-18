@@ -303,9 +303,17 @@ void MainWindow::handleNxmUrl(const QString &url)
     //
     // An update the user is fetching by hand (a free account, the link
     // refused, Nexus opened: ModRole::AwaitingUpdateDownload) IS a Replace -
-    // asking would only repeat the Update click.
-    bool awaitedUpdate = false;
-    for (int i = 0; i < m_modList->count() && !awaitedUpdate; ++i) {
+    // asking would only repeat the Update click. WHICH row, when the page has
+    // several waiting (a main file and an optional one, both just updated):
+    // the one that was waiting for THIS file (AwaitingFileId, recorded when
+    // its link was refused). Matching by page alone put Tamriel Rebuilt's
+    // music file into the main row and purged the main's folder as the old
+    // version. A lone waiting row with nothing recorded still counts; more
+    // than one with no file match goes through the question, which names them.
+    ModRow awaited      = nullptr;
+    ModRow soleAwaiting = nullptr;
+    int    awaitingRows = 0;
+    for (int i = 0; i < m_modList->count() && !awaited; ++i) {
         ModRow it = m_modList->item(i);
         if (!mod_row::isMod(it)) continue;
         if (!mod_row::isInstalled(it)) continue;
@@ -313,12 +321,20 @@ void MainWindow::handleNxmUrl(const QString &url)
         const auto ref = parseNexusModUrl(it->data(ModRole::NexusUrl).toString());
         if (!ref || ref->modId != modId
             || ref->game.compare(game, Qt::CaseInsensitive) != 0) continue;
-        it->setData(ModRole::AwaitingUpdateDownload, QVariant());
-        awaitedUpdate = true;
+        ++awaitingRows;
+        soleAwaiting = it;
+        if (it->data(ModRole::AwaitingFileId).toLongLong() == qint64(fileId))
+            awaited = it;
     }
-    const auto reinstallChoice = awaitedUpdate
-        ? ReinstallChoice::Replace
-        : confirmReinstallIfInstalled(game, modId);
+    if (!awaited && awaitingRows == 1) awaited = soleAwaiting;
+    if (awaited) {
+        awaited->setData(ModRole::AwaitingUpdateDownload, QVariant());
+        awaited->setData(ModRole::AwaitingFileId, QVariant());
+    }
+    int        chosenRow = -1;
+    const auto reinstallChoice =
+        awaited ? ReinstallChoice::Replace
+                : confirmReinstallIfInstalled(game, modId, nullptr, true, &chosenRow);
     if (reinstallChoice == ReinstallChoice::Cancel) return;
     const bool forceSeparate = (reinstallChoice == ReinstallChoice::Separate);
     const bool forceMerge    = (reinstallChoice == ReinstallChoice::Merge);
@@ -355,7 +371,16 @@ void MainWindow::handleNxmUrl(const QString &url)
         if (status == InstallStatus::NotInstalled) { placeholder = it; break; }
         if (!installedMatch) installedMatch = it;
     }
+    // The row the answer was about beats "the first installed one": the
+    // waiting row matched by file, else the row picked in the question.
+    if (awaited)
+        installedMatch = awaited;
+    else if (chosenRow >= 0)
+        installedMatch = m_modList->item(chosenRow);
     if (!placeholder && !forceSeparate) placeholder = installedMatch;
+    // An awaited update goes into its own row even when a pending placeholder
+    // of the same page exists - that one is some other file's slot.
+    if (awaited) placeholder = awaited;
     // Merge always targets the installed row; a pending download placeholder
     // for the same modId (if any) has nothing to merge into.
     if (forceMerge && installedMatch) placeholder = installedMatch;

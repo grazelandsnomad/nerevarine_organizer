@@ -1408,18 +1408,73 @@ bool MainWindow::confirmGameForDownload(const QString &game)
 }
 
 MainWindow::ReinstallChoice
-MainWindow::confirmReinstallIfInstalled(const QString &game, int modId,
-                                         ModRow except, bool allowMerge)
+MainWindow::confirmReinstallIfInstalled(const QString &game, int modId, ModRow except,
+                                        bool allowMerge, int *targetRow)
 {
-    // Find an already-installed row for this mod page through the typed model
-    // (Stage 2 of the QListWidget->ModlistModel migration) instead of walking
-    // m_modList and re-parsing every NexusUrl by hand.  m_model is kept in sync
-    // synchronously via modlist::connectAutoSync, so its row indices line up
-    // with m_modList and the scan sees current state.
+    // Every installed row of this mod page, through the typed model. One is
+    // the usual case; a page shipping a main file and an optional one (Tamriel
+    // Rebuilt and its music) has two, and "the first" was the wrong answer
+    // once: the music landed in the main row and the main's folder was purged
+    // as the old version. With several, the user says which.
     const int exceptRow = except ? m_modList->row(except) : -1;
-    const int row = m_model.findInstalledByModId(game, modId, exceptRow);
-    if (row < 0) return ReinstallChoice::NotInstalled;
+    QList<int> rows;
+    {
+        const QString         gameLc = game.toLower();
+        const QList<ModEntry> all    = m_model.all();
+        for (int i = 0; i < all.size(); ++i) {
+            if (i == exceptRow) continue;
+            const ModEntry &e = all.at(i);
+            if (!e.isMod() || e.installStatus != 1) continue;
+            const auto ref = parseNexusModUrl(e.nexusUrl);
+            if (ref && ref->modId == modId && ref->game == gameLc) rows << i;
+        }
+    }
+    if (targetRow) *targetRow = -1;
+    if (rows.isEmpty()) return ReinstallChoice::NotInstalled;
+    if (targetRow) *targetRow = rows.first();
 
+    if (rows.size() > 1) {
+        QDialog dlg(this);
+        dlg.setWindowTitle(T("reinstall_warn_title"));
+        auto *lay  = new QVBoxLayout(&dlg);
+        auto *body = new QLabel(T("reinstall_warn_body_many").arg(rows.size()), &dlg);
+        body->setWordWrap(true);
+        lay->addWidget(body);
+        auto *pick = new QComboBox(&dlg);
+        for (int r : rows) pick->addItem(m_model.at(r).effectiveName(), r);
+        lay->addWidget(pick);
+        auto *btns = new QDialogButtonBox(&dlg);
+        auto *replaceBtn =
+            btns->addButton(T("reinstall_choice_replace"), QDialogButtonBox::ActionRole);
+        auto *mergeBtn = allowMerge ? btns->addButton(T("reinstall_choice_merge"),
+                                                      QDialogButtonBox::ActionRole)
+                                    : nullptr;
+        auto *separateBtn =
+            btns->addButton(T("reinstall_choice_separate"), QDialogButtonBox::ActionRole);
+        btns->addButton(QDialogButtonBox::Cancel);
+        lay->addWidget(btns);
+        ReinstallChoice choice = ReinstallChoice::Cancel;
+        connect(replaceBtn, &QPushButton::clicked, &dlg, [&] {
+            choice = ReinstallChoice::Replace;
+            dlg.accept();
+        });
+        if (mergeBtn)
+            connect(mergeBtn, &QPushButton::clicked, &dlg, [&] {
+                choice = ReinstallChoice::Merge;
+                dlg.accept();
+            });
+        connect(separateBtn, &QPushButton::clicked, &dlg, [&] {
+            choice = ReinstallChoice::Separate;
+            dlg.accept();
+        });
+        connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+        separateBtn->setDefault(true);
+        if (dlg.exec() != QDialog::Accepted) return ReinstallChoice::Cancel;
+        if (targetRow) *targetRow = pick->currentData().toInt();
+        return choice;
+    }
+
+    const int row = rows.first();
     {
         const QString existingName = m_model.at(row).effectiveName();
 

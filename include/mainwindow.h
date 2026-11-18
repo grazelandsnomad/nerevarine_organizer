@@ -499,9 +499,13 @@ private:
     // disambiguate. `except` is an item to skip (the placeholder being
     // installed). allowMerge=false hides Merge for callers that can't honour it
     // (Search-on-Nexus installs into `item` itself - no folder to overlay).
+    // `targetRow`, when given, receives the row Replace / Merge act on: the
+    // one installed row of the page, or the one the user picked from a list
+    // when the page has several (a main file and an optional one).
     ReinstallChoice confirmReinstallIfInstalled(const QString &game, int modId,
-                                                 ModRow except = nullptr,
-                                                 bool allowMerge = true);
+                                                ModRow except     = nullptr,
+                                                bool   allowMerge = true,
+                                                int   *targetRow  = nullptr);
     // Hard block for forbidden mods. True when (game, modId) is clear; false
     // (after the "forbidden" dialog, with a shortcut to the manager) when
     // blocked. Call as `if (!confirmNotForbidden(...)) return;`. No

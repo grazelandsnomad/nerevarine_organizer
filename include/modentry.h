@@ -119,6 +119,7 @@ struct ModEntry {
     QString     fileSuperseded;            // ModRole::FileSuperseded
     qint64      pendingFileId = 0;         // ModRole::PendingFileId
     bool        awaitingUpdateDownload = false;
+    qint64      awaitingFileId         = 0;     // the file that refusal was for
     bool        updateFoundThisSession = false; // ModRole::UpdateFoundThisSession
     bool        creationDownloaded = false;     // ModRole::CreationDownloaded
     bool        sepHasUpdate = false;      // separator only

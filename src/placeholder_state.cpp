@@ -56,6 +56,7 @@ void clearInstallTransients(ModEntry &e)
     e.installToken = QUuid();
     e.pendingFileId = 0;
     e.awaitingUpdateDownload = false;
+    e.awaitingFileId         = 0;
 }
 void clearInstallTransients(ModRow row) { onRow(row, [](ModEntry &e) { clearInstallTransients(e); }); }
 

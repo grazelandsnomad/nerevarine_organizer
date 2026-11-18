@@ -87,6 +87,7 @@ const RoleField kRoleTable[] = {
     NRV_ROLE(ModRole::PendingArchive, pendingArchive, toString),
     NRV_ROLE(ModRole::PendingFileId, pendingFileId, toLongLong),
     NRV_ROLE(ModRole::AwaitingUpdateDownload, awaitingUpdateDownload, toBool),
+    NRV_ROLE(ModRole::AwaitingFileId, awaitingFileId, toLongLong),
     NRV_ROLE(ModRole::NexusFileName, nexusFileName, toString),
     NRV_ROLE(ModRole::RuntimeMismatchWarned, runtimeMismatchWarned, toBool),
 

@@ -174,8 +174,8 @@ void DownloadQueue::fetchDownloadLink(const QString &game, int modId, int fileId
         auto offerManualFallback = [&]() {
             const QString modUrl =
                 QString("https://www.nexusmods.com/%1/mods/%2?tab=files")
-                    .arg(game).arg(modId);
-            (void)fileId;  // let the user pick on the Files tab
+                    .arg(game)
+                    .arg(modId);
 
             // Non-modal so the nxm:// callback can close it once the download
             // starts. Plain QDialog, not QMessageBox, so the action button
@@ -208,8 +208,13 @@ void DownloadQueue::fetchDownloadLink(const QString &game, int modId, int fileId
             resetPlaceholder();
             // An update stays installed while the user fetches it by hand
             // (restoreInstalled); remember the link coming back is its own.
-            if (ModRow item = rowFor(row); item && mod_row::isInstalled(item))
+            if (ModRow item = rowFor(row); item && mod_row::isInstalled(item)) {
                 item->setData(ModRole::AwaitingUpdateDownload, true);
+                // Which file: a page with a main and an optional file has two
+                // rows waiting, and the link that comes back names its file.
+                item->setData(ModRole::AwaitingFileId,
+                              QVariant::fromValue(qint64(fileId)));
+            }
             emit statusMessage(T("manual_dl_status"), 6000);
         };
 

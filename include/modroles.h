@@ -129,6 +129,13 @@ namespace ModRole {
     // the arrow that says which section; this is the grey that says "not
     // done yet". Session-only.
     constexpr int SepAnyUpdate          = Qt::UserRole + 67; // bool
+    // The Nexus file id a row was waiting for when its download link was
+    // refused and the "Premium required" box sent the user to the website
+    // (beside AwaitingUpdateDownload). handleNxmUrl matches the link that
+    // comes back by THIS, not by page: a page with a main and an optional
+    // file has two waiting rows, and matching by page alone put Tamriel
+    // Rebuilt's music file into the main row. Session-only.
+    constexpr int AwaitingFileId        = Qt::UserRole + 68; // qint64
     constexpr int VideoUrl              = Qt::UserRole + 35; // QString: YouTube video URL
     constexpr int SourceUrl             = Qt::UserRole + 36; // QString: non-Nexus download page (GitHub, etc.)
     // Set by handleNxmUrl when an installed row is reused as the placeholder

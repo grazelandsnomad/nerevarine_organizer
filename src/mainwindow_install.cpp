@@ -1488,28 +1488,36 @@ void MainWindow::installLocalArchive(const QString &archivePath,
     if (!placeholder && archiveModId > 0 && !gameId.isEmpty()) {
         const GameAdapter *adapter   = GameAdapterRegistry::find(gameId);
         const QString      nexusGame = adapter ? adapter->nexusDomain() : gameId;
-        ModRow             waiting   = nullptr;
-        for (int i = 0; i < m_modList->count() && !waiting; ++i) {
+        // A dropped archive carries no file id, so only a LONE waiting row of
+        // the page is taken as the one it is for; with several waiting (a
+        // main and an optional file both updated) the question names them.
+        ModRow waiting      = nullptr;
+        int    awaitingRows = 0;
+        for (int i = 0; i < m_modList->count(); ++i) {
             ModRow it = m_modList->item(i);
             if (!mod_row::isMod(it) || !mod_row::isInstalled(it)) continue;
             if (!it->data(ModRole::AwaitingUpdateDownload).toBool()) continue;
             const auto ref = parseNexusModUrl(it->data(ModRole::NexusUrl).toString());
             if (ref && ref->modId == archiveModId &&
-                ref->game.compare(nexusGame, Qt::CaseInsensitive) == 0)
+                ref->game.compare(nexusGame, Qt::CaseInsensitive) == 0) {
+                ++awaitingRows;
                 waiting = it;
+            }
         }
+        if (awaitingRows != 1) waiting = nullptr;
         ReinstallChoice choice = ReinstallChoice::NotInstalled;
+        int             row    = -1;
         if (waiting) {
             waiting->setData(ModRole::AwaitingUpdateDownload, QVariant());
+            waiting->setData(ModRole::AwaitingFileId, QVariant());
             choice = ReinstallChoice::Replace;
+            row    = m_modList->row(waiting);
         } else {
-            choice = confirmReinstallIfInstalled(nexusGame, archiveModId);
+            choice =
+                confirmReinstallIfInstalled(nexusGame, archiveModId, nullptr, true, &row);
         }
         if (choice == ReinstallChoice::Cancel) return;
         if (choice == ReinstallChoice::Replace || choice == ReinstallChoice::Merge) {
-            const int row =
-                waiting ? m_modList->row(waiting)
-                        : m_model.findInstalledByModId(nexusGame, archiveModId, -1);
             if (row >= 0) {
                 placeholder = m_modList->item(row);
                 const QString currentPath =

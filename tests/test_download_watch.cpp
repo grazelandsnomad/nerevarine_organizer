@@ -62,6 +62,17 @@ void testNexusModIdRecovery()
     check("a numeric-only version chain is fine",
           download_watch::nexusModIdFromFileName("Some Mod-4321-2-1-3-1712345678.zip") == 4321);
 
+    // Nexus's newer manual-download naming (2026-11): spaces, a dotted
+    // version, an ISO date and a hash instead of dashes and an epoch. The
+    // real file that produced a duplicate row before this was recognised.
+    check("the newer space-separated naming yields its mod id",
+          download_watch::nexusModIdFromFileName(
+              "Tamriel Rebuilt 26.11.01 42145 26.11.2 2026-11-01T22-25Z H0S90o2b.7z") ==
+              42145);
+    check("the newer naming needs its date and hash anchor",
+          download_watch::nexusModIdFromFileName(
+              "Tamriel Rebuilt 26.11.01 42145 26.11.2.7z") == -1);
+
     // The timestamp is the anchor. Without it this is somebody else's naming
     // scheme and guessing would attach the wrong mod page to a row.
     check("no trailing timestamp, no guess",

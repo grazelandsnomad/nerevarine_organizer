@@ -42,7 +42,14 @@ int nexusModIdFromFileName(const QString &fileName)
     // else's naming scheme and nothing should be inferred.
     static const QRegularExpression rx(
         QStringLiteral("-(\\d{1,7})-(?:\\d+-)*\\d{9,11}$"));
-    const auto m = rx.match(base);
+    // Nexus's newer manual-download naming, seen 2026-11: no dashes and no
+    // epoch - "<name> <version> <modid> <version> <YYYY-MM-DDTHH-MMZ> <hash>"
+    // ("Tamriel Rebuilt 26.11.01 42145 26.11.2 2026-11-01T22-25Z H0S90o2b").
+    // The date and the hash are the anchor this time.
+    static const QRegularExpression rxNew(QStringLiteral(
+        " (\\d{1,7}) \\S+ \\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}Z [A-Za-z0-9]{6,12}$"));
+    auto                            m = rx.match(base);
+    if (!m.hasMatch()) m = rxNew.match(base);
     if (!m.hasMatch()) return -1;
     bool ok = false;
     const int id = m.captured(1).toInt(&ok);
