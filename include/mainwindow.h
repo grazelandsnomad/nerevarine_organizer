@@ -1,6 +1,7 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
+#include <QPointer>
 #include <QColor>
 #include <QDateTime>
 #include <QJsonObject>
@@ -800,9 +801,18 @@ private:
     // updating gets prepareItemForInstall + a file list fetched without the
     // picker. Returns how many started.
     int  startUpdates(const QList<ReviewUpdates::Candidate> &picked);
-    // Re-bake text colours into the transparent toolbar buttons (Profile, theme
-    // toggle) from the live palette after a theme swap.
+    // Re-bake every toolbar text colour for the current window background:
+    // the transparent buttons (Profile, the toggles) and every widget tinted
+    // through tintText(). Called after a theme swap and on
+    // ApplicationPaletteChange; a stylesheet colour is a literal Qt never
+    // revisits on its own.
     void restyleToolbarTextButtons();
+    // Style `w` with `qss` (%1 = the colour) in `hue` made readable on the
+    // current window background - the authored colour on a light surface,
+    // lightened with its hue kept on a dark one - and remember it for
+    // restyleToolbarTextButtons().
+    void    tintText(QWidget *w, const QColor &hue,
+                     const QString &qss = QStringLiteral("color: %1; font-weight: bold;"));
     QString modlistPath() const override;
     QString forbiddenModsPath() const;
     // Rebind m_forbidden to the current game's forbidden-mods file.
@@ -943,6 +953,15 @@ private:
     QAction               *m_actTranslateProvider    = nullptr;
     QAction               *m_actUntranslatedToggle   = nullptr;
     QLabel                *m_profileLbl              = nullptr;  // "Profile:" prefix
+    // Toolbar and header text drawn in a colour of its own (the green Start,
+    // the red Separator, the grey count...). Each colour was authored for a
+    // light surface; see tintText().
+    struct TintedText {
+        QPointer<QWidget> widget;
+        QColor            hue; // as authored
+        QString           qss; // %1 = the colour
+    };
+    QList<TintedText>      m_tintedText;
     QAction               *m_actLaunchOpenMW          = nullptr;
     QAction               *m_actLaunchLauncher        = nullptr;
     QAction               *m_actLaunchGame            = nullptr;  // "▶ Start" for non-Morrowind

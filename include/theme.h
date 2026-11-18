@@ -21,6 +21,8 @@
 // those are made palette-driven (palette(text)/palette(window)) so they follow
 // the active theme instead of fighting it.
 
+#include <QColor>
+
 namespace theme {
 
 // Remember the platform's default style name + palette as the "light" baseline.
@@ -38,5 +40,10 @@ void applyTheme(bool dark);
 // otherwise hard-code.  Reads the captured-once default palette, so it's stable
 // across theme toggles (unlike qApp->palette(), which lags a setPalette()).
 bool backgroundIsDark(bool darkMode);
+
+// The window background behind backgroundIsDark(): our dark palette's in dark
+// mode, the captured platform default's in light mode. For colouring text
+// that has to read on it.
+QColor windowBackground(bool darkMode);
 
 } // namespace theme

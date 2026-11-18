@@ -871,6 +871,14 @@ void MainWindow::updateThemeButton()
 void MainWindow::changeEvent(QEvent *event)
 {
     QMainWindow::changeEvent(event);
+    // The toolbar's text colours are stylesheet literals baked for one
+    // background; Qt never revisits them. Re-bake on a palette change - our
+    // own theme toggle sends one too, and so would a style plugin.
+    if (event->type() == QEvent::ApplicationPaletteChange) {
+        restyleToolbarTextButtons();
+        if (m_modList && m_modList->viewport()) m_modList->viewport()->update();
+        return;
+    }
     if (event->type() != QEvent::WindowStateChange) return;
     bool nowMax = isMaximized();
     if (nowMax == m_windowMaximized) return;

@@ -12,6 +12,7 @@
 #include "modlist_model.h"
 #include "settings.h"
 #include "theme.h"
+#include "color_contrast.h"
 #include "separatordialog.h"
 #include "modlistdelegate.h"
 #include "mod_row.h"
@@ -488,8 +489,7 @@ void MainWindow::setupToolbar()
 
     // Generic launch buttons for non-Morrowind Steam games
     m_actLaunchGame = tb->addAction(T("toolbar_launch_game"), m_deployFlow, &DeployFlow::onLaunchGame);
-    if (auto *btn = qobject_cast<QToolButton *>(tb->widgetForAction(m_actLaunchGame)))
-        btn->setStyleSheet("color: #1a8a1a; font-weight: bold;");
+    tintText(tb->widgetForAction(m_actLaunchGame), QColor(QStringLiteral("#1a8a1a")));
     m_actLaunchSteamLauncher = tb->addAction(T("toolbar_launch_launcher"), m_deployFlow, &DeployFlow::onLaunchSteamLauncher);
 
     // Dependency canvas. Takes the slot "Tune INI" had, as asked - Tune INI
@@ -498,16 +498,14 @@ void MainWindow::setupToolbar()
     // button should cost.
     m_actDepGraph = tb->addAction(T("toolbar_dep_graph"),
                                   this, &MainWindow::onDependencyGraph);
-    if (auto *btn = qobject_cast<QToolButton *>(tb->widgetForAction(m_actDepGraph)))
-        btn->setStyleSheet("color: #1a6fa8; font-weight: bold;");
+    tintText(tb->widgetForAction(m_actDepGraph), QColor(QStringLiteral("#1a6fa8")));
 
     // Tune INI is no longer on the toolbar; it is created and added in
     // setupMenuBar(), which runs before this.
 
     // Launch buttons (OpenMW-specific - shown only for Morrowind)
     m_actLaunchOpenMW = tb->addAction(T("toolbar_launch_openmw"), m_deployFlow, &DeployFlow::onLaunchOpenMW);
-    if (auto *btn = qobject_cast<QToolButton *>(tb->widgetForAction(m_actLaunchOpenMW)))
-        btn->setStyleSheet("color: #1a8a1a; font-weight: bold;");
+    tintText(tb->widgetForAction(m_actLaunchOpenMW), QColor(QStringLiteral("#1a8a1a")));
     m_actLaunchLauncher = tb->addAction(T("toolbar_launch_launcher"), m_deployFlow, &DeployFlow::onLaunchOpenMWLauncher);
 
     // Sort with LOOT - on-demand; visibility toggled per-profile in
@@ -517,19 +515,16 @@ void MainWindow::setupToolbar()
         saveLoadOrder();
         syncGameConfig();
     });
-    if (auto *btn = qobject_cast<QToolButton *>(tb->widgetForAction(m_actSortLoot)))
-        btn->setStyleSheet("color: #8a4a1a; font-weight: bold;");
+    tintText(tb->widgetForAction(m_actSortLoot), QColor(QStringLiteral("#8a4a1a")));
 
     tb->addSeparator();
 
     auto *actSep = tb->addAction(T("toolbar_add_separator"), this, &MainWindow::onAddSeparator);
-    if (auto *btn = qobject_cast<QToolButton *>(tb->widgetForAction(actSep)))
-        btn->setStyleSheet("color: #c0392b; font-weight: bold;");
+    tintText(tb->widgetForAction(actSep), QColor(QStringLiteral("#c0392b")));
 
     auto *actSortSeps = tb->addAction(T("toolbar_sort_separators"),
                                        this, &MainWindow::onSortSeparators);
-    if (auto *btn = qobject_cast<QToolButton *>(tb->widgetForAction(actSortSeps)))
-        btn->setStyleSheet("color: #6a1b9a; font-weight: bold;");
+    tintText(tb->widgetForAction(actSortSeps), QColor(QStringLiteral("#6a1b9a")));
     tb->addSeparator();
 
     auto *actRemove = tb->addAction(T("toolbar_remove"),        this, &MainWindow::onRemoveSelected);
@@ -619,7 +614,9 @@ void MainWindow::setupToolbar()
     goodStatesBtn->setText(QString("◆ ") + T("toolbar_good_states"));
     goodStatesBtn->setPopupMode(QToolButton::InstantPopup);
     goodStatesBtn->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    goodStatesBtn->setStyleSheet("QToolButton { color: #1a8a1a; font-weight: bold; padding: 3px 8px; }");
+    tintText(goodStatesBtn, QColor(QStringLiteral("#1a8a1a")),
+             QStringLiteral(
+                 "QToolButton { color: %1; font-weight: bold; padding: 3px 8px; }"));
     auto *goodStatesMenu = new QMenu(goodStatesBtn);
     connect(goodStatesMenu, &QMenu::aboutToShow, this, [this, goodStatesMenu]{
         m_backups->populateGoodStatesMenu(goodStatesMenu, this);
@@ -631,8 +628,7 @@ void MainWindow::setupToolbar()
 
     auto *actForbidden = tb->addAction(QString("⊘ ") + T("menu_forbidden_mods"),
                                        this, [this]{ m_forbidden->showManageDialog(this); });
-    if (auto *btn = qobject_cast<QToolButton *>(tb->widgetForAction(actForbidden)))
-        btn->setStyleSheet("color: #c0392b; font-weight: bold;");
+    tintText(tb->widgetForAction(actForbidden), QColor(QStringLiteral("#c0392b")));
 
     auto *actRestore = tb->addAction(T("toolbar_restore_backup"),
                                       this, [this]{ m_backups->showRestoreBackupDialog(this); });
@@ -643,18 +639,15 @@ void MainWindow::setupToolbar()
     auto *actMoveMods = tb->addAction(T("toolbar_move_mods"),
                                        m_libraryFlow, &LibraryFlow::onMoveModsDir);
     actMoveMods->setToolTip(T("toolbar_move_mods_tip"));
-    if (auto *btn = qobject_cast<QToolButton *>(tb->widgetForAction(actMoveMods)))
-        btn->setStyleSheet("color: #8a4a1a; font-weight: bold;");
+    tintText(tb->widgetForAction(actMoveMods), QColor(QStringLiteral("#8a4a1a")));
 
     auto *actSummary = tb->addAction(T("toolbar_modlist_summary"),
                                       this, &MainWindow::onModlistSummary);
-    if (auto *btn = qobject_cast<QToolButton *>(tb->widgetForAction(actSummary)))
-        btn->setStyleSheet("color: #1a6fa8; font-weight: bold;");
+    tintText(tb->widgetForAction(actSummary), QColor(QStringLiteral("#1a6fa8")));
 
     auto *actDiagBundle = tb->addAction(T("toolbar_diag_bundle"),
                                          this, &MainWindow::onCreateDiagnosticBundle);
-    if (auto *btn = qobject_cast<QToolButton *>(tb->widgetForAction(actDiagBundle)))
-        btn->setStyleSheet("color: #6a1b9a; font-weight: bold;");
+    tintText(tb->widgetForAction(actDiagBundle), QColor(QStringLiteral("#6a1b9a")));
 
     // Utmost-right slot: Check Updates, on a bar of its own. A QToolBar hides
     // items from the END of its action list when the window is too narrow,
@@ -784,6 +777,27 @@ void MainWindow::updateCheckUpdatesButton()
     }
 }
 
+// The authored colour when it reads on `surface`, else lightened with its hue
+// kept. The bar is WCAG's 4.5:1 for body text: this is 9-10 pt, and the 3:1
+// the (bold, enlarged) separator labels use leaves a green on #353535 legible
+// but muted. The greens, blues, browns and purples on the bar were all
+// authored against a light surface and most are unreadable on the dark
+// palette's #353535 as they are.
+static QString readableTextColour(const QColor &hue, const QColor &surface)
+{
+    const QColor c =
+        color_contrast::lightenedToRead(hue, surface, color_contrast::kBodyTextRatio);
+    return (c.isValid() ? c : hue).name();
+}
+
+void MainWindow::tintText(QWidget *w, const QColor &hue, const QString &qss)
+{
+    if (!w) return;
+    m_tintedText.append({w, hue, qss});
+    w->setStyleSheet(qss.arg(
+        readableTextColour(hue, theme::windowBackground(Settings::uiDarkMode()))));
+}
+
 void MainWindow::restyleToolbarTextButtons()
 {
     // Transparent toolbar widgets (Profile label+picker, theme toggle) sit on
@@ -845,6 +859,13 @@ void MainWindow::restyleToolbarTextButtons()
     if (m_themeBtn)            m_themeBtn->setStyleSheet(toggleStyle);
     if (m_conflictNoticesBtn)  m_conflictNoticesBtn->setStyleSheet(toggleStyle);
     if (m_untranslatedBtn)     m_untranslatedBtn->setStyleSheet(toggleStyle);
+
+    // The coloured text: each was styled once when it was built, so a theme
+    // switch left dark green, purple and red on a dark surface until restart.
+    const QColor surface = theme::windowBackground(Settings::uiDarkMode());
+    for (const TintedText &tt : std::as_const(m_tintedText))
+        if (tt.widget)
+            tt.widget->setStyleSheet(tt.qss.arg(readableTextColour(tt.hue, surface)));
 }
 
 void MainWindow::setupCentralWidget()
@@ -1006,18 +1027,18 @@ void MainWindow::setupCentralWidget()
     // ColumnHeader splices them into the layout.
     m_dateSortBtn = new QPushButton(T("col_date_added_asc"), m_columnHeader->widget());
     m_dateSortBtn->setFlat(true);
-    m_dateSortBtn->setStyleSheet(
-        "font-weight: bold; color: #888; font-size: 9pt;"
-        "text-align: left; padding: 0; border: none;");
+    tintText(m_dateSortBtn, QColor(QStringLiteral("#888888")),
+             QStringLiteral("font-weight: bold; color: %1; font-size: 9pt;"
+                            "text-align: left; padding: 0; border: none;"));
     m_dateSortBtn->setCursor(Qt::PointingHandCursor);
     connect(m_dateSortBtn, &QPushButton::clicked, this, &MainWindow::onSortByDate);
     m_columnHeader->setDateSortButton(m_dateSortBtn);
 
     m_sizeSortBtn = new QPushButton(T("col_size_desc"), m_columnHeader->widget());
     m_sizeSortBtn->setFlat(true);
-    m_sizeSortBtn->setStyleSheet(
-        "font-weight: bold; color: #888; font-size: 9pt;"
-        "text-align: left; padding: 0; border: none;");
+    tintText(m_sizeSortBtn, QColor(QStringLiteral("#888888")),
+             QStringLiteral("font-weight: bold; color: %1; font-size: 9pt;"
+                            "text-align: left; padding: 0; border: none;"));
     m_sizeSortBtn->setCursor(Qt::PointingHandCursor);
     connect(m_sizeSortBtn, &QPushButton::clicked, this, &MainWindow::onSortBySize);
     m_columnHeader->setSizeSortButton(m_sizeSortBtn);
@@ -1066,7 +1087,8 @@ void MainWindow::setupCentralWidget()
 
     // Mod count label - permanent widget on the right of the status bar
     m_modCountLabel = new QLabel(this);
-    m_modCountLabel->setStyleSheet("color: #888; padding: 0 10px;");
+    tintText(m_modCountLabel, QColor(QStringLiteral("#888888")),
+             QStringLiteral("color: %1; padding: 0 10px;"));
     statusBar()->addPermanentWidget(m_modCountLabel);
 
     // Update count whenever a checkbox is toggled; also re-scan conflicts (enabled set changed)
