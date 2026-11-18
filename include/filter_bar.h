@@ -17,6 +17,10 @@ public:
     void focus();
     bool hasText() const;
     void clearText();
+    // Text in the box OR the favourites-only star: either one hides rows.
+    bool isFiltering() const;
+    // Both off, so every row that is not under a collapsed section shows.
+    void clearFilter();
 
 private:
     void apply();

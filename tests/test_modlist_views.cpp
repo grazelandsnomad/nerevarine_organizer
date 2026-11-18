@@ -10,6 +10,7 @@
 #include "modlistview.h"
 #include "modrow.h"
 #include "modlist_sort.h"
+#include "filter_bar.h"
 #include "modroles.h"
 
 #include <QAbstractItemModelTester>
@@ -22,6 +23,8 @@
 #include <QVariant>
 #include <QDateTime>
 #include <QStringList>
+#include <QAction>
+#include <QLineEdit>
 
 #include <iostream>
 
@@ -453,6 +456,50 @@ void testDropOnSeparatorMovesAndKeepsEveryRow()
           view.dropSelectionOnSeparator(1).isEmpty() && m.count() == 6);
 }
 
+
+// The filter bar hides rows the way a collapsed section does, so anything
+// that inserts by row index has to know whether a filter is on - and "on"
+// means the text OR the favourites-only star.
+void testFilterBarCountsTheStarAsAFilterAndClearsBoth()
+{
+    std::cout << "testFilterBarCountsTheStarAsAFilterAndClearsBoth\n";
+    ModlistModel m;
+    ModListView  view;
+    view.setModel(&m);
+    FilterBar bar(&view);
+
+    view.addItem(mkSep(QStringLiteral("S")));
+    ModRow a = view.addItem(mkMod(QStringLiteral("Alpha")));
+    view.addItem(mkMod(QStringLiteral("Beta")));
+    a->setData(ModRole::IsFavorite, true);
+
+    check("nothing is filtering at first", !bar.isFiltering());
+
+    bar.widget()->setText(QStringLiteral("alp"));
+    check("text in the box is a filter", bar.isFiltering() && bar.hasText());
+    check("and it hides the row that does not match",
+          !view.isRowHidden(1) && view.isRowHidden(2));
+
+    bar.clearFilter();
+    check("clearing it shows every row again",
+          !bar.isFiltering() && !view.isRowHidden(1) && !view.isRowHidden(2));
+
+    QAction *star = nullptr;
+    for (QAction *act : bar.widget()->actions())
+        if (act->isCheckable()) star = act;
+    check("the favourites-only star is on the box", star != nullptr);
+    if (star) {
+        star->setChecked(true);
+        check("the star alone is a filter, with no text typed",
+              bar.isFiltering() && !bar.hasText());
+        check("and it hides the row that is not a favourite",
+              !view.isRowHidden(1) && view.isRowHidden(2));
+        bar.clearFilter();
+        check("clearing resets the star as well as the text",
+              !star->isChecked() && !bar.isFiltering() && !view.isRowHidden(2));
+    }
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -467,6 +514,7 @@ int main(int argc, char **argv)
     testDateOrderSendsSeparatorsAndDatelessToTheEnd();
     testSizeOrderKeepsSeparatorsAsDividers();
     testDropOnSeparatorMovesAndKeepsEveryRow();
+    testFilterBarCountsTheStarAsAFilterAndClearsBoth();
 
     std::cout << "\n" << s_passed << " passed, " << s_failed << " failed\n";
     return s_failed == 0 ? 0 : 1;

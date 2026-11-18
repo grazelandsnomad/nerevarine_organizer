@@ -378,6 +378,18 @@ void MainWindow::onAddSeparator()
 
 void MainWindow::addSeparatorAtRow(int targetRow)
 {
+    // A filter hides rows with the same setHidden the collapse route uses, so
+    // a separator put above a visible match would quietly take the hidden
+    // rows below it, up to the next separator, into its new section - the one
+    // way "the separator absorbed my mods" was still reachable. Clear the
+    // filter first, so the list the separator lands in is the one on screen
+    // (and so a new, still-empty separator is not hidden by the filter the
+    // moment it is added), and say so.
+    if (m_filterBar && m_filterBar->isFiltering()) {
+        m_filterBar->clearFilter();
+        statusBar()->showMessage(T("status_filter_cleared_separator"), 5000);
+    }
+
     SeparatorDialog dlg(this);
     if (dlg.exec() != QDialog::Accepted) return;
 
@@ -472,7 +484,7 @@ MainWindow::DepBreak MainWindow::confirmDependencyBreakage(
 // either way: they are part of the list, just not on screen.
 void MainWindow::setAllModsEnabled(bool enable)
 {
-    const bool filtering = m_filterBar && m_filterBar->hasText();
+    const bool filtering = m_filterBar && m_filterBar->isFiltering();
     QList<int> rows;
     for (int i = 0; i < m_modList->count(); ++i) {
         if (!mod_row::isMod(m_modList->item(i))) continue;

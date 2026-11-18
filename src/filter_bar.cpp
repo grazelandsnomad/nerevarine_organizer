@@ -75,6 +75,17 @@ void FilterBar::clearText()
     m_edit->clear();
 }
 
+bool FilterBar::isFiltering() const
+{
+    return hasText() || (m_favOnlyAction && m_favOnlyAction->isChecked());
+}
+
+void FilterBar::clearFilter()
+{
+    if (m_favOnlyAction) m_favOnlyAction->setChecked(false);
+    m_edit->clear();
+}
+
 void FilterBar::apply()
 {
     QString q = m_edit->text().trimmed();
