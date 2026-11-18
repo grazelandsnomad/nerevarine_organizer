@@ -1475,6 +1475,59 @@ void MainWindow::installLocalArchive(const QString &archivePath,
     ModRow placeholder =
         findPendingRowForModId(m_modList, archiveModId, gameId);
 
+    // The archive can also be the newer version of a mod already installed -
+    // since Update All, often the one a row is waiting for by hand: the file
+    // has no Mod Manager Download button (the author switched it off, as
+    // Tamriel Rebuilt's main file has) or the account is free and the manual
+    // route was taken. findPendingRowForModId skips installed rows on
+    // purpose, so route that case the way the nxm:// drop does: a row marked
+    // AwaitingUpdateDownload is a Replace with no question asked, any other
+    // installed match gets the Replace / Merge / Separate choice. Before this
+    // the new version landed as a second row at the bottom, the old one still
+    // in place and still flagged.
+    if (!placeholder && archiveModId > 0 && !gameId.isEmpty()) {
+        const GameAdapter *adapter   = GameAdapterRegistry::find(gameId);
+        const QString      nexusGame = adapter ? adapter->nexusDomain() : gameId;
+        ModRow             waiting   = nullptr;
+        for (int i = 0; i < m_modList->count() && !waiting; ++i) {
+            ModRow it = m_modList->item(i);
+            if (!mod_row::isMod(it) || !mod_row::isInstalled(it)) continue;
+            if (!it->data(ModRole::AwaitingUpdateDownload).toBool()) continue;
+            const auto ref = parseNexusModUrl(it->data(ModRole::NexusUrl).toString());
+            if (ref && ref->modId == archiveModId &&
+                ref->game.compare(nexusGame, Qt::CaseInsensitive) == 0)
+                waiting = it;
+        }
+        ReinstallChoice choice = ReinstallChoice::NotInstalled;
+        if (waiting) {
+            waiting->setData(ModRole::AwaitingUpdateDownload, QVariant());
+            choice = ReinstallChoice::Replace;
+        } else {
+            choice = confirmReinstallIfInstalled(nexusGame, archiveModId);
+        }
+        if (choice == ReinstallChoice::Cancel) return;
+        if (choice == ReinstallChoice::Replace || choice == ReinstallChoice::Merge) {
+            const int row =
+                waiting ? m_modList->row(waiting)
+                        : m_model.findInstalledByModId(nexusGame, archiveModId, -1);
+            if (row >= 0) {
+                placeholder = m_modList->item(row);
+                const QString currentPath =
+                    placeholder->data(ModRole::ModPath).toString();
+                if (choice == ReinstallChoice::Merge) {
+                    if (!currentPath.isEmpty())
+                        placeholder->setData(ModRole::MergeTargetPath, currentPath);
+                } else if (!currentPath.isEmpty() &&
+                           placeholder->data(ModRole::PrevModPath).toString().isEmpty()) {
+                    // Replace: the old folder goes once the install lands
+                    // (addModFromPath consumes PrevModPath).
+                    placeholder->setData(ModRole::PrevModPath, currentPath);
+                }
+            }
+        }
+        // Separate falls through to a fresh placeholder beside the existing row.
+    }
+
     if (placeholder) {
         // Adopt the existing row.  Switch it into "installing" state so the
         // delegate paints it with the spinner, preserve CustomName and URL.
