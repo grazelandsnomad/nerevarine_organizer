@@ -71,12 +71,15 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
         // Separator colours are authored for light mode and glare in dark mode.
         // resolve() darkens the bg toward black (keeping hue) and keeps the
         // user's label colour unless it stops reading. Live palette only, no
-        // stored data touched; light mode unchanged.
+        // stored data touched; light mode unchanged. A section with an update
+        // waiting or on its way (SepHasUpdate, per section) wears a neutral
+        // grey instead until the update lands - this section only, and the
+        // arrow below says why.
         const bool darkUi = option.palette.color(QPalette::Window).lightness() < 128;
-        const auto themed = separator_theme::resolve(
+        const bool sectionUpdate = index.data(ModRole::SepHasUpdate).toBool();
+        const auto themed        = separator_theme::resolve(
             index.data(ModRole::BgColor).value<QColor>(),
-            index.data(ModRole::FgColor).value<QColor>(),
-            darkUi);
+            index.data(ModRole::FgColor).value<QColor>(), darkUi, sectionUpdate);
         const QColor bg = themed.bg;
         const QColor fg = themed.fg;
 
@@ -112,14 +115,13 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
                           collapsed ? QStringLiteral("+") : QStringLiteral("−"));
         painter->restore();
 
-        // A mod in this section has an update waiting: the mod rows' green
-        // arrow, right of the toggle, on the separator's own colours. This
-        // used to repaint the whole band grey - and since the flag was one
-        // global answer written to every separator, one update anywhere
-        // recoloured the lot, which users reported as "the update changed my
-        // separator colours". The section's own header is visible even when
-        // the section is collapsed, so nothing the wash surfaced is lost.
-        const bool sectionUpdate = index.data(ModRole::SepHasUpdate).toBool();
+        // A mod in this section has an update waiting or in progress: the mod
+        // rows' green arrow, right of the toggle, on the grey band resolve()
+        // just chose. The flag used to be one global answer written to every
+        // separator, so one update anywhere greyed the lot, which users
+        // reported as "the update changed my separator colours"; it is per
+        // section now. The section's own header is visible even when the
+        // section is collapsed, so a collapsed section's update is not hidden.
         if (sectionUpdate) {
             const QRect g = separatorUpdateRect(option);
             painter->save();

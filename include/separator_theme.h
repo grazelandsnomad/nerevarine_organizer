@@ -30,9 +30,22 @@ struct Colors {
     QColor fg;
 };
 
+// The band and label of a section that holds a mod with an update waiting or
+// on its way: a neutral grey that reads as "something to finish here", for as
+// long as that is true. The user's own colours are never touched in storage;
+// they come back the moment the last update in the section lands. Only that
+// section - every other separator keeps its colours.
+inline Colors pendingUpdateColors(bool darkUi)
+{
+    return darkUi ? Colors{QColor(74, 74, 74), QColor(230, 230, 230)}
+                  : Colors{QColor(210, 210, 210), QColor(40, 40, 40)};
+}
+
 // Resolve (background, label) for a separator given the user's stored colours
-// (an invalid QColor means "never customised" -> use the default) and whether
-// the active palette is dark.
+// (an invalid QColor means "never customised" -> use the default), whether the
+// active palette is dark, and whether a mod in the section has an update
+// waiting or in progress - in which case the pair above is returned whole,
+// whatever the stored colours, until the update has landed.
 //
 // Light mode: stored colours pass straight through - the list looks exactly as
 // the user authored it.
@@ -52,8 +65,9 @@ struct Colors {
 // the fix for "my separator text colour changed in dark mode": the label used
 // to be swapped for that fixed grey outright, so every pale preset's dark
 // label (Audio, Characters, ...) lost its colour on the theme switch.
-inline Colors resolve(QColor bg, QColor fg, bool darkUi)
+inline Colors resolve(QColor bg, QColor fg, bool darkUi, bool pendingUpdate = false)
 {
+    if (pendingUpdate) return pendingUpdateColors(darkUi);
     if (!bg.isValid()) bg = defaultBg();
     if (!fg.isValid()) fg = defaultFg();
     if (!darkUi) return {bg, fg};

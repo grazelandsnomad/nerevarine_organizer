@@ -147,6 +147,29 @@ void testDarkModeLightensTheLabelInsteadOfReplacingIt()
     check("white on black stays white", w.fg == QColor(Qt::white), hex(w.fg));
 }
 
+// A section with an update waiting or on its way wears the neutral grey
+// instead of its colours - whatever they are - until the update lands.
+void testPendingUpdateWearsTheGreyUntilItLands()
+{
+    using color_contrast::contrastRatio;
+    using color_contrast::kLargeTextRatio;
+    const auto light = separator_theme::resolve(kAudioBg, kAudioFg, false, true);
+    check("light mode: the pending band is the grey, not the preset",
+          light.bg == QColor(210, 210, 210) && light.fg == QColor(40, 40, 40),
+          hex(light.bg) + " / " + hex(light.fg));
+    const auto dark = separator_theme::resolve(kAudioBg, kAudioFg, true, true);
+    check("dark mode: a dark grey band with a light label",
+          dark.bg == QColor(74, 74, 74) && dark.fg == QColor(230, 230, 230),
+          hex(dark.bg) + " / " + hex(dark.fg));
+    check("both pairs read", contrastRatio(light.fg, light.bg) >= kLargeTextRatio &&
+                                 contrastRatio(dark.fg, dark.bg) >= kLargeTextRatio);
+    const auto back = separator_theme::resolve(kAudioBg, kAudioFg, false, false);
+    check("with nothing pending the authored colours are back",
+          back.bg == kAudioBg && back.fg == kAudioFg, hex(back.bg));
+    check("the default argument is 'nothing pending'",
+          separator_theme::resolve(kAudioBg, kAudioFg, false).bg == kAudioBg);
+}
+
 } // namespace
 
 int main()
@@ -158,6 +181,7 @@ int main()
     testLightModePassesThrough();
     testDarkModeBand();
     testDarkModeLightensTheLabelInsteadOfReplacingIt();
+    testPendingUpdateWearsTheGreyUntilItLands();
 
     std::cout << "\n" << s_passed << " passed, " << s_failed << " failed\n";
     return s_failed == 0 ? 0 : 1;
