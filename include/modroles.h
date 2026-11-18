@@ -116,9 +116,10 @@ namespace ModRole {
     // Cleared on any real (re)install via addModFromPath.
     constexpr int IntendedModPath       = Qt::UserRole + 33; // QString
     // Separator-only: true iff a mod in this section (to the next separator or
-    // list end) has UpdateAvailable. Recomputed by updateSectionCounts(),
-    // drives a light-grey paint override in ModListDelegate. Clears once every
-    // pending update is installed or removed.
+    // list end) has UpdateAvailable. Recomputed by updateSectionCounts();
+    // ModListDelegate draws it as a small green arrow beside the collapse
+    // toggle, on the separator's own colours. Clears once every pending update
+    // in the section is installed or removed.
     constexpr int SepHasUpdate          = Qt::UserRole + 34; // bool
     constexpr int VideoUrl              = Qt::UserRole + 35; // QString: YouTube video URL
     constexpr int SourceUrl             = Qt::UserRole + 36; // QString: non-Nexus download page (GitHub, etc.)

@@ -77,16 +77,8 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
             index.data(ModRole::BgColor).value<QColor>(),
             index.data(ModRole::FgColor).value<QColor>(),
             darkUi);
-        QColor bg = themed.bg;
-        QColor fg = themed.fg;
-
-        // Grey-out tint when some mod has a pending update. SepHasUpdate is set
-        // on EVERY separator, not just the offending one, else updates in
-        // collapsed neighbours stay hidden. Clears once all are handled.
-        if (index.data(ModRole::SepHasUpdate).toBool()) {
-            bg = QColor(210, 210, 210);
-            fg = QColor(40, 40, 40);
-        }
+        const QColor bg = themed.bg;
+        const QColor fg = themed.fg;
 
         painter->fillRect(option.rect, bg);
         painter->setPen(QPen(bg.darker(130), 1));
@@ -120,6 +112,31 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
                           collapsed ? QStringLiteral("+") : QStringLiteral("−"));
         painter->restore();
 
+        // A mod in this section has an update waiting: the mod rows' green
+        // arrow, right of the toggle, on the separator's own colours. This
+        // used to repaint the whole band grey - and since the flag was one
+        // global answer written to every separator, one update anywhere
+        // recoloured the lot, which users reported as "the update changed my
+        // separator colours". The section's own header is visible even when
+        // the section is collapsed, so nothing the wash surfaced is lost.
+        const bool sectionUpdate = index.data(ModRole::SepHasUpdate).toBool();
+        if (sectionUpdate) {
+            const QRect g = separatorUpdateRect(option);
+            painter->save();
+            painter->setRenderHint(QPainter::Antialiasing, true);
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(QColor(30, 160, 30));
+            painter->drawRoundedRect(g, 3, 3);
+            painter->setBrush(Qt::white);
+            const QRect t = g.adjusted(g.width() / 4, g.height() / 3, -g.width() / 4,
+                                       -g.height() / 3);
+            QPolygon    tri;
+            tri << QPoint(t.left(), t.top()) << QPoint(t.right(), t.top())
+                << QPoint(t.center().x(), t.bottom());
+            painter->drawPolygon(tri);
+            painter->restore();
+        }
+
         // Active/total count on the right.
         QString countStr;
         QVariant tv = index.data(ModRole::TotalCount);
@@ -140,10 +157,12 @@ void ModListDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
             countReserve = QFontMetrics(cf).horizontalAdvance(countStr) + 16;
         }
 
-        // Title spans from the +/- button to the count zone.
-        QRect textRect = option.rect.adjusted(
-            btn.right() - option.rect.left() + 8, 0,
-            -12 - countReserve, 0);
+        // Title spans from the +/- button (or the update arrow) to the count
+        // zone.
+        const int titleFrom =
+            sectionUpdate ? separatorUpdateRect(option).right() : btn.right();
+        QRect textRect = option.rect.adjusted(titleFrom - option.rect.left() + 8, 0,
+                                              -12 - countReserve, 0);
         // Elide, don't clip mid-glyph; full name is in the tooltip.
         const QString rawTitle = index.data(Qt::DisplayRole).toString();
         const QString elided   = painter->fontMetrics().elidedText(
@@ -919,10 +938,24 @@ QRect ModListDelegate::separatorCollapseRect(const QStyleOptionViewItem &option)
     return QRect(x, y, side, side);
 }
 
+// The section-has-an-update arrow: the same square, right of the toggle.
+QRect ModListDelegate::separatorUpdateRect(const QStyleOptionViewItem &option) const
+{
+    const QRect btn = separatorCollapseRect(option);
+    return QRect(btn.right() + 6, btn.top(), btn.width(), btn.height());
+}
+
 bool ModListDelegate::helpEvent(QHelpEvent *event, QAbstractItemView *view,
                                 const QStyleOptionViewItem &option,
                                 const QModelIndex &index)
 {
+    if (event->type() == QEvent::ToolTip && mod_row::isSeparator(index) &&
+        index.data(ModRole::SepHasUpdate).toBool() &&
+        separatorUpdateRect(option).contains(event->pos())) {
+        QToolTip::showText(event->globalPos(), T("tip_section_update"), view);
+        return true;
+    }
+
     if (event->type() == QEvent::ToolTip &&
         mod_row::isMod(index))
     {

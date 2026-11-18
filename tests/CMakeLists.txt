@@ -52,6 +52,7 @@ endfunction()
 #                               catalog, what to take over, the move
 #   test_toolbar_customization  a toolbar button's two gates, the saved choice
 #   test_crash_report           the crash handler's block, the binary's identity
+#   test_separator_theme        a separator's colours in dark mode, the shared contrast maths
 set(UNIT_TESTS
     test_openmw_config
     test_fomod
@@ -85,6 +86,7 @@ set(UNIT_TESTS
     test_creations
     test_toolbar_customization
     test_crash_report
+    test_separator_theme
 )
 foreach(t IN LISTS UNIT_TESTS)
     nrv_test(${t})

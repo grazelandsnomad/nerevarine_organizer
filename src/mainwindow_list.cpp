@@ -2105,31 +2105,20 @@ void MainWindow::onSortBySize()
 
 void MainWindow::updateSectionCounts()
 {
-    // Pass 1: does ANY mod anywhere in the list have a pending Nexus
-    // update?  When yes, every separator gets the "needs attention" grey
-    // wash - originally only the offending section was tinted, but that
-    // made pending updates in a different (or collapsed) section too easy
-    // to miss, so now a single update greys the whole scaffolding until
-    // the user either installs the update or removes the offending mod.
-    bool anyUpdate = false;
-    const QList<ModEntry> modRows = m_model.all();
-    for (int i = 0; i < modRows.size(); ++i) {
-        const ModEntry &it = modRows.at(i);
-        if (!it.isMod())
-            continue;
-        if (it.updateAvailable) {
-            anyUpdate = true;
-            break;
-        }
-    }
-
+    // Per section: how many of its mods are on, and whether any of them has
+    // a Nexus update waiting. The update flag used to be ONE answer for the
+    // whole list written to every separator, so a single update anywhere
+    // recoloured all of them - the delegate now draws it as a small arrow on
+    // the section's own header, which stays visible when the section is
+    // collapsed, so per-section loses nothing the global wash was for.
     ModRow currentSep = nullptr;
     int active = 0, total = 0;
+    bool   sectionUpdate = false;
     auto flush = [&]() {
         if (!currentSep) return;
         currentSep->setData(ModRole::ActiveCount,  active);
         currentSep->setData(ModRole::TotalCount,   total);
-        currentSep->setData(ModRole::SepHasUpdate, anyUpdate);
+        currentSep->setData(ModRole::SepHasUpdate, sectionUpdate);
     };
     for (int i = 0; i < m_modList->count(); ++i) {
         ModRow it = m_modList->item(i);
@@ -2137,9 +2126,11 @@ void MainWindow::updateSectionCounts()
             flush();
             currentSep = it;
             active = total = 0;
+            sectionUpdate  = false;
         } else {
             ++total;
             if (it->checkState() == Qt::Checked) ++active;
+            if (it->data(ModRole::UpdateAvailable).toBool()) sectionUpdate = true;
         }
     }
     flush();

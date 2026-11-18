@@ -58,6 +58,8 @@ private:
     QRect favoriteIconRect(const QStyleOptionViewItem &option, int statusX) const;
     // Clickable "+ / −" collapse toggle on the left of a separator row.
     QRect separatorCollapseRect(const QStyleOptionViewItem &option) const;
+    // "A mod in this section has an update" arrow, right of the toggle.
+    QRect separatorUpdateRect(const QStyleOptionViewItem &option) const;
     // Video-review column - centred icon inside the column rect.
     QRect videoReviewIconRect(const QStyleOptionViewItem &option, int videoX,
                               int videoW) const;

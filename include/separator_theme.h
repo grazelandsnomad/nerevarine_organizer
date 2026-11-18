@@ -8,10 +8,10 @@
 // here has been re-tuned repeatedly; keeping it in one tested place stops the
 // next tweak from silently recolouring separators the user customised.
 
+#include "color_contrast.h"
+
 #include <QColor>
 #include <Qt>
-
-#include <cmath>
 
 namespace separator_theme {
 
@@ -20,30 +20,10 @@ namespace separator_theme {
 inline QColor defaultBg() { return QColor(55, 55, 75); }
 inline QColor defaultFg() { return QColor(Qt::white); }
 
-// Light label substituted in dark mode when the stored one would be unreadable.
+// Light label substituted in dark mode when the stored one cannot be made to
+// read at any lightness. With the band pulled down to ~0.18 that is all but
+// unreachable - it is the last resort, not the first.
 inline QColor darkModeFallbackFg() { return QColor(214, 219, 230); }
-
-// WCAG relative luminance of a colour, in [0, 1] (0 = black, 1 = white).
-inline double relativeLuminance(const QColor &c)
-{
-    auto lin = [](double ch) {
-        return ch <= 0.03928 ? ch / 12.92
-                             : std::pow((ch + 0.055) / 1.055, 2.4);
-    };
-    return 0.2126 * lin(c.redF())
-         + 0.7152 * lin(c.greenF())
-         + 0.0722 * lin(c.blueF());
-}
-
-// WCAG contrast ratio between two colours, in [1, 21].
-inline double contrastRatio(const QColor &a, const QColor &b)
-{
-    const double la = relativeLuminance(a);
-    const double lb = relativeLuminance(b);
-    const double hi = la > lb ? la : lb;
-    const double lo = la > lb ? lb : la;
-    return (hi + 0.05) / (lo + 0.05);
-}
 
 struct Colors {
     QColor bg;
@@ -63,13 +43,15 @@ struct Colors {
 // pulls down - a background the user already made dark is left untouched (this
 // is why a user with an already-dark separator sees its background unchanged).
 //
-// The stored label colour is KEPT whenever it still reads on that band, and is
-// only swapped for a light default when it wouldn't - the classic unreadable
-// case being dark text authored for a pale background we just darkened out from
-// under it.  Separator text is bold + enlarged, so WCAG's 3:1 large-text
-// contrast threshold is the bar.  This is the fix for "my separator text colour
-// changed in dark mode": a readable custom colour now survives the theme switch
-// instead of being clobbered unconditionally.
+// The stored label colour is KEPT whenever it still reads on that band.  When
+// it does not - the classic case being dark text authored for a pale
+// background we just darkened out from under it - it is LIGHTENED with its hue
+// and saturation kept, just far enough to read, so a purple label stays purple.
+// Separator text is bold + enlarged, so WCAG's 3:1 large-text threshold is the
+// bar.  The fixed light fallback is used only if no lightness reads.  This is
+// the fix for "my separator text colour changed in dark mode": the label used
+// to be swapped for that fixed grey outright, so every pale preset's dark
+// label (Audio, Characters, ...) lost its colour on the theme switch.
 inline Colors resolve(QColor bg, QColor fg, bool darkUi)
 {
     if (!bg.isValid()) bg = defaultBg();
@@ -81,8 +63,9 @@ inline Colors resolve(QColor bg, QColor fg, bool darkUi)
     if (l > 0.18f)
         bg = QColor::fromHslF(h, s, 0.18f, a);
 
-    if (contrastRatio(fg, bg) < 3.0)
-        fg = darkModeFallbackFg();
+    const QColor lit =
+        color_contrast::lightenedToRead(fg, bg, color_contrast::kLargeTextRatio);
+    fg = lit.isValid() ? lit : darkModeFallbackFg();
     return {bg, fg};
 }
 
