@@ -435,6 +435,19 @@ public:
 };
 
 // -- CD Projekt RED ----------------------------------------------------
+// Cyberpunk 2077 is not a Data/ game: its mods overlay the install folder
+// itself - archive/pc/mod/ for the REDengine archives nearly every mod ships,
+// r6/scripts/ (redscript), red4ext/plugins/ and bin/x64/plugins/ (Cyber
+// Engine Tweaks), mods/ (REDmod). The exe sits two levels down in bin/x64/,
+// so as with Gothic II the deploy target is ABOVE the exe's folder and is
+// overlaid as-is; unlike Gothic II the game root IS that folder, so
+// gameRootFromData is "." and the exe check and the Proton prefix hang off
+// it. The wrapper DLLs the mod loaders ship (RED4ext's winmm.dll, CET's
+// version.dll) sit beside the exe in bin/x64/, which is where the
+// DLL-override pass is told to look (bethesdaRegisterDllOverrides).
+//
+// Not pinned: this was built against a mock game folder, not a real install,
+// so it stays behind "Show all games" until someone runs it for real.
 class Cyberpunk2077Adapter : public GameAdapter {
 public:
     QString id()          const override { return QStringLiteral("cyberpunk2077"); }
@@ -447,6 +460,9 @@ public:
         {"Cyberpunk 2077", "bin/x64/Cyberpunk2077.exe", ""},
     }; }
     QStringList lutrisTokens() const override { return {"cyberpunk"}; }
+    QString          dataSubdir() const override { return QStringLiteral("../.."); }
+    bool             overlayDeploy() const override { return true; }
+    QString          gameRootFromData() const override { return QStringLiteral("."); }
 };
 
 class WitcherAdapter : public GameAdapter {

@@ -660,6 +660,16 @@ static void run_install_layout()
     expectDive("does not dive into bare Interface/", {"Interface"}, {}, QString());
     expectDive("does not dive into bare Strings/",   {"Strings"},   {}, QString());
     expectDive("does not dive into bare Source/",    {"Source"},    {}, QString());
+
+    // Cyberpunk 2077 roots: the game is overlaid whole, so a mod that is
+    // nothing but archive/pc/mod/x.archive (nearly all of them) or a CET
+    // mod's bin/x64/plugins/ has to keep its top folder.
+    expectDive("does not dive into bare archive/", {"archive"}, {}, QString());
+    expectDive("does not dive into bare r6/", {"r6"}, {}, QString());
+    expectDive("does not dive into bare red4ext/", {"red4ext"}, {}, QString());
+    expectDive("does not dive into bare bin/", {"bin"}, {}, QString());
+    expectDive("does not dive into bare mods/", {"mods"}, {}, QString());
+    expectDive("does not dive into bare engine/", {"engine"}, {}, QString());
     // A wrapper that merely CONTAINS one still dives - the rule is about the
     // wrapper's own name, not what is inside it.
     expectDive("still dives into a wrapper holding SKSE/",

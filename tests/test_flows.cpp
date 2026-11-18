@@ -777,6 +777,72 @@ void testDeployFlowWritesThePluginListWhereTheGameSpelledIt()
     QSettings().clear();
 }
 
+// Cyberpunk 2077: an overlay of the install folder itself, with the exe two
+// levels down. The deploy root, the exe check and the Proton prefix have to
+// agree on the folder, and the wrapper DLL a mod loader ships sits beside
+// the exe in bin/x64/, not at the deploy root - the override pass has to
+// look there. Built against this mock, not a real install.
+void testDeployFlowOverlaysCyberpunkIntoItsInstallFolder()
+{
+    std::cout << "testDeployFlowOverlaysCyberpunkIntoItsInstallFolder\n";
+    QSettings().clear();
+    QTemporaryDir tmp;
+    const QString lib  = tmp.path() + "/steamapps";
+    const QString game = lib + "/common/Cyberpunk 2077";
+    const QString reg  = lib + "/compatdata/1091500/pfx/user.reg";
+    const QString mods = tmp.path() + "/mods";
+    writeFile(game + "/REDprelauncher.exe", "MZ");
+    writeFile(game + "/bin/x64/Cyberpunk2077.exe", "MZ");
+    writeFile(game + "/archive/pc/content/basegame_1_engine.archive", "RDAR");
+    writeFile(reg, "WINE REGISTRY Version 2\n\n"
+                   "[Software\\\\Wine\\\\DllOverrides] 1785137682\n"
+                   "\"atl100\"=\"native,builtin\"\n\n");
+    writeFile(mods + "/Cool/archive/pc/mod/cool.archive", "RDAR");
+    writeFile(mods + "/Cool/r6/scripts/cool.reds", "// reds");
+    writeFile(mods + "/Cool/bin/x64/version.dll", "MZ"); // a CET-style wrapper
+
+    FakeShell shell;
+    shell.gameId       = QStringLiteral("cyberpunk2077");
+    shell.modsDirValue = mods;
+    ModEntry e         = ModEntry::named(QStringLiteral("Cool"));
+    e.modPath          = mods + "/Cool";
+    e.installStatus    = 1;
+    e.checked          = true;
+    shell.modelStore.append(e);
+    Settings::setDataDir(shell.gameId, game);
+
+    const QString manifest = resolveUserStatePath("deploy_manifest_modlist.json");
+    const QString backup   = resolveUserStatePath("deploy_backup_modlist");
+    writeFile(manifest, "{}");
+    const auto read = [](const QString &p) {
+        QFile f(p);
+        return f.open(QIODevice::ReadOnly) ? QString::fromUtf8(f.readAll()) : QString();
+    };
+
+    DeployFlow flow(shell);
+    bool       ran = false;
+    flow.maybeDeployBeforeLaunch(shell.gameId, [&] { ran = true; });
+    check("the re-sync ran through to its continuation", ran);
+    check("the data folder is the install folder itself",
+          Settings::dataDir(shell.gameId) == game, Settings::dataDir(shell.gameId));
+    check("the archive landed under archive/pc/mod/, not at the root",
+          QFileInfo::exists(game + "/archive/pc/mod/cool.archive") &&
+              !QFileInfo::exists(game + "/pc/mod/cool.archive"));
+    check("the script landed under r6/scripts/",
+          QFileInfo::exists(game + "/r6/scripts/cool.reds"));
+    check("the wrapper DLL sits beside the exe",
+          QFileInfo::exists(game + "/bin/x64/version.dll"));
+    check("the game's own archive is untouched",
+          read(game + "/archive/pc/content/basegame_1_engine.archive") == "RDAR");
+    check("the prefix was told to prefer the wrapper beside the exe",
+          read(reg).contains("\"version\"=\"native"), read(reg));
+
+    QFile::remove(manifest);
+    QFile::remove(resolveUserStatePath("deploy_manifest_modlist.fingerprint"));
+    QDir(backup).removeRecursively();
+    QSettings().clear();
+}
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
@@ -798,6 +864,7 @@ int main(int argc, char **argv)
     testLibraryFlowPlansFolderRenames();
     testDeployFlowAdoptsCreationsFromTheGamesDownloads();
     testDeployFlowWritesThePluginListWhereTheGameSpelledIt();
+    testDeployFlowOverlaysCyberpunkIntoItsInstallFolder();
 
     std::cout << "\n";
     if (s_failed == 0)

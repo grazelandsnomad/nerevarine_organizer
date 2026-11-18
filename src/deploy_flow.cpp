@@ -183,6 +183,7 @@ static DeployOutcome bethesdaApplyDeploy(const QString &id, const GameAdapter *a
 static QString bethesdaApplyUndeploy(const QString &id, const GameAdapter *adapter, const QString &dataDir, const QString &modlistFile, int *removedOut = nullptr);
 static int bethesdaLeaveOldFolder(const QString &id, const GameAdapter *adapter, const QString &oldDataDir, const QString &modlistFile);
 static QStringList gameExeNames(const GameAdapter *adapter);
+static QString     bethesdaGameRoot(const GameAdapter *adapter, const QString &dataDir);
 static QStringList bethesdaConfigureArchives(const QString &id, const GameAdapter *adapter, const QString &dataDir, const bethesda_deploy::Manifest &manifest);
 static QStringList bethesdaPrefixUserDirs(const GameAdapter *adapter, const QString &dataDir);
 static QString bethesdaResolveDataDir(QWidget *parent, const QString &id, const GameAdapter *adapter, bool allowPrompt);
@@ -435,7 +436,19 @@ static QStringList bethesdaRegisterDllOverrides(const GameAdapter *adapter,
 {
     QStringList rels;
     for (const auto &f : manifest.files) rels << f.rel;
-    const QStringList dlls = dll_overrides::wrapperDllsIn(rels);
+    // Where the loader looks for a wrapper: beside the exe. For a Data/ game
+    // and the Souls games that is the deploy root itself (or outside it);
+    // Cyberpunk deploys into its install folder while the exe sits in bin/x64.
+    QString appDir;
+    if (adapter && !adapter->steamLayout().exe.isEmpty()) {
+        const QString exeDir =
+            QDir::cleanPath(bethesdaGameRoot(adapter, dataDir) + "/" +
+                            QFileInfo(adapter->steamLayout().exe).path());
+        appDir = QDir(dataDir).relativeFilePath(exeDir);
+        if (appDir == QStringLiteral(".") || appDir.startsWith(QStringLiteral("..")))
+            appDir.clear();
+    }
+    const QStringList dlls = dll_overrides::wrapperDllsIn(rels, appDir);
     if (dlls.isEmpty()) return {};
 
     const QString regPath = resolveUserRegPath(adapter, dataDir);

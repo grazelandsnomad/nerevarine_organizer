@@ -31,11 +31,23 @@ bool isDataRootName(const QString &folderName)
 {
     // Folder names that ARE the data root, not a wrapper around one.
     // Lowercase; caller normalises before lookup.
-    static const QSet<QString> kDataRootNames {
+    static const QSet<QString> kDataRootNames{
         // OpenMW asset dirs - live directly under data=.
-        "textures", "meshes", "splash", "fonts", "sound", "music",
-        "icons", "bookart", "mwscript", "video", "shaders", "scripts",
-        "grass", "lod", "distantland",
+        "textures",
+        "meshes",
+        "splash",
+        "fonts",
+        "sound",
+        "music",
+        "icons",
+        "bookart",
+        "mwscript",
+        "video",
+        "shaders",
+        "scripts",
+        "grass",
+        "lod",
+        "distantland",
         // Diving past fomod/ pushes it to <modPath>/fomod/fomod/… and
         // FomodWizard::hasFomod() then can't find ModuleConfig.xml.
         "fomod",
@@ -51,10 +63,39 @@ bool isDataRootName(const QString &folderName)
         // game then fails with "Failed to locate an appropriate address
         // library", which reads like a missing download rather than a
         // misplaced one.
-        "skse", "f4se", "obse", "nvse", "fose", "sfse",
-        "interface", "strings", "seq", "materials", "shadersfx",
-        "lodsettings", "dialogueviews", "source", "facegen", "menus",
-        "trees", "distantlod", "calientetools", "planetdata",
+        "skse",
+        "f4se",
+        "obse",
+        "nvse",
+        "fose",
+        "sfse",
+        "interface",
+        "strings",
+        "seq",
+        "materials",
+        "shadersfx",
+        "lodsettings",
+        "dialogueviews",
+        "source",
+        "facegen",
+        "menus",
+        "trees",
+        "distantlod",
+        "calientetools",
+        "planetdata",
+        // Cyberpunk 2077 roots. The game is overlaid whole, so a mod that is
+        // nothing but archive/ (nearly all of them) or bin/ (a CET mod) has
+        // to keep that folder as its top level, or the overlay lands
+        // pc/mod/foo.archive at the game root instead of archive/pc/mod/.
+        // "bin" and "mods" are generic words, but a mod for any game that
+        // wraps itself in a lone bin/ or mods/ is not a shape seen in the
+        // wild, and a wrong dive is the worse outcome.
+        "archive",
+        "r6",
+        "red4ext",
+        "engine",
+        "bin",
+        "mods",
     };
     return kDataRootNames.contains(folderName.toLower());
 }

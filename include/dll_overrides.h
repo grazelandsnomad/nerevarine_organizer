@@ -44,9 +44,12 @@ inline constexpr char kNativeBuiltin[] = "native,builtin";
 bool isWrapperDll(const QString &fileName);
 
 // The wrapper DLL names among `relPaths` (deploy-manifest rels), lowercased,
-// de-duplicated, sorted. Only top-level paths count: a DLL inside a subfolder
+// de-duplicated, sorted. Only DLLs in the application directory count - the
+// folder holding the exe, which the loader searches and nothing below it.
+// That is the deploy root itself unless `appDir` names a subfolder of it
+// (Cyberpunk: bin/x64 under an overlaid install folder); a DLL anywhere else
 // is not on the loader's search path, so overriding its name would be wrong.
-QStringList wrapperDllsIn(const QStringList &relPaths);
+QStringList wrapperDllsIn(const QStringList &relPaths, const QString &appDir = {});
 
 // Add "<dll>"="native,builtin" to the [Software\\Wine\\DllOverrides] section of
 // `userReg`, creating the section if the prefix has none, and keeping entries

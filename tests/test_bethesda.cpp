@@ -1485,6 +1485,33 @@ static void testDarkSouls2Classification()
               sotfs->steamAppId() + "/" + og->steamAppId());
     }
 }
+
+// Cyberpunk 2077: the install folder overlaid whole, exe two levels down in
+// bin/x64/. The deploy root, the exe check and the Proton prefix all have to
+// agree on the same folder.
+static void testCyberpunkClassification()
+{
+    std::cout << "\n[Cyberpunk 2077: install folder overlaid, exe under bin/x64]\n";
+    const GameAdapter *a = GameAdapterRegistry::find("cyberpunk2077");
+    check("adapter exists", a != nullptr);
+    if (!a) return;
+    check("deploys into the folder two above the exe (dataSubdir \"../..\")",
+          a->dataSubdir() == QStringLiteral("../.."), a->dataSubdir());
+    check("overlays as-is", a->overlayDeploy());
+    check("the game root is the deploy folder itself",
+          a->gameRootFromData() == QStringLiteral("."), a->gameRootFromData());
+    check("the exe stays where the game keeps it, under bin/x64",
+          a->steamLayout().exe == QStringLiteral("bin/x64/Cyberpunk2077.exe"),
+          a->steamLayout().exe);
+    check("GOG keeps the same layout",
+          !a->gogLayouts().isEmpty() &&
+              a->gogLayouts().first().exe == a->steamLayout().exe);
+    check("no plugin list to write", a->loadOrderStyle() == LoadOrderStyle::Unknown);
+    check("no script extender", a->scriptExtenderLoaders().isEmpty());
+    check("no separate launcher", !a->hasLauncher());
+    check("unproven on a real install, so not pinned", !a->pinned());
+    check("stays out of the first-run chooser", !a->builtin());
+}
 } // namespace adapters_section
 
 namespace adapters_section {
@@ -1540,6 +1567,7 @@ static void run_game_adapters()
     adapters_section::testNexusDomainDefaultsToId();
     adapters_section::testEnderalClassification();
     adapters_section::testDarkSouls2Classification();
+    adapters_section::testCyberpunkClassification();
     adapters_section::testArchiveConfigPerEngineFamily();
     adapters_section::testFallout4IsDiscoverable();
     adapters_section::testOblivionRemasteredLayout();
@@ -1653,6 +1681,15 @@ static void testWrapperDetection()
           picked == QStringList({"dinput8", "dxgi"}), picked.join(", "));
     check("a DLL in a subfolder is not on the loader's search path",
           !picked.contains("inner"));
+
+    // Cyberpunk: the deploy root is the install folder and the exe sits in
+    // bin/x64/, so that is the folder the loader searches - not the root.
+    const QStringList cp = dll_overrides::wrapperDllsIn(
+        {"bin/x64/version.dll", "bin/x64/winmm.dll", "bin/x64/plugins/cet.dll",
+         "archive/pc/mod/x.archive", "dxgi.dll"},
+        QStringLiteral("bin/x64"));
+    check("with an app dir, the wrappers beside the exe count and nothing else",
+          cp == QStringList({"version", "winmm"}), cp.join(", "));
 }
 
 static void testAddKeepsTheFileIntact()

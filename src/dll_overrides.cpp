@@ -14,6 +14,8 @@
 
 #include "dll_overrides.h"
 
+#include <QFileInfo>
+#include <QDir>
 #include <QLatin1Char>
 #include <QSet>
 #include <QStringView>
@@ -122,15 +124,16 @@ bool isWrapperDll(const QString &fileName)
     return inWhitelist(baseName(fileName));
 }
 
-QStringList wrapperDllsIn(const QStringList &relPaths)
+QStringList wrapperDllsIn(const QStringList &relPaths, const QString &appDir)
 {
+    // Only what sits beside the exe: the loader searches the application
+    // directory, not its subfolders. QFileInfo::path() of a bare name is ".".
+    const QString want = appDir.isEmpty() ? QStringLiteral(".") : QDir::cleanPath(appDir);
     QStringList out;
     for (const QString &rel : relPaths) {
-        // Only what sits at the deploy root: the loader searches the
-        // application directory, not its subfolders.
-        if (rel.contains(QLatin1Char('/'))) continue;
         if (!rel.endsWith(QLatin1String(".dll"), Qt::CaseInsensitive)) continue;
-        const QString base = baseName(rel);
+        if (QDir::cleanPath(QFileInfo(rel).path()) != want) continue;
+        const QString base = baseName(QFileInfo(rel).fileName());
         if (!inWhitelist(base) || out.contains(base)) continue;
         out << base;
     }
