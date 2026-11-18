@@ -2,15 +2,15 @@
 
 A native Linux mod manager for OpenMW.
 
-## 0.75 - in development
+## 0.76 - in development
 
 The next release, built from `main`. Its notes grow in
-[`docs/release-notes/0.75.md`](docs/release-notes/0.75.md) as changes land.
+[`docs/release-notes/0.76.md`](docs/release-notes/0.76.md) as changes land.
 
-### Latest release: 0.74
+### Latest release: 0.75
 
 Download: [AppImage or plain Linux
-binary](https://github.com/grazelandsnomad/nerevarine_organizer/releases/tag/v0.74).
+binary](https://github.com/grazelandsnomad/nerevarine_organizer/releases/tag/v0.75).
 The AppImage is portable and runs on most distros, Steam Deck included. It
 needs FUSE 2 (`libfuse2t64` or `libfuse2` on Ubuntu and Debian, `fuse2` on
 Arch); without it, start it with `--appimage-extract-and-run`. The plain
@@ -19,42 +19,30 @@ version over the old folder to keep them.
 
 It brings, among the rest:
 
-- **A FOMOD's "recommended when you have mod X" is answered from your mod
-  list and your game.** Options for mods you don't have are no longer
-  pre-selected, a Fallout 4 installer picks the build your game runs
-  (Next-Gen or Anniversary), and nested install conditions are read whole.
-- **Start works with Steam closed**: it opens Steam, waits for it, then starts
-  the game through its script extender.
-- **Bethesda.net Creations as rows**: paste or drop a Creation's page link,
-  get it in-game, and the next Deploy or Start takes its files into your
-  mod library like any mod.
-- **Update All**: when Check Updates finds updates, its button turns red and
-  updates them all in one click, each mod to the new version of the file you
-  installed.
-- **Mods that spell a folder differently share it in the game's Data**
-  (Textures and textures, F4SE and f4se), so under Proton all their files
-  load, and a translation's plugin replaces the original.
-- **A plugin whose master is missing is left out of the load order** and
-  marked red, instead of stopping a Bethesda game as it loads; each plugin
-  now loads after its own masters.
-- **The welcome wizard comes back after a first run that was cut short**, and
-  Qt's own buttons (Next, Finish, Yes, No) speak the app's language.
-- **Mods that ship several folders can be told which to load**, a folder can
-  be dropped straight onto the list, and folders you make in the mods
-  directory yourself can be added to it from Clean Up Mod Folders.
-- **A View menu** switches the translation tools off for people who don't
-  translate mods, and shows a Move Mod Library button on the toolbar for
-  moving a whole library to another disk. Closing the window while a scan
-  still ran no longer crashes at exit.
-- **Importing an MO2 modlist links mods to their Nexus pages**, undo after a
-  drag goes back to before the drag, and moving the mod library no longer
-  freezes the window.
+- **Every mod gets a folder named after the mod**, whichever installer it
+  came through, and **Tidy Mod Folder Names…** offers to rename the ones you
+  already have, with a preview first.
+- **Folders you make or copy into the mods directory are picked up on their
+  own**, switched off, with no button and no dialog; Clean Up Mod Folders
+  moves to the Trash instead of deleting, and no longer freezes the window.
+- **Enable All, Disable All and Enable/Disable Selected**, one undo step each.
+- **Start says when the game did not survive** the launch, with what the
+  script extender's log ends on and any crash log.
+- **Four reported bugs fixed**: a grass-removing plugin was forced to
+  `groundcover=` and never ran; dark mode threw away separator label colours;
+  a separator added over a filtered list took rows you could not see; the
+  coloured toolbar buttons were unreadable on a dark theme.
+- **Updates land in the right row**: a hand-downloaded update replaces the mod
+  instead of adding a second row, a download for a page you have two mods
+  from goes into the one that was waiting for that file, and Nexus's newer
+  download file names are recognised. **Cyberpunk 2077** gains a deploy,
+  experimental and tested only against a mock install.
 
 Guides: [mod conflicts and how to fix each kind](docs/conflicts.md).
 
-Full notes: [`docs/release-notes/0.74.md`](docs/release-notes/0.74.md)
-(prior: [0.72](docs/release-notes/0.72.md), [0.71](docs/release-notes/0.71.md),
-[0.70](docs/release-notes/0.70.md))
+Full notes: [`docs/release-notes/0.75.md`](docs/release-notes/0.75.md)
+(prior: [0.74](docs/release-notes/0.74.md), [0.72](docs/release-notes/0.72.md),
+[0.71](docs/release-notes/0.71.md))
 
 # Tech Stack
 C++26 and Qt6.
