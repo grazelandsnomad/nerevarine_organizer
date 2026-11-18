@@ -30,11 +30,12 @@ struct Colors {
     QColor fg;
 };
 
-// The band and label of a section that holds a mod with an update waiting or
-// on its way: a neutral grey that reads as "something to finish here", for as
-// long as that is true. The user's own colours are never touched in storage;
-// they come back the moment the last update in the section lands. Only that
-// section - every other separator keeps its colours.
+// The band and label of every separator while any mod in the list has an
+// update waiting or on its way: a neutral grey that reads as "something to
+// finish", for as long as that is true. Every separator, on purpose - an
+// update in a collapsed or far-away section must not be missed; the section
+// that holds it is marked by an arrow. The user's own colours are never
+// touched in storage; they come back the moment the last update lands.
 inline Colors pendingUpdateColors(bool darkUi)
 {
     return darkUi ? Colors{QColor(74, 74, 74), QColor(230, 230, 230)}
@@ -43,9 +44,9 @@ inline Colors pendingUpdateColors(bool darkUi)
 
 // Resolve (background, label) for a separator given the user's stored colours
 // (an invalid QColor means "never customised" -> use the default), whether the
-// active palette is dark, and whether a mod in the section has an update
+// active palette is dark, and whether a mod anywhere in the list has an update
 // waiting or in progress - in which case the pair above is returned whole,
-// whatever the stored colours, until the update has landed.
+// whatever the stored colours, until the last update has landed.
 //
 // Light mode: stored colours pass straight through - the list looks exactly as
 // the user authored it.

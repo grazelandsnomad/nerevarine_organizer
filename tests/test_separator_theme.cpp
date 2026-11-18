@@ -147,8 +147,8 @@ void testDarkModeLightensTheLabelInsteadOfReplacingIt()
     check("white on black stays white", w.fg == QColor(Qt::white), hex(w.fg));
 }
 
-// A section with an update waiting or on its way wears the neutral grey
-// instead of its colours - whatever they are - until the update lands.
+// While any update is waiting or on its way, a separator wears the neutral
+// grey instead of its colours - whatever they are - until the last one lands.
 void testPendingUpdateWearsTheGreyUntilItLands()
 {
     using color_contrast::contrastRatio;

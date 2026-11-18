@@ -122,6 +122,7 @@ struct ModEntry {
     bool        updateFoundThisSession = false; // ModRole::UpdateFoundThisSession
     bool        creationDownloaded = false;     // ModRole::CreationDownloaded
     bool        sepHasUpdate = false;      // separator only
+    bool        sepAnyUpdate = false;      // separator only: an update pending anywhere
     QString     nexusFileName;             // ModRole::NexusFileName
     qint64      sortAnchor = -1;           // ModRole::SortAnchor; -1 = never stamped
     int         translationState = 0;      // ModRole::TranslationState

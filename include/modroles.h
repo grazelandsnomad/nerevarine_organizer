@@ -121,6 +121,14 @@ namespace ModRole {
     // toggle, on the separator's own colours. Clears once every pending update
     // in the section is installed or removed.
     constexpr int SepHasUpdate          = Qt::UserRole + 34; // bool
+    // Separator-only: true iff a mod ANYWHERE in the list has an update
+    // waiting or on its way. Written to every separator by
+    // updateSectionCounts(); the delegate greys every separator while it is
+    // set, so an update in a collapsed or far-away section cannot be missed,
+    // and the colours come back when the last update lands. SepHasUpdate is
+    // the arrow that says which section; this is the grey that says "not
+    // done yet". Session-only.
+    constexpr int SepAnyUpdate          = Qt::UserRole + 67; // bool
     constexpr int VideoUrl              = Qt::UserRole + 35; // QString: YouTube video URL
     constexpr int SourceUrl             = Qt::UserRole + 36; // QString: non-Nexus download page (GitHub, etc.)
     // Set by handleNxmUrl when an installed row is reused as the placeholder

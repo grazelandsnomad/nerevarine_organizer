@@ -2118,12 +2118,21 @@ void MainWindow::onSortBySize()
 
 void MainWindow::updateSectionCounts()
 {
-    // Per section: how many of its mods are on, and whether any of them has
-    // a Nexus update waiting. The update flag used to be ONE answer for the
-    // whole list written to every separator, so a single update anywhere
-    // recoloured all of them - the delegate now draws it as a small arrow on
-    // the section's own header, which stays visible when the section is
-    // collapsed, so per-section loses nothing the global wash was for.
+    // Pass 1: does ANY mod anywhere in the list have an update waiting or on
+    // its way? When yes, every separator wears the grey "not done yet" wash
+    // until the last one lands - a single update greys the whole
+    // scaffolding on purpose, so one in a collapsed or far-away section is
+    // not missed. Pass 2, per section: the on/total tallies, and whether
+    // THIS section holds one of those updates, which the delegate draws as
+    // an arrow beside the name - the grey says something is unfinished, the
+    // arrow says where.
+    bool anyUpdate = false;
+    for (const ModEntry &it : m_model.all())
+        if (it.isMod() && it.updateAvailable) {
+            anyUpdate = true;
+            break;
+        }
+
     ModRow currentSep = nullptr;
     int active = 0, total = 0;
     bool   sectionUpdate = false;
@@ -2132,6 +2141,7 @@ void MainWindow::updateSectionCounts()
         currentSep->setData(ModRole::ActiveCount,  active);
         currentSep->setData(ModRole::TotalCount,   total);
         currentSep->setData(ModRole::SepHasUpdate, sectionUpdate);
+        currentSep->setData(ModRole::SepAnyUpdate, anyUpdate);
     };
     for (int i = 0; i < m_modList->count(); ++i) {
         ModRow it = m_modList->item(i);
