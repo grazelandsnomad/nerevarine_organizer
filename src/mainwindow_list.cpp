@@ -1324,30 +1324,32 @@ void MainWindow::onContextMenu(const QPoint &pos)
                 {
                     const QString modPath = item->data(ModRole::ModPath).toString();
                     const auto picked = dataFoldersOf(modPath);
-                    if (picked.size() >= 2) {
+                    if (picked.size() >= 2)
                         menu.addAction(T("ctx_choose_data_folders"), this,
                                        [this, modPath]{ chooseDataFolders(modPath); });
 
-                        // A mod's grass is guessed from file and folder names, and
-                        // a wrong guess is invisible: a plugin emitted as
-                        // groundcover= is dropped from the load order, so it
-                        // simply never runs. This is the way back, per mod, and it
-                        // beats every rule.
-                        {
-                            static const QStringList kGcExts{".esp", ".esm", ".omwaddon"};
-                            QStringList              plugins;
-                            for (const auto &p : m_scans->cachedDataFolders(
-                                     item->data(ModRole::ModPath).toString(), kGcExts))
-                                for (const QString &cf : p.second) plugins << cf;
-                            if (!plugins.isEmpty()) {
-                                bool allForced = true;
-                                for (const QString &cf : plugins)
-                                    if (!m_contentPlugins.contains(cf)) allForced = false;
-                                auto *act = menu.addAction(T("ctx_not_groundcover"));
-                                act->setCheckable(true);
-                                act->setChecked(allForced);
-                                connect(
-                                    act, &QAction::triggered, this,
+                    // A mod's grass is guessed from file and folder names, and
+                    // a wrong guess is invisible: a plugin emitted as
+                    // groundcover= is dropped from the load order, so it
+                    // simply never runs. This is the way back, per mod, and it
+                    // beats every rule. Offered on ANY mod with a plugin - it
+                    // used to sit inside the folder-choice branch above, so a
+                    // one-folder grass remover, the case it exists for, never
+                    // got it - and only on OpenMW, where groundcover= is a
+                    // thing; the other engines have no such line to be wrong in.
+                    if (currentProfile().id == QStringLiteral("morrowind")) {
+                        static const QStringList kGcExts{".esp", ".esm", ".omwaddon"};
+                        QStringList              plugins;
+                        for (const auto &p : m_scans->cachedDataFolders(modPath, kGcExts))
+                            for (const QString &cf : p.second) plugins << cf;
+                        if (!plugins.isEmpty()) {
+                            bool allForced = true;
+                            for (const QString &cf : plugins)
+                                if (!m_contentPlugins.contains(cf)) allForced = false;
+                            auto *act = menu.addAction(T("ctx_not_groundcover"));
+                            act->setCheckable(true);
+                            act->setChecked(allForced);
+                            connect(act, &QAction::triggered, this,
                                     [this, plugins](bool on) {
                                         for (const QString &cf : plugins) {
                                             if (on)
@@ -1360,7 +1362,6 @@ void MainWindow::onContextMenu(const QPoint &pos)
                                                         m_contentPlugins.end()));
                                         saveModList(); // re-sync groundcover=/content=
                                     });
-                            }
                         }
                     }
                 }
