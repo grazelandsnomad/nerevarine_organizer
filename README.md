@@ -2,15 +2,15 @@
 
 A native Linux mod manager for OpenMW.
 
-## 0.76 - in development
+## 0.77 - in development
 
 The next release, built from `main`. Its notes grow in
-[`docs/release-notes/0.76.md`](docs/release-notes/0.76.md) as changes land.
+[`docs/release-notes/0.77.md`](docs/release-notes/0.77.md) as changes land.
 
-### Latest release: 0.75
+### Latest release: 0.76
 
 Download: [AppImage or plain Linux
-binary](https://github.com/grazelandsnomad/nerevarine_organizer/releases/tag/v0.75).
+binary](https://github.com/grazelandsnomad/nerevarine_organizer/releases/tag/v0.76).
 The AppImage is portable and runs on most distros, Steam Deck included. It
 needs FUSE 2 (`libfuse2t64` or `libfuse2` on Ubuntu and Debian, `fuse2` on
 Arch); without it, start it with `--appimage-extract-and-run`. The plain
@@ -19,30 +19,28 @@ version over the old folder to keep them.
 
 It brings, among the rest:
 
-- **Every mod gets a folder named after the mod**, whichever installer it
-  came through, and **Tidy Mod Folder Names…** offers to rename the ones you
-  already have, with a preview first.
-- **Folders you make or copy into the mods directory are picked up on their
-  own**, switched off, with no button and no dialog; Clean Up Mod Folders
-  moves to the Trash instead of deleting, and no longer freezes the window.
-- **Enable All, Disable All and Enable/Disable Selected**, one undo step each.
-- **Start says when the game did not survive** the launch, with what the
-  script extender's log ends on and any crash log.
-- **Four reported bugs fixed**: a grass-removing plugin was forced to
-  `groundcover=` and never ran; dark mode threw away separator label colours;
-  a separator added over a filtered list took rows you could not see; the
-  coloured toolbar buttons were unreadable on a dark theme.
-- **Updates land in the right row**: a hand-downloaded update replaces the mod
-  instead of adding a second row, a download for a page you have two mods
-  from goes into the one that was waiting for that file, and Nexus's newer
-  download file names are recognised. **Cyberpunk 2077** gains a deploy,
-  experimental and tested only against a mock install.
+- **Move Mod Library moves the whole library.** It used to carry only the
+  folders a row pointed at directly, leaving a library of download folders
+  largely where it was while reporting success; and picking a disk root
+  strewed the mods over it. Now everything travels, into a folder of its own
+  on a disk root, and the summary says what stayed behind.
+- **Cyberpunk 2077 is a normal entry in the game menu**, run against a real
+  install at last. A mod that is one bare `.archive` reaches
+  `archive/pc/mod` instead of the install root, and a GOG copy's mod loaders
+  are registered in the prefix Heroic actually uses.
+- **Diagnose Last OpenMW Run reads missing-object errors**, one entry per
+  object with a repeat count, and names the mod that places it.
+- **A download for a game you have no profile for offers to add it**, finds
+  the install and puts the mod in its own list, instead of leaving you the
+  choice between the wrong list and nothing.
+- **Start greys out and says Running** while the game is up, so a second
+  click cannot launch it again.
 
 Guides: [mod conflicts and how to fix each kind](docs/conflicts.md).
 
-Full notes: [`docs/release-notes/0.75.md`](docs/release-notes/0.75.md)
-(prior: [0.74](docs/release-notes/0.74.md), [0.72](docs/release-notes/0.72.md),
-[0.71](docs/release-notes/0.71.md))
+Full notes: [`docs/release-notes/0.76.md`](docs/release-notes/0.76.md)
+(prior: [0.75](docs/release-notes/0.75.md), [0.74](docs/release-notes/0.74.md),
+[0.72](docs/release-notes/0.72.md))
 
 # Tech Stack
 C++26 and Qt6.
