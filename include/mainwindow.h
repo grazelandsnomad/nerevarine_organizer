@@ -805,6 +805,14 @@ private:
     // through scheduleCheckButtonRefresh, at most once per event-loop turn.
     void updateCheckUpdatesButton();
     void scheduleCheckButtonRefresh();
+    // The Start button while a game is up: grey, "Running", not clickable, so
+    // a second click cannot launch again. The only writer of those buttons'
+    // text, style and enabled state - the appearance itself is decided in
+    // launch_ui.h, which is where it can be tested.
+    void updateLaunchButtons();
+    // Called from the launch signals: arm the state, upgrade it to "this one
+    // reports its own end", or stand it back up.
+    void setLaunchRunning(bool running, bool monitored);
     // The update paths' common start: each row still there and not already
     // updating gets prepareItemForInstall + a file list fetched without the
     // picker. Returns how many started.
@@ -870,6 +878,12 @@ private:
     QTimer      *m_checkButtonTimer = nullptr;  // 0 ms: one refresh per burst of row changes
     int          m_checksRunning    = 0;        // checks dispatched, not yet finished
     bool         m_updateAllMode    = false;    // the button reads Update All
+    // The Start buttons while a launch is under way. Two of them because the
+    // toolbar carries a Morrowind twin, and only one is ever visible.
+    QToolButton *m_launchBtn        = nullptr;
+    QToolButton *m_launchOpenMWBtn  = nullptr;
+    QTimer      *m_launchResetTimer = nullptr;  // the safety net, see launch_ui.h
+    bool         m_launchRunning    = false;
     qint64       m_updateAllSinceMs = 0;        // when it last turned red (double-click guard)
     DownloadQueue                    *m_downloadQueue = nullptr;
     // Bulk-install throttle: drip-feeds onInstallFromNexus to avoid hammering

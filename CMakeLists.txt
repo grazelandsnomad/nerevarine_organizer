@@ -286,6 +286,7 @@ set(CORE_SOURCES
     include/backup_ops.h
     include/bulk_install_queue.h
     include/review_updates_dialog.h
+    include/launch_ui.h
     include/launch_warnings.h
     include/modlist_sort.h
     include/send_to_dialog.h

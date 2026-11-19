@@ -99,6 +99,7 @@
 #include <QProgressDialog>
 #include <QStorageInfo>
 #include <QProcess>
+#include <QScopeGuard>
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <QTimer>
@@ -2254,7 +2255,7 @@ void DeployFlow::launchProgram(QString &storedPath,
     if (storedPath.isEmpty() || !QFile::exists(storedPath)) {
         storedPath = QFileDialog::getOpenFileName(
             m_shell.dialogParent(), locateTitle, "/usr/bin");
-        if (storedPath.isEmpty()) return;
+        if (storedPath.isEmpty()) { emit launchFinished(); return; }
         if (savePath) savePath(storedPath);
     }
 
@@ -2264,6 +2265,8 @@ void DeployFlow::launchProgram(QString &storedPath,
         connect(proc, &QProcess::finished, this,
                 [this, proc](int code, QProcess::ExitStatus) {
             proc->deleteLater();
+            // The only launch in the app that really does see the game quit.
+            emit launchFinished();
             if (code != 0)
                 QTimer::singleShot(0, this, [this] { m_shell.triageOpenMWLog(); });
         });
@@ -2271,6 +2274,9 @@ void DeployFlow::launchProgram(QString &storedPath,
         if (!proc->waitForStarted(3000)) {
             proc->deleteLater();
             ui::warn(m_shell.dialogParent(), T("launch_error_title"), T("launch_error_body").arg(storedPath));
+            emit launchFinished();
+        } else {
+            emit launchMonitored();
         }
     } else {
         if (!subprocess::startDetached(storedPath, {}))
@@ -2483,6 +2489,9 @@ void DeployFlow::onLaunchOpenMW()
 {
     if (refuseLaunchIfRebootPending()) return;
     if (!confirmLaunchIfWarnings()) return;
+    // After the guards, so a cancelled warning dialog never stands the button
+    // down. launchProgram releases it again if it cannot find the binary.
+    emit launchStarted();
     const QString id = m_shell.currentGameId();
     QString path = m_shell.openmwPath();
     launchProgram(path,
@@ -2673,6 +2682,7 @@ void DeployFlow::launchWhenSteamReady(const QString &appId, const QString &loade
             << "launch game: found" << loader
             << "but could not build a Proton command - falling back to Steam";
         if (dispatchSteamUrl(parent, "steam://rungameid/" + appId)) watchLaunch(gameExe);
+        else emit launchFinished();   // nothing started, so release the button
     };
 
     const steam_client::State now = steam_client::state();
@@ -2713,7 +2723,7 @@ void DeployFlow::launchWhenSteamReady(const QString &appId, const QString &loade
     auto waited = std::make_shared<QElapsedTimer>();
     waited->start();
     connect(dlg, &QDialog::rejected, timer, &QTimer::stop);
-    connect(timer, &QTimer::timeout, dlg, [dlg, timer, run, waited, parent] {
+    connect(timer, &QTimer::timeout, dlg, [this, dlg, timer, run, waited, parent] {
         switch (steam_client::next(steam_client::state(), waited->elapsed())) {
         case steam_client::Next::Wait:
             return;
@@ -2732,6 +2742,7 @@ void DeployFlow::launchWhenSteamReady(const QString &appId, const QString &loade
                                          << waited->elapsed() << "ms - not launching";
             dlg->reject();
             ui::warn(parent, T("launch_error_title"), T("launch_steam_timeout"));
+            emit launchFinished();   // launchGameNow handed the outcome over
             return;
         }
     });
@@ -2906,6 +2917,11 @@ void DeployFlow::onLaunchGame()
         << "launch game: game=" << id << " appId=" << appId
         << " adapter=" << (adapter ? "yes" : "MISSING");
 
+    // Stand the button down now, not after the launch: the re-sync below can
+    // put a progress dialog up and the Steam path can wait behind another one,
+    // and every click in between used to start the game again.
+    emit launchStarted();
+
     // Deploy-on-launch: re-sync a previously-deployed Bethesda profile's Data/
     // to the current list before the game starts (best-effort; it only waits
     // when a Creation the game downloaded is being copied into the library,
@@ -2986,6 +3002,10 @@ void DeployFlow::watchLaunch(const QString &gameExe)
         if (alive && !giveUp) return;
         if (!w->seen && !giveUp) return;
         m_launchWatchTimer->stop();
+        // The app's knowledge of this launch ends here, whatever the verdict,
+        // so the button comes back. Not the same as the game closing: the poll
+        // only ever concludes "it ran", "it never came" or "it died early".
+        emit launchFinished();
 
         launch_watch::Observation o;
         o.gameName      = w->gameName;
@@ -3031,12 +3051,23 @@ void DeployFlow::watchLaunch(const QString &gameExe)
                  launch_watch::details(o));
     });
     m_launchWatchTimer->start();
+    emit launchMonitored();
 }
 
 void DeployFlow::launchGameNow(const QString &id)
 {
     const QString appId = GameProfileRegistry::steamAppId(id);
     const GameAdapter *adapter = GameAdapterRegistry::find(id);
+
+    // Every path out of here that does NOT start something has to release the
+    // button, and there are several - a cancelled warning dialog, an
+    // unresolved OpenGothic pair, a missing exe. One guard rather than an emit
+    // per return: `handedOff` is set wherever something really was started, or
+    // taken over by launchWhenSteamReady.
+    bool handedOff = false;
+    const auto release = qScopeGuard([this, &handedOff] {
+        if (!handedOff) emit launchFinished();
+    });
 
     // Look at what the re-sync put there. This button never asked before - the
     // launch warnings existed and only the two OpenMW launchers called them -
@@ -3065,6 +3096,8 @@ void DeployFlow::launchGameNow(const QString &id)
         qCInfo(logging::lcLaunch) << "launch game: opengothic" << engine << args;
         if (!subprocess::startDetached(engine, args))
             ui::warn(m_shell.dialogParent(), T("launch_error_title"), T("launch_error_body").arg(engine));
+        else
+            handedOff = true;
         return;
     }
 
@@ -3073,6 +3106,8 @@ void DeployFlow::launchGameNow(const QString &id)
     if (!gogExe.isEmpty() && QFile::exists(gogExe)) {
         if (!launchViaGog(gogExe))
             ui::warn(m_shell.dialogParent(), T("launch_error_title"), T("launch_error_body").arg(gogExe));
+        else
+            handedOff = true;   // Heroic owns it now, and never reports back
         return;
     }
 
@@ -3096,11 +3131,16 @@ void DeployFlow::launchGameNow(const QString &id)
             findScriptExtenderLoader(adapter, QFileInfo(steamExe).path());
         const QString gameExe = QFileInfo(steamExe).fileName();
         if (!loader.isEmpty()) {
+            // It may wait on Steam behind a dialog first, so it owns the
+            // outcome from here, the watch included.
+            handedOff = true;
             launchWhenSteamReady(appId, loader, gameExe);
             return;
         }
-        if (dispatchSteamUrl(m_shell.dialogParent(), "steam://rungameid/" + appId))
+        if (dispatchSteamUrl(m_shell.dialogParent(), "steam://rungameid/" + appId)) {
+            handedOff = true;
             watchLaunch(gameExe);
+        }
         return;
     }
 
@@ -3108,7 +3148,8 @@ void DeployFlow::launchGameNow(const QString &id)
     if (!appId.isEmpty()) {
         qCInfo(logging::lcLaunch) << "launch game: exe not confirmed on disk,"
                                   << "asking Steam to run" << appId << "anyway";
-        dispatchSteamUrl(m_shell.dialogParent(), "steam://rungameid/" + appId);
+        if (dispatchSteamUrl(m_shell.dialogParent(), "steam://rungameid/" + appId))
+            handedOff = true;   // no exe name to poll for, so nothing watches it
         return;
     }
 
@@ -3130,4 +3171,6 @@ void DeployFlow::launchGameNow(const QString &id)
         m_shell.showStatus(T("launch_with_script_extender"), 3000);
     if (!subprocess::startDetached(toRun, {}))
         ui::warn(m_shell.dialogParent(), T("launch_error_title"), T("launch_error_body").arg(toRun));
+    else
+        handedOff = true;
 }

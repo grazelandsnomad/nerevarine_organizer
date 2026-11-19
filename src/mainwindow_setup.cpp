@@ -43,6 +43,7 @@
 #include "backup_manager.h"
 #include "bulk_install_queue.h"
 #include "review_updates_dialog.h"
+#include "launch_ui.h"
 #include "launch_warnings.h"
 #include "modlist_sort.h"
 #include "send_to_dialog.h"
@@ -490,6 +491,7 @@ void MainWindow::setupToolbar()
     // Generic launch buttons for non-Morrowind Steam games
     m_actLaunchGame = tb->addAction(T("toolbar_launch_game"), m_deployFlow, &DeployFlow::onLaunchGame);
     tintText(tb->widgetForAction(m_actLaunchGame), QColor(QStringLiteral("#1a8a1a")));
+    m_launchBtn = qobject_cast<QToolButton *>(tb->widgetForAction(m_actLaunchGame));
     m_actLaunchSteamLauncher = tb->addAction(T("toolbar_launch_launcher"), m_deployFlow, &DeployFlow::onLaunchSteamLauncher);
 
     // Dependency canvas. Takes the slot "Tune INI" had, as asked - Tune INI
@@ -506,6 +508,7 @@ void MainWindow::setupToolbar()
     // Launch buttons (OpenMW-specific - shown only for Morrowind)
     m_actLaunchOpenMW = tb->addAction(T("toolbar_launch_openmw"), m_deployFlow, &DeployFlow::onLaunchOpenMW);
     tintText(tb->widgetForAction(m_actLaunchOpenMW), QColor(QStringLiteral("#1a8a1a")));
+    m_launchOpenMWBtn = qobject_cast<QToolButton *>(tb->widgetForAction(m_actLaunchOpenMW));
     m_actLaunchLauncher = tb->addAction(T("toolbar_launch_launcher"), m_deployFlow, &DeployFlow::onLaunchOpenMWLauncher);
 
     // Sort with LOOT - on-demand; visibility toggled per-profile in
@@ -749,6 +752,42 @@ static QString checkUpdatesButtonStyle(bool updateAll)
         "}").arg(QLatin1String(base), QLatin1String(hover), QLatin1String(pressed));
 }
 
+void MainWindow::setLaunchRunning(bool running, bool monitored)
+{
+    m_launchRunning = running;
+    if (!m_launchResetTimer) {
+        m_launchResetTimer = new QTimer(this);
+        m_launchResetTimer->setSingleShot(true);
+        connect(m_launchResetTimer, &QTimer::timeout, this,
+                [this] { setLaunchRunning(false, false); });
+    }
+    // Re-armed on every signal, so a "monitored" arriving after "started"
+    // lengthens the hold rather than adding a second timer.
+    m_launchResetTimer->stop();
+    if (running) m_launchResetTimer->start(launch_ui::resetTimeoutMs(monitored));
+    updateLaunchButtons();
+}
+
+void MainWindow::updateLaunchButtons()
+{
+    const launch_ui::Look look = launch_ui::look(m_launchRunning);
+    // The Morrowind twin keeps its own label when idle; only the running face
+    // is shared, and both lose their green while it is up.
+    const auto apply = [&look](QAction *act, QToolButton *btn,
+                               const QString &idleKey) {
+        if (!act) return;
+        act->setEnabled(look.enabled);
+        act->setText(T(look.enabled ? idleKey : look.textKey));
+        act->setToolTip(look.enabled ? QString() : T("toolbar_launch_running_tip"));
+        if (btn && !look.qss.isEmpty()) btn->setStyleSheet(look.qss);
+    };
+    apply(m_actLaunchGame,   m_launchBtn,       QStringLiteral("toolbar_launch_game"));
+    apply(m_actLaunchOpenMW, m_launchOpenMWBtn, QStringLiteral("toolbar_launch_openmw"));
+    // Back to idle: the green tint is baked per widget and per theme, so hand
+    // it back to the one function that knows how.
+    if (look.enabled) restyleToolbarTextButtons();
+}
+
 void MainWindow::scheduleCheckButtonRefresh()
 {
     if (m_checkButtonTimer) m_checkButtonTimer->start();
@@ -866,6 +905,15 @@ void MainWindow::restyleToolbarTextButtons()
     for (const TintedText &tt : std::as_const(m_tintedText))
         if (tt.widget)
             tt.widget->setStyleSheet(tt.qss.arg(readableTextColour(tt.hue, surface)));
+
+    // The Start buttons are in that list, so a theme switch mid-launch would
+    // have put the green back under the word "Running". Re-apply it here
+    // rather than calling the refresher, which would recurse.
+    if (m_launchRunning) {
+        const launch_ui::Look look = launch_ui::look(true);
+        if (m_launchBtn)       m_launchBtn->setStyleSheet(look.qss);
+        if (m_launchOpenMWBtn) m_launchOpenMWBtn->setStyleSheet(look.qss);
+    }
 }
 
 void MainWindow::setupCentralWidget()
@@ -1941,6 +1989,8 @@ void MainWindow::switchToGame(int idx)
     m_deployFlow->updateDeployHint();
     resetUntranslatedNotices();
 
+    // A launch belonging to the game just left is not news about this one.
+    if (m_launchRunning) setLaunchRunning(false, false);
     statusBar()->showMessage(
         T("status_switched_game").arg(m_profiles->current().displayName), 3000);
 }

@@ -431,6 +431,14 @@ MainWindow::MainWindow(QWidget *parent)
     m_tbCustom     = new ToolbarCustomization(this);
     m_importFlow   = new ImportFlow(*this, this);
     m_deployFlow   = new DeployFlow(*this, this);
+    // Start says "Running" while a launch is under way, so a second click
+    // cannot start the game again. See launch_ui.h for what each signal buys.
+    connect(m_deployFlow, &DeployFlow::launchStarted,   this,
+            [this] { setLaunchRunning(true, false); });
+    connect(m_deployFlow, &DeployFlow::launchMonitored, this,
+            [this] { setLaunchRunning(true, true); });
+    connect(m_deployFlow, &DeployFlow::launchFinished,  this,
+            [this] { setLaunchRunning(false, false); });
     m_libraryFlow  = new LibraryFlow(*this, this);
     setupMenuBar();
     setupToolbar();

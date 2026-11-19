@@ -8,6 +8,7 @@
 // for the usual reason: it ends in exec().
 
 #include "launch_warnings.h"
+#include "launch_ui.h"
 
 #include "forbidden_mods.h"
 #include "modentry.h"
@@ -154,6 +155,48 @@ void testScriptExtenderRowsOnlyExistWithFindings()
     check("and leave no explainer", r.scriptExtenderExplain.isEmpty());
 }
 
+// What Start looks like once it has been pressed. The widget half is not
+// testable - WindowShell exposes no toolbar action - so the decision was put
+// in launch_ui.h and this is it.
+void testTheStartButtonStandsDownWhileRunning()
+{
+    std::cout << "\n[launch_ui: Start reads Running and refuses clicks]\n";
+    const launch_ui::Look idle = launch_ui::look(false);
+    check("idle is clickable and keeps the Start label",
+          idle.enabled && idle.textKey == QStringLiteral("toolbar_launch_game"),
+          idle.textKey);
+    check("and idle styles nothing, so the green tint survives",
+          idle.qss.isEmpty(), idle.qss);
+
+    const launch_ui::Look run = launch_ui::look(true);
+    check("running cannot be clicked", !run.enabled);
+    check("running says so", run.textKey == QStringLiteral("toolbar_launch_running"),
+          run.textKey);
+    // The reason this is asserted: Qt greys a disabled button's text itself,
+    // so without a :disabled rule the blue is thrown away and the state reads
+    // as an ordinary dead button.
+    check("and styles the disabled state, not just the base one",
+          run.qss.contains(QStringLiteral("QToolButton:disabled")), run.qss);
+    check("filled, which is what makes it readable on either theme",
+          run.qss.contains(QStringLiteral("background-color")));
+}
+
+void testTheRunningStateAlwaysEnds()
+{
+    std::cout << "\n[launch_ui: the hold always expires]\n";
+    const int loose = launch_ui::resetTimeoutMs(false);
+    const int held  = launch_ui::resetTimeoutMs(true);
+    // A launch handed to Heroic or a bare exe never reports back, so the hold
+    // is short on purpose: long enough to eat a double click, short enough
+    // that nobody is left waiting on a button.
+    check("an unwatched launch is held for about half a minute",
+          loose >= 10000 && loose <= 60000, QString::number(loose));
+    check("a watched one waits for its own signal, with a longer backstop",
+          held > loose, QString::number(held));
+    check("but it is still bounded - nothing holds forever", held > 0 && held < 3600000,
+          QString::number(held));
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -165,6 +208,8 @@ int main(int argc, char **argv)
     testAnEmptyInstallIsFlaggedAndAnyContentClearsIt();
     testForbiddenModsAreCaughtByModPage();
     testScriptExtenderRowsOnlyExistWithFindings();
+    testTheStartButtonStandsDownWhileRunning();
+    testTheRunningStateAlwaysEnds();
 
     std::cout << "\n";
     if (s_failed == 0)

@@ -102,6 +102,17 @@ public:
     void adoptCreations(const creations::Paths &paths, const creations::Plan &plan,
                         bool modal, std::function<void(const AdoptionReport &)> then);
 
+signals:
+    // The Start button's state, so the window can stand it down and stop a
+    // second click launching the game again. launchStarted fires on the click,
+    // before the deploy-on-launch and the Steam wait that can follow it;
+    // launchMonitored says this launch will report its own end, so the
+    // window's short safety timeout can give way to the signal; launchFinished
+    // fires when the launch is over, failed, or was never going to happen.
+    void launchStarted();
+    void launchMonitored();
+    void launchFinished();
+
 private:
     // The deploy proper, once the game's downloads have moved: gathers the
     // sources again (rows changed hands) and runs the worker.
