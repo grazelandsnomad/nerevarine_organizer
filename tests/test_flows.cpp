@@ -877,6 +877,76 @@ void testDeployFlowWritesThePluginListWhereTheGameSpelledIt()
     QSettings().clear();
 }
 
+// The same overlay for a GOG copy run through Heroic, which is how the game is
+// actually installed on the machine this was finally tested on. Nothing lives
+// under steamapps here, so the Steam compatdata hunt finds nothing and the
+// only prefix is Heroic's - the leg that did not exist, and whose absence let
+// the deploy place RED4ext's and CET's wrapper DLLs and then register them
+// nowhere, leaving the loaders inert with no error.
+void testDeployFlowFindsTheHeroicPrefixForAGogCopy()
+{
+    std::cout << "testDeployFlowFindsTheHeroicPrefixForAGogCopy\n";
+    QSettings().clear();
+    QTemporaryDir tmp;
+    // A throwaway HOME, so heroicConfigDirs() reads our fixture and the two
+    // $HOME Steam compatdata fallbacks land on nothing.
+    const QByteArray oldHome = qgetenv("HOME");
+    const QString    home    = tmp.filePath("home");
+    qputenv("HOME", home.toUtf8());
+
+    const QString game   = tmp.filePath("Jocs/Cyberpunk 2077");   // not under steamapps
+    const QString prefix = home + "/Games/Heroic/Prefixes/default/Cyberpunk 2077";
+    const QString reg    = prefix + "/pfx/user.reg";
+    const QString mods   = tmp.filePath("mods");
+    writeFile(game + "/bin/x64/Cyberpunk2077.exe", "MZ");
+    writeFile(game + "/archive/pc/content/basegame_1_engine.archive", "RDAR");
+    writeFile(home + "/.config/heroic/gog_store/installed.json",
+              QStringLiteral(R"([{"appName":"1423049311","install_path":"%1","executable":""}])")
+                  .arg(game));
+    writeFile(home + "/.config/heroic/GamesConfig/1423049311.json",
+              QStringLiteral(R"({"1423049311":{"winePrefix":"%1",)"
+                             R"("wineVersion":{"type":"proton"}}})").arg(prefix));
+    writeFile(reg, "WINE REGISTRY Version 2\n\n"
+                   "[Software\\\\Wine\\\\DllOverrides] 1785137682\n"
+                   "\"atl100\"=\"native,builtin\"\n\n");
+    writeFile(mods + "/Loader/bin/x64/winmm.dll", "MZ");   // RED4ext-style wrapper
+    writeFile(mods + "/Loader/archive/pc/mod/loader.archive", "RDAR");
+
+    FakeShell shell;
+    shell.gameId       = QStringLiteral("cyberpunk2077");
+    shell.modsDirValue = mods;
+    ModEntry e         = ModEntry::named(QStringLiteral("Loader"));
+    e.modPath          = mods + "/Loader";
+    e.installStatus    = 1;
+    e.checked          = true;
+    shell.modelStore.append(e);
+    Settings::setDataDir(shell.gameId, game);
+
+    const QString manifest = resolveUserStatePath("deploy_manifest_modlist.json");
+    const QString backup   = resolveUserStatePath("deploy_backup_modlist");
+    writeFile(manifest, "{}");
+    const auto read = [](const QString &p) {
+        QFile f(p);
+        return f.open(QIODevice::ReadOnly) ? QString::fromUtf8(f.readAll()) : QString();
+    };
+
+    DeployFlow flow(shell);
+    bool       ran = false;
+    flow.maybeDeployBeforeLaunch(shell.gameId, [&] { ran = true; });
+    check("the re-sync ran through to its continuation", ran);
+    check("the files still land in the install folder",
+          QFileInfo::exists(game + "/archive/pc/mod/loader.archive") &&
+              QFileInfo::exists(game + "/bin/x64/winmm.dll"));
+    check("and Heroic's prefix is the one told to prefer the wrapper",
+          read(reg).contains("\"winmm\"=\"native"), read(reg));
+
+    QFile::remove(manifest);
+    QFile::remove(resolveUserStatePath("deploy_manifest_modlist.fingerprint"));
+    QDir(backup).removeRecursively();
+    QSettings().clear();
+    if (oldHome.isEmpty()) qunsetenv("HOME"); else qputenv("HOME", oldHome);
+}
+
 // Cyberpunk 2077: an overlay of the install folder itself, with the exe two
 // levels down. The deploy root, the exe check and the Proton prefix have to
 // agree on the folder, and the wrapper DLL a mod loader ships sits beside
@@ -967,6 +1037,7 @@ int main(int argc, char **argv)
     testDeployFlowAdoptsCreationsFromTheGamesDownloads();
     testDeployFlowWritesThePluginListWhereTheGameSpelledIt();
     testDeployFlowOverlaysCyberpunkIntoItsInstallFolder();
+    testDeployFlowFindsTheHeroicPrefixForAGogCopy();
 
     std::cout << "\n";
     if (s_failed == 0)
