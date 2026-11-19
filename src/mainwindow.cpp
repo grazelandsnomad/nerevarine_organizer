@@ -138,6 +138,7 @@
 #include "pluginparser.h"
 #include "openmwconfigwriter.h"
 #include "log_triage.h"
+#include "log_triage_attrib.h"
 #include "log_triage_dialog.h"
 #include "safe_fs.h"
 #include "deps_resolver.h"
@@ -2846,7 +2847,8 @@ void MainWindow::onTriageOpenMWLog()
     // the display name and the filenames each mod ships, so the walk is
     // trivially cheap compared to onInspectOpenMWSetup's per-mod FS scan.
     static const QStringList contentExts{".esp", ".esm", ".omwaddon", ".omwscripts"};
-    QList<openmw::TriageMod> triageMods;
+    QList<openmw::TriageMod>    triageMods;
+    QList<openmw::AttribSource> sources;   // the same mods, with full paths
     triageMods.reserve(m_modList->count());
     const QList<ModEntry> modRows = m_model.all();
     for (int i = 0; i < modRows.size(); ++i) {
@@ -2858,20 +2860,50 @@ void MainWindow::onTriageOpenMWLog()
         tm.displayName = item.customName;
         if (tm.displayName.isEmpty()) tm.displayName = item.displayName;
 
+        openmw::AttribSource src;
+        src.modName = tm.displayName;
+
         const QString modPath = item.modPath;
         for (const auto &p : collectDataFolders(modPath, contentExts))
-            for (const QString &f : p.second) tm.plugins << f;
+            for (const QString &f : p.second) {
+                tm.plugins << f;
+                src.pluginPaths << p.first + "/" + f;
+            }
 
-        if (!tm.plugins.isEmpty()) triageMods << tm;
+        if (!tm.plugins.isEmpty()) {
+            triageMods << tm;
+            sources    << src;
+        }
     }
 
-    const openmw::LogTriageReport report =
-        openmw::triageOpenMWLog(logText, triageMods);
+    openmw::LogTriageReport report = openmw::triageOpenMWLog(logText, triageMods);
 
-    // Grouping + rendering live in log_triage_dialog; this slot keeps only
-    // the parts that need MainWindow state (reading the log, indexing the
-    // mod list into TriageMod rows).
-    openmw::showTriageDialog(this, report, logPath);
+    // A record id resolves to a mod only by looking inside the plugins, which
+    // is disk work: off the UI thread, and only when the log held any.
+    QStringList refIds;
+    for (const openmw::LogIssue &i : report.issues)
+        if (i.kind == openmw::LogIssueKind::MissingCellRef) refIds << i.target;
+
+    if (refIds.isEmpty()) {
+        // Grouping + rendering live in log_triage_dialog; this slot keeps only
+        // the parts that need MainWindow state (reading the log, indexing the
+        // mod list into TriageMod rows).
+        openmw::showTriageDialog(this, report, logPath);
+        return;
+    }
+
+    QApplication::setOverrideCursor(Qt::BusyCursor);
+    async::guarded(this,
+        [sources, refIds](MainWindow *) {
+            return openmw::modsMentioningIds(sources, refIds);
+        },
+        [report, logPath](MainWindow *self, QHash<QString, QString> owners) mutable {
+            QApplication::restoreOverrideCursor();
+            for (openmw::LogIssue &i : report.issues)
+                if (i.kind == openmw::LogIssueKind::MissingCellRef)
+                    i.suspectMod = owners.value(i.target.toLower());
+            openmw::showTriageDialog(self, report, logPath);
+        });
 }
 
 

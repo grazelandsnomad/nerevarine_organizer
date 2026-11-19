@@ -26,6 +26,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTemporaryDir>
+#include <QStorageInfo>
 #include <QTextStream>
 
 #include <iostream>
@@ -278,8 +279,8 @@ void testLibraryFlowMovesFoldersAndRepointsRows()
     LibraryFlow flow(shell);
 
     QList<LibraryFlow::FolderMove> moves;
-    moves.append({a, src + "/A", QStringLiteral("A"), 4});
-    moves.append({b, src + "/B", QStringLiteral("B"), 4});
+    moves.append({{a}, src + "/A", QStringLiteral("A"), 4});
+    moves.append({{b}, src + "/B", QStringLiteral("B"), 4});
     check("the preflight passes with room and no collision",
           flow.preflightFolderMoves(moves, dst, 8, QStringLiteral("t")));
     QDir().mkpath(dst + "/B");
@@ -310,6 +311,105 @@ void testLibraryFlowMovesFoldersAndRepointsRows()
               .arg(shell.masterScans).arg(shell.sizeScans));
     check("and the summary was reported", shell.reports.size() == 1
                                           && shell.reports.first().first == QStringLiteral("Move"));
+}
+
+// A library move carries the whole library: the folder a row points straight
+// at, the download folder whose sub-folder is what the row holds, and the
+// folder no row points at. The row-driven version of this moved only the
+// first kind and still reported success, leaving the old disk full.
+void testLibraryFlowMovesTheWholeLibrary()
+{
+    std::cout << "testLibraryFlowMovesTheWholeLibrary\n";
+    QTemporaryDir tmp;
+    const QString src = tmp.filePath("lib"), dst = tmp.filePath("newlib");
+    writeFile(src + "/A/a.esp", QStringLiteral("TES3"));
+    writeFile(src + "/B/Data Files/b.esp", QStringLiteral("TES3"));
+    writeFile(src + "/C/readme.txt", QStringLiteral("orphan"));
+    writeFile(src + "/leftover.7z", QStringLiteral("archive"));
+    QDir().mkpath(dst);
+
+    FakeShell shell;
+    shell.modsDirValue = src;
+    auto installed = [&](const QString &name, const QString &path) {
+        ModEntry e = ModEntry::named(name);
+        e.modPath = path; e.installStatus = 1; e.checked = true;
+        return shell.modelStore.rowId(shell.modelStore.append(e));
+    };
+    const QUuid a = installed(QStringLiteral("A"), src + "/A");
+    const QUuid b = installed(QStringLiteral("B"), src + "/B/Data Files");
+    LibraryFlow flow(shell);
+
+    const QList<LibraryFlow::FolderMove> moves =
+        LibraryFlow::plannedLibraryMoves(shell.modelStore.all(), src);
+    check("every folder of the library is planned, loose files are not",
+          moves.size() == 3 && moves.at(0).folderName == QStringLiteral("A")
+          && moves.at(1).folderName == QStringLiteral("B")
+          && moves.at(2).folderName == QStringLiteral("C"),
+          QStringLiteral("n=%1").arg(moves.size()));
+    check("each folder carries the rows that live in it, the orphan carries none",
+          moves.at(0).rows == QList<QUuid>{a} && moves.at(1).rows == QList<QUuid>{b}
+          && moves.at(2).rows.isEmpty() && moves.at(2).sizeBytes > 0,
+          QStringLiteral("orphan bytes=%1").arg(moves.at(2).sizeBytes));
+
+    int finishedOk = -1;
+    QEventLoop loop;
+    QObject::connect(&flow, &LibraryFlow::movesFinished, &loop,
+                     [&](int ok, int) { finishedOk = ok; loop.quit(); });
+    QTimer::singleShot(20000, &loop, &QEventLoop::quit);
+    flow.moveModFolders(moves, dst, QStringLiteral("Move"), nullptr, src);
+    loop.exec();
+
+    check("all three folders land, including the one no row points at",
+          finishedOk == 3 && QFileInfo::exists(dst + "/A/a.esp")
+          && QFileInfo::exists(dst + "/B/Data Files/b.esp")
+          && QFileInfo::exists(dst + "/C/readme.txt"),
+          QStringLiteral("ok=%1").arg(finishedOk));
+    check("a row inside a download folder keeps its sub-folder",
+          shell.modelStore.at(1).modPath == dst + "/B/Data Files",
+          shell.modelStore.at(1).modPath, dst + "/B/Data Files");
+    check("and the row pointing straight at a folder follows it too",
+          shell.modelStore.at(0).modPath == dst + "/A", shell.modelStore.at(0).modPath);
+    check("no folder is left on the old disk",
+          QDir(src).entryList(QDir::Dirs | QDir::NoDotAndDotDot).isEmpty(),
+          QDir(src).entryList(QDir::Dirs | QDir::NoDotAndDotDot).join(','));
+    // No translations are loaded in a test binary, so T() hands back the key:
+    // the key in the body is what proves the note was added.
+    check("the loose file stays and the summary says what is left behind",
+          QFileInfo::exists(src + "/leftover.7z") && shell.reports.size() == 1
+          && shell.reports.first().second.contains(QStringLiteral("move_mods_done_left")),
+          shell.reports.isEmpty() ? QStringLiteral("no report")
+                                  : shell.reports.first().second);
+}
+
+// Where Move Mod Library puts the mods for a picked folder: a disk root gets
+// the library as a folder named after the current one, anything else is used
+// as it is - so a pick of /mnt/disk does not strew the mod folders over its
+// root and make the disk the mods dir.
+void testLibraryFlowMoveDestinationForDiskRoot()
+{
+    std::cout << "testLibraryFlowMoveDestinationForDiskRoot\n";
+    // The mount point holding the temp dir: a real disk root on any machine.
+    const QString root = QStorageInfo(QDir::tempPath()).rootPath();
+    bool driveRoot = false;
+    const QString onRoot = LibraryFlow::moveDestinationFor(root, QStringLiteral("/x/y/mods"), &driveRoot);
+    check("a disk root gets a folder named after the current library",
+          driveRoot && onRoot == QDir(root).filePath(QStringLiteral("mods"))
+          && !onRoot.contains(QStringLiteral("//")),
+          root + QStringLiteral(" -> ") + onRoot);
+    const QString own = LibraryFlow::libraryFolderName(QStringLiteral("/x/y/My Mods"));
+    check("the name is the library folder's own", own == QStringLiteral("My Mods"),
+          own + QStringLiteral(" / storage root of a missing path: ")
+          + QStorageInfo(QStringLiteral("/x/y/My Mods")).rootPath());
+    const QString ofRoot = LibraryFlow::libraryFolderName(root);
+    check("a library that is itself a mount point is called mods on the new disk",
+          ofRoot == QStringLiteral("mods"), ofRoot);
+
+    QTemporaryDir tmp;
+    const QString plain = tmp.filePath("somewhere");
+    QDir().mkpath(plain);
+    driveRoot = true;
+    const QString asIs = LibraryFlow::moveDestinationFor(plain, QStringLiteral("/x/y/mods"), &driveRoot);
+    check("any other folder is used as it is", !driveRoot && asIs == plain, asIs);
 }
 
 // The folders nothing in any modlist points at, and which of them hold
@@ -859,6 +959,8 @@ int main(int argc, char **argv)
     testImportFlowRoutesANerevarineFileToTheLoader();
     testDeployFlowFingerprintAndQuietPaths();
     testLibraryFlowMovesFoldersAndRepointsRows();
+    testLibraryFlowMoveDestinationForDiskRoot();
+    testLibraryFlowMovesTheWholeLibrary();
     testLibraryFlowFindsFoldersNoModlistPointsAt();
     testLibraryFlowAdoptsNewFoldersByItself();
     testLibraryFlowPlansFolderRenames();

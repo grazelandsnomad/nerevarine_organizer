@@ -5,6 +5,7 @@
 #include "plugin_collisions.h"
 #include "asset_collisions.h"
 #include "log_triage.h"
+#include "log_triage_attrib.h"
 
 #include <QByteArray>
 #include <QCoreApplication>
@@ -1084,6 +1085,92 @@ static void testRepeatsCollapse()
     check("deduped to a single issue", r.issues.size() == 1,
           QString::number(r.issues.size()));
 }
+
+// The shape that sent the user here: a record id, not a filename, so none of
+// the asset patterns can see it and the catch-all used to swallow it.
+static void testCellReferencesAreTheirOwnKind()
+{
+    std::cout << "\n[log_triage: 'Cell reference is not found' is an object, not noise]\n";
+    // Verbatim from the user's openmw.log (Daedric Shrine Overhaul placing
+    // objects The Doors of Oblivion was meant to define).
+    QString log =
+        "[12:09:53.927 E] Cell reference \"bs_flora_brittleb2\" is not found!\n"
+        "[12:09:55.086 E] Cell reference \"bs_ash_guardian1\" is not found!\n";
+    // The same object again, seconds later: one error, not two.
+    for (int i = 0; i < 18; ++i)
+        log += QStringLiteral("[12:09:5%1.086 E] Cell reference \"bs_flora_brittleb2\" is not found!\n")
+                   .arg(i % 10);
+    const LogTriageReport r = triageOpenMWLog(log, {});
+
+    const LogIssue *brittle = find(r, LogIssueKind::MissingCellRef, "bs_flora_brittleb2");
+    check("the record id is the issue, captured whole", brittle != nullptr,
+          r.issues.isEmpty() ? QStringLiteral("no issues") : r.issues.first().target);
+    check("two distinct objects, however many lines", r.issues.size() == 2,
+          QString::number(r.issues.size()));
+    check("repeats at other timestamps are counted, not re-listed",
+          brittle && brittle->count == 19,
+          QString::number(brittle ? brittle->count : -1), QStringLiteral("19"));
+    for (const LogIssue &i : r.issues)
+        check("not left to the catch-all", i.kind != LogIssueKind::OtherError, i.target);
+}
+
+// The budget bug underneath it: an unclassified message repeated at a new
+// timestamp each time counted as a new issue and spent the whole allowance.
+static void testTimestampsDoNotMakeNewErrors()
+{
+    std::cout << "\n[log_triage: the same unknown error at two times is one error]\n";
+    QString log;
+    for (int i = 0; i < 12; ++i)
+        log += QStringLiteral("[10:00:%1.000 E] Something unheard of went wrong\n")
+                   .arg(i, 2, 10, QLatin1Char('0'));
+    log += "[10:01:00.000 E] A different unheard-of thing went wrong\n";
+    const LogTriageReport r = triageOpenMWLog(log, {});
+    check("two issues, not thirteen", r.issues.size() == 2,
+          QString::number(r.issues.size()));
+    check("the repeat count carries the weight",
+          !r.issues.isEmpty() && r.issues.first().count == 12,
+          QString::number(r.issues.isEmpty() ? -1 : r.issues.first().count));
+    check("and the timestamp is not part of what is shown",
+          !r.issues.isEmpty()
+              && !r.issues.first().target.startsWith(QLatin1Char('[')),
+          r.issues.isEmpty() ? QString() : r.issues.first().target);
+}
+
+// Attribution: the plugin that PLACES the object contains the id as bytes.
+static void testRecordIdsResolveToTheModThatPlacesThem()
+{
+    std::cout << "\n[log_triage: a record id names the mod whose plugin holds it]\n";
+    QTemporaryDir tmp;
+    const QString a = tmp.filePath("ShrineMod/Shrine.esp");
+    const QString b = tmp.filePath("OtherMod/Other.esp");
+    QDir().mkpath(QFileInfo(a).absolutePath());
+    QDir().mkpath(QFileInfo(b).absolutePath());
+    {
+        QFile f(a);
+        check("the placing plugin is written", f.open(QIODevice::WriteOnly));
+        f.write(QByteArray("TES3\0\0junk", 11));
+        f.write(QByteArray("bs_In_DAE_roomMB_L_cor_01"));
+        f.write(QByteArray(8192, 'x'));
+    }
+    {
+        QFile f(b);
+        check("and an innocent one beside it", f.open(QIODevice::WriteOnly));
+        f.write(QByteArray(4096, 'y'));
+    }
+    QList<AttribSource> sources{
+        {QStringLiteral("Other Mod"), {b}},
+        {QStringLiteral("Shrine Overhaul"), {a}},
+    };
+    const QHash<QString, QString> owners = modsMentioningIds(
+        sources, {QStringLiteral("bs_In_DAE_roomMB_L_cor_01"),
+                  QStringLiteral("bs_nobody_has_this")});
+    check("the mod whose plugin holds the id is named",
+          owners.value(QStringLiteral("bs_in_dae_roommb_l_cor_01"))
+              == QStringLiteral("Shrine Overhaul"),
+          owners.value(QStringLiteral("bs_in_dae_roommb_l_cor_01")));
+    check("an id nobody holds stays unattributed",
+          !owners.contains(QStringLiteral("bs_nobody_has_this")));
+}
 } // namespace triage_section
 
 static void run_log_triage()
@@ -1092,6 +1179,9 @@ static void run_log_triage()
     triage_section::testSaveGameDependencyIsItsOwnKind();
     triage_section::testRealErrorsStillClassified();
     triage_section::testRepeatsCollapse();
+    triage_section::testCellReferencesAreTheirOwnKind();
+    triage_section::testTimestampsDoNotMakeNewErrors();
+    triage_section::testRecordIdsResolveToTheModThatPlacesThem();
 }
 
 int main(int argc, char **argv)

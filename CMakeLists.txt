@@ -171,6 +171,7 @@ set(CORE_SOURCES
     src/archive_magic.cpp
     src/archive_policy.cpp
     src/log_triage.cpp
+    src/log_triage_attrib.cpp
     src/log_triage_dialog.cpp
     src/plugin_collisions.cpp
     src/post_install.cpp
@@ -273,6 +274,7 @@ set(CORE_SOURCES
     include/translate_dialog.h
     include/scan_overlay.h
     include/variant_picker.h
+    include/log_triage_attrib.h
     include/log_triage_dialog.h
     include/conflict_inspector.h
     include/deployment_report.h

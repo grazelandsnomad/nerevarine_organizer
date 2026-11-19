@@ -44,6 +44,18 @@ enum class LogIssueKind {
     // to be a plugin-shaped filename we recognise.
     MissingAsset,
 
+    // "Cell reference "bs_foo" is not found!" - a plugin places an object in
+    // a cell but nothing in the load order defines a record with that ID, so
+    // OpenMW drops the reference and that bit of the world is missing. The
+    // target is a record ID, not a filename, which is why none of the asset
+    // shapes above can see it: left in OtherError, one such message repeated
+    // per timestamp used to spend the whole catch-all budget by itself.
+    //
+    // Nearly always a required mod that is missing or disabled: the plugin
+    // doing the placing is found by searching the installed plugins for the
+    // ID, which the caller does, since this parser does no I/O.
+    MissingCellRef,
+
     // Error/Fatal line that didn't fit any known shape.  Kept so the user
     // sees the raw message instead of having it disappear.
     OtherError,
@@ -66,11 +78,16 @@ struct LogIssue {
     QString      parent;      // MissingMaster: the .esm that's missing; else {}
     QString      suspectMod;  // display name of the owning mod, or empty
     QString      detail;      // full log line, for the "show me why" column
+    int          count = 1;   // how many lines collapsed into this issue
 };
 
 struct LogTriageReport {
     QList<LogIssue> issues;
     int errorLines = 0;       // every "[... E]" / "Fatal error:" line scanned
+    // Distinct cell-reference IDs past the reporting cap. A broken dependency
+    // can place hundreds; the dialog names a readable number and says how
+    // many more there were.
+    int cellRefsOmitted = 0;
 };
 
 // Parse `logText` (full contents of openmw.log) and return a structured

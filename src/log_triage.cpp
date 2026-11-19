@@ -66,6 +66,20 @@ LogTriageReport triageOpenMWLog(const QString          &logText,
         R"rx(Saved game dependency\s+"?([^"\r\n]+?\.(?:esp|esm|omwaddon|omwscripts))"?\s+is missing)rx",
         QRegularExpression::CaseInsensitiveOption);
 
+    // 2c. A cell reference whose record nothing defines. The capture is a
+    //     record ID, so it must be matched before the asset shapes below,
+    //     all of which insist on a file extension and would miss it anyway.
+    static const QRegularExpression rxCellRef(
+        R"rx(Cell reference\s+"([^"\r\n]+)"\s+is not found)rx",
+        QRegularExpression::CaseInsensitiveOption);
+
+    // OpenMW stamps every line: "[12:09:53.927 E] ". The same message a
+    // second later is the same error, so the stamp must not reach a dedup key
+    // - with it in, one repeated message spent the whole catch-all budget and
+    // hid everything after it.
+    static const QRegularExpression rxStamp(
+        R"rx(^\[[0-9:.]+\s+[A-Za-z]\]\s*)rx");
+
     // 3a. Missing texture. Matches Can't/Cannot/Can not; phrasing varies by
     //     graphics backend.
     static const QRegularExpression rxMissingTexture(
@@ -90,12 +104,19 @@ LogTriageReport triageOpenMWLog(const QString          &logText,
         QRegularExpression::CaseInsensitiveOption);
 
     // Dedup keyed by (kind, target): the same "asks for parent file X" repeated
-    // 80 times collapses to one issue.
-    QSet<QString> seen;
+    // 80 times collapses to one issue, which then carries how many times it
+    // was seen. The value is the index of that issue, so the count can be
+    // bumped; every caller appends exactly one issue when this returns false,
+    // which is what makes the index it reserves correct.
+    QHash<QString, int> seen;
     auto already = [&](LogIssueKind k, const QString &target) {
         const QString key = QString::number(int(k)) + "|" + target.toLower();
-        if (seen.contains(key)) return true;
-        seen.insert(key);
+        const auto it = seen.constFind(key);
+        if (it != seen.constEnd()) {
+            ++report.issues[*it].count;
+            return true;
+        }
+        seen.insert(key, int(report.issues.size()));
         return false;
     };
 
@@ -103,6 +124,13 @@ LogTriageReport triageOpenMWLog(const QString          &logText,
     // messages so a 50k-line log doesn't drown the dialog.
     const int kMaxOtherErrors = 10;
     int otherErrorsEmitted = 0;
+
+    // One broken dependency can place hundreds of distinct objects. Report a
+    // readable number of them and count the rest, rather than printing a
+    // screenful of IDs that all say the same thing.
+    const int kMaxCellRefs = 25;
+    int cellRefsEmitted = 0;
+    QHash<QString, int> cellRefSeen;   // lowered id -> issue index, or -1
 
     const QStringList lines = logText.split('\n');
     for (const QString &raw : lines) {
@@ -177,6 +205,37 @@ LogTriageReport triageOpenMWLog(const QString          &logText,
             }
         }
 
+        // 2c. Cell reference with no record behind it.
+        {
+            auto m = rxCellRef.match(line);
+            if (m.hasMatch()) {
+                const QString refId = cleanToken(m.captured(1));
+                if (!refId.isEmpty()) {
+                    // Own bookkeeping rather than `already`, which reserves an
+                    // index for an issue that is always appended: past the cap
+                    // no issue lands, so the id is remembered as -1 and only
+                    // counted.
+                    const QString key = refId.toLower();
+                    const auto known = cellRefSeen.constFind(key);
+                    if (known != cellRefSeen.constEnd()) {
+                        if (*known >= 0) ++report.issues[*known].count;
+                    } else if (cellRefsEmitted < kMaxCellRefs) {
+                        cellRefSeen.insert(key, int(report.issues.size()));
+                        LogIssue issue;
+                        issue.kind   = LogIssueKind::MissingCellRef;
+                        issue.target = refId;
+                        issue.detail = line;
+                        report.issues << issue;
+                        ++cellRefsEmitted;
+                    } else {
+                        cellRefSeen.insert(key, -1);
+                        ++report.cellRefsOmitted;
+                    }
+                }
+                continue;
+            }
+        }
+
         // 3a. Missing texture.
         {
             auto m = rxMissingTexture.match(line);
@@ -228,7 +287,7 @@ LogTriageReport triageOpenMWLog(const QString          &logText,
         // Unclassified error. Budget-capped (see above) so a pathological log
         // doesn't emit thousands of "unknown" rows.
         if (isError && otherErrorsEmitted < kMaxOtherErrors) {
-            const QString excerpt = line.trimmed();
+            const QString excerpt = QString(line).remove(rxStamp).trimmed();
             if (!already(LogIssueKind::OtherError, excerpt)) {
                 LogIssue issue;
                 issue.kind   = LogIssueKind::OtherError;

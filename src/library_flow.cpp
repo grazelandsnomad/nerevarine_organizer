@@ -111,7 +111,38 @@ QString cleanupFmtBytes(qint64 b)
     return QString::number(b / 1024.0, 'f', 0) + QStringLiteral(" KB");
 }
 
+// True when `path` is where a filesystem is mounted - the root of a disk as
+// the user sees it. QStorageInfo names a path that does not exist as its own
+// root, so only an existing directory counts, and through any symlink.
+bool isMountRoot(const QString &path)
+{
+    const QFileInfo fi(path);
+    if (!fi.isDir()) return false;
+    const QString canon = fi.canonicalFilePath();
+    return !canon.isEmpty() && QStorageInfo(canon).rootPath() == canon;
+}
+
 } // namespace
+
+QString LibraryFlow::libraryFolderName(const QString &modsRoot)
+{
+    const QString root = QFileInfo(modsRoot).absoluteFilePath();
+    const QString name = QFileInfo(root).fileName();
+    if (name.isEmpty() || isMountRoot(root))
+        return QStringLiteral("mods");
+    return name;
+}
+
+QString LibraryFlow::moveDestinationFor(const QString &picked, const QString &modsRoot,
+                                        bool *driveRoot)
+{
+    const QString dest = QFileInfo(picked).absoluteFilePath();
+    const bool isRoot = isMountRoot(dest);
+    if (driveRoot) *driveRoot = isRoot;
+    if (!isRoot) return dest;
+    return QDir(dest).filePath(libraryFolderName(modsRoot));
+}
+
 bool LibraryFlow::preflightFolderMoves(const QList<FolderMove> &moves,
                                       const QString &destRoot, qint64 totalBytes,
                                       const QString &title)
@@ -144,7 +175,8 @@ bool LibraryFlow::preflightFolderMoves(const QList<FolderMove> &moves,
 
 void LibraryFlow::moveModFolders(const QList<FolderMove> &moves, const QString &destRoot,
                                 const QString &title,
-                                std::function<void(int movedOk)> done)
+                                std::function<void(int movedOk)> done,
+                                const QString &sourceRoot)
 {
     if (moves.isEmpty()) return;
 
@@ -200,9 +232,19 @@ void LibraryFlow::moveModFolders(const QList<FolderMove> &moves, const QString &
             const FolderMove &m = moves.at(out.index);
             if (out.ok) {
                 ++tally->movedOk;
-                if (ModRow item = m_shell.rowById(m.row)) {
-                    item->setData(ModRole::ModPath, out.newPath);
-                    item->setToolTip(out.newPath);
+                // Every row in this folder follows it. A row holding a
+                // sub-folder keeps that tail, so ".../Mod-1234/Data Files"
+                // lands on the matching sub-folder of the new place instead
+                // of on the folder itself.
+                for (const QUuid &id : m.rows) {
+                    ModRow item = m_shell.rowById(id);
+                    if (!item) continue;
+                    const QString was = item.entry().modPath;
+                    QString now = out.newPath;
+                    if (was.startsWith(m.oldPath + "/"))
+                        now += was.mid(m.oldPath.size());
+                    item->setData(ModRole::ModPath, now);
+                    item->setToolTip(now);
                 }
                 m_shell.saveModList();
             } else {
@@ -244,7 +286,7 @@ void LibraryFlow::moveModFolders(const QList<FolderMove> &moves, const QString &
                 }, Qt::QueuedConnection);
             }
         },
-        [this, drain, dlg, tally, title, done](LibraryFlow *) {
+        [this, drain, dlg, tally, title, done, sourceRoot](LibraryFlow *) {
             drain();   // whatever the last hop had not delivered yet
             if (dlg) {
                 dlg->hide();
@@ -271,9 +313,65 @@ void LibraryFlow::moveModFolders(const QList<FolderMove> &moves, const QString &
                 body += "\n\n" + T("move_mods_done_failures")
                                     .arg(tally->failures.size()) + "\n  • " + flist;
             }
-            m_shell.reportResult(title, body, !tally->failures.isEmpty());
+            // "Moved N successfully" must never be the whole truth while the
+            // old library still holds something. Name what stayed, so a
+            // folder left behind is read here and not days later on disk.
+            int leftDirs = 0, leftFiles = 0;
+            if (!sourceRoot.isEmpty() && QFileInfo(sourceRoot).isDir()) {
+                const QFileInfoList rest = QDir(sourceRoot).entryInfoList(
+                    QDir::Dirs | QDir::Files | QDir::NoDotAndDotDot | QDir::Hidden
+                    | QDir::System);
+                for (const QFileInfo &e : rest) (e.isDir() ? leftDirs : leftFiles)++;
+            }
+            if (leftDirs > 0 || leftFiles > 0)
+                body += "\n\n" + T("move_mods_done_left")
+                                      .arg(leftDirs).arg(leftFiles).arg(sourceRoot);
+
+            m_shell.reportResult(title, body,
+                                 !tally->failures.isEmpty() || leftDirs > 0);
             emit movesFinished(tally->movedOk, int(tally->failures.size()));
         });
+}
+
+QList<LibraryFlow::FolderMove>
+LibraryFlow::plannedLibraryMoves(const QList<ModEntry> &entries, const QString &modsRoot)
+{
+    if (modsRoot.isEmpty()) return {};
+    const QString root = QFileInfo(modsRoot).absoluteFilePath();
+
+    // Rows that live somewhere under the library, resolved once.
+    QList<QPair<QUuid, const ModEntry *>> inside;
+    for (const ModEntry &it : entries) {
+        if (!it.isMod() || it.modPath.isEmpty()) continue;
+        const QString abs = QFileInfo(it.modPath).absoluteFilePath();
+        if (abs == root || !abs.startsWith(root + "/")) continue;
+        inside.append({it.rowId, &it});
+    }
+
+    // One job per direct child of the library. Folder-driven on purpose: the
+    // row-driven version this replaced moved only rows that pointed straight
+    // at a child, so a library of download folders (row on the Data Files
+    // sub-folder) stayed where it was while the move reported success.
+    QList<FolderMove> moves;
+    const QFileInfoList children = QDir(root).entryInfoList(
+        QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System, QDir::Name);
+    for (const QFileInfo &child : children) {
+        const QString abs = child.absoluteFilePath();
+        FolderMove m;
+        m.oldPath    = abs;
+        m.folderName = child.fileName();
+        for (const auto &r : inside) {
+            const QString p = QFileInfo(r.second->modPath).absoluteFilePath();
+            if (p != abs && !p.startsWith(abs + "/")) continue;
+            m.rows.append(r.first);
+            if (r.second->modSize > 0) m.sizeBytes += r.second->modSize;
+        }
+        // Nothing carries a size for a folder no row points at, and the free
+        // space check has to know about it too: measure it.
+        if (m.rows.isEmpty()) m.sizeBytes = folderSizeBytes(abs);
+        moves.append(m);
+    }
+    return moves;
 }
 
 void LibraryFlow::onMoveModsDir()
@@ -295,38 +393,25 @@ void LibraryFlow::onMoveModsDir()
     // Refresh sizes so the "X GB will be moved" figure is honest.
     m_shell.scheduleSizeScan();
 
-    // -- Gather the set of mod folders to move ---
-    QList<FolderMove> moves;
-    qint64 totalBytes = 0;
-
-    const QString modsRoot = QFileInfo(m_shell.modsDir()).absoluteFilePath();
-
-    const QList<ModEntry> rows = m_shell.model().all();
-    for (const ModEntry &it : rows) {
-        if (!it.isMod() || !it.isInstalled()) continue;
-        const QString path = it.modPath;
-        if (path.isEmpty() || !QFileInfo(path).isDir())              continue;
-
-        const QString abs = QFileInfo(path).absoluteFilePath();
-        // Only move entries that actually live under the active mods dir.
-        // Mods pointing somewhere else (user symlinked, manually added from
-        // /opt/…, etc.) are left alone to avoid surprises.
-        if (!abs.startsWith(modsRoot + "/") && abs != modsRoot)      continue;
-
-        const QString folderName = QDir(modsRoot).relativeFilePath(abs);
-        // We only know how to move direct children of modsRoot; anything
-        // nested (moved via repair, for instance) is left where it is.
-        if (folderName.contains('/')) continue;
-
-        FolderMove m;
-        m.row        = it.rowId;
-        m.oldPath    = abs;
-        m.folderName = folderName;
-        m.sizeBytes  = it.modSize;
-        if (m.sizeBytes < 0) m.sizeBytes = 0;
-        moves.append(m);
-        totalBytes += m.sizeBytes;
+    // -- Gather the library ---
+    // With no mods dir set there is nothing to enumerate, and an empty path
+    // would resolve to the working directory.
+    if (m_shell.modsDir().isEmpty()) {
+        ui::info(m_shell.dialogParent(), T("move_mods_title"), T("move_mods_err_nothing"));
+        return;
     }
+    const QString modsRoot = QFileInfo(m_shell.modsDir()).absoluteFilePath();
+    const QList<FolderMove> moves = plannedLibraryMoves(m_shell.model().all(), modsRoot);
+
+    qint64 totalBytes = 0;
+    int    withRows = 0, modRows = 0;
+    for (const FolderMove &m : moves) {
+        totalBytes += m.sizeBytes;
+        if (m.rows.isEmpty()) continue;
+        ++withRows;
+        modRows += int(m.rows.size());
+    }
+    const int strays = int(moves.size()) - withRows;
 
     if (moves.isEmpty()) {
         ui::info(m_shell.dialogParent(), T("move_mods_title"), T("move_mods_err_nothing"));
@@ -334,17 +419,17 @@ void LibraryFlow::onMoveModsDir()
     }
 
     // -- Ask for the destination ---
-    QString dest = QFileDialog::getExistingDirectory(
-        m_shell.dialogParent(), T("move_mods_pick_dir"),
+    const QString libraryName = libraryFolderName(modsRoot);
+    const QString picked = QFileDialog::getExistingDirectory(
+        m_shell.dialogParent(), T("move_mods_pick_dir").arg(libraryName),
         QFileInfo(m_shell.modsDir()).absolutePath());
-    if (dest.isEmpty()) return;
-    dest = QFileInfo(dest).absoluteFilePath();
+    if (picked.isEmpty()) return;
+    // The root of a disk gets the library as a folder, not the mod folders
+    // loose on the drive: every check below runs on where they really land.
+    bool driveRoot = false;
+    const QString dest = moveDestinationFor(picked, modsRoot, &driveRoot);
 
     // -- Destination validation ---
-    if (!QFileInfo(dest).isDir()) {
-        ui::warn(m_shell.dialogParent(), T("move_mods_title"), T("move_mods_err_dest_not_dir").arg(dest));
-        return;
-    }
     if (dest == modsRoot) {
         ui::warn(m_shell.dialogParent(), T("move_mods_title"), T("move_mods_err_dest_same"));
         return;
@@ -356,6 +441,23 @@ void LibraryFlow::onMoveModsDir()
         ui::warn(m_shell.dialogParent(), T("move_mods_title"), T("move_mods_err_dest_nested"));
         return;
     }
+    // The library folder under a disk root may not exist yet: make it, and
+    // take it away again if the move does not go ahead. rmdir only removes
+    // an empty folder, so one that was there before, or got anything, stays.
+    bool createdDest = false;
+    if (!QFileInfo::exists(dest)) {
+        if (!QDir().mkpath(dest)) {
+            ui::warn(m_shell.dialogParent(), T("move_mods_title"),
+                     T("move_mods_err_dest_not_writable").arg(dest));
+            return;
+        }
+        createdDest = true;
+    }
+    const auto dropCreatedDest = [&] { if (createdDest) QDir().rmdir(dest); };
+    if (!QFileInfo(dest).isDir()) {
+        ui::warn(m_shell.dialogParent(), T("move_mods_title"), T("move_mods_err_dest_not_dir").arg(dest));
+        return;
+    }
 
     // Writable test: create + delete a stamp file.
     {
@@ -363,13 +465,17 @@ void LibraryFlow::onMoveModsDir()
         QFile probe(stamp);
         if (!probe.open(QIODevice::WriteOnly)) {
             ui::warn(m_shell.dialogParent(), T("move_mods_title"), T("move_mods_err_dest_not_writable").arg(dest));
+            dropCreatedDest();
             return;
         }
         probe.close();
         QFile::remove(stamp);
     }
 
-    if (!preflightFolderMoves(moves, dest, totalBytes, T("move_mods_title"))) return;
+    if (!preflightFolderMoves(moves, dest, totalBytes, T("move_mods_title"))) {
+        dropCreatedDest();
+        return;
+    }
 
     // -- Final confirmation ---
     QMessageBox confirm(m_shell.dialogParent());
@@ -379,18 +485,33 @@ void LibraryFlow::onMoveModsDir()
                         .arg(moves.size())
                         .arg(fmtMbGb(totalBytes))
                         .arg(dest));
-    confirm.setInformativeText(T("move_mods_confirm_info"));
+    // What those folders hold, since the count alone hid the thing that went
+    // wrong before: folders no row points at used to stay behind in silence.
+    QString info = T("move_mods_confirm_extras").arg(modRows).arg(withRows);
+    if (strays > 0) info += " " + T("move_mods_confirm_extras_strays").arg(strays);
+    info += "\n\n";
+    // On a disk root, say why the path gained a folder before the usual
+    // warning, so nobody expects their mods loose on the drive.
+    info += T("move_mods_confirm_info");
+    if (driveRoot)
+        info = T("move_mods_confirm_drive_root")
+                   .arg(QFileInfo(picked).absoluteFilePath()).arg(libraryName)
+               + "\n\n" + info;
+    confirm.setInformativeText(info);
     auto *yes = confirm.addButton(T("move_mods_confirm_yes"),
                                    QMessageBox::DestructiveRole);
     confirm.addButton(QMessageBox::Cancel);
     confirm.setDefaultButton(QMessageBox::Cancel);
     confirm.exec();
-    if (confirm.clickedButton() != yes) return;
+    if (confirm.clickedButton() != yes) {
+        dropCreatedDest();
+        return;
+    }
 
     moveModFolders(moves, dest, T("move_mods_title"), [this, dest](int) {
         // Whatever moved now lives under dest: point the profile there.
         m_shell.setModsDir(dest);
-    });
+    }, modsRoot);
 }
 
 void LibraryFlow::onConsolidateModsIntoActiveProfile()
@@ -422,7 +543,7 @@ void LibraryFlow::onConsolidateModsIntoActiveProfile()
         if (abs == modsRoot || abs.startsWith(modsRoot + "/"))       continue;
 
         FolderMove m;
-        m.row        = it.rowId;
+        m.rows       = {it.rowId};
         m.oldPath    = abs;
         m.folderName = QFileInfo(abs).fileName();
         m.sizeBytes  = it.modSize;

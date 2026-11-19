@@ -27,10 +27,16 @@ public:
     // One folder to move: the row it belongs to, where it is now, and what
     // it will be called under the destination root.
     struct FolderMove {
-        QUuid   row;              // the row's id; resolved when the move lands
-        QString oldPath;
-        QString folderName;
-        qint64  sizeBytes = 0;
+        // Every row that lives in this folder: the one pointing AT it and any
+        // pointing INTO it (a download folder whose "Data Files" sub-folder is
+        // what the row holds). All of them are repointed when the folder
+        // lands, each keeping the tail of its own path. Empty for a folder no
+        // row points at - which still moves, because what the user asked to
+        // move is the library, not the rows.
+        QList<QUuid> rows;
+        QString      oldPath;
+        QString      folderName;
+        qint64       sizeBytes = 0;
     };
 
 public slots:
@@ -119,9 +125,29 @@ public:
     static QList<FolderRename> plannedRenames(const QList<ModEntry> &entries,
                                               const QString         &modsRoot);
 
+    // Everything a library move would carry: one entry per direct child of
+    // the mods dir, each with the rows that live in it. Folder-driven, not
+    // row-driven, so a row pointing at a sub-folder travels with its download
+    // folder and a folder nothing points at is not left behind. Reads the
+    // directory, and measures a row-less folder on disk since no row carries
+    // its size. Public for the test.
+    static QList<FolderMove> plannedLibraryMoves(const QList<ModEntry> &entries,
+                                                 const QString         &modsRoot);
+
     OrphanInputs      orphanInputs() const;
     static OrphanScan scanOrphans(const OrphanInputs &in);
 
+    // What the library folder is called: the current mods dir's own name, or
+    // "mods" when that dir is itself a mount point (its name would be a
+    // disk's, not a library's). Public for moveDestinationFor and the test.
+    static QString libraryFolderName(const QString &modsRoot);
+    // Where the library ends up for a folder the user picked. A disk root (a
+    // mount point: QStorageInfo::rootPath() == picked) gets a folder named
+    // libraryFolderName() inside it, so the mod folders are not strewn over
+    // the drive root; any other folder is used as it is. `driveRoot` says
+    // which case applied. Pure but for asking what is mounted.
+    static QString moveDestinationFor(const QString &picked, const QString &modsRoot,
+                                      bool *driveRoot = nullptr);
     // The checks both moves share before asking: enough free space under
     // destRoot (10% headroom, since a cross-filesystem move copies first) and
     // no folder of the same name already there. Tells the user and returns
@@ -134,8 +160,12 @@ public:
     // nothing. `done(movedOk)` runs on the UI thread after the last one, before
     // the tail both moves share (config sync, rescans, undo cleared) and the
     // summary.
+    // With sourceRoot set, the summary also says what is still in it once the
+    // move is over, so "moved successfully" can never mean a full folder left
+    // behind.
     void moveModFolders(const QList<FolderMove> &moves, const QString &destRoot,
-                        const QString &title, std::function<void(int movedOk)> done);
+                        const QString &title, std::function<void(int movedOk)> done,
+                        const QString &sourceRoot = {});
 
 signals:
     // After the summary of a move: how many folders landed and how many did not.

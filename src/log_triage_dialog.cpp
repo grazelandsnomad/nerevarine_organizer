@@ -29,10 +29,11 @@ int kindRank(LogIssueKind k)
         case LogIssueKind::MissingMaster:      return 0;
         case LogIssueKind::MissingPlugin:      return 1;
         case LogIssueKind::MissingAsset:       return 2;
-        case LogIssueKind::OtherError:         return 3;
-        case LogIssueKind::SaveGameDependency: return 4;
+        case LogIssueKind::MissingCellRef:     return 3;
+        case LogIssueKind::OtherError:         return 4;
+        case LogIssueKind::SaveGameDependency: return 5;
     }
-    return 5;
+    return 6;
 }
 
 QString kindLabel(LogIssueKind k)
@@ -41,6 +42,7 @@ QString kindLabel(LogIssueKind k)
         case LogIssueKind::MissingMaster:  return T("log_triage_kind_master");
         case LogIssueKind::MissingPlugin:  return T("log_triage_kind_plugin");
         case LogIssueKind::MissingAsset:   return T("log_triage_kind_asset");
+        case LogIssueKind::MissingCellRef: return T("log_triage_kind_cellref");
         case LogIssueKind::OtherError:     return T("log_triage_kind_other");
         case LogIssueKind::SaveGameDependency: return T("log_triage_kind_savedep");
     }
@@ -92,6 +94,10 @@ void showTriageDialog(QWidget *parent, const LogTriageReport &report,
                 body += "  [" + kindLabel(i.kind) + "] " + i.target;
                 if (!i.parent.isEmpty())
                     body += " → " + T("log_triage_needs") + " " + i.parent;
+                // How often, when it was more than once: the weight of an
+                // error is part of reading it.
+                if (i.count > 1)
+                    body += QStringLiteral("  ×%1").arg(i.count);
                 body += "\n";
                 body += "      " + i.detail.trimmed() + "\n";
             }
@@ -107,6 +113,19 @@ void showTriageDialog(QWidget *parent, const LogTriageReport &report,
         if (anySaveDep)
             body += "\n=== " + T("log_triage_kind_savedep") + " ===\n"
                   + T("log_triage_savedep_note") + "\n";
+
+        // Same idea for cell references: on their own they read as noise, and
+        // the one thing worth knowing - a mod the load order is missing - is
+        // not in the message.
+        const bool anyCellRef = std::any_of(
+            report.issues.constBegin(), report.issues.constEnd(),
+            [](const LogIssue &i) { return i.kind == LogIssueKind::MissingCellRef; });
+        if (anyCellRef) {
+            body += "\n=== " + T("log_triage_kind_cellref") + " ===\n"
+                  + T("log_triage_cellref_note") + "\n";
+            if (report.cellRefsOmitted > 0)
+                body += T("log_triage_cellref_more").arg(report.cellRefsOmitted) + "\n";
+        }
     }
 
     QDialog dlg(parent);
