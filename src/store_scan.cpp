@@ -76,6 +76,38 @@ QList<HeroicInstall> parseHeroicInstalled(const QByteArray &json)
     return out;
 }
 
+QString parseHeroicGamePrefix(const QByteArray &json, const QString &appName)
+{
+    QJsonParseError err{};
+    const QJsonDocument doc = QJsonDocument::fromJson(json, &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) return {};
+    const QJsonObject root = doc.object();
+    // Normally keyed by the app id, but take any object carrying a winePrefix:
+    // Heroic has shipped more than one spelling of this file.
+    const QJsonObject game = root.value(appName).toObject();
+    if (const QString p = game.value(QStringLiteral("winePrefix")).toString(); !p.isEmpty())
+        return p;
+    for (auto it = root.constBegin(); it != root.constEnd(); ++it) {
+        if (!it.value().isObject()) continue;
+        const QString p = it.value().toObject()
+                              .value(QStringLiteral("winePrefix")).toString();
+        if (!p.isEmpty()) return p;
+    }
+    return {};
+}
+
+QString parseHeroicDefaultPrefix(const QByteArray &json)
+{
+    QJsonParseError err{};
+    const QJsonDocument doc = QJsonDocument::fromJson(json, &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) return {};
+    const QJsonObject def = doc.object()
+                                .value(QStringLiteral("defaultSettings")).toObject();
+    QString p = def.value(QStringLiteral("defaultWinePrefix")).toString();
+    if (p.isEmpty()) p = def.value(QStringLiteral("winePrefix")).toString();
+    return p;
+}
+
 QHash<QString, StoreTitle> parseHeroicLibrary(const QByteArray &json)
 {
     QHash<QString, StoreTitle> out;
@@ -175,6 +207,52 @@ QHash<QString, StoreTitle> heroicTitles(const QStringList &configDirs)
 }
 
 QHash<QString, StoreTitle> heroicTitles() { return heroicTitles(heroicConfigDirs()); }
+
+QString heroicPrefixForInstall(const QString &installPath, const QStringList &configDirs)
+{
+    if (installPath.isEmpty()) return {};
+    const QString want = QDir::cleanPath(installPath);
+
+    // Which Heroic entry owns this path. A prefix test, not equality: the
+    // caller may hand us the exe's folder or the deploy root, both of which
+    // sit under install_path.
+    QString appName;
+    QString installRoot;
+    for (const HeroicInstall &h : heroicInstalls(configDirs)) {
+        const QString root = QDir::cleanPath(h.installPath);
+        if (root.isEmpty()) continue;
+        if (want != root && !want.startsWith(root + QLatin1Char('/'))) continue;
+        // Longest match wins, so a game installed inside another's folder
+        // cannot steal it.
+        if (root.size() <= installRoot.size()) continue;
+        appName     = h.appName;
+        installRoot = root;
+    }
+    if (appName.isEmpty()) return {};
+
+    for (const QString &cfg : configDirs) {
+        QFile f(cfg + QStringLiteral("/GamesConfig/") + appName + QStringLiteral(".json"));
+        if (!f.open(QIODevice::ReadOnly)) continue;
+        const QString p = parseHeroicGamePrefix(f.readAll(), appName);
+        if (!p.isEmpty()) return QDir::cleanPath(p);
+    }
+
+    // No per-game file, or it named no prefix: Heroic uses the default root
+    // with a folder named after the game.
+    for (const QString &cfg : configDirs) {
+        QFile f(cfg + QStringLiteral("/config.json"));
+        if (!f.open(QIODevice::ReadOnly)) continue;
+        const QString base = parseHeroicDefaultPrefix(f.readAll());
+        if (base.isEmpty()) continue;
+        return QDir::cleanPath(base + QLatin1Char('/') + QFileInfo(installRoot).fileName());
+    }
+    return {};
+}
+
+QString heroicPrefixForInstall(const QString &installPath)
+{
+    return heroicPrefixForInstall(installPath, heroicConfigDirs());
+}
 
 QStringList steamLibraryRoots()
 {

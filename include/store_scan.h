@@ -59,6 +59,17 @@ struct StoreTitle {
 QList<HeroicInstall>       parseHeroicInstalled(const QByteArray &json);
 QHash<QString, StoreTitle> parseHeroicLibrary(const QByteArray &json);
 
+// The Wine/Proton prefix out of Heroic's GamesConfig/<appName>.json, which
+// nests everything under the app id: {"<appName>": {"winePrefix": "...", ...}}.
+// Empty when the file names no prefix, which is Heroic saying "use the
+// default one".
+QString parseHeroicGamePrefix(const QByteArray &json, const QString &appName);
+
+// The default prefix root out of Heroic's config.json
+// (defaultSettings.winePrefix). Heroic puts each game in a folder named after
+// it underneath.
+QString parseHeroicDefaultPrefix(const QByteArray &json);
+
 // The "installdir" of a Steam appmanifest_<appid>.acf, empty if absent. This is
 // what Steam itself uses, so it is right even when the folder was renamed or
 // the game shipped under a different name than its store page.
@@ -93,6 +104,21 @@ QList<HeroicInstall>       heroicInstalls(const QStringList &configDirs);
 QList<HeroicInstall>       heroicInstalls();
 QHash<QString, StoreTitle> heroicTitles(const QStringList &configDirs);
 QHash<QString, StoreTitle> heroicTitles();
+
+// The prefix Heroic runs the game installed at `installPath` in, or empty.
+//
+// Needed because a prefix is not only a Steam thing: a Heroic copy runs under
+// Proton too, in ~/Games/Heroic/Prefixes/..., and the DLL overrides the mod
+// loaders need (RED4ext, Cyber Engine Tweaks) have to be written into THAT
+// registry. Looks up the per-game GamesConfig file by matching installPath
+// against installed.json, then falls back to the default prefix plus the
+// install folder's name, which is what Heroic does itself.
+//
+// The path is returned whether or not it exists yet: Heroic creates the prefix
+// on first launch, and the caller is the one that knows whether an absent
+// prefix matters.
+QString heroicPrefixForInstall(const QString &installPath, const QStringList &configDirs);
+QString heroicPrefixForInstall(const QString &installPath);
 
 // Every existing `.../steamapps` directory, from libraryfolders.vdf plus the
 // default locations. `steamapps/common` is one level below each.

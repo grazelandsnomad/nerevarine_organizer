@@ -16,8 +16,11 @@
 #include "game_store.h"
 
 #include <QCoreApplication>
+#include <QDir>
+#include <QFile>
 #include <QString>
 #include <QStringList>
+#include <QTemporaryDir>
 
 #include <iostream>
 
@@ -280,6 +283,97 @@ void testGameStoreFromPaths()
           game_store::fromInstallPath("", heroic) == Store::Unknown);
 }
 
+// Where Heroic runs a game. Shaped from the real files for the author's
+// Cyberpunk 2077, which is the install that showed the gap: the deploy wrote
+// RED4ext's and CET's DLLs into the game folder and then registered them
+// nowhere, because the only prefix hunt was Steam's compatdata.
+const QByteArray kGamesConfigJson = R"({
+  "1423049311": {
+    "autoInstallDxvk": true,
+    "wineVersion": {
+      "bin": "/home/u/.config/heroic/tools/proton/GE-Proton10-34/proton",
+      "name": "GE-Proton10-34",
+      "type": "proton"
+    },
+    "winePrefix": "/home/u/Games/Heroic/Prefixes/default/Cyberpunk 2077",
+    "wineCrossoverBottle": ""
+  },
+  "version": "v0",
+  "explicit": true
+})";
+
+const QByteArray kHeroicConfigJson = R"({
+  "defaultSettings": {
+    "defaultInstallPath": "/mnt/nvme_2TB/Jocs",
+    "winePrefix": "/home/u/Games/Heroic/Prefixes/default",
+    "defaultWinePrefix": "/home/u/Games/Heroic/Prefixes/default"
+  },
+  "version": "v0"
+})";
+
+void testHeroicPrefixParse()
+{
+    std::cout << "\n[heroic: the prefix a game runs in]\n";
+    check("the per-game prefix is read from under the app id",
+          store_scan::parseHeroicGamePrefix(kGamesConfigJson, "1423049311")
+              == "/home/u/Games/Heroic/Prefixes/default/Cyberpunk 2077",
+          store_scan::parseHeroicGamePrefix(kGamesConfigJson, "1423049311"));
+    // Heroic has shipped more than one spelling of this file, so an id that
+    // does not match still finds the one prefix in it rather than nothing.
+    check("a mismatched id still finds the prefix the file holds",
+          store_scan::parseHeroicGamePrefix(kGamesConfigJson, "9999")
+              == "/home/u/Games/Heroic/Prefixes/default/Cyberpunk 2077");
+    check("junk is nothing, not a crash",
+          store_scan::parseHeroicGamePrefix("{ not json", "1").isEmpty());
+    check("the default prefix root is read from config.json",
+          store_scan::parseHeroicDefaultPrefix(kHeroicConfigJson)
+              == "/home/u/Games/Heroic/Prefixes/default");
+    check("and junk there is nothing too",
+          store_scan::parseHeroicDefaultPrefix("").isEmpty());
+}
+
+void testHeroicPrefixForAnInstall()
+{
+    std::cout << "\n[heroic: install path -> prefix]\n";
+    QTemporaryDir tmp;
+    const QString cfg = tmp.filePath("heroic");
+    QDir().mkpath(cfg + "/gog_store");
+    QDir().mkpath(cfg + "/GamesConfig");
+    auto write = [](const QString &path, const QByteArray &body) {
+        QFile f(path);
+        check("fixture written", f.open(QIODevice::WriteOnly));
+        f.write(body);
+    };
+    write(cfg + "/gog_store/installed.json", R"([
+      { "appName": "1423049311", "install_path": "/mnt/games/Cyberpunk 2077", "executable": "" },
+      { "appName": "1207658718", "install_path": "/mnt/games/Gothic 2 Gold", "executable": "" }
+    ])");
+    write(cfg + "/GamesConfig/1423049311.json", kGamesConfigJson);
+    const QStringList dirs{cfg};
+
+    check("the install folder resolves to its own prefix",
+          store_scan::heroicPrefixForInstall("/mnt/games/Cyberpunk 2077", dirs)
+              == "/home/u/Games/Heroic/Prefixes/default/Cyberpunk 2077",
+          store_scan::heroicPrefixForInstall("/mnt/games/Cyberpunk 2077", dirs));
+    // The caller may hand over the exe's folder rather than the root, since
+    // that is what it has.
+    check("a path inside the install resolves to the same prefix",
+          store_scan::heroicPrefixForInstall("/mnt/games/Cyberpunk 2077/bin/x64", dirs)
+              == "/home/u/Games/Heroic/Prefixes/default/Cyberpunk 2077");
+    check("a game Heroic does not know about resolves to nothing",
+          store_scan::heroicPrefixForInstall("/mnt/games/Morrowind", dirs).isEmpty());
+    check("an empty path resolves to nothing",
+          store_scan::heroicPrefixForInstall("", dirs).isEmpty());
+
+    // No per-game file: Heroic falls back to the default root plus the
+    // install folder's name, and so must we.
+    write(cfg + "/config.json", kHeroicConfigJson);
+    check("without a per-game file the default root plus the folder name is used",
+          store_scan::heroicPrefixForInstall("/mnt/games/Gothic 2 Gold", dirs)
+              == "/home/u/Games/Heroic/Prefixes/default/Gothic 2 Gold",
+          store_scan::heroicPrefixForInstall("/mnt/games/Gothic 2 Gold", dirs));
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -293,6 +387,8 @@ int main(int argc, char **argv)
     testSteamManifest();
     testGameStoreFromNames();
     testGameStoreFromPaths();
+    testHeroicPrefixParse();
+    testHeroicPrefixForAnInstall();
 
     std::cout << "\n" << s_passed << " passed, " << s_failed << " failed\n";
     return s_failed == 0 ? 0 : 1;

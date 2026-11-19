@@ -409,16 +409,34 @@ static QStringList bethesdaPrefixUserDirs(const GameAdapter *adapter,
 }
 
 // The prefix registry to record DLL overrides in: the first user.reg that
-// actually exists.  Empty when the game has never been run under Proton (no
-// prefix yet) or isn't a Steam title - in both cases there is nothing to write
-// to, and deploy carries on without it.
+// actually exists.  Empty when the game has never been run (no prefix yet) or
+// runs natively - in both cases there is nothing to write to, and deploy
+// carries on without it.
+//
+// Steam's compatdata is tried first, then the prefix Heroic keeps for a GOG
+// copy. Without the Heroic leg a GOG install deployed its files happily and
+// then registered nothing, so RED4ext and Cyber Engine Tweaks sat inert with
+// their DLLs in place - measured on a real Cyberpunk 2077 install, where the
+// only prefix on the machine was ~/Games/Heroic/Prefixes/default/Cyberpunk
+// 2077 and the Steam appid had no compatdata at all.
 static QString resolveUserRegPath(const GameAdapter *adapter, const QString &dataDir)
 {
     const QString appId = adapter ? adapter->steamAppId() : QString();
-    if (appId.isEmpty()) return {};
-    for (const QString &root : bethesdaCompatdataRoots(dataDir)) {
-        const QString reg = proton::userRegPath(root, appId);
-        if (QFileInfo::exists(reg)) return reg;
+    if (!appId.isEmpty()) {
+        for (const QString &root : bethesdaCompatdataRoots(dataDir)) {
+            const QString reg = proton::userRegPath(root, appId);
+            if (QFileInfo::exists(reg)) return reg;
+        }
+    }
+    // Heroic: <winePrefix>/pfx/user.reg under Proton, <winePrefix>/user.reg
+    // under plain Wine. Proton first - it is what Heroic picks for a Windows
+    // game - and an existence test rather than reading the runner back, so a
+    // prefix that only has one of the two still resolves.
+    const QString heroic = store_scan::heroicPrefixForInstall(dataDir);
+    if (!heroic.isEmpty()) {
+        for (const QString &reg : { heroic + QStringLiteral("/pfx/user.reg"),
+                                    heroic + QStringLiteral("/user.reg") })
+            if (QFileInfo::exists(reg)) return reg;
     }
     return {};
 }
