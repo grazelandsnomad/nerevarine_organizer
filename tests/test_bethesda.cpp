@@ -687,7 +687,8 @@ static void touch(const QString &p)
 
 static const root_routes::Routes kRemaster{
     QStringLiteral("OblivionRemastered/Content/Paks/~mods"),
-    QStringLiteral("OblivionRemastered/Binaries/Win64/OBSE")};
+    QStringLiteral("OblivionRemastered/Binaries/Win64/OBSE"),
+    {}, {}};   // no loose-file rule for this game
 
 static void testPaksLandInModsWhereverShipped()
 {
