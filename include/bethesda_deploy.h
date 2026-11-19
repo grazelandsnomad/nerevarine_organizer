@@ -66,6 +66,12 @@ struct DeploySource {
     // two destinations, so the root files are named explicitly rather than
     // discovered by a walk that would also sweep up Data/ and src/.
     QStringList onlyFiles = {};
+    // Paths, relative to `dir`, that a walk of `dir` must NOT pick up because
+    // another source already places them somewhere else. One mod folder can be
+    // both overlaid whole and partly routed - a Cyberpunk mod whose bare
+    // .archive goes to archive/pc/mod while the rest of it overlays as-is -
+    // and without this the routed file would also land where it sits.
+    QStringList skipRels = {};
     // Folder under the deploy root these files land in, "" for the root itself.
     //
     // For the mods that ship a bare archive with no folder around it. A Gothic

@@ -877,6 +877,58 @@ void testDeployFlowWritesThePluginListWhereTheGameSpelledIt()
     QSettings().clear();
 }
 
+// The shape that reported a clean deploy and changed nothing in game: a mod
+// that is ONE bare .archive, no folders at all, which is how most single-file
+// Cyberpunk mods ship. Mirrored where it sat, it landed at the install root,
+// and the engine reads .archive only from archive/pc/mod.
+void testDeployFlowRoutesABareCyberpunkArchive()
+{
+    std::cout << "testDeployFlowRoutesABareCyberpunkArchive\n";
+    QSettings().clear();
+    QTemporaryDir tmp;
+    const QString lib  = tmp.path() + "/steamapps";
+    const QString game = lib + "/common/Cyberpunk 2077";
+    const QString mods = tmp.path() + "/mods";
+    writeFile(game + "/bin/x64/Cyberpunk2077.exe", "MZ");
+    writeFile(game + "/archive/pc/content/basegame_1_engine.archive", "RDAR");
+    // No folder around it, exactly as the real mod ships.
+    writeFile(mods + "/Blade/Blade_Runner_2077.archive", "RDAR");
+    writeFile(mods + "/Blade/readme.txt", "docs");
+
+    FakeShell shell;
+    shell.gameId       = QStringLiteral("cyberpunk2077");
+    shell.modsDirValue = mods;
+    ModEntry e         = ModEntry::named(QStringLiteral("Blade"));
+    e.modPath          = mods + "/Blade";
+    e.installStatus    = 1;
+    e.checked          = true;
+    shell.modelStore.append(e);
+    Settings::setDataDir(shell.gameId, game);
+
+    const QString manifest = resolveUserStatePath("deploy_manifest_modlist.json");
+    const QString backup   = resolveUserStatePath("deploy_backup_modlist");
+    writeFile(manifest, "{}");
+
+    DeployFlow flow(shell);
+    bool       ran = false;
+    flow.maybeDeployBeforeLaunch(shell.gameId, [&] { ran = true; });
+    check("the re-sync ran through to its continuation", ran);
+    check("the archive is in the one folder the engine reads",
+          QFileInfo::exists(game + "/archive/pc/mod/Blade_Runner_2077.archive"));
+    check("and NOT at the install root, where it used to go",
+          !QFileInfo::exists(game + "/Blade_Runner_2077.archive"));
+    // Everything that is not routed still overlays as before.
+    check("the rest of the mod overlays unchanged",
+          QFileInfo::exists(game + "/readme.txt"));
+    check("the game's own archive is untouched",
+          QFileInfo::exists(game + "/archive/pc/content/basegame_1_engine.archive"));
+
+    QFile::remove(manifest);
+    QFile::remove(resolveUserStatePath("deploy_manifest_modlist.fingerprint"));
+    QDir(backup).removeRecursively();
+    QSettings().clear();
+}
+
 // The same overlay for a GOG copy run through Heroic, which is how the game is
 // actually installed on the machine this was finally tested on. Nothing lives
 // under steamapps here, so the Steam compatdata hunt finds nothing and the
@@ -1037,6 +1089,7 @@ int main(int argc, char **argv)
     testDeployFlowAdoptsCreationsFromTheGamesDownloads();
     testDeployFlowWritesThePluginListWhereTheGameSpelledIt();
     testDeployFlowOverlaysCyberpunkIntoItsInstallFolder();
+    testDeployFlowRoutesABareCyberpunkArchive();
     testDeployFlowFindsTheHeroicPrefixForAGogCopy();
 
     std::cout << "\n";

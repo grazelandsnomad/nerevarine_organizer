@@ -58,8 +58,8 @@ static void testDestSubdirRoutesBareFiles()
     touch(tmp.filePath("Bare/Karibik.ini"), "ini");
 
     const DeployResult r = deploy(root, tmp.filePath("backup"), {
-        {"Karibik", tmp.filePath("Bare"), {"Karibik.mod"}, "Data"},
-        {"Karibik", tmp.filePath("Bare"), {"Karibik.ini"}, "system"},
+        {"Karibik", tmp.filePath("Bare"), {"Karibik.mod"}, {}, "Data"},
+        {"Karibik", tmp.filePath("Bare"), {"Karibik.ini"}, {}, "system"},
     });
 
     check("no errors", r.errors.isEmpty(), r.errors.join(';'));
@@ -753,6 +753,74 @@ static void testOtherGamesRouteNothing()
           !root_routes::onlyRoutedContent(t.filePath("mod"), {}));
 }
 
+// Cyberpunk: the engine reads .archive only from archive/pc/mod, and the
+// commonest mod shape is a bare .archive with no folder at all. Deployed where
+// it sits, that lands at the install root, which is not a load path - the
+// Blade Runner overhaul that reported a clean deploy and changed nothing.
+static const root_routes::Routes kCyberpunk{
+    {}, {}, QStringLiteral("archive/pc/mod"), QStringLiteral("r6/scripts")};
+
+static void testLooseArchiveIsRoutedToTheModFolder()
+{
+    std::cout << "\n[root_routes: a bare .archive goes to archive/pc/mod]\n";
+    QTemporaryDir t;
+    const QString mod = t.filePath("mod");
+    touch(mod + "/Blade_Runner_2077.archive");
+    QStringList claimed;
+    const auto src = root_routes::sourcesFor("Blade", mod, kCyberpunk, &claimed);
+    check("one source for it", src.size() == 1, QString::number(src.size()));
+    check("named, and aimed at archive/pc/mod",
+          !src.isEmpty() && src[0].onlyFiles == QStringList({"Blade_Runner_2077.archive"})
+              && src[0].destSubdir == QStringLiteral("archive/pc/mod"),
+          src.isEmpty() ? QString() : src[0].destSubdir);
+    check("and claimed, so the overlay pass skips it",
+          claimed == QStringList({"Blade_Runner_2077.archive"}), claimed.join(','));
+}
+
+static void testAWellPackedArchiveIsLeftAlone()
+{
+    std::cout << "\n[root_routes: a mod that already ships archive/pc/mod is untouched]\n";
+    QTemporaryDir t;
+    const QString mod = t.filePath("mod");
+    touch(mod + "/archive/pc/mod/Good.archive");
+    QStringList claimed;
+    const auto src = root_routes::sourcesFor("Good", mod, kCyberpunk, &claimed);
+    check("nothing is routed", src.isEmpty() && claimed.isEmpty(),
+          QString::number(src.size()));
+
+    // Wrapped one folder too deep, which the overlay would place at
+    // <install>/Extra/archive/pc/mod - still not a load path.
+    QTemporaryDir t2;
+    const QString wrapped = t2.filePath("mod");
+    touch(wrapped + "/Extra/archive/pc/mod/Deep.archive");
+    const auto src2 = root_routes::sourcesFor("Deep", wrapped, kCyberpunk);
+    check("but a wrapped one is pulled back out",
+          src2.size() == 1 && src2[0].destSubdir == QStringLiteral("archive/pc/mod"),
+          QString::number(src2.size()));
+}
+
+static void testLooseRedscriptAndMixedMods()
+{
+    std::cout << "\n[root_routes: a loose .reds goes to r6/scripts, the rest overlays]\n";
+    QTemporaryDir t;
+    const QString mod = t.filePath("mod");
+    touch(mod + "/tweak.reds");
+    touch(mod + "/Mine.archive");
+    touch(mod + "/bin/x64/plugins/thing/init.lua");   // CET, left to the overlay
+    touch(mod + "/readme.txt");
+    QStringList claimed;
+    const auto src = root_routes::sourcesFor("Mix", mod, kCyberpunk, &claimed);
+    check("two sources, one per kind", src.size() == 2, QString::number(src.size()));
+    QStringList dests;
+    for (const auto &d : src) dests << d.destSubdir;
+    dests.sort();
+    check("aimed at both folders",
+          dests == QStringList({"archive/pc/mod", "r6/scripts"}), dests.join(','));
+    claimed.sort();
+    check("only those two files are claimed",
+          claimed == QStringList({"Mine.archive", "tweak.reds"}), claimed.join(','));
+}
+
 } // namespace routes_section
 
 static void run_root_routes()
@@ -762,6 +830,9 @@ static void run_root_routes()
     routes_section::testLogicModsKeepTheirFolder();
     routes_section::testObsePluginsLeaveData();
     routes_section::testOtherGamesRouteNothing();
+    routes_section::testLooseArchiveIsRoutedToTheModFolder();
+    routes_section::testAWellPackedArchiveIsLeftAlone();
+    routes_section::testLooseRedscriptAndMixedMods();
 }
 
 namespace archives_section {

@@ -208,10 +208,19 @@ DeployResult deploy(const QString &dataDir,
                 if (QFileInfo::exists(abs)) absFiles << abs;
             }
         } else {
+            // A set, because a routed mod can name several files and this walk
+            // sees every one of them.
+            QSet<QString> skip;
+            for (const QString &r : src.skipRels) skip.insert(QDir::cleanPath(r));
             QDirIterator it(src.dir,
                             QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot,
                             QDirIterator::Subdirectories);
-            while (it.hasNext()) absFiles << it.next();
+            while (it.hasNext()) {
+                const QString abs = it.next();
+                if (!skip.isEmpty() && skip.contains(base.relativeFilePath(abs)))
+                    continue;
+                absFiles << abs;
+            }
         }
 
         for (const QString &abs : absFiles) {

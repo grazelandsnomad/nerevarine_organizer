@@ -467,6 +467,11 @@ public:
     QString          dataSubdir() const override { return QStringLiteral("../.."); }
     bool             overlayDeploy() const override { return true; }
     QString          gameRootFromData() const override { return QStringLiteral("."); }
+    // A bare .archive is the commonest shape a mod for this game comes in, and
+    // the engine only reads archive/pc/mod. Same for a loose .reds, which
+    // redscript only reads from r6/scripts.
+    QString          looseArchiveSubdir() const override { return QStringLiteral("archive/pc/mod"); }
+    QString          looseScriptSubdir()  const override { return QStringLiteral("r6/scripts"); }
     bool             pinned() const override { return true; }
 };
 

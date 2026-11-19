@@ -164,6 +164,14 @@ public:
     // as SKSE and F4SE do. Empty = leave it in Data/ like everything else.
     virtual QString extenderPluginsSubdir() const { return {}; }
 
+    // Loose content that belongs in ONE fixed folder of the game root rather
+    // than wherever the mod happened to leave it. Cyberpunk mods ship a bare
+    // .archive as often as the full archive/pc/mod/ path, and the engine reads
+    // only the latter: deployed where it sits, the file lands at the install
+    // root and nothing ever looks at it. Empty = this game has no such rule.
+    virtual QString looseArchiveSubdir() const { return {}; }   // .archive, .xl
+    virtual QString looseScriptSubdir()  const { return {}; }   // .reds
+
     // Plugins.txt lives in the data folder itself rather than in the prefix's
     // AppData/Local (Oblivion Remastered).
     virtual bool pluginsTxtInDataDir() const { return false; }

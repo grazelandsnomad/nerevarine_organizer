@@ -16,6 +16,11 @@
 //   - OBSE64 plugins load from Binaries/Win64/OBSE/Plugins, not
 //     Data/OBSE/Plugins as SKSE's and F4SE's do.
 //
+// Cyberpunk 2077 has the same problem one level simpler: it is an overlay
+// game, so a mod that ships the full archive/pc/mod/ path lands right by
+// itself, but the bare .archive most single-file mods ship would land at the
+// install root, which is not a load path. Those get routed too.
+//
 // Each becomes a DeploySource for the game-root pass (its own manifest, so
 // undeploy takes it back out). Qt Core only; tested off a QTemporaryDir.
 
@@ -29,12 +34,21 @@ namespace root_routes {
 struct Routes {
     QString pakModsSubdir;          // "" = no pak mods for this game
     QString extenderPluginsSubdir;  // "" = the extender folder stays in Data/
+    // Cyberpunk: a .archive/.xl belongs in archive/pc/mod and a .reds in
+    // r6/scripts, wherever the mod left them. "" = no such rule.
+    QString looseArchiveSubdir;
+    QString looseScriptSubdir;
 };
 
 // What of `modPath` goes where, relative to the game root.
+//
+// `claimedRels`, when given, collects the paths (relative to modPath) that the
+// returned sources place, so an overlay caller can hand them to
+// DeploySource::skipRels and not deploy the same file twice.
 QList<bethesda_deploy::DeploySource> sourcesFor(const QString &label,
                                                 const QString &modPath,
-                                                const Routes &routes);
+                                                const Routes &routes,
+                                                QStringList *claimedRels = nullptr);
 
 // True when the mod holds nothing BUT routed content (no plugin, no archive,
 // no loose asset outside a routed folder) - so the Data/ pass must not fall

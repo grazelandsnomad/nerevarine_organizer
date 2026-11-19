@@ -32,11 +32,52 @@ QString extenderFolder(const QString &modPath)
     return best;
 }
 
+bool hasAnyExt(const QString &name, const QStringList &exts)
+{
+    for (const QString &e : exts)
+        if (name.endsWith(e, Qt::CaseInsensitive)) return true;
+    return false;
+}
+
+// Loose files of one kind, gathered to one folder of the game root. Files
+// already sitting exactly at that folder are left alone: the overlay pass
+// places those itself, and claiming them would deploy the same file twice.
+// Anything deeper or shallower IS claimed, including a mod that wrapped the
+// whole correct path in a folder of its own.
+void looseRoute(const QString &label, const QString &modPath,
+                const QStringList &exts, const QString &dest,
+                QList<bethesda_deploy::DeploySource> &out,
+                QStringList *claimedRels)
+{
+    if (dest.isEmpty()) return;
+    const QDir base(modPath);
+    QHash<QString, QStringList> byDir;
+    QStringList dirs;   // first-seen order, sorted below for a stable result
+    QDirIterator it(modPath, QDir::Files, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        const QFileInfo fi(it.next());
+        if (!hasAnyExt(fi.fileName(), exts)) continue;
+        const QString relDir = base.relativeFilePath(fi.absolutePath());
+        if (relDir.compare(dest, Qt::CaseInsensitive) == 0) continue;
+        const QString dir = fi.absolutePath();
+        if (!byDir.contains(dir)) dirs << dir;
+        byDir[dir] << fi.fileName();
+        if (claimedRels) *claimedRels << base.relativeFilePath(fi.absoluteFilePath());
+    }
+    std::sort(dirs.begin(), dirs.end());
+    for (const QString &dir : dirs) {
+        QStringList names = byDir.value(dir);
+        names.sort();
+        out.append({label, dir, names, {}, dest});
+    }
+}
+
 } // namespace
 
 QList<bethesda_deploy::DeploySource> sourcesFor(const QString &label,
                                                 const QString &modPath,
-                                                const Routes &routes)
+                                                const Routes &routes,
+                                                QStringList *claimedRels)
 {
     QList<bethesda_deploy::DeploySource> out;
     if (modPath.isEmpty() || !QDir(modPath).exists()) return out;
@@ -62,7 +103,7 @@ QList<bethesda_deploy::DeploySource> sourcesFor(const QString &label,
             names.sort();
             const bool logic = QFileInfo(dir).fileName()
                 .compare(QLatin1String("LogicMods"), Qt::CaseInsensitive) == 0;
-            out.append({label, dir, names,
+            out.append({label, dir, names, {},
                         logic ? paksParent + QStringLiteral("/LogicMods")
                               : routes.pakModsSubdir});
         }
@@ -71,8 +112,13 @@ QList<bethesda_deploy::DeploySource> sourcesFor(const QString &label,
     if (!routes.extenderPluginsSubdir.isEmpty()) {
         const QString obse = extenderFolder(modPath);
         if (!obse.isEmpty())
-            out.append({label, obse, {}, routes.extenderPluginsSubdir});
+            out.append({label, obse, {}, {}, routes.extenderPluginsSubdir});
     }
+
+    looseRoute(label, modPath, {QStringLiteral(".archive"), QStringLiteral(".xl")},
+               routes.looseArchiveSubdir, out, claimedRels);
+    looseRoute(label, modPath, {QStringLiteral(".reds")},
+               routes.looseScriptSubdir, out, claimedRels);
     return out;
 }
 

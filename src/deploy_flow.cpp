@@ -528,7 +528,8 @@ static QString bethesdaGameRoot(const GameAdapter *adapter, const QString &dataD
 static root_routes::Routes bethesdaRoutes(const GameAdapter *adapter)
 {
     if (!adapter) return {};
-    return {adapter->pakModsSubdir(), adapter->extenderPluginsSubdir()};
+    return {adapter->pakModsSubdir(), adapter->extenderPluginsSubdir(),
+            adapter->looseArchiveSubdir(), adapter->looseScriptSubdir()};
 }
 
 // Resolve the prefix Plugins.txt path (active set / order).  Manual override
@@ -808,7 +809,7 @@ static QList<bethesda_deploy::DeploySource> gatherScriptExtenderSources(
                 payload << f;
         if (payload.isEmpty()) continue;
 
-        out.append({label, modPath, payload,
+        out.append({label, modPath, payload, {},
                     loaderDir == QLatin1String(".") ? QString() : loaderDir});
     }
     return out;
@@ -972,13 +973,21 @@ static QList<bethesda_deploy::DeploySource> gatherBethesdaSources(const ModlistM
                 const auto m = opengothic::mapModFolder(modPath);
                 if (!m.overlay) {
                     if (!m.archives.isEmpty())
-                        sources.append({label, modPath, m.archives, QStringLiteral("Data")});
+                        sources.append({label, modPath, m.archives, {}, QStringLiteral("Data")});
                     if (!m.inis.isEmpty())
-                        sources.append({label, modPath, m.inis, QStringLiteral("system")});
+                        sources.append({label, modPath, m.inis, {}, QStringLiteral("system")});
                     continue;
                 }
             }
-            sources.append({label, modPath});
+            // Content the engine reads from one fixed folder only, wherever
+            // the mod left it: a bare .archive at the mod's root would
+            // otherwise be placed at the install root, which is not a load
+            // path, and the deploy would report success.
+            QStringList claimed;
+            const auto routed =
+                root_routes::sourcesFor(label, modPath, bethesdaRoutes(adapter), &claimed);
+            sources += routed;
+            sources.append({label, modPath, {}, claimed});
             continue;
         }
 
