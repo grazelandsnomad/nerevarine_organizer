@@ -1353,9 +1353,9 @@ bool MainWindow::confirmGameForDownload(const QString &game)
 
     // Name the incoming game the way the user would recognise it. The domain
     // is a slug; an adapter registered under it knows the real title.
+    const GameAdapter *incomingAdapter = GameAdapterRegistry::findByNexusDomain(game);
     QString incoming = game;
-    if (const GameAdapter *a = GameAdapterRegistry::find(game))
-        incoming = a->displayName();
+    if (incomingAdapter) incoming = incomingAdapter->displayName();
     const QString here = m_profiles->current().displayName;
 
     // Custom button set and clickedButton inspection - raw QMessageBox, same
@@ -1365,16 +1365,42 @@ bool MainWindow::confirmGameForDownload(const QString &game)
     box.setIcon(QMessageBox::Warning);
 
     if (verdict.verdict == game_match::Verdict::Unknown) {
-        // Nowhere to send it. Offer the escape hatch, but default to Cancel:
-        // installing a foreign game's files into this list is almost never
-        // what was meant, and undoing it means hunting the folder down.
+        // Nowhere to send it YET. When this is a game the app can manage,
+        // offer to add it and carry the download into it: the dead end here
+        // was the whole of what the user saw, and the way forward - the game
+        // menu - is somewhere else entirely.
+        //
+        // Only for a pinned adapter, and that is the point rather than a
+        // shortcut: an unpinned game is absent from the game menu unless
+        // "Show all games" is on, so adding one from here would leave a
+        // profile that cannot be switched back to. One rule, in one place.
+        const bool canAdd = incomingAdapter && incomingAdapter->pinned();
         box.setText(T("wrong_game_body_unknown").arg(incoming, here));
+        if (canAdd) box.setInformativeText(T("wrong_game_add_hint").arg(incoming, here));
+        QPushButton *add = nullptr;
+        if (canAdd)
+            add = box.addButton(T("wrong_game_add").arg(incoming),
+                                QMessageBox::AcceptRole);
+        // Still reachable, and still not the default: installing a foreign
+        // game's files into this list is almost never what was meant, and
+        // undoing it means hunting the folder down.
         auto *anyway = box.addButton(T("wrong_game_install_anyway"),
-                                     QMessageBox::AcceptRole);
+                                     canAdd ? QMessageBox::DestructiveRole
+                                            : QMessageBox::AcceptRole);
         auto *cancel = box.addButton(QMessageBox::Cancel);
-        box.setDefaultButton(cancel);
+        box.setDefaultButton(add ? add : cancel);
         box.exec();
-        return box.clickedButton() == anyway;
+
+        QAbstractButton *clicked = box.clickedButton();
+        if (clicked == anyway) return true;
+        if (add && clicked == add) {
+            // Detection, the profile and the switch all happen in there, and
+            // the install continues into the new game. A backed-out detection
+            // returns false, which aborts rather than quietly falling back to
+            // the list the user was looking at.
+            return addAndDetectGame(incomingAdapter->id(), incoming);
+        }
+        return false;
     }
 
     // One button per profile that serves this game. Usually exactly one; two
@@ -3512,13 +3538,13 @@ void MainWindow::onAddGame()
     ui::info(this, T("add_game_title"), T("add_game_more_body"));
 }
 
-void MainWindow::addAndDetectGame(const QString &gameId, const QString &displayName)
+bool MainWindow::addAndDetectGame(const QString &gameId, const QString &displayName)
 {
     // Already configured? Just switch.
     for (int i = 0; i < m_profiles->size(); ++i) {
         if (m_profiles->games()[i].id == gameId) {
             switchToGame(i);
-            return;
+            return true;
         }
     }
 
@@ -3530,12 +3556,12 @@ void MainWindow::addAndDetectGame(const QString &gameId, const QString &displayN
     const GameAdapter *newAdapter = GameAdapterRegistry::find(gameId);
     if (newAdapter && newAdapter->isOpenGothic()) {
         QString engine, root;
-        if (!opengothicResolvePaths(this, gameId, engine, root)) return;
+        if (!opengothicResolvePaths(this, gameId, engine, root)) return false;
         ui::info(this, displayName,
                  T("gothic_detected").arg(QDir::toNativeSeparators(root),
                                           QDir::toNativeSeparators(engine)));
         createGameProfile(gameId, displayName);
-        return;
+        return true;
     }
 
     // Detect: Heroic/GOG → Steam → Lutris.
@@ -3547,20 +3573,22 @@ void MainWindow::addAndDetectGame(const QString &gameId, const QString &displayN
 
     if (exe.isEmpty() || !QFile::exists(exe)) {
         // Ask the user.
-        ui::info(this, QString("Locate %1").arg(displayName), QString("%1 was not found in Steam, Heroic, or Lutris.\n"
-                    "Please point to the game's executable.").arg(displayName));
+        ui::info(this, T("add_game_locate_title").arg(displayName),
+                 T("add_game_not_found").arg(displayName));
         const QString picked = QFileDialog::getOpenFileName(this,
-            QString("Locate %1 executable").arg(displayName),
+            T("add_game_pick_exe").arg(displayName),
             QDir::homePath(),
-            "Executables (*.exe);;All files (*)");
-        if (picked.isEmpty()) return;
+            T("add_game_exe_filter"));
+        if (picked.isEmpty()) return false;
         exe = picked;
     }
 
     // Confirm to the user where it was found.
-    ui::info(this, displayName, QString("%1 detected at:\n%2").arg(displayName, QDir::toNativeSeparators(exe)));
+    ui::info(this, displayName,
+             T("add_game_detected").arg(displayName, QDir::toNativeSeparators(exe)));
 
     createGameProfile(gameId, displayName);
+    return true;
 }
 
 // Ask for the mods directory and create the profile, once the game itself has
@@ -3572,7 +3600,7 @@ void MainWindow::createGameProfile(const QString &gameId, const QString &display
     // park heavy installs (FNV, Skyrim, etc) on a different mount than OpenMW.
     const QString defaultModsDir = QDir::homePath() + "/Games/" + gameId + "_mods";
     QString modsDir = QFileDialog::getExistingDirectory(this,
-        QString("Choose mods directory for %1").arg(displayName),
+        T("add_game_pick_mods_dir").arg(displayName),
         defaultModsDir,
         QFileDialog::ShowDirsOnly | QFileDialog::DontConfirmOverwrite);
     if (modsDir.isEmpty()) modsDir = defaultModsDir;

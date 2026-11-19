@@ -446,8 +446,12 @@ public:
 // version.dll) sit beside the exe in bin/x64/, which is where the
 // DLL-override pass is told to look (bethesdaRegisterDllOverrides).
 //
-// Not pinned: this was built against a mock game folder, not a real install,
-// so it stays behind "Show all games" until someone runs it for real.
+// Pinned since 0.76: run against a real install at last, a GOG copy through
+// Heroic. What that proved is the finding half - the store scan matches the
+// install, the exe resolves, the deploy target lands on the install root, the
+// override app dir comes out as bin/x64 - and it is what found the prefix
+// lookup being Steam-only. Still unproven: the overlay on real mod archives
+// and the override write itself, which needs a prefix that exists.
 class Cyberpunk2077Adapter : public GameAdapter {
 public:
     QString id()          const override { return QStringLiteral("cyberpunk2077"); }
@@ -463,6 +467,7 @@ public:
     QString          dataSubdir() const override { return QStringLiteral("../.."); }
     bool             overlayDeploy() const override { return true; }
     QString          gameRootFromData() const override { return QStringLiteral("."); }
+    bool             pinned() const override { return true; }
 };
 
 class WitcherAdapter : public GameAdapter {
@@ -830,6 +835,22 @@ const GameAdapter *find(const QString &id)
 {
     for (const auto &a : kAdapters())
         if (a->id() == id) return a.get();
+    return nullptr;
+}
+
+const GameAdapter *findByNexusDomain(const QString &domain)
+{
+    if (domain.isEmpty()) return nullptr;
+    // The ids are deliberately spelled as Nexus domains, so this answers
+    // everything on the first pass.
+    if (const GameAdapter *a = find(domain)) return a;
+    // Except where a game has no section of its own on Nexus: Skyrim AE asks
+    // for skyrimspecialedition. Registration order decides, which puts SE
+    // ahead of AE - the right way round, since a download from that domain is
+    // an SE file.
+    for (const auto &a : kAdapters())
+        if (a->nexusDomain().compare(domain, Qt::CaseInsensitive) == 0)
+            return a.get();
     return nullptr;
 }
 

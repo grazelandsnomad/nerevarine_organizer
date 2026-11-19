@@ -264,7 +264,11 @@ private slots:
     void onAddGame();
     // Detect an external (non-OpenMW) game in Steam/Heroic/Lutris, prompt for
     // the exe if not found, create a profile and switch. From pinned-game menu.
-    void addAndDetectGame(const QString &gameId, const QString &displayName);
+    // True once a profile for gameId is the active one - whether it already
+    // existed or was just made. False when the user backed out of locating
+    // the game, so a caller that was going to install into it can abort
+    // instead of falling back to whatever list was open.
+    bool addAndDetectGame(const QString &gameId, const QString &displayName);
     // Offer a mod archive that just landed in the download folder. Only runs
     // for a profile whose game has no mod-manager download route at all.
     void onDownloadCaught(const QString &path);

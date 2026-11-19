@@ -236,6 +236,11 @@ namespace GameAdapterRegistry {
 // Lookup by id; nullptr if unknown.
 const GameAdapter *find(const QString &id);
 
+// Lookup by Nexus game domain - what an nxm:// URL names - which is the id
+// for every game but the ones with no Nexus section of their own (Skyrim AE
+// asks for skyrimspecialedition). nullptr if unknown or empty.
+const GameAdapter *findByNexusDomain(const QString &domain);
+
 // All registered adapters in registration order.
 QList<const GameAdapter *> all();
 

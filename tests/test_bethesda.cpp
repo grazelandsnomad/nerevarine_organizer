@@ -1509,8 +1509,51 @@ static void testCyberpunkClassification()
     check("no plugin list to write", a->loadOrderStyle() == LoadOrderStyle::Unknown);
     check("no script extender", a->scriptExtenderLoaders().isEmpty());
     check("no separate launcher", !a->hasLauncher());
-    check("unproven on a real install, so not pinned", !a->pinned());
+    // Pinned in 0.76, once it had been run against a real GOG install: an
+    // unpinned game is absent from the game menu unless "Show all games" is
+    // on, and the download guard will only offer to add a pinned one.
+    check("pinned, so the game menu lists it", a->pinned());
+    bool inPinned = false;
+    for (const GameAdapter *p : GameAdapterRegistry::pinned())
+        if (p == a) inPinned = true;
+    check("and the pinned list really carries it", inPinned);
     check("stays out of the first-run chooser", !a->builtin());
+}
+
+// An nxm:// URL names a Nexus DOMAIN, while the adapters are keyed by profile
+// id. The download guard needs the adapter behind a domain to name the game
+// and to offer to add it, so the two spellings have to meet somewhere.
+static void testAdapterByNexusDomain()
+{
+    std::cout << "\n[registry: a Nexus domain resolves to its adapter]\n";
+    const GameAdapter *cyber = GameAdapterRegistry::findByNexusDomain("cyberpunk2077");
+    check("a domain that is also an id resolves",
+          cyber != nullptr && cyber->id() == QStringLiteral("cyberpunk2077"),
+          cyber ? cyber->id() : QStringLiteral("<null>"));
+
+    // Skyrim AE has no section of its own on Nexus, so its domain is SE's. A
+    // file from that domain is an SE file, and SE is registered first.
+    const GameAdapter *se = GameAdapterRegistry::findByNexusDomain("skyrimspecialedition");
+    check("the shared Skyrim domain resolves to Special Edition, not Anniversary",
+          se != nullptr && se->id() == QStringLiteral("skyrimspecialedition"),
+          se ? se->id() : QStringLiteral("<null>"));
+    const GameAdapter *ae = GameAdapterRegistry::find("skyrimanniversaryedition");
+    check("and Anniversary really does buy from that domain",
+          ae != nullptr && ae->nexusDomain() == QStringLiteral("skyrimspecialedition"),
+          ae ? ae->nexusDomain() : QStringLiteral("<null>"));
+
+    check("a game nobody ships resolves to nothing",
+          GameAdapterRegistry::findByNexusDomain("quakeiv") == nullptr);
+    check("an empty domain resolves to nothing",
+          GameAdapterRegistry::findByNexusDomain("") == nullptr);
+
+    // Every pinned game is one the guard may offer to add, so each of their
+    // own domains has to come back to an adapter.
+    QString unresolved;
+    for (const GameAdapter *p : GameAdapterRegistry::pinned())
+        if (!GameAdapterRegistry::findByNexusDomain(p->nexusDomain()))
+            unresolved += p->id() + " ";
+    check("every pinned game's own domain resolves", unresolved.isEmpty(), unresolved);
 }
 } // namespace adapters_section
 
@@ -1568,6 +1611,7 @@ static void run_game_adapters()
     adapters_section::testEnderalClassification();
     adapters_section::testDarkSouls2Classification();
     adapters_section::testCyberpunkClassification();
+    adapters_section::testAdapterByNexusDomain();
     adapters_section::testArchiveConfigPerEngineFamily();
     adapters_section::testFallout4IsDiscoverable();
     adapters_section::testOblivionRemasteredLayout();
