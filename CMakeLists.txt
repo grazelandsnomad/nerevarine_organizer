@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(NerevarineOrganizer VERSION 0.76 LANGUAGES CXX)
+project(NerevarineOrganizer VERSION 0.77 LANGUAGES CXX)
 
 # A build configured without a type gets RelWithDebInfo: optimised, with line
 # tables, so the frames of a crash block in the log resolve to file:line
