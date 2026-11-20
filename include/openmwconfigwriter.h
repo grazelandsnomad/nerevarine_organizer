@@ -15,6 +15,8 @@
 #include <QString>
 #include <QStringList>
 
+#include <functional>
+
 namespace openmw {
 
 // One mod entry in modlist order, plugin layout already resolved from disk by
@@ -121,6 +123,11 @@ struct SyncPrepareInputs {
     QSet<QString>    disabledModPaths;
     QString          modsRoot;           // m_modsDir, QDir::cleanPath'd
     QStringList      loadOrder;          // current managed load order
+    // A plugin's MAST list, given its full path. Left unset this opens and
+    // reads every enabled plugin on every sync - measured at 475 ms over 400
+    // plugins warm and 16 s cold - so the window passes the cache it already
+    // keeps per file with an mtime gate.
+    std::function<QStringList(const QString &)> mastersOf;
 };
 
 // Output of prepareForSync, fed into renderOpenMWConfig + the async writers.

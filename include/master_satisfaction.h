@@ -15,6 +15,8 @@
 
 #include <QList>
 #include <QSet>
+
+#include <functional>
 #include <QString>
 #include <QStringList>
 
@@ -38,9 +40,15 @@ struct PluginRef {
 // Transitive closure: if plugin A depends on plugin B and B is suppressed
 // in the first pass, A is also returned - the function loops until the
 // unsatisfied set stops growing.
+// `mastersOf` reads a plugin's MAST list, given its full path. It is a
+// parameter because the caller usually has those lists already:
+// ScanCoordinator keeps them per file with an mtime gate, while the default
+// here opens and re-reads every plugin on every call - 475 ms of one sync on
+// 400 plugins, and 16 s of a cold one.
 QSet<QString> findUnsatisfiedMasters(
     const QList<PluginRef> &plugins,
-    QSet<QString>           availableLower);
+    QSet<QString>           availableLower,
+    const std::function<QStringList(const QString &)> &mastersOf = {});
 
 // Of `plugins`, the ones `loadOrder` actually carries - leaving out the ones
 // the sync holds back for a missing master (`suppressed`, from prepareForSync).

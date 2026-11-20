@@ -331,6 +331,12 @@ private:
     void setupCentralWidget();
 
     void saveModList() override;
+    // The save a switch needs: persist the rows and the load order, and skip
+    // the phases that only decorate rows about to be destroyed or rewrite the
+    // config of the game being left. Those are re-run for the game being
+    // switched to, by its own load. Measured together at 254 ms of a 620 ms
+    // save on 438 rows, and 33 s of a cold one.
+    void saveModListForSwitch();
     // Debounced save (150ms) for high-traffic mutation sites (drag reorder,
     // hold-to-repeat move, rapid favorite/collapse toggles); calls within the
     // window collapse to one saveModList(). Sync saveModList() stops this timer
@@ -351,6 +357,8 @@ private:
     // or saveModList's side effects). No-op when the token is null or the path
     // won't resolve.
     void saveModListFor(const QString &profileKey, ModRow placeholder);
+    // Both of the above, with the one difference between them.
+    void doSaveModList(bool leavingProfile);
     // Absolute modlist path for a profile key (the <gameId>__<profileName> form
     // currentProfileKey emits). Empty when no profile matches.
     QString modlistPathFor(const QString &profileKey) const;
@@ -756,6 +764,9 @@ private:
     // hashed them. Mutable because it is a cache that fills itself on first
     // touch - which is why no switch site has to remember to reload it.
     mutable loadorder::Store m_loadOrders;
+    // Per load-order file, the list the topo sort last produced. The sort's
+    // master lookup stats every plugin, so an unmoved list is not re-sorted.
+    QHash<QString, QStringList> m_sortedOrderMemo;
     QSet<QString> m_suppressedPlugins;
     // The active game's order, read from its own file on a cache miss. The
     // only way to the list, so the key is always resolved first.

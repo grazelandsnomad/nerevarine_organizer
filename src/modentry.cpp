@@ -162,6 +162,16 @@ bool ModEntry::setRoleData(int role, const QVariant &value)
 {
     const RoleField *f = roleIndex().value(role, nullptr);
     if (!f) return false;
+    // Writing a value the row already holds is not a change, and saying that
+    // it is costs two full row walks: ModlistModel::setRole emits dataChanged,
+    // the view turns that into itemChanged per row, and the handler there runs
+    // updateModCount() and updateSectionCounts() over every row. The
+    // dependency scan alone writes three roles per mod and almost never
+    // changes any of them - measured at 205 ms of a 620 ms save on 438 rows.
+    //
+    // A field whose type has no operator== compares unequal under QVariant, so
+    // it still writes and still reports a change, which is what it did before.
+    if (f->get(*this) == value) return false;
     f->set(*this, value);
     return true;
 }

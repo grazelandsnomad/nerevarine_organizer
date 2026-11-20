@@ -2,6 +2,7 @@
 
 #include "annotation_codec.h"
 #include "modentry.h"
+#include "modlist_model.h"
 #include "modlist_io.h"
 #include "modlist_serializer.h"
 #include "modlist_sync_guard.h"
@@ -1077,6 +1078,50 @@ static QStringList names(const std::vector<ModEntry> &v)
 
 } // namespace modentry_section
 
+// Writing a value a row already holds is not a change. Saying it is costs two
+// full row walks per write, through dataChanged -> itemChanged ->
+// updateModCount + updateSectionCounts, and the dependency scan writes three
+// roles per mod that almost never move - 205 ms of a 620 ms save on 438 rows.
+static void run_role_write_is_only_a_change_when_it_changes()
+{
+    std::cout << "=== ModEntry role writes ===\n";
+    ModEntry e = ModEntry::named(QStringLiteral("A"));
+
+    check("a new value is a change", e.setRoleData(ModRole::HasMissingDependency, true));
+    check("and it stuck", e.roleData(ModRole::HasMissingDependency).toBool());
+    check("the same value again is not a change",
+          !e.setRoleData(ModRole::HasMissingDependency, true));
+    check("and it is still set", e.roleData(ModRole::HasMissingDependency).toBool());
+    check("changing it back is a change",
+          e.setRoleData(ModRole::HasMissingDependency, false));
+
+    // The list-valued roles matter most: these are the ones the dependency
+    // scan rewrites on every save.
+    const QStringList labels{QStringLiteral("Foo.esp")};
+    check("a list role changes once", e.setRoleData(ModRole::MissingDependencies, labels));
+    check("and not twice", !e.setRoleData(ModRole::MissingDependencies, labels));
+    check("a different list is a change",
+          e.setRoleData(ModRole::MissingDependencies,
+                        QStringList{QStringLiteral("Bar.esp")}));
+
+    // The model is the funnel that turns a change into a signal, so it has to
+    // agree: no write, no dataChanged.
+    ModlistModel m;
+    m.append(ModEntry::named(QStringLiteral("B")));
+    int emitted = 0;   // not `signals`: that is a Qt keyword
+    QObject::connect(&m, &QAbstractItemModel::dataChanged, &m,
+                     [&emitted](const QModelIndex &, const QModelIndex &,
+                                const QList<int> &) { ++emitted; });
+    check("the model reports a real write", m.setRole(0, ModRole::HasMissingDependency, true));
+    check("and emitted once", emitted == 1, QString::number(emitted));
+    check("the model declines a no-op write",
+          !m.setRole(0, ModRole::HasMissingDependency, true));
+    check("and emitted nothing for it", emitted == 1, QString::number(emitted));
+
+    // An unknown role was already a no-op and stays one.
+    check("an unknown role is still refused", !e.setRoleData(123456, true));
+}
+
 static void run_modentry()
 {
     using namespace modentry_section;
@@ -1383,6 +1428,8 @@ int main(int argc, char **argv)
     run_modlist_serialization();
     std::cout << "\n";
     run_modentry();
+    std::cout << "\n";
+    run_role_write_is_only_a_change_when_it_changes();
     std::cout << "\n";
     run_modlist_sync_guard();
 

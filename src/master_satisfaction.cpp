@@ -9,16 +9,20 @@ namespace openmw {
 
 QSet<QString> findUnsatisfiedMasters(
     const QList<PluginRef> &plugins,
-    QSet<QString>           availableLower)
+    QSet<QString>           availableLower,
+    const std::function<QStringList(const QString &)> &mastersOf)
 {
-    // Cache of masters per fullPath - cheap per call but avoids re-reading
-    // the same plugin across fixpoint iterations on big modlists.
+    // Whatever the caller handed over, or the file itself. The per-call cache
+    // below still earns its keep either way: the fixpoint loop asks about the
+    // same plugin once per pass.
+    const auto read = mastersOf
+        ? mastersOf
+        : std::function<QStringList(const QString &)>(&plugins::readTes3Masters);
     QHash<QString, QStringList> mastersCache;
-    auto mastersOf = [&](const PluginRef &pr) -> const QStringList& {
+    auto mastersFor = [&](const PluginRef &pr) -> const QStringList& {
         auto it = mastersCache.constFind(pr.fullPath);
         if (it != mastersCache.constEnd()) return it.value();
-        return *mastersCache.insert(pr.fullPath,
-                                    plugins::readTes3Masters(pr.fullPath));
+        return *mastersCache.insert(pr.fullPath, read(pr.fullPath));
     };
 
     QSet<QString> unsatisfied;
@@ -30,7 +34,7 @@ QSet<QString> findUnsatisfiedMasters(
         changed = false;
         for (const PluginRef &pr : plugins) {
             if (unsatisfied.contains(pr.filename)) continue;
-            for (const QString &m : mastersOf(pr)) {
+            for (const QString &m : mastersFor(pr)) {
                 if (!availableLower.contains(m.toLower())) {
                     unsatisfied.insert(pr.filename);
                     availableLower.remove(pr.filename.toLower());

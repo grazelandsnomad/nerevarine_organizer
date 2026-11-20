@@ -267,6 +267,7 @@ QStringList &MainWindow::loadOrderRef()
 void MainWindow::forgetCachedLoadOrders()
 {
     m_loadOrders.clear();
+    m_sortedOrderMemo.clear();
     m_suppressedPlugins.clear();
 }
 
@@ -450,6 +451,13 @@ void MainWindow::reconcileLoadOrder()
     // looked up multiple times within a single topo sort - it's a
     // hot-path memo on top of the cross-call mtime cache.
     QHash<QString, QStringList> reconcileMemo;
+    // The sort's mastersOf callback stats every plugin file, which is the
+    // whole cost of this phase on a mods drive behind FUSE. Same input, same
+    // output: when the list has not moved since the last sort there is nothing
+    // to learn by asking again.
+    const QString sortKey = loadOrderPath();
+    if (m_sortedOrderMemo.value(sortKey) == loadOrderRef()) return;
+
     loadOrderRef() = loadorder::topologicallySortByMasters(
         loadOrderRef(),
         [this, &pathByName, &reconcileMemo](const QString &name) -> QStringList {
@@ -461,6 +469,7 @@ void MainWindow::reconcileLoadOrder()
             reconcileMemo.insert(name, ms);
             return ms;
         });
+    m_sortedOrderMemo.insert(sortKey, loadOrderRef());
 }
 
 static QString detectLootBinary()
@@ -645,7 +654,10 @@ void MainWindow::autoSortLoadOrder()
     statusBar()->showMessage(T("loot_done"), 4000);
 }
 
-void MainWindow::saveModList()
+void MainWindow::saveModList()           { doSaveModList(false); }
+void MainWindow::saveModListForSwitch()  { doSaveModList(true); }
+
+void MainWindow::doSaveModList(bool leavingProfile)
 {
     // Coalesce: any pending debounce timer's fire is now redundant -
     // a synchronous save is happening anyway.  Safe even when no
@@ -740,16 +752,23 @@ void MainWindow::saveModList()
     saveLoadOrder();
     const qint64 ms_loadorder = phase.restart();
 
-    syncGameConfig();
+    // Leaving this profile: the rows below are about to be destroyed by the
+    // switch and this game's config describes a game nobody is looking at, so
+    // the four phases here would decorate the dead and rewrite the absent.
+    // Measured together at 254 ms of a 620 ms save, and 33 s of a cold one.
+    // Each is re-run for the game being switched TO, by its own load.
+    const bool leaving = leavingProfile;
+
+    if (!leaving) syncGameConfig();
     const qint64 ms_syncCfg = phase.restart();
 
-    scanMissingMasters();
+    if (!leaving) scanMissingMasters();
     const qint64 ms_masters = phase.restart();
 
-    scanMissingDependencies();
+    if (!leaving) scanMissingDependencies();
     const qint64 ms_deps = phase.restart();
 
-    updateSectionCounts();
+    if (!leaving) updateSectionCounts();
     const qint64 ms_counts = phase.elapsed();
 
     // Per-stage ms in log.txt: a single number jumping pins a UI-freeze.
@@ -1396,6 +1415,12 @@ void MainWindow::syncOpenMWConfig()
     prep.modsRoot         = m_modsDir.isEmpty() ? QString()
                                                 : QDir::cleanPath(m_modsDir);
     prep.loadOrder        = loadOrderRef();
+    // The masters the window already has, per file with an mtime gate, rather
+    // than re-reading every enabled plugin's header on every sync.
+    if (m_scans)
+        prep.mastersOf = [this](const QString &pluginPath) {
+            return m_scans->cachedTes3Masters(pluginPath);
+        };
 
     openmw::SyncPrepareResult prepared = openmw::prepareForSync(prep);
     mods = std::move(prepared.mods);

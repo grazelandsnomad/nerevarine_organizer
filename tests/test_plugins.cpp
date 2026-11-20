@@ -505,6 +505,41 @@ static void ms_testSatisfiedMasterNotSuppressed(QDir &root)
     check("no other entries returned",      bad.isEmpty());
 }
 
+// The lookup is a parameter because the caller usually has the lists already:
+// the window keeps them per file with an mtime gate, while the default here
+// opens and re-reads every enabled plugin on every sync - 475 ms over 400
+// plugins warm, 16 s cold.
+static void ms_testMastersLookupCanBeHandedOver()
+{
+    std::cout << "\n[master satisfaction: the masters lookup is injectable]\n";
+    QSet<QString> available{QStringLiteral("morrowind.esm")};
+    int asked = 0;
+    const auto lookup = [&asked](const QString &path) -> QStringList {
+        ++asked;
+        // A path that does not exist on disk, so a reader would find nothing:
+        // whatever comes back can only have come from here.
+        return path.endsWith(QStringLiteral("child.esp"))
+                   ? QStringList{QStringLiteral("Missing.esm")}
+                   : QStringList{};
+    };
+    const auto bad = findUnsatisfiedMasters(
+        {{QStringLiteral("child.esp"), QStringLiteral("/nowhere/child.esp")},
+         {QStringLiteral("lone.esp"),  QStringLiteral("/nowhere/lone.esp")}},
+        available, lookup);
+
+    check("the injected lookup was used", asked > 0, QString::number(asked));
+    check("and its answer decided the verdict",
+          bad.contains(QStringLiteral("child.esp"))
+              && !bad.contains(QStringLiteral("lone.esp")),
+          QStringList(bad.begin(), bad.end()).join(','));
+
+    // Left unset it must behave exactly as before, which for paths that are
+    // not there means no masters and so nothing unsatisfied.
+    const auto noneGiven = findUnsatisfiedMasters(
+        {{QStringLiteral("child.esp"), QStringLiteral("/nowhere/child.esp")}}, available);
+    check("without one, it falls back to reading the file", noneGiven.isEmpty());
+}
+
 // A plugin the load order does not carry is not in the game, so it cannot fail
 // to find a master.
 //
@@ -696,6 +731,7 @@ static void run_master_satisfaction()
     }
     QDir root(tmp.path());
 
+    ms_testMastersLookupCanBeHandedOver();
     ms_testSatisfiedMasterNotSuppressed(root);
     ms_testMissingMasterReported(root);
     ms_testCarriedByAsksTheLoadOrder();

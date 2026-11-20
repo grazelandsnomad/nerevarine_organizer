@@ -210,7 +210,7 @@ SyncPrepareResult prepareForSync(const SyncPrepareInputs &in)
         }
 
         const QSet<QString> unsatisfied =
-            openmw::findUnsatisfiedMasters(candidates, availableLower);
+            openmw::findUnsatisfiedMasters(candidates, availableLower, in.mastersOf);
 
         if (!unsatisfied.isEmpty()) {
             for (auto &cm : out.mods) {

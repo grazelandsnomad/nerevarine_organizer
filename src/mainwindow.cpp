@@ -3427,7 +3427,7 @@ void MainWindow::switchToModlistProfile(int idx)
     // Persist current modlist + load order to the OLD profile's files
     // BEFORE flipping the active index - paths are derived from the active
     // profile, so the writes have to happen first.
-    saveModList();
+    saveModListForSwitch();
     saveLoadOrder();
 
     // Same stranding dance as switchToGame: keep in-flight placeholders
@@ -3442,8 +3442,14 @@ void MainWindow::switchToModlistProfile(int idx)
     m_modList->clear();
     loadModList();
     restoreStrandedInstalls();
-    // openmw.cfg now needs to reflect a different mod set on disk; sync.
+    // openmw.cfg now needs to reflect a different mod set on disk; sync. This
+    // one is for the profile being switched TO, not the one being left, and it
+    // has to stay: nothing on the launch path writes openmw.cfg, so without it
+    // OpenMW would start on the previous profile's mods. (The save above
+    // skips its own sync, which was for the profile being left and could not
+    // have changed.)
     syncGameConfig();
+
     updateProfileButton();
     // Deploy state is per modlist profile (the manifest is keyed by the
     // modlist filename), so the answer changes with the profile. Dismissed

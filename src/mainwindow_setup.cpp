@@ -1957,7 +1957,7 @@ void MainWindow::switchToGame(int idx)
     if (m_notify) m_notify->dismiss();
     m_viewSortActive = false;
 
-    saveModList(); // persist current game's list before switching
+    saveModListForSwitch(); // persist this game's list; the rest is the new game's
 
     // Take in-flight install rows OUT of m_modList before the clear()
     // below destroys them - they live on in m_strandedInstalls so the
