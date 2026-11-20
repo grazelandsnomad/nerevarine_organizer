@@ -2073,6 +2073,15 @@ static QDateTime updateBaseline(const ModRow &item)
 
 void MainWindow::onCheckUpdates()
 {
+    // One at a time. A check is one request per installed mod, and while it
+    // was running this button still read "Check Updates", so a second click
+    // started a second full scan over the same 409 mods. Three of those in
+    // ninety seconds is what got a user rate-limited by Nexus.
+    if (m_checksRunning > 0) {
+        statusBar()->showMessage(T("check_updates_already_running")
+                                     .arg(m_checkTotal), 4000);
+        return;
+    }
     if (m_apiKey.isEmpty()) {
         ui::info(this, T("nxm_api_key_required_title"), T("nxm_api_key_required_body"));
         onSetApiKey();
@@ -2087,6 +2096,7 @@ void MainWindow::onCheckUpdates()
 
     statusBar()->showMessage(T("check_updates_checking").arg(toCheck.size()));
     ++m_checksRunning;
+    m_checkTotal = toCheck.size();
     scheduleCheckButtonRefresh();
     m_nexusCtl->checkForUpdates(toCheck, [this](const QUuid &row) {
         return updateBaseline(rowById(row));
@@ -2096,6 +2106,12 @@ void MainWindow::onCheckUpdates()
 int MainWindow::checkUpdatesForMods(const QStringList &labels)
 {
     if (labels.isEmpty()) return 0;
+    // Same reason as onCheckUpdates: never two scans at once.
+    if (m_checksRunning > 0) {
+        statusBar()->showMessage(T("check_updates_already_running")
+                                     .arg(m_checkTotal), 4000);
+        return 0;
+    }
     if (m_apiKey.isEmpty()) {
         ui::info(this, T("nxm_api_key_required_title"), T("nxm_api_key_required_body"));
         onSetApiKey();
@@ -2114,6 +2130,7 @@ int MainWindow::checkUpdatesForMods(const QStringList &labels)
     statusBar()->showMessage(T("check_updates_checking").arg(toCheck.size()));
     m_reviewAfterCheck = true;
     ++m_checksRunning;
+    m_checkTotal = toCheck.size();
     scheduleCheckButtonRefresh();
     m_nexusCtl->checkForUpdates(toCheck, [this](const QUuid &row) {
         return updateBaseline(rowById(row));
@@ -2217,6 +2234,13 @@ void MainWindow::onReviewUpdates()
 
 void MainWindow::onCheckUpdatesButton()
 {
+    // Reading "Checking…": it is busy, and clicking it is not a request to
+    // start another one. onCheckUpdates refuses as well, for the menu item.
+    if (m_checksRunning > 0) {
+        statusBar()->showMessage(T("check_updates_already_running")
+                                     .arg(m_checkTotal), 4000);
+        return;
+    }
     if (!m_updateAllMode) {
         onCheckUpdates();
         return;

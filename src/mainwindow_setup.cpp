@@ -796,9 +796,12 @@ void MainWindow::scheduleCheckButtonRefresh()
 void MainWindow::updateCheckUpdatesButton()
 {
     if (!m_actCheckUpdates) return;
-    // A running check has cleared the marks it is about to set again; its
-    // count means nothing until it is done.
-    const int n = m_checksRunning > 0 ? 0 : int(m_model.pendingUpdateRows().size());
+    // Three faces, not two. A running check has cleared the marks it is about
+    // to set again, so its count means nothing until it is done - but saying
+    // "Check Updates" while it runs invited a second click, and a second click
+    // ran a second full scan. It says what it is doing instead.
+    const bool checking  = m_checksRunning > 0;
+    const int  n = checking ? 0 : int(m_model.pendingUpdateRows().size());
     const bool updateAll = n > 0;
     if (updateAll != m_updateAllMode) {
         m_updateAllMode = updateAll;
@@ -807,7 +810,12 @@ void MainWindow::updateCheckUpdatesButton()
             m_checkUpdatesBtn->setStyleSheet(checkUpdatesButtonStyle(updateAll));
     }
     // QAction ignores a text or tooltip it already has.
-    if (updateAll) {
+    if (checking) {
+        m_actCheckUpdates->setText(T("toolbar_check_updates_running")
+                                       .arg(m_checkTotal));
+        m_actCheckUpdates->setToolTip(T("toolbar_check_updates_running_tip")
+                                          .arg(m_checkTotal));
+    } else if (updateAll) {
         m_actCheckUpdates->setText(T("toolbar_update_all").arg(n));
         m_actCheckUpdates->setToolTip(T("toolbar_update_all_tip").arg(n));
     } else {
