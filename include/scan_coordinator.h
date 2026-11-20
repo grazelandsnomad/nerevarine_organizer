@@ -67,6 +67,12 @@ public:
     // invalidateDataFoldersCache on the containing modPath.
     QStringList cachedTes3Masters(const QString &pluginPath);
 
+    // Read the scan written down by a previous run, and write the current one
+    // back. Both are no-ops without a path. Entries are checked when used,
+    // not when loaded, so starting up costs one file read.
+    void loadPersistedCache(const QString &path);
+    void savePersistedCache() const;
+
 signals:
     // The size scan landed: bytes per installed mod path. A path missing
     // from the hash was not installed or could not be measured.
@@ -96,6 +102,15 @@ private:
     // Written and read on the UI thread only; workers receive a value-copy
     // snapshot via dataFoldersSnapshot().
     QHash<QString, QList<QPair<QString, QStringList>>> m_dataFoldersCache;
+
+    // For each of those entries, every directory the walk opened and the
+    // modification time it had. This is what lets an entry read back from
+    // disk be trusted: see scan_cache.h for why checking is ~3000x cheaper
+    // than rescanning, and for what the app's own invalidation cannot cover.
+    QHash<QString, QList<QPair<QString, qint64>>> m_dataFolderDirs;
+    // Where the two caches are written. Empty = do not persist, which is what
+    // a test gets unless it asks otherwise.
+    QString m_cachePath;
 
     // BSA basename cache: modPath → list of *.bsa filenames found anywhere
     // under modPath.  UI-thread only.  Cleared in lockstep with

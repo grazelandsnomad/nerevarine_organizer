@@ -448,6 +448,12 @@ MainWindow::MainWindow(QWidget *parent)
     // warmDataFoldersCache() on the worker.
     m_scans = new ScanCoordinator([this] { return m_model.all(); },
                                   this);
+    // The folder scan written down by the last run. One file read here saves
+    // re-walking every mod folder: measured at 16.8 s of a profile switch on a
+    // 409-mod library, against a stat per directory to check an entry is still
+    // good. scan_cache.h has the numbers and the one case the app's own
+    // invalidation cannot cover.
+    m_scans->loadPersistedCache(resolveUserStatePath("scan_cache.json"));
     connect(m_scans, &ScanCoordinator::sizesScanned,
             this, &MainWindow::onModSizesScanned);
     // Qualified: these are WindowShell overrides, and a constructor calls its own
@@ -4022,6 +4028,10 @@ void MainWindow::moveModAdjacentTo(ModRow mod, const QString &targetPath,
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
+    // Whatever was scanned this run, written down for the next one. Cheap, and
+    // it catches the plugin masters that were read outside a warm pass.
+    if (m_scans) m_scans->savePersistedCache();
+
     // An install's file work is running on a worker (install_job). Closing
     // under it would leave half a mod on disk and a row that never learns
     // where it went, so the window stays until the last install lands and

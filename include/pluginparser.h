@@ -26,10 +26,17 @@ inline QStringList contentExtensions()
 // "Data Files/…" wrappers, OAAB-style placement). Skips fomod, .git, .svn,
 // docs, documentation so installer configs / VCS metadata aren't listed as
 // data= paths.
+// `visitedDirs`, when given, collects every directory this walk opened. That
+// is what makes a cached result checkable: a plugin added anywhere under the
+// mod changes the modification time of the directory holding it, and a new
+// directory changes its parent's, so if all of these still carry the times
+// they had, the answer cannot have changed. Recording only `root` would miss a
+// plugin dropped into a subfolder, which is where most mods keep them.
 QList<QPair<QString, QStringList>>
     collectDataFolders(const QString &root,
                        const QStringList &exts,
-                       int maxDepth = 6);
+                       int maxDepth = 6,
+                       QStringList *visitedDirs = nullptr);
 
 // Find folders under `root` that look like asset roots: containing a
 // recognized resource subdir (textures, meshes, splash, fonts, sound, music,

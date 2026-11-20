@@ -37,6 +37,7 @@
 
 #include <iostream>
 
+#include "scan_cache.h"
 #include "test_harness.h"
 
 // ---- load_order_merge ----
@@ -640,6 +641,74 @@ void testSizeScanOutlivesCoordinator()
     delete sc;
     QThreadPool::globalInstance()->waitForDone(20000);
     check("the worker finishes against the shared cache after the coordinator is gone", true);
+}
+
+// The folder scan, written down between runs. Rebuilding it measured 16.8 s of
+// a profile switch on a 409-mod library; checking a written-down entry is a
+// stat per directory, 0.002 ms against 6.8 ms to reopen one.
+static void run_scan_cache()
+{
+    std::cout << "=== scan_cache tests ===\n";
+    QTemporaryDir tmp;
+    const QString mod  = tmp.filePath("Mod");
+    const QString deep = mod + "/Data Files";
+    QDir().mkpath(deep);
+    { QFile f(deep + "/a.esp"); f.open(QIODevice::WriteOnly); f.write("TES3"); }
+
+    const auto mtimeOf = [](const QString &d) {
+        return QFileInfo(d).lastModified().toMSecsSinceEpoch();
+    };
+    scan_cache::Cache c;
+    scan_cache::Entry e;
+    e.dataFolders = {{deep, QStringList{QStringLiteral("a.esp")}}};
+    e.dirs        = {{mod, mtimeOf(mod)}, {deep, mtimeOf(deep)}};
+    c.mods.insert(mod, e);
+    c.masters.insert(deep + "/a.esp", {1234, QStringList{QStringLiteral("Morrowind.esm")}});
+
+    const scan_cache::Cache back = scan_cache::parse(scan_cache::serialize(c));
+    check("a cache round-trips its mods", back.mods.size() == 1 && back.mods.contains(mod),
+          QString::number(back.mods.size()));
+    check("with the plugin list intact",
+          back.mods.value(mod).dataFolders == e.dataFolders);
+    check("and the directories it was read from",
+          back.mods.value(mod).dirs == e.dirs);
+    check("masters round-trip too, keyed per file",
+          back.masters.value(deep + "/a.esp").second
+              == QStringList{QStringLiteral("Morrowind.esm")});
+
+    check("an entry whose directories are untouched is still good",
+          scan_cache::stillValid(back.mods.value(mod)));
+
+    // A plugin dropped in from outside the app moves the directory's time,
+    // which is the whole case the app's own invalidation cannot see.
+    { QFile f(deep + "/b.esp"); f.open(QIODevice::WriteOnly); f.write("TES3"); }
+    check("a directory that changed makes the entry stale",
+          !scan_cache::stillValid(back.mods.value(mod)),
+          QString::number(mtimeOf(deep)));
+
+    scan_cache::Entry gone;
+    gone.dirs = {{tmp.filePath("never-existed"), 1}};
+    check("an entry naming a directory that is not there is stale",
+          !scan_cache::stillValid(gone));
+    scan_cache::Entry blank;
+    check("an entry with nothing to check is not trusted",
+          !scan_cache::stillValid(blank));
+
+    check("malformed json is an empty cache, not a crash",
+          scan_cache::parse("{ not json").mods.isEmpty()
+              && scan_cache::parse(QByteArray()).mods.isEmpty());
+    check("a future version is ignored rather than misread",
+          scan_cache::parse("{\"version\":99,\"mods\":{\"x\":{}}}").mods.isEmpty());
+
+    // The scan has to report what it opened, or there is nothing to check.
+    QStringList visited;
+    const auto found = plugins::collectDataFolders(
+        mod, plugins::contentExtensions(), 6, &visited);
+    check("the scan finds the nested plugin folder",
+          found.size() == 1 && found.first().first == deep,
+          QString::number(found.size()));
+    check("and reports the mod folder and the subfolder it opened",
+          visited.contains(mod) && visited.contains(deep), visited.join(','));
 }
 
 static void run_scan_coordinator()
@@ -3057,6 +3126,7 @@ int main(int argc, char **argv)
 
     run_load_order_merge();
     run_load_order_store();
+    run_scan_cache();
     run_scan_coordinator();
     run_conflict_direction();
     run_plugin_records();

@@ -14,7 +14,8 @@
 namespace plugins {
 
 QList<QPair<QString, QStringList>> collectDataFolders(
-    const QString &root, const QStringList &exts, int maxDepth)
+    const QString &root, const QStringList &exts, int maxDepth,
+    QStringList *visitedDirs)
 {
     QList<QPair<QString, QStringList>> out;
     if (root.isEmpty() || !QFileInfo(root).isDir()) return out;
@@ -26,6 +27,9 @@ QList<QPair<QString, QStringList>> collectDataFolders(
     while (!queue.isEmpty()) {
         Entry e = queue.takeFirst();
         QDir dir(e.path);
+        // Every directory this walk opens, so a caller can check later whether
+        // its answer can still be trusted - see scan_cache.h.
+        if (visitedDirs) *visitedDirs << e.path;
 
         QStringList files;
         for (const QString &cf : dir.entryList(QDir::Files, QDir::Name)) {

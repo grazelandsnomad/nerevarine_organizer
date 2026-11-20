@@ -232,6 +232,7 @@ set(CORE_SOURCES
     src/report_dialog.cpp
     src/reboot_check.cpp
     src/toolbar_customization.cpp
+    src/scan_cache.cpp
     src/scan_coordinator.cpp
     src/backup_manager.cpp
     src/backup_ops.cpp
