@@ -1,4 +1,5 @@
 #include "nexusclient.h"
+#include "update_budget.h"
 #include "deps_resolver.h"
 #include "file_pick.h"
 
@@ -2144,6 +2145,105 @@ static void testTheUsersOwnStoreDecides()
     }
 }
 
+// --- the rate-limit reading -------------------------------------------------
+//
+// The headers are the only thing standing between the app and spending an
+// allowance it cannot see. The discipline being pinned here is that not
+// knowing reads as -1 and never as nothing-left: a renamed header must leave
+// the app behaving as it did before it read any, not refusing to send
+// requests the user is entitled to.
+
+static QHash<QByteArray, QByteArray> rlHeaders(int hourly, int daily)
+{
+    QHash<QByteArray, QByteArray> h;
+    h.insert("X-RL-Hourly-Limit", "500");
+    h.insert("X-RL-Hourly-Remaining", QByteArray::number(hourly));
+    h.insert("X-RL-Hourly-Reset", "2026-11-21T13:00:00Z");
+    h.insert("X-RL-Daily-Limit", "20000");
+    h.insert("X-RL-Daily-Remaining", QByteArray::number(daily));
+    h.insert("X-RL-Daily-Reset", "2026-11-22T00:00:00Z");
+    return h;
+}
+
+static void testRateLimitHeadersRead()
+{
+    std::cout << "\n[rate limit: a reply that carries the headers]\n";
+    const QDateTime now = QDateTime::currentDateTime();
+    const NexusRateLimit rl = NexusClient::parseRateLimit(rlHeaders(420, 19000), now);
+    check("the reading counts as taken", rl.known());
+    check("the hourly numbers come through",
+          rl.hourlyRemaining == 420 && rl.hourlyLimit == 500);
+    check("the daily numbers too",
+          rl.dailyRemaining == 19000 && rl.dailyLimit == 20000);
+    check("the binding allowance is the smaller one", rl.remaining() == 420);
+    check("and it resets when that one does",
+          rl.resetsAt() == QDateTime::fromString(QStringLiteral("2026-11-21T13:00:00Z"),
+                                                 Qt::ISODate).toUTC());
+
+    const NexusRateLimit dayBound = NexusClient::parseRateLimit(rlHeaders(400, 12), now);
+    check("when the daily one is the smaller, it binds instead",
+          dayBound.remaining() == 12);
+    check("and that is the reset that matters",
+          dayBound.resetsAt() == QDateTime::fromString(QStringLiteral("2026-11-22T00:00:00Z"),
+                                                       Qt::ISODate).toUTC());
+}
+
+static void testRateLimitAbsentOrGarbledReadsAsUnknown()
+{
+    std::cout << "\n[rate limit: nothing to read, or nonsense]\n";
+    const QDateTime now = QDateTime::currentDateTime();
+
+    const NexusRateLimit none = NexusClient::parseRateLimit({}, now);
+    check("a reply with no such headers is not a reading", !none.known());
+    check("and reports an unknown allowance, not an empty one",
+          none.remaining() == -1);
+    check("with no reset to promise", !none.resetsAt().isValid());
+
+    QHash<QByteArray, QByteArray> junk;
+    junk.insert("X-RL-Hourly-Remaining", "not a number");
+    junk.insert("X-RL-Hourly-Reset", "whenever");
+    const NexusRateLimit bad = NexusClient::parseRateLimit(junk, now);
+    check("an unparseable count is unknown rather than zero",
+          bad.remaining() == -1);
+    check("an unparseable reset is simply not known", !bad.resetsAt().isValid());
+
+    // The whole point, stated as a test: if Nexus renames a header tomorrow,
+    // the app must carry on as it did for years before it read any of them.
+    check("an unknown allowance never stops a run",
+          !update_budget::stopForQuota(none.remaining()));
+}
+
+static void testRetryAfterInBothShapes()
+{
+    std::cout << "\n[rate limit: Retry-After, seconds or a date]\n";
+    const QDateTime now = QDateTime::fromString(QStringLiteral("2026-11-21T12:00:00Z"),
+                                                Qt::ISODate).toUTC();
+    QHash<QByteArray, QByteArray> secs;
+    secs.insert("Retry-After", "90");
+    check("seconds are taken as seconds",
+          NexusClient::parseRateLimit(secs, now).retryAfterSecs == 90);
+    check("and that alone counts as a reading",
+          NexusClient::parseRateLimit(secs, now).known());
+
+    QHash<QByteArray, QByteArray> date;
+    date.insert("Retry-After", "2026-11-21T12:05:00Z");
+    check("a date is turned into the seconds until it",
+          NexusClient::parseRateLimit(date, now).retryAfterSecs == 300,
+          QString::number(NexusClient::parseRateLimit(date, now).retryAfterSecs));
+
+    QHash<QByteArray, QByteArray> past;
+    past.insert("Retry-After", "2026-11-21T11:00:00Z");
+    check("a date already gone asks for no wait",
+          NexusClient::parseRateLimit(past, now).retryAfterSecs == 0);
+}
+
+static void run_rate_limit()
+{
+    testRateLimitHeadersRead();
+    testRateLimitAbsentOrGarbledReadsAsUnknown();
+    testRetryAfterInBothShapes();
+}
+
 static void run_file_pick()
 {
     testDescribesTheReportedPage();
@@ -2162,6 +2262,7 @@ int main(int argc, char **argv)
     run_nexus_client();
     run_deps_resolver();
     run_file_pick();
+    run_rate_limit();
 
     std::cout << "\n"
               << s_passed << " passed, "

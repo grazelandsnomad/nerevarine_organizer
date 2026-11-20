@@ -36,12 +36,97 @@ void NexusClient::setNetworkAccessManager(QNetworkAccessManager *nam)
     }
 }
 
-QNetworkReply *NexusClient::buildGet(const QString &path)
+int NexusRateLimit::remaining() const
 {
-    QNetworkRequest req{QUrl(QString::fromLatin1(kBaseUrl) + path)};
+    if (hourlyRemaining < 0) return dailyRemaining;
+    if (dailyRemaining  < 0) return hourlyRemaining;
+    return std::min(hourlyRemaining, dailyRemaining);
+}
+
+QDateTime NexusRateLimit::resetsAt() const
+{
+    // Whichever allowance is the binding one is the one that has to free up.
+    if (hourlyRemaining >= 0 && (dailyRemaining < 0 || hourlyRemaining <= dailyRemaining))
+        return hourlyReset;
+    return dailyReset;
+}
+
+NexusRateLimit NexusClient::parseRateLimit(const QHash<QByteArray, QByteArray> &headers,
+                                           const QDateTime &now)
+{
+    NexusRateLimit rl;
+    // Absent or unparseable stays -1: see NexusRateLimit for why that matters
+    // more than reading every header correctly.
+    const auto num = [&](const char *name) {
+        const auto it = headers.constFind(QByteArray(name));
+        if (it == headers.constEnd()) return -1;
+        bool ok = false;
+        const int v = it->trimmed().toInt(&ok);
+        return ok ? v : -1;
+    };
+    const auto when = [&](const char *name) {
+        const auto it = headers.constFind(QByteArray(name));
+        if (it == headers.constEnd()) return QDateTime();
+        const QString raw = QString::fromLatin1(it->trimmed());
+        // Nexus sends these as a date; accept the two shapes it is documented
+        // and observed to use, and an epoch, rather than guessing one.
+        for (auto fmt : {Qt::ISODate, Qt::RFC2822Date}) {
+            const QDateTime d = QDateTime::fromString(raw, fmt);
+            if (d.isValid()) return d.toUTC();
+        }
+        bool ok = false;
+        const qint64 secs = raw.toLongLong(&ok);
+        if (ok && secs > 0) return QDateTime::fromSecsSinceEpoch(secs, Qt::UTC);
+        return QDateTime();
+    };
+    rl.hourlyLimit     = num("X-RL-Hourly-Limit");
+    rl.hourlyRemaining = num("X-RL-Hourly-Remaining");
+    rl.dailyLimit      = num("X-RL-Daily-Limit");
+    rl.dailyRemaining  = num("X-RL-Daily-Remaining");
+    rl.hourlyReset     = when("X-RL-Hourly-Reset");
+    rl.dailyReset      = when("X-RL-Daily-Reset");
+
+    // Retry-After is seconds or an HTTP date; both appear in the wild.
+    if (const auto it = headers.constFind(QByteArray("Retry-After"));
+        it != headers.constEnd()) {
+        bool ok = false;
+        const int secs = it->trimmed().toInt(&ok);
+        if (ok && secs > 0) {
+            rl.retryAfterSecs = secs;
+        } else if (const QDateTime d = when("Retry-After");
+                   d.isValid() && now.isValid() && d > now.toUTC()) {
+            rl.retryAfterSecs = int(now.toUTC().secsTo(d));
+        }
+    }
+    // Only a reply that actually carried something counts as a reading.
+    if (rl.hourlyRemaining >= 0 || rl.dailyRemaining >= 0 || rl.retryAfterSecs > 0)
+        rl.readAt = now;
+    return rl;
+}
+
+void NexusClient::noteRateLimit(QNetworkReply *reply)
+{
+    if (!reply) return;
+    QHash<QByteArray, QByteArray> headers;
+    for (const auto &p : reply->rawHeaderPairs()) headers.insert(p.first, p.second);
+    const NexusRateLimit rl = parseRateLimit(headers, QDateTime::currentDateTime());
+    if (!rl.known()) return;            // nothing to learn from this one
+    m_rl = rl;
+}
+
+QNetworkReply *NexusClient::sendV1(QNetworkRequest req)
+{
     req.setRawHeader("apikey", m_apiKey.toUtf8());
     req.setRawHeader("Accept", "application/json");
-    return m_nam->get(req);
+    QNetworkReply *reply = m_nam->get(req);
+    connect(reply, &QNetworkReply::finished, this,
+            [this, reply] { noteRateLimit(reply); });
+    return reply;
+}
+
+QNetworkReply *NexusClient::buildGet(const QString &path)
+{
+    return sendV1(QNetworkRequest{QUrl(QString::fromLatin1(kBaseUrl) + path)});
 }
 
 QNetworkReply *NexusClient::requestModInfo(const QString &game, int modId)
@@ -267,10 +352,7 @@ QNetworkReply *NexusClient::requestDownloadLink(const QString &game, int modId, 
         q.addQueryItem("expires", expires);
         url.setQuery(q);
     }
-    QNetworkRequest req(url);
-    req.setRawHeader("apikey", m_apiKey.toUtf8());
-    req.setRawHeader("Accept", "application/json");
-    return m_nam->get(req);
+    return sendV1(QNetworkRequest(url));
 }
 
 QNetworkReply *NexusClient::requestValidateUser()

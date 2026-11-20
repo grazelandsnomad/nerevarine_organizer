@@ -5,6 +5,8 @@
 #include <QByteArray>
 #include <QList>
 #include <QObject>
+#include <QDateTime>
+#include <QNetworkRequest>
 #include <QHash>
 #include <QString>
 
@@ -21,6 +23,29 @@ class QNetworkReply;
 // QNetworkReply* to connect to. The static parsers (parseModInfo /
 // parseFilesList / parseDownloadUri) are tested against fixture JSON, no
 // network needed.
+// What Nexus last said about the allowance, read off the X-RL-* headers it
+// puts on every v1 reply. Nexus publishes 20,000 requests per 24 hours,
+// dropping to 500 an hour once that is gone, and the app spent years with no
+// idea how close it was to either.
+//
+// Every field is -1 until a reply carries it. That discipline is the point:
+// if Nexus renames a header, this reads as "do not know", which is what every
+// build before it did, and never as "nothing left" - which would refuse to
+// send requests the user is perfectly entitled to.
+struct NexusRateLimit {
+    int       hourlyLimit = -1, hourlyRemaining = -1;
+    int       dailyLimit  = -1, dailyRemaining  = -1;
+    QDateTime hourlyReset, dailyReset;   // UTC; invalid == not told
+    QDateTime readAt;                    // invalid == never read one
+    int       retryAfterSecs = 0;        // from a 429's Retry-After
+
+    [[nodiscard]] bool known() const { return readAt.isValid(); }
+    // The one that binds - the smaller of the two that are known - or -1.
+    [[nodiscard]] int remaining() const;
+    // When the binding one frees up, or an invalid date when not told.
+    [[nodiscard]] QDateTime resetsAt() const;
+};
+
 class NexusClient : public QObject
 {
     // No Q_OBJECT: no signals/slots, QObject only for parent-child cleanup.
@@ -248,10 +273,35 @@ public:
     static std::expected<QString, NexusError>
     parseDownloadUri(const QByteArray &json);
 
+    // What the last v1 reply said about the allowance. Never read == known()
+    // false, which every caller must treat as "carry on".
+    // Polled, not signalled: this class has no Q_OBJECT on purpose. The pump
+    // reads it between requests and the window reads it when a reply fails.
+    [[nodiscard]] const NexusRateLimit &rateLimit() const { return m_rl; }
+
+    // The X-RL-* headers of one reply, as a reading. Pure, so the header
+    // names and their absence are testable without a network.
+    //
+    // UNVERIFIED: the spellings are from the public documentation, not from a
+    // reply this code has seen. A header that is not there stays -1, so a
+    // rename degrades to the behaviour of every earlier build.
+    static NexusRateLimit parseRateLimit(const QHash<QByteArray, QByteArray> &headers,
+                                         const QDateTime &now);
+
 private:
+    // Every v1 request goes through here. It is the only kind that spends the
+    // allowance and the only kind Nexus answers with X-RL-* headers; the v2
+    // GraphQL posts are unauthenticated and deliberately stay out.
+    //
+    // The reading is taken on a connection made before the caller can make
+    // its own, and Qt delivers finished() in connection order, so a caller
+    // handling its own reply already sees that reply's numbers.
+    QNetworkReply         *sendV1(QNetworkRequest req);
     QNetworkReply         *buildGet(const QString &path);
+    void                   noteRateLimit(QNetworkReply *reply);
     QNetworkAccessManager *m_nam = nullptr;
     QString                m_apiKey;
+    NexusRateLimit         m_rl;
 };
 
 #endif // NEXUSCLIENT_H

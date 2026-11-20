@@ -2,6 +2,7 @@
 
 #include "deps_resolver.h"
 #include "nexusclient.h"
+#include "update_budget.h"
 
 #include <QDateTime>
 #include <QNetworkReply>
@@ -158,6 +159,7 @@ struct NexusController::CheckRun {
     int  done = 0, total = 0;   // for the progress signal
     int  found = 0, superseded = 0;
     bool finished = false;      // checkUpdatesFinished fires exactly once
+    bool rateLimited = false;   // Nexus said 429 and the run gave up
     QTimer *pump = nullptr;
 };
 
@@ -198,6 +200,17 @@ void NexusController::pumpChecks(const std::shared_ptr<CheckRun> &state,
     if (state->queue.isEmpty()) return;             // draining the last replies
     if (state->inFlight >= kCheckMaxInFlight) return;   // let them land first
 
+    // Spending the last of the allowance on a scan leaves the user unable to
+    // download what it finds. The rows not reached keep their previous marks
+    // and their previous stamp, so the next run carries on from here.
+    if (update_budget::stopForQuota(m_client->rateLimit().remaining())) {
+        const int left = m_client->rateLimit().remaining();
+        state->queue.clear();
+        emit checkUpdatesStopped(state->done, state->total, left, false);
+        if (state->inFlight == 0) pumpChecks(state, dateAddedFor);
+        return;
+    }
+
     const CheckTarget t = state->queue.takeFirst();
     ++state->inFlight;
     QNetworkReply *reply = m_client->requestModInfo(t.game, t.modId);
@@ -208,6 +221,17 @@ void NexusController::pumpChecks(const std::shared_ptr<CheckRun> &state,
         --state->inFlight;
         ++state->done;
         emit checkUpdatesProgress(state->done, state->total);
+        // A refusal used to be dropped here, which made it indistinguishable
+        // from "this mod has no update" - so a rate-limited check could report
+        // that everything was up to date without having asked anything.
+        const int status =
+            reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (status == 429 && !state->rateLimited) {
+            state->rateLimited = true;
+            state->queue.clear();
+            emit checkUpdatesStopped(state->done, state->total,
+                                     m_client->rateLimit().remaining(), true);
+        }
         if (reply->error() == QNetworkReply::NoError) {
             const auto info = NexusClient::parseModInfo(reply->readAll());
             if (info) {

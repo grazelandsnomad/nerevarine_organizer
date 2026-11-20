@@ -110,6 +110,10 @@ signals:
     void modChecked(const QUuid &row);
     // How far a running check has got, for the toolbar.
     void checkUpdatesProgress(int done, int total);
+    // The run gave up early: the allowance ran low (rateLimited false) or
+    // Nexus refused outright with a 429 (true). checkUpdatesFinished still
+    // follows once the replies already asked for have landed.
+    void checkUpdatesStopped(int done, int total, int remaining, bool rateLimited);
     void checkUpdatesFinished(int foundCount, int supersededCount);
     void titleFetched(const QUuid &row, const QString &name);
     // Every file on the same mod page as the one being downloaded. Emitted

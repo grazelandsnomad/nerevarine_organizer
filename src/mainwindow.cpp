@@ -359,6 +359,30 @@ MainWindow::MainWindow(QWidget *parent)
         m_checkDone  = done;
         m_checkTotal = total;
         scheduleCheckButtonRefresh();
+        // Warn once per session, while there is still enough left to act on.
+        if (m_nexus && !m_rateLimitWarned) {
+            const NexusRateLimit rl = m_nexus->rateLimit();
+            const int left = rl.remaining();
+            if (left >= 0 && left < kRateLimitWarnAt) {
+                m_rateLimitWarned = true;
+                if (m_notify)
+                    m_notify->show(T("nexus_rate_limit_low")
+                                       .arg(left).arg(rateLimitWhen()),
+                                   QStringLiteral("#8a4a1a"));
+            }
+        }
+    });
+    connect(m_nexusCtl, &NexusController::checkUpdatesStopped, this,
+            [this](int done, int total, int remaining, bool rateLimited) {
+        // Said out loud, not swallowed. A check that stopped early has not
+        // cleared the mods it never reached, and must not look like one that
+        // found nothing.
+        const QString msg =
+            rateLimited
+                ? T("check_updates_rate_limited").arg(done).arg(total).arg(rateLimitWhen())
+                : T("check_updates_stopped_quota").arg(done).arg(total).arg(remaining);
+        statusBar()->showMessage(msg, 15000);
+        if (m_notify) m_notify->show(msg, QStringLiteral("#8a4a1a"));
     });
     connect(m_nexusCtl, &NexusController::checkUpdatesFinished,
             this, &MainWindow::onCheckUpdatesFinished);
@@ -1668,6 +1692,20 @@ void MainWindow::fetchModFiles(const QString &game, int modId, ModRow item,
     m_nexusCtl->fetchFileList(row, game, modId);
 }
 
+// When the allowance frees up, in words, or a vague stand-in when Nexus did
+// not say. Used by the messages that have to tell someone when to come back.
+QString MainWindow::rateLimitWhen() const
+{
+    if (!m_nexus) return T("nexus_rate_limit_unknown");
+    const NexusRateLimit rl = m_nexus->rateLimit();
+    if (rl.retryAfterSecs > 0)
+        return T("nexus_rate_limit_in_minutes")
+                   .arg(qMax(1, (rl.retryAfterSecs + 59) / 60));
+    const QDateTime at = rl.resetsAt();
+    if (!at.isValid()) return T("nexus_rate_limit_unknown");
+    return T("nexus_rate_limit_at").arg(at.toLocalTime().toString(QStringLiteral("HH:mm")));
+}
+
 void MainWindow::onFileListFetchFailed(const QUuid &row, const QString &reason, int httpStatus)
 {
     ModRow item = replyRow(row, "file list failure");
@@ -1676,6 +1714,11 @@ void MainWindow::onFileListFetchFailed(const QUuid &row, const QString &reason, 
     const QString msg =
           (httpStatus == 401) ? T("nexus_api_error_link_401")
         : (httpStatus == 403) ? T("nexus_api_error_link_403")
+        // 429 used to fall through to the generic message, which ends "Make
+        // sure your API key is correct." The key is fine; too many requests
+        // went out. Telling someone to re-paste a working key while the real
+        // answer is "wait twenty minutes" is the worst kind of wrong.
+        : (httpStatus == 429) ? T("nexus_api_error_link_429").arg(rateLimitWhen())
         :                        T("nexus_api_error_link").arg(reason);
     qCInfo(logging::lcNexus).noquote() << "file list failed for" << item->text()
                                        << "HTTP" << httpStatus << reason;

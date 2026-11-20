@@ -384,6 +384,8 @@ private:
     // Those answers, back on the UI thread: drop the stale scans, correct the
     // rows, then run what was waiting on them.
     void applyInstallProbe(const InstallProbe &r);
+    // When the Nexus allowance frees up, in words. See rateLimitWhen.
+    QString rateLimitWhen() const;
     // Anything that reads "installed" - the deploy fingerprint, the config
     // write, the load-order prune - has to wait between a list going up and
     // its probe landing, or it judges a list the app does not know yet.
@@ -948,6 +950,9 @@ private:
     int          m_checkDone        = 0;        // ...and how many have answered
     // The next check ignores the skip window: set by "Check for Updates (all)".
     bool         m_forceNextCheck   = false;
+    // Warn about a thinning Nexus allowance once a session, not once a reply.
+    bool         m_rateLimitWarned  = false;
+    static constexpr int kRateLimitWarnAt = 200;
     bool         m_updateAllMode    = false;    // the button reads Update All
     // The Start buttons while a launch is under way. Two of them because the
     // toolbar carries a Morrowind twin, and only one is ever visible.
