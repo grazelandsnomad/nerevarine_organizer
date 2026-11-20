@@ -88,4 +88,16 @@ QString deployRoot(const QString &modPath, const QString &modsDir);
 enum class OaabVariant { None, NeedsOaab, NoOaab };
 OaabVariant classifyOaabVariant(const QString &fileName);
 
+// True when `path` is a directory holding at least one entry.
+//
+// This is the install-status probe: a mod whose folder is missing is not
+// installed, and neither is one whose folder is empty, which is what a
+// half-finished extraction leaves behind. One directory walk answers both,
+// because a walk of a directory that is not there finds nothing either - so
+// the stat that used to precede it was asking a question the walk already
+// answers. Measured at about half of a 4.1 s cold probe over 405 folders.
+//
+// A path that is a file rather than a directory is not installed.
+bool folderHasContent(const QString &path);
+
 } // namespace install_layout

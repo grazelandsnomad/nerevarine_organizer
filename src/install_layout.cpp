@@ -136,4 +136,18 @@ OaabVariant classifyOaabVariant(const QString &fileName)
     return OaabVariant::None;
 }
 
+bool folderHasContent(const QString &path)
+{
+    if (path.isEmpty()) return false;
+    // QDir::isEmpty() reports true for a directory that does not exist, so
+    // this one call covers missing, empty and present-with-content.
+    //
+    // Default filters on purpose: AllEntries | NoDotAndDotDot, which does NOT
+    // include Hidden. That is what the two-call probe this replaces used, so a
+    // folder holding nothing but a dotfile still reads as not installed.
+    // Widening it here would quietly change which rows count as installed,
+    // and installed feeds the deploy fingerprint.
+    return !QDir(path).isEmpty();
+}
+
 } // namespace install_layout

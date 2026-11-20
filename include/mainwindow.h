@@ -357,6 +357,10 @@ private:
     // or saveModList's side effects). No-op when the token is null or the path
     // won't resolve.
     void saveModListFor(const QString &profileKey, ModRow placeholder);
+    // Pull the other profiles' mod folders into the page cache on a worker,
+    // so the install probe is the warm case when one of them is opened. See
+    // install_layout::folderHasContent for what that probe costs cold.
+    void warmOtherProfileFolders();
     // Both of the above, with the one difference between them.
     void doSaveModList(bool leavingProfile);
     // Absolute modlist path for a profile key (the <gameId>__<profileName> form

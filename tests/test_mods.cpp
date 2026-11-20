@@ -624,6 +624,46 @@ static void run_folder_naming()
               install_layout::isDataContainerName("  DATA FILES  "));
 }
 
+// The install-status probe. It replaced a stat plus a directory walk with just
+// the walk, which is the same answer because a walk of a directory that is not
+// there finds nothing either - worth pinning, since "installed" feeds the
+// deploy fingerprint and the missing-master scan.
+static void testFolderHasContent()
+{
+    std::cout << "install_layout::folderHasContent\n";
+    QTemporaryDir tmp;
+    const QString missing = tmp.filePath("nope");
+    const QString empty   = tmp.filePath("empty");
+    const QString withFile= tmp.filePath("file");
+    const QString withDir = tmp.filePath("dir");
+    const QString hidden  = tmp.filePath("hidden");
+    const QString aFile   = tmp.filePath("plain.txt");
+    QDir().mkpath(empty);
+    QDir().mkpath(withDir + "/inner");
+    QDir().mkpath(hidden);
+    for (const QString &p : {withFile + "/a.esp", hidden + "/.stub", aFile}) {
+        QDir().mkpath(QFileInfo(p).absolutePath());
+        QFile f(p);
+        check("fixture written", f.open(QIODevice::WriteOnly));
+        f.write("x");
+    }
+
+    check("a folder that is not there is not installed",
+          !install_layout::folderHasContent(missing));
+    check("an empty folder is not installed - a half-finished extraction",
+          !install_layout::folderHasContent(empty));
+    check("a folder with a file in it is installed",
+          install_layout::folderHasContent(withFile));
+    check("a folder with only a sub-folder is installed",
+          install_layout::folderHasContent(withDir));
+    check("an empty path is not installed", !install_layout::folderHasContent(QString()));
+    // The filters match the probe this replaced, which did not count hidden
+    // entries. Widening them would silently change which rows are installed.
+    check("a folder holding only a dotfile reads as before, not installed",
+          !install_layout::folderHasContent(hidden));
+    check("a plain file is not an install", !install_layout::folderHasContent(aFile));
+}
+
 static void run_install_layout()
 {
     std::cout << "install_layout::diveTarget\n";
@@ -1619,6 +1659,7 @@ int main(int argc, char **argv)
     run_bulk_check();
     run_folder_naming();
     run_install_layout();
+    testFolderHasContent();
     run_post_install();
     run_modlist_summary();
     run_placeholder_state();
