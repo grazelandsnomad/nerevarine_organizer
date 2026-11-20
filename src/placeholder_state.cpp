@@ -152,6 +152,7 @@ void markInstalled(ModEntry &e, const QString &modPath)
     e.downloadProgress = 0;
     e.updateAvailable = false;
     e.updateFoundThisSession = false;
+    e.updateDeferred = false;      // the install landed: nothing to defer
     clearInstallTransients(e);
     if (wasUpdate || !e.dateAdded.isValid())
         e.dateAdded = QDateTime::currentDateTime();

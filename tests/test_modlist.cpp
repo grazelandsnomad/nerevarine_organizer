@@ -987,6 +987,7 @@ static void testUpdateMarksAcrossASave()
     m.installStatus = 1;
     m.updateAvailable        = true;
     m.updateFoundThisSession = true;
+    m.updateDeferred         = true;
     m.confirmedCurrentAt = QDateTime::fromString("2026-10-25T12:30:00", Qt::ISODate);
 
     const QString text = modlist_serializer::serializeModlist({m});
@@ -995,6 +996,10 @@ static void testUpdateMarksAcrossASave()
     if (got.isEmpty()) return;
     check("the update mark is saved", got[0].updateAvailable);
     check("but not that this session found it", !got[0].updateFoundThisSession);
+    // Nor that it was turned down. Both are about what happened in one run of
+    // the app, and a decline must not follow the row into tomorrow and stop
+    // the toolbar offering an update that is still waiting.
+    check("nor that it was turned down", !got[0].updateDeferred);
     check("the date the file was confirmed current round-trips",
           got[0].confirmedCurrentAt == m.confirmedCurrentAt,
           got[0].confirmedCurrentAt.toString(Qt::ISODate));

@@ -1519,11 +1519,15 @@ static void testMarkInstalledKeepsAnUpdatesCheckbox()
     off.installStatus   = 2;
     off.updateAvailable = true;
     off.updateFoundThisSession = true;
+    off.updateDeferred  = true;      // it was turned down before it was taken
     off.checked         = false;
     placeholder_state::markInstalled(off, QStringLiteral("/mods/Updated"));
     check("an update of a disabled mod leaves it disabled", !off.checked);
     check("and clears the update marks",
           !off.updateAvailable && !off.updateFoundThisSession);
+    // Including the decline: the install landed, so there is nothing left to
+    // defer, and the next check starts from a clean row.
+    check("and the decline with them", !off.updateDeferred);
 
     ModEntry fresh;
     fresh.installStatus = 2;

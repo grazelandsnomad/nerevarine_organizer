@@ -121,6 +121,7 @@ struct ModEntry {
     bool        awaitingUpdateDownload = false;
     qint64      awaitingFileId         = 0;     // the file that refusal was for
     bool        updateFoundThisSession = false; // ModRole::UpdateFoundThisSession
+    bool        updateDeferred = false;         // ModRole::UpdateDeferred
     bool        creationDownloaded = false;     // ModRole::CreationDownloaded
     bool        sepHasUpdate = false;      // separator only
     bool        sepAnyUpdate = false;      // separator only: an update pending anywhere

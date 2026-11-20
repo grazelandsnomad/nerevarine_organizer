@@ -335,6 +335,10 @@ QList<int> ModlistModel::pendingUpdateRows() const
         const ModEntry &e = m_entries[i];
         if (!e.isMod() || !e.isInstalled()) continue;
         if (!e.updateAvailable || !e.updateFoundThisSession) continue;
+        // Offered once and turned down. The arrow stays so it can be updated
+        // by hand; the button must not keep offering it, and must not fall
+        // back to "Check Updates" either. See ModRole::UpdateDeferred.
+        if (e.updateDeferred) continue;
         if (!parseNexusModUrl(e.nexusUrl)) continue;
         out.append(i);
     }

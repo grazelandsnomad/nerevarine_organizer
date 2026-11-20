@@ -310,11 +310,35 @@ static void mm_testPendingUpdateRows()
     cleared.updateAvailable = false;                                 // 7: the next check cleared it
     m.append(cleared);
     m.append(flagged("Also found", 8));                              // 8: counted
+    ModEntry deferred = flagged("Turned down", 9);
+    deferred.updateDeferred = true;                                  // 9: offered, declined
+    m.append(deferred);
 
     const QList<int> rows = m.pendingUpdateRows();
     check("only this session's finds that nothing started, in list order",
           rows == QList<int>({1, 8}),
           QString::number(rows.size()));
+
+    // The bug this was written for. An update that was started and then given
+    // up on used to lose updateFoundThisSession outright, so the count fell to
+    // zero, the toolbar went back to reading "Check Updates", and the next
+    // click rescanned every installed mod rather than retrying. A row that
+    // came back from Installing still counts; only an explicit decline stops
+    // it counting, and that leaves the arrow painted either way.
+    ModEntry cameBack = flagged("Cancelled, back to installed", 10);
+    cameBack.installStatus = 1;              // restoreInstalled put it back
+    ModlistModel m2;
+    m2.append(cameBack);
+    check("a row that went Installing and came back is still counted",
+          m2.pendingUpdateRows() == QList<int>({0}));
+    ModEntry declined = cameBack;
+    declined.updateDeferred = true;
+    ModlistModel m3;
+    m3.append(declined);
+    check("and stops being counted once it is turned down",
+          m3.pendingUpdateRows().isEmpty());
+    check("but it keeps the arrow, so it can still be updated by hand",
+          declined.updateAvailable);
 
     // Undo rebuilds every row from a snapshot; the finds come back with it.
     m.replace(m.all());

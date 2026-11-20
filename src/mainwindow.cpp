@@ -1226,10 +1226,14 @@ void MainWindow::prepareItemForInstall(ModRow item)
     if (name.isEmpty()) name = item->text();
     item->setText(QString("⠋ %1 (%2)").arg(T("status_installing_label"), name));
     mod_row::setInstallStatus(item, InstallStatus::Installing);
-    // Started: Update All no longer counts it, and an update that fails or is
-    // cancelled keeps its arrow without turning the button red again.
-    if (item->data(ModRole::UpdateFoundThisSession).toBool())
-        item->setData(ModRole::UpdateFoundThisSession, false);
+    // The line that used to clear UpdateFoundThisSession here is gone. It was
+    // redundant - pendingUpdateRows already skips a row that is not Installed,
+    // which Installing above has just made true - and it was destructive,
+    // because nothing could tell later whether the mark had been there. So a
+    // cancelled update lost its place in the count, the button turned back
+    // into "Check Updates", and the next click rescanned 409 mods instead of
+    // retrying. What that comment actually wanted is ModRole::UpdateDeferred,
+    // set when an update is turned down rather than when one is started.
     // Mint a stable per-install identity so InstallController signals can
     // route back to this row even after a profile switch parks it in
     // m_strandedInstalls.  Reuse an existing token if one is already
@@ -2045,10 +2049,12 @@ collectUpdateTargets(ModListView *modList, const QStringList &only)
         // while the UI thread was busy, the conditions for its worst crash.
         // So, too, all of a row's marks go in one write.
         if (const ModEntry &cur = item.entry();
-            cur.updateAvailable || cur.updateFoundThisSession || !cur.fileSuperseded.isEmpty()) {
+            cur.updateAvailable || cur.updateFoundThisSession
+            || cur.updateDeferred || !cur.fileSuperseded.isEmpty()) {
             ModEntry e = cur;
             e.updateAvailable        = false;
             e.updateFoundThisSession = false;
+            e.updateDeferred         = false;
             e.fileSuperseded.clear();
             item.model()->update(item.row(), std::move(e));
         }
@@ -2336,6 +2342,13 @@ const NexusClient::FileEntry *MainWindow::updatePick(
 void MainWindow::abandonBatchedUpdate(ModRow item, UpdateOutcome why)
 {
     restoreAbandonedRow(item);
+    // Turned down, for whatever reason. Every outcome that reaches here is one
+    // that repeating verbatim cannot change, so the row keeps its arrow and
+    // stops being counted. AlreadyNewest drops the arrow below and does not
+    // need it.
+    if (item && why != UpdateOutcome::AlreadyNewest
+        && !item->data(ModRole::UpdateDeferred).toBool())
+        item->setData(ModRole::UpdateDeferred, true);
     if (why == UpdateOutcome::AlreadyNewest && item) {
         // The check flagged it only because the page changed. Drop the arrow,
         // and keep the moment, so the next check measures the page from here

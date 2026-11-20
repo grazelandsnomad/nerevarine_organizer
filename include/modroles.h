@@ -136,6 +136,19 @@ namespace ModRole {
     // file has two waiting rows, and matching by page alone put Tamriel
     // Rebuilt's music file into the main row. Session-only.
     constexpr int AwaitingFileId        = Qt::UserRole + 68; // qint64
+    // An update this session found that has already been turned down once: a
+    // file picker closed without choosing, a batch row the auto-pick could not
+    // answer for, a download that failed. The arrow stays (UpdateAvailable) so
+    // the row can still be updated by hand, but the toolbar stops counting it.
+    //
+    // Without this the toolbar's count went to zero the moment an update was
+    // attempted, so the button turned back into "Check Updates" - and the
+    // obvious next click ran a fresh scan of every installed mod instead of
+    // retrying. Repeat that and Nexus rate-limits you. An outcome that cannot
+    // change on its own must not leave the button inviting a rescan.
+    //
+    // Cleared by the next check and by an install landing. Session-only.
+    constexpr int UpdateDeferred        = Qt::UserRole + 69; // bool
     constexpr int VideoUrl              = Qt::UserRole + 35; // QString: YouTube video URL
     constexpr int SourceUrl             = Qt::UserRole + 36; // QString: non-Nexus download page (GitHub, etc.)
     // Set by handleNxmUrl when an installed row is reused as the placeholder

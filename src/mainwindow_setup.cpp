@@ -681,6 +681,7 @@ void MainWindow::setupToolbar()
             [this](const QModelIndex &, const QModelIndex &, const QList<int> &roles) {
         if (roles.isEmpty() || roles.contains(ModRole::UpdateAvailable)
             || roles.contains(ModRole::UpdateFoundThisSession)
+            || roles.contains(ModRole::UpdateDeferred)
             || roles.contains(ModRole::InstallStatus) || roles.contains(ModRole::NexusUrl))
             scheduleCheckButtonRefresh();
     });
