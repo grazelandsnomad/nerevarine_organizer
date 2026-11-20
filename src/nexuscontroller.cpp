@@ -7,6 +7,7 @@
 #include <QNetworkReply>
 #include <QUuid>
 
+#include <QTimer>
 #include <functional>
 #include <memory>
 
@@ -145,6 +146,21 @@ void NexusController::fetchChangelog(const QUuid &row,
     });
 }
 
+// Per-run state in a shared_ptr so each lambda owns a copy: handles
+// overlapping runs and survives `this` dying mid-flight (replies are parented
+// to `this` so they'd cancel, but the queue still drains).
+//
+// The queue is the point. This used to be a for loop that fired every request
+// in one event-loop turn; see kCheckSpacingMs for what that cost.
+struct NexusController::CheckRun {
+    QList<CheckTarget> queue;
+    int  inFlight = 0;          // replies asked for and not yet answered
+    int  done = 0, total = 0;   // for the progress signal
+    int  found = 0, superseded = 0;
+    bool finished = false;      // checkUpdatesFinished fires exactly once
+    QTimer *pump = nullptr;
+};
+
 void NexusController::checkForUpdates(
     const QList<CheckTarget> &targets,
     std::function<QDateTime(const QUuid &)> dateAddedFor)
@@ -154,61 +170,91 @@ void NexusController::checkForUpdates(
         return;
     }
 
-    // Per-run state in a shared_ptr so each lambda owns a copy: handles
-    // overlapping runs and survives `this` dying mid-flight (replies are
-    // parented to `this` so they'd cancel, but the counter still drains).
-    struct RunState { int pending; int found; int superseded; };
-    auto state = std::make_shared<RunState>(
-        RunState{static_cast<int>(targets.size()), 0, 0});
+    auto state = std::make_shared<CheckRun>();
+    state->queue = targets;
+    state->total = int(targets.size());
 
-    for (const auto &t : targets) {
-        QNetworkReply *reply = m_client->requestModInfo(t.game, t.modId);
-        connect(reply, &QNetworkReply::finished, this,
-                [this, reply, row = t.row, modId = t.modId, fileId = t.fileId,
-                 state, dateAddedFor]() {
-            reply->deleteLater();
-            if (reply->error() == QNetworkReply::NoError) {
-                const auto info = NexusClient::parseModInfo(reply->readAll());
-                if (info && info->updatedTimestamp > 0) {
-                    const QDateTime modUpdated =
-                        QDateTime::fromSecsSinceEpoch(info->updatedTimestamp);
-                    const QDateTime dateAdded  = dateAddedFor(row);
-                    if (dateAdded.isValid() && modUpdated > dateAdded) {
-                        emit updateFoundForItem(row);
-                        ++state->found;
-                    }
-                }
-                // The timestamp cannot see a file retired on a page that has
-                // not changed since - so for a row that knows its file, ask
-                // the page's file list too. The numeric game id it needs is in
-                // this reply. Counted in before this reply is counted out, so
-                // the run cannot finish in between.
-                if (info && fileId > 0 && info->gameIdNumeric > 0) {
-                    ++state->pending;
-                    QNetworkReply *files =
-                        m_client->requestModFilesV2(info->gameIdNumeric, modId);
-                    connect(files, &QNetworkReply::finished, this,
-                            [this, files, row, fileId, state]() {
-                        files->deleteLater();
-                        if (files->error() == QNetworkReply::NoError) {
-                            const auto list = NexusClient::parseModFilesV2(files->readAll());
-                            if (list) {
-                                const auto v = file_status::judge(fileId, *list);
-                                if (v.state == file_status::Verdict::State::Superseded) {
-                                    emit fileSupersededForItem(row, v);
-                                    ++state->superseded;
-                                }
-                            }
-                        }
-                        if (--state->pending == 0)
-                            emit checkUpdatesFinished(state->found, state->superseded);
-                    });
+    state->pump = new QTimer(this);
+    state->pump->setInterval(kCheckSpacingMs);
+    connect(state->pump, &QTimer::timeout, this,
+            [this, state, dateAddedFor] { pumpChecks(state, dateAddedFor); });
+    state->pump->start();
+    // One straight away, so a single-mod check does not wait for a tick.
+    pumpChecks(state, dateAddedFor);
+}
+
+void NexusController::pumpChecks(const std::shared_ptr<CheckRun> &state,
+                                 std::function<QDateTime(const QUuid &)> dateAddedFor)
+{
+    if (state->finished) return;
+
+    // Everything asked and everything answered.
+    if (state->queue.isEmpty() && state->inFlight == 0) {
+        state->finished = true;
+        if (state->pump) { state->pump->stop(); state->pump->deleteLater(); state->pump = nullptr; }
+        emit checkUpdatesFinished(state->found, state->superseded);
+        return;
+    }
+    if (state->queue.isEmpty()) return;             // draining the last replies
+    if (state->inFlight >= kCheckMaxInFlight) return;   // let them land first
+
+    const CheckTarget t = state->queue.takeFirst();
+    ++state->inFlight;
+    QNetworkReply *reply = m_client->requestModInfo(t.game, t.modId);
+    connect(reply, &QNetworkReply::finished, this,
+            [this, reply, row = t.row, modId = t.modId, fileId = t.fileId,
+             state, dateAddedFor]() {
+        reply->deleteLater();
+        --state->inFlight;
+        ++state->done;
+        emit checkUpdatesProgress(state->done, state->total);
+        if (reply->error() == QNetworkReply::NoError) {
+            const auto info = NexusClient::parseModInfo(reply->readAll());
+            if (info) {
+                // Asked and answered. Only on a reply that parsed: a network
+                // error or a refusal must never be written down as a check,
+                // or it would hide a real update until the window passed.
+                emit modChecked(row);
+            }
+            if (info && info->updatedTimestamp > 0) {
+                const QDateTime modUpdated =
+                    QDateTime::fromSecsSinceEpoch(info->updatedTimestamp);
+                const QDateTime dateAdded  = dateAddedFor(row);
+                if (dateAdded.isValid() && modUpdated > dateAdded) {
+                    emit updateFoundForItem(row);
+                    ++state->found;
                 }
             }
-            if (--state->pending == 0)
-                emit checkUpdatesFinished(state->found, state->superseded);
-        });
-    }
+            // The timestamp cannot see a file retired on a page that has
+            // not changed since - so for a row that knows its file, ask
+            // the page's file list too. The numeric game id it needs is in
+            // this reply. Counted in before this reply is counted out, so
+            // the run cannot finish in between. This one is unauthenticated
+            // (v2 GraphQL), so it costs no allowance and is not paced.
+            if (info && fileId > 0 && info->gameIdNumeric > 0) {
+                ++state->inFlight;
+                QNetworkReply *files =
+                    m_client->requestModFilesV2(info->gameIdNumeric, modId);
+                connect(files, &QNetworkReply::finished, this,
+                        [this, files, row, fileId, state, dateAddedFor]() {
+                    files->deleteLater();
+                    --state->inFlight;
+                    if (files->error() == QNetworkReply::NoError) {
+                        const auto list = NexusClient::parseModFilesV2(files->readAll());
+                        if (list) {
+                            const auto v = file_status::judge(fileId, *list);
+                            if (v.state == file_status::Verdict::State::Superseded) {
+                                emit fileSupersededForItem(row, v);
+                                ++state->superseded;
+                            }
+                        }
+                    }
+                    pumpChecks(state, dateAddedFor);
+                });
+            }
+        }
+        pumpChecks(state, dateAddedFor);
+    });
 }
 
 void NexusController::fetchRequirementsPage(

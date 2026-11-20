@@ -813,7 +813,7 @@ void MainWindow::updateCheckUpdatesButton()
     // QAction ignores a text or tooltip it already has.
     if (checking) {
         m_actCheckUpdates->setText(T("toolbar_check_updates_running")
-                                       .arg(m_checkTotal));
+                                       .arg(m_checkDone).arg(m_checkTotal));
         m_actCheckUpdates->setToolTip(T("toolbar_check_updates_running_tip")
                                           .arg(m_checkTotal));
     } else if (updateAll) {

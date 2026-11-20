@@ -945,6 +945,7 @@ private:
     QTimer      *m_checkButtonTimer = nullptr;  // 0 ms: one refresh per burst of row changes
     int          m_checksRunning    = 0;        // checks dispatched, not yet finished
     int          m_checkTotal       = 0;        // mods the running check is asking about
+    int          m_checkDone        = 0;        // ...and how many have answered
     bool         m_updateAllMode    = false;    // the button reads Update All
     // The Start buttons while a launch is under way. Two of them because the
     // toolbar carries a Morrowind twin, and only one is ever visible.

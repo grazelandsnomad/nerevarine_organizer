@@ -40,13 +40,30 @@ public:
         qint64           fileId = 0;
     };
 
-    // One requestModInfo per target, in parallel. Fires updateFoundForItem
-    // when a target's Nexus "updated" timestamp beats dateAddedFor(item).
+    // One requestModInfo per target, paced. Fires updateFoundForItem when a
+    // target's Nexus "updated" timestamp beats dateAddedFor(item), and
+    // modChecked for every target whose reply parsed - including the ones with
+    // no update, which is what lets the caller remember it asked.
     // checkUpdatesFinished(foundCount) fires once after the last reply. Safe
-    // to call while a previous run is in flight; each run has its own counter.
+    // to call while a previous run is in flight; each run has its own queue.
     // dateAddedFor keeps ModRole lookups on the UI side, by row id.
     void checkForUpdates(const QList<CheckTarget> &targets,
                          std::function<QDateTime(const QUuid &)> dateAddedFor);
+
+    // Milliseconds between kickoffs. These used to go out in one event-loop
+    // turn - 409 installed mods, 409 requests, together. Qt 6 allows HTTP/2
+    // and Nexus negotiates it, so there is not even a six-connection ceiling
+    // to spread them out: they really do arrive at once, and that is what
+    // earns an HTTP 429. Five a second drains a 409-mod list in about eighty
+    // seconds, which is why the toolbar says a check is running.
+    //
+    // UNVERIFIED: nothing here proves five a second is under the threshold.
+    // Nexus publishes 20,000 requests a day, dropping to 500 an hour once
+    // that is gone, but says nothing about how hard a burst may be.
+    static constexpr int kCheckSpacingMs   = 200;
+    // Not the pace - the timer above is. This only keeps replies from piling
+    // up when the endpoint is slow; the timer keeps ticking either way.
+    static constexpr int kCheckMaxInFlight = 4;
 
     // Fire-and-forget title fetch. Success -> titleFetched(item, name);
     // parse/network errors swallowed (a missing title is non-fatal).
@@ -87,6 +104,12 @@ signals:
     // be on another page, so this is information, not a one-click update.
     void fileSupersededForItem(const QUuid &row,
                                const file_status::Verdict &verdict);
+    // The reply for this row parsed, whether or not it held an update. The
+    // caller writes down that it asked, so the next check inside its window
+    // can reuse the answer instead of spending the allowance again.
+    void modChecked(const QUuid &row);
+    // How far a running check has got, for the toolbar.
+    void checkUpdatesProgress(int done, int total);
     void checkUpdatesFinished(int foundCount, int supersededCount);
     void titleFetched(const QUuid &row, const QString &name);
     // Every file on the same mod page as the one being downloaded. Emitted
@@ -121,6 +144,14 @@ signals:
                           const QList<NexusClient::ChangelogEntry> &entries);
 
 private:
+    // One check in flight, queued and paced. Defined in the .cpp: nothing
+    // outside needs its shape. pumpChecks sends the next request when the
+    // timer ticks and there is room, and emits checkUpdatesFinished when the
+    // queue and the replies have both run out.
+    struct CheckRun;
+    void pumpChecks(const std::shared_ptr<CheckRun> &state,
+                    std::function<QDateTime(const QUuid &)> dateAddedFor);
+
     // One page of a mod's authored requirements table, then the next until
     // totalCount is reached. A member rather than a self-referencing lambda,
     // which would keep its own closure alive through a shared_ptr cycle.

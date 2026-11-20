@@ -342,6 +342,14 @@ MainWindow::MainWindow(QWidget *parent)
         item->setData(ModRole::FileSuperseded, supersededText(v));
         m_modList->update(m_modList->indexFromItem(item));
     });
+    connect(m_nexusCtl, &NexusController::checkUpdatesProgress,
+            this, [this](int done, int total) {
+        // The check is paced now and a long list takes a while, so the button
+        // counts rather than just saying it is busy.
+        m_checkDone  = done;
+        m_checkTotal = total;
+        scheduleCheckButtonRefresh();
+    });
     connect(m_nexusCtl, &NexusController::checkUpdatesFinished,
             this, &MainWindow::onCheckUpdatesFinished);
     // The file lists of a batch update come back one by one; the note waits
@@ -2103,6 +2111,7 @@ void MainWindow::onCheckUpdates()
     statusBar()->showMessage(T("check_updates_checking").arg(toCheck.size()));
     ++m_checksRunning;
     m_checkTotal = toCheck.size();
+    m_checkDone  = 0;
     scheduleCheckButtonRefresh();
     m_nexusCtl->checkForUpdates(toCheck, [this](const QUuid &row) {
         return updateBaseline(rowById(row));
@@ -2137,6 +2146,7 @@ int MainWindow::checkUpdatesForMods(const QStringList &labels)
     m_reviewAfterCheck = true;
     ++m_checksRunning;
     m_checkTotal = toCheck.size();
+    m_checkDone  = 0;
     scheduleCheckButtonRefresh();
     m_nexusCtl->checkForUpdates(toCheck, [this](const QUuid &row) {
         return updateBaseline(rowById(row));
