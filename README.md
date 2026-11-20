@@ -7,10 +7,10 @@ A native Linux mod manager for OpenMW.
 The next release, built from `main`. Its notes grow in
 [`docs/release-notes/0.77.md`](docs/release-notes/0.77.md) as changes land.
 
-### Latest release: 0.76
+### Latest release: 0.76.1
 
 Download: [AppImage or plain Linux
-binary](https://github.com/grazelandsnomad/nerevarine_organizer/releases/tag/v0.76).
+binary](https://github.com/grazelandsnomad/nerevarine_organizer/releases/tag/v0.76.1).
 The AppImage is portable and runs on most distros, Steam Deck included. It
 needs FUSE 2 (`libfuse2t64` or `libfuse2` on Ubuntu and Debian, `fuse2` on
 Arch); without it, start it with `--appimage-extract-and-run`. The plain
@@ -19,6 +19,8 @@ version over the old folder to keep them.
 
 It brings, among the rest:
 
+- **0.76.1:** switching game and back no longer claims your mod list changed
+  and asks you to deploy again.
 - **Move Mod Library moves the whole library.** It used to carry only the
   folders a row pointed at directly, leaving a library of download folders
   largely where it was while reporting success; and picking a disk root
@@ -38,9 +40,9 @@ It brings, among the rest:
 
 Guides: [mod conflicts and how to fix each kind](docs/conflicts.md).
 
-Full notes: [`docs/release-notes/0.76.md`](docs/release-notes/0.76.md)
-(prior: [0.75](docs/release-notes/0.75.md), [0.74](docs/release-notes/0.74.md),
-[0.72](docs/release-notes/0.72.md))
+Full notes: [`docs/release-notes/0.76.1.md`](docs/release-notes/0.76.1.md)
+(prior: [0.76](docs/release-notes/0.76.md), [0.75](docs/release-notes/0.75.md),
+[0.74](docs/release-notes/0.74.md))
 
 # Tech Stack
 C++26 and Qt6.
