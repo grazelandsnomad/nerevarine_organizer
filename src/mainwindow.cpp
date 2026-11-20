@@ -2153,6 +2153,17 @@ static QDateTime updateBaseline(const ModRow &item)
     return e.dateAdded;
 }
 
+// What a check has to say, said in both places. The status bar is where it
+// used to go alone, and a line at the bottom of a 400-row window is easy to
+// miss - which is exactly how a user came to click Update All three times.
+// The blue banner at the top is the one they already read for "all mods are
+// up to date", so everything else a check says belongs there too.
+void MainWindow::sayAboutChecking(const QString &msg, int statusMs)
+{
+    statusBar()->showMessage(msg, statusMs);
+    if (m_notify) m_notify->show(msg, kCheckBannerColour);
+}
+
 void MainWindow::onCheckUpdates()
 {
     // One at a time. A check is one request per installed mod, and while it
@@ -2160,8 +2171,7 @@ void MainWindow::onCheckUpdates()
     // started a second full scan over the same 409 mods. Three of those in
     // ninety seconds is what got a user rate-limited by Nexus.
     if (m_checksRunning > 0) {
-        statusBar()->showMessage(T("check_updates_already_running")
-                                     .arg(m_checkTotal), 4000);
+        sayAboutChecking(T("check_updates_already_running").arg(m_checkTotal));
         return;
     }
     if (m_apiKey.isEmpty()) {
@@ -2174,15 +2184,14 @@ void MainWindow::onCheckUpdates()
     const auto toCheck = collectUpdateTargets(m_modList, {}, m_forceNextCheck, &skipped);
     m_forceNextCheck = false;
     if (toCheck.isEmpty()) {
-        statusBar()->showMessage(skipped > 0
-                                     ? T("check_updates_all_fresh").arg(skipped)
-                                     : T("check_updates_no_mods"), 5000);
+        sayAboutChecking(skipped > 0 ? T("check_updates_all_fresh").arg(skipped)
+                                     : T("check_updates_no_mods"), 6000);
         return;
     }
 
-    statusBar()->showMessage(
+    sayAboutChecking(
         skipped > 0 ? T("check_updates_checking_some").arg(toCheck.size()).arg(skipped)
-                    : T("check_updates_checking").arg(toCheck.size()));
+                    : T("check_updates_checking").arg(toCheck.size()), 0);
     ++m_checksRunning;
     m_checkTotal = toCheck.size();
     m_checkDone  = 0;
@@ -2197,8 +2206,7 @@ int MainWindow::checkUpdatesForMods(const QStringList &labels)
     if (labels.isEmpty()) return 0;
     // Same reason as onCheckUpdates: never two scans at once.
     if (m_checksRunning > 0) {
-        statusBar()->showMessage(T("check_updates_already_running")
-                                     .arg(m_checkTotal), 4000);
+        sayAboutChecking(T("check_updates_already_running").arg(m_checkTotal));
         return 0;
     }
     if (m_apiKey.isEmpty()) {
@@ -2211,14 +2219,14 @@ int MainWindow::checkUpdatesForMods(const QStringList &labels)
     // a six-hour-old one will not do.
     const auto toCheck = collectUpdateTargets(m_modList, labels, /*force=*/true);
     if (toCheck.isEmpty()) {
-        statusBar()->showMessage(T("check_updates_no_mods"), 3000);
+        sayAboutChecking(T("check_updates_no_mods"), 6000);
         return 0;
     }
 
     // The count is what was checked, not what was asked for. A mod whose
     // label no longer matches a row, or that has no Nexus page, is not
     // something to claim was looked at.
-    statusBar()->showMessage(T("check_updates_checking").arg(toCheck.size()));
+    sayAboutChecking(T("check_updates_checking").arg(toCheck.size()), 0);
     m_reviewAfterCheck = true;
     ++m_checksRunning;
     m_checkTotal = toCheck.size();
@@ -2244,8 +2252,7 @@ void MainWindow::onCheckUpdatesFinished(int foundCount, int supersededCount)
     updateSectionCounts();
 
     if (foundCount == 0 && supersededCount == 0) {
-        statusBar()->showMessage(T("check_updates_none"), 4000);
-        m_notify->show(T("check_updates_none"), "#1a6fa8");
+        sayAboutChecking(T("check_updates_none"), 4000);
         subprocess::startDetached("notify-send",
             {"-i", "dialog-information",
              "-t", "6000",
@@ -2256,7 +2263,9 @@ void MainWindow::onCheckUpdatesFinished(int foundCount, int supersededCount)
         if (foundCount > 0)      parts << T("check_updates_found").arg(foundCount);
         if (supersededCount > 0) parts << T("check_updates_superseded").arg(supersededCount);
         const QString msg = parts.join(QLatin1Char(' '));
-        statusBar()->showMessage(msg, 5000);
+        // Up top as well: the result of a check is the thing the user asked
+        // for, and it used to live only in the status bar.
+        sayAboutChecking(msg, 5000);
         subprocess::startDetached("notify-send",
             {"-i", "software-update-available",
              "-t", "6000",

@@ -386,6 +386,12 @@ private:
     void applyInstallProbe(const InstallProbe &r);
     // When the Nexus allowance frees up, in words. See rateLimitWhen.
     QString rateLimitWhen() const;
+    // Say something about checking for updates, in the status bar and in the
+    // banner at the top. statusMs 0 leaves the status message up until
+    // something replaces it, which is what a check in progress wants.
+    void sayAboutChecking(const QString &msg, int statusMs = 4000);
+    // The blue the "all mods are up to date" banner has always used.
+    static constexpr const char *kCheckBannerColour = "#1a6fa8";
 
     // A batch-update row the auto-pick could not answer for, with the file
     // list its reply already carried - so asking the user costs no second
