@@ -82,6 +82,19 @@ public:
     // this is the difference between a switch of 42 s and one of milliseconds.
     std::optional<bool> cachedFolderHasContent(const QString &path);
 
+    // Has a mod folder appeared or disappeared in this root since the last
+    // time every mod under it was checked? One stat: adding or removing a
+    // direct child moves a directory's own time. True also when this root was
+    // never checked. This is what decides whether the background re-verify
+    // runs at all, and scan_cache.h lays out the three guards in full.
+    bool modsRootMoved(const QString &root) const;
+    // Record this root's time as of now, meaning every mod under it has just
+    // been checked. Called when a verify pass lands.
+    void noteModsRootChecked(const QString &root);
+    // The time a mod's own folder carried when it was scanned, -1 when nothing
+    // was recorded. What the verify pass compares against, one stat each.
+    qint64 recordedFolderTime(const QString &path) const;
+
 signals:
     // The size scan landed: bytes per installed mod path. A path missing
     // from the hash was not installed or could not be measured.
@@ -113,13 +126,17 @@ private:
     QHash<QString, QList<QPair<QString, QStringList>>> m_dataFoldersCache;
 
     // For each of those entries, every directory the walk opened and the
-    // modification time it had. This is what lets an entry read back from
-    // disk be trusted: see scan_cache.h for why checking is ~3000x cheaper
-    // than rescanning, and for what the app's own invalidation cannot cover.
+    // modification time it had. Checking all of them is what scan_cache.h
+    // describes, and is far too slow to do here: cachedDataFolders says what
+    // happens if you try. Only the mod folder's own time is read now, by
+    // recordedFolderTime, for the background re-verify.
     QHash<QString, QList<QPair<QString, qint64>>> m_dataFolderDirs;
     // The install probe's answer per mod folder, recorded while the scan had
-    // the folder open, and only trusted while m_dataFolderDirs checks out.
+    // the folder open.
     QHash<QString, bool> m_hasContentCache;
+    // Mods root → the time it carried when every mod under it was last
+    // checked against disk. Persisted with the caches.
+    QHash<QString, qint64> m_roots;
     // Where the two caches are written. Empty = do not persist, which is what
     // a test gets unless it asks otherwise.
     QString m_cachePath;

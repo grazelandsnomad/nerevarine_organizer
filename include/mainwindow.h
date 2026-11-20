@@ -362,9 +362,22 @@ private:
     // so the install probe is the warm case when one of them is opened. See
     // install_layout::folderHasContent for what that probe costs cold.
     void warmOtherProfileFolders();
-    // The install probe's answers, back from the worker: correct the rows that
-    // were assumed installed, then run what was waiting on them.
-    void applyInstallProbe(const QList<QPair<QString, bool>> &answers);
+    // What the install-probe worker brings back: an install answer per mod
+    // folder it opened, and the paths whose written-down scan it found out of
+    // date. See loadModList for the two jobs it does in one pass.
+    struct InstallProbe {
+        QList<QPair<QString, bool>> answers;
+        QStringList stale;
+        // True when every cached mod under the root was checked in this pass,
+        // which is what lets the root's time be recorded as current. The root
+        // travels with it: a pass can land after the user has switched to
+        // another profile, and recording that one as checked would be a lie.
+        bool verified = false;
+        QString root;
+    };
+    // Those answers, back on the UI thread: drop the stale scans, correct the
+    // rows, then run what was waiting on them.
+    void applyInstallProbe(const InstallProbe &r);
     // True between a list going up and its install probe landing. Anything
     // that reads "installed" - the deploy fingerprint most of all - has to
     // wait, or it judges a list the app does not know yet.

@@ -1,6 +1,7 @@
 #include "scan_coordinator.h"
 
 #include <QDir>
+#include <QSaveFile>
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
@@ -49,18 +50,39 @@ std::optional<bool> ScanCoordinator::cachedFolderHasContent(const QString &path)
     if (path.isEmpty()) return std::nullopt;
     const auto it = m_hasContentCache.constFind(path);
     if (it == m_hasContentCache.constEnd()) return std::nullopt;
-    scan_cache::Entry probe;
-    probe.dirs = m_dataFolderDirs.value(path);
-    if (probe.dirs.isEmpty() || !scan_cache::stillValid(probe)) {
-        // Something under the mod moved, so the recorded answer is not an
-        // answer any more. Drop it and let the caller look.
-        m_hasContentCache.remove(path);
-        m_dataFoldersCache.remove(path);
-        m_dataFolderDirs.remove(path);
-        m_bsaCache.remove(path);
-        return std::nullopt;
-    }
-    return *it;
+    return *it;   // trusted as it stands: see cachedDataFolders
+}
+
+bool ScanCoordinator::modsRootMoved(const QString &root) const
+{
+    if (root.isEmpty()) return false;
+    const QString key = QDir::cleanPath(root);
+    const auto it = m_roots.constFind(key);
+    // Never looked, so look: one verify pass, and then this is quiet until
+    // the root really moves.
+    if (it == m_roots.constEnd()) return true;
+    return !scan_cache::folderAsRecorded(key, *it);
+}
+
+void ScanCoordinator::noteModsRootChecked(const QString &root)
+{
+    if (root.isEmpty()) return;
+    const QString key = QDir::cleanPath(root);
+    const QFileInfo fi(key);
+    if (!fi.isDir()) return;            // nothing to record a time for
+    m_roots.insert(key, fi.lastModified().toMSecsSinceEpoch());
+}
+
+qint64 ScanCoordinator::recordedFolderTime(const QString &path) const
+{
+    // The mod folder's own recorded time. One stat checks it, against the 7648
+    // a full check of every recorded directory needs, and it is what catches
+    // the two cases that matter: the folder deleted, and its contents changed
+    // from outside. A file added deeper inside it is not caught until the
+    // entry is invalidated or the cache is rebuilt.
+    for (const auto &d : m_dataFolderDirs.value(path))
+        if (d.first == path) return d.second;
+    return -1;
 }
 
 void ScanCoordinator::loadPersistedCache(const QString &path)
@@ -78,6 +100,7 @@ void ScanCoordinator::loadPersistedCache(const QString &path)
     }
     for (auto it = c.masters.constBegin(); it != c.masters.constEnd(); ++it)
         m_mastersCache.insert(it.key(), it.value());
+    m_roots = c.roots;
 }
 
 void ScanCoordinator::savePersistedCache() const
@@ -93,9 +116,14 @@ void ScanCoordinator::savePersistedCache() const
         c.mods.insert(it.key(), e);
     }
     c.masters = m_mastersCache;
-    QFile f(m_cachePath);
+    c.roots   = m_roots;
+    // Written whole or not at all. This file is over a megabyte and the disk
+    // it lives on has run out of room mid-write before; a truncated one would
+    // parse as no cache at all and cost a full cold rebuild.
+    QSaveFile f(m_cachePath);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return;
     f.write(scan_cache::serialize(c));
+    f.commit();
 }
 
 void ScanCoordinator::scheduleSizeScan()
@@ -118,21 +146,18 @@ qint64 ScanCoordinator::sizeOf(const QString &path) const
 QList<QPair<QString, QStringList>> ScanCoordinator::cachedDataFolders(
     const QString &path, const QStringList &exts)
 {
+    // The written-down answer is used here without being checked first.
+    // Checking means a stat per directory the scan recorded, and measured
+    // against the real cache that is 7648 directories at 8.1 ms each: 62
+    // seconds for one pass. Nothing that expensive belongs on the UI thread,
+    // and an earlier revision that checked on every call turned a switch into
+    // a fifteen-minute freeze. Two things keep it honest instead:
+    // invalidateDataFoldersCache, for every folder the app itself changes, and
+    // MainWindow's background re-verify, which stats each mod's own folder on
+    // a worker (410 stats, ~3 s, nobody waiting) and invalidates the ones that
+    // moved. A change made behind the app's back is therefore picked up on the
+    // next load rather than instantly, which is the trade this disk forces.
     auto it = m_dataFoldersCache.find(path);
-    // A cached answer is only as good as the directories it was read from. The
-    // check is a stat each, which measured 0.002 ms against 6.8 ms to reopen
-    // the directory, so it runs every time rather than only after a load.
-    if (it != m_dataFoldersCache.end()) {
-        scan_cache::Entry probe;
-        probe.dirs = m_dataFolderDirs.value(path);
-        if (!probe.dirs.isEmpty() && !scan_cache::stillValid(probe)) {
-            m_dataFoldersCache.erase(it);
-            m_dataFolderDirs.remove(path);
-            m_hasContentCache.remove(path);
-            m_bsaCache.remove(path);
-            it = m_dataFoldersCache.end();
-        }
-    }
     if (it == m_dataFoldersCache.end()) {
         QStringList visited;
         auto folders = plugins::collectDataFolders(

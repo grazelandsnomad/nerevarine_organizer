@@ -47,6 +47,13 @@ Cache parse(const QByteArray &json)
         if (!e.dirs.isEmpty()) out.mods.insert(it.key(), e);
     }
 
+    // The mods roots and the time each was last checked at. Absent in a file
+    // written by an older build, which reads as "never checked" and costs one
+    // verify pass.
+    const QJsonObject roots = root.value(QStringLiteral("roots")).toObject();
+    for (auto it = roots.constBegin(); it != roots.constEnd(); ++it)
+        out.roots.insert(it.key(), qint64(it.value().toDouble()));
+
     for (const QJsonValue &mv : root.value(QStringLiteral("masters")).toArray()) {
         const QJsonObject m = mv.toObject();
         const QString file = m.value(QStringLiteral("file")).toString();
@@ -89,21 +96,22 @@ QByteArray serialize(const Cache &cache)
                                    {QStringLiteral("mtime"), double(it.value().first)},
                                    {QStringLiteral("parents"), parents}});
     }
+    QJsonObject roots;
+    for (auto it = cache.roots.constBegin(); it != cache.roots.constEnd(); ++it)
+        roots.insert(it.key(), double(it.value()));
     const QJsonObject root{{QStringLiteral("version"), kVersion},
                            {QStringLiteral("mods"), mods},
-                           {QStringLiteral("masters"), masters}};
+                           {QStringLiteral("masters"), masters},
+                           {QStringLiteral("roots"), roots}};
     return QJsonDocument(root).toJson(QJsonDocument::Compact);
 }
 
-bool stillValid(const Entry &entry)
+bool folderAsRecorded(const QString &dir, qint64 recordedMs)
 {
-    if (entry.dirs.isEmpty()) return false;   // nothing to check against
-    for (const auto &d : entry.dirs) {
-        const QFileInfo fi(d.first);
-        if (!fi.isDir()) return false;
-        if (fi.lastModified().toMSecsSinceEpoch() != d.second) return false;
-    }
-    return true;
+    if (dir.isEmpty() || recordedMs < 0) return false;  // never recorded
+    const QFileInfo fi(dir);
+    if (!fi.isDir()) return false;                      // gone, or not a dir
+    return fi.lastModified().toMSecsSinceEpoch() == recordedMs;
 }
 
 } // namespace scan_cache

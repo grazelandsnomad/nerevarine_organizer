@@ -678,8 +678,18 @@ static void run_scan_cache()
           back.masters.value(deep + "/a.esp").second
               == QStringList{QStringLiteral("Morrowind.esm")});
 
-    check("an entry whose directories are untouched is still good",
-          scan_cache::stillValid(back.mods.value(mod)));
+    check("the roots a cache was checked at round-trip", [&] {
+        scan_cache::Cache r;
+        r.roots.insert(mod, 4242);
+        return scan_cache::parse(scan_cache::serialize(r)).roots.value(mod) == 4242;
+    }());
+
+    const auto recorded = [&](const QString &dir) {
+        return back.mods.value(mod).dirs.value(
+            back.mods.value(mod).dirs.at(0).first == dir ? 0 : 1).second;
+    };
+    check("a folder still carrying its recorded time is as recorded",
+          scan_cache::folderAsRecorded(deep, recorded(deep)));
 
     // A plugin dropped in from outside the app moves the directory's time,
     // which is the whole case the app's own invalidation cannot see. Asserted
@@ -688,18 +698,12 @@ static void run_scan_cache()
     // writes two files inside one millisecond sees no change at all. That
     // flakiness is the test's, not the check's - a real scan takes far longer
     // than a millisecond - but a test must not depend on it.
-    scan_cache::Entry moved = back.mods.value(mod);
-    moved.dirs[1].second -= 1000;
-    check("a directory whose recorded time no longer matches is stale",
-          !scan_cache::stillValid(moved));
-
-    scan_cache::Entry gone;
-    gone.dirs = {{tmp.filePath("never-existed"), 1}};
-    check("an entry naming a directory that is not there is stale",
-          !scan_cache::stillValid(gone));
-    scan_cache::Entry blank;
-    check("an entry with nothing to check is not trusted",
-          !scan_cache::stillValid(blank));
+    check("a folder whose recorded time no longer matches is not",
+          !scan_cache::folderAsRecorded(deep, recorded(deep) - 1000));
+    check("a folder that is not there is not as recorded",
+          !scan_cache::folderAsRecorded(tmp.filePath("never-existed"), 1));
+    check("a folder nothing was recorded for is not as recorded",
+          !scan_cache::folderAsRecorded(deep, -1));
 
     check("malformed json is an empty cache, not a crash",
           scan_cache::parse("{ not json").mods.isEmpty()
