@@ -1031,6 +1031,11 @@ void MainWindow::onFileListFetched(const QUuid &rowKey,
     // on the SKSE page ran past 540 and took the verdict off screen with them.
     dlg.setMinimumWidth(720);
     auto *layout = new QVBoxLayout(&dlg);
+    // Draining a queue of these: say where you are in it, or several dialogs
+    // in a row look like one that will not go away.
+    if (m_pickTotal > 1)
+        layout->addWidget(new QLabel(T("file_pick_queue_position")
+                                         .arg(m_pickServed).arg(m_pickTotal)));
     layout->addWidget(new QLabel(T("install_pick_file_label")));
 
     auto *fileList = new QListWidget(&dlg);
@@ -1100,6 +1105,15 @@ void MainWindow::onFileListFetched(const QUuid &rowKey,
 
     auto *buttons = new QDialogButtonBox(
         QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    // A way out of a long queue that is not "cancel this one" N times.
+    if (m_pickTotal > 1 && !m_pickQueue.isEmpty()) {
+        QPushButton *skipAll = buttons->addButton(T("file_pick_skip_rest"),
+                                                  QDialogButtonBox::DestructiveRole);
+        connect(skipAll, &QPushButton::clicked, &dlg, [this, &dlg] {
+            m_pickSkipRest = true;
+            dlg.reject();
+        });
+    }
     connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
     connect(fileList, &QListWidget::itemDoubleClicked, &dlg, &QDialog::accept);
@@ -1111,7 +1125,16 @@ void MainWindow::onFileListFetched(const QUuid &rowKey,
         statusBar()->clearMessage();
         // Cancelled before any download: the update arrow's row is the mod
         // it was. The row may have gone while the picker was open.
-        restoreAbandonedRow(replyRow(rowKey, "file picker"));
+        ModRow back = replyRow(rowKey, "file picker");
+        restoreAbandonedRow(back);
+        // Turned down. The arrow stays so it can still be updated by hand,
+        // but the toolbar stops counting it - otherwise the count falls to
+        // zero on its own, the button reads "Check Updates" again, and the
+        // next click spends a request per installed mod instead of retrying.
+        if (back && back->data(ModRole::UpdateAvailable).toBool()) {
+            back->setData(ModRole::UpdateDeferred, true);
+            noteUpdateOutcome(back, UpdateOutcome::NeedsPick);
+        }
         return;
     }
 
@@ -1129,6 +1152,9 @@ void MainWindow::onFileListFetched(const QUuid &rowKey,
     if (sz > 0)         item->setData(ModRole::ExpectedSize, sz);
     item->setData(ModRole::ExpectedFileId, QVariant::fromValue(qint64(fileId)));
     autoLinkSameModpage(item, cat);
+    // Chosen from a drained batch, so the batch's tally should say so - this
+    // is the one the auto-pick could not answer for, now answered.
+    if (m_pickDraining) noteUpdateOutcome(item, UpdateOutcome::Started);
     m_downloadQueue->fetchDownloadLink(game, modId, fileId, "", "", rowKey);
 }
 

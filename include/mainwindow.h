@@ -386,6 +386,33 @@ private:
     void applyInstallProbe(const InstallProbe &r);
     // When the Nexus allowance frees up, in words. See rateLimitWhen.
     QString rateLimitWhen() const;
+
+    // A batch-update row the auto-pick could not answer for, with the file
+    // list its reply already carried - so asking the user costs no second
+    // request. Drained one dialog at a time by drainPickQueue.
+    //
+    // Queued rather than shown on the spot because the decision is made
+    // inside a reply handler, and a modal dialog there runs a nested event
+    // loop that delivers the rest of the batch's replies - each of which
+    // would open another dialog on top. One at a time, from a clean stack.
+    struct PendingPick {
+        QUuid   row;
+        QString game;
+        int     modId = 0;
+        QList<NexusClient::FileEntry> files;
+    };
+    QList<PendingPick> m_pickQueue;
+    bool               m_pickDraining = false;
+    // Set when the user says "skip the rest" in a picker; cleared per drain.
+    bool               m_pickSkipRest = false;
+    // How many pickers this drain has shown and how many it will, for the
+    // "File 2 of 5" line. Read by the picker in onFileListFetched.
+    int                m_pickServed = 0, m_pickTotal = 0;
+    void drainPickQueue();
+    // Put a batch row in that queue and arrange for the drain. Takes the file
+    // list the reply already carried, so the picker costs no second request.
+    void queuePickForBatch(ModRow item, const QString &game, int modId,
+                           const QList<NexusClient::FileEntry> &files);
     // Anything that reads "installed" - the deploy fingerprint, the config
     // write, the load-order prune - has to wait between a list going up and
     // its probe landing, or it judges a list the app does not know yet.

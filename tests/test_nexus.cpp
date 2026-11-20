@@ -354,6 +354,28 @@ static void testUpdateTarget()
     check("unknown file, no fallback: left for the picker",
           target(lone, 0, 0, true).kind == K::NeedsPick);
     check("an empty page answers nothing", target({}, 40, 0, true).kind == K::NeedsPick);
+
+    // The shape that started all this: "(OpenMW) Illegal Necromancy" on a
+    // 409-mod list. The mod list line carries no "file" key, so nothing is
+    // known about which file is installed, and the page offers several MAIN
+    // files with no recommendation to break the tie.
+    //
+    // There is no right answer here and this must not invent one. The bug was
+    // never that it said NeedsPick - it was that the interface treated that as
+    // "give up quietly", which let the toolbar fall back to "Check Updates"
+    // and invited a rescan of all 409 mods. The interface asks now. This is
+    // here so nobody later "fixes" the deadlock by guessing a file instead.
+    const QList<PageFile> severalMains = {
+        {90, "Illegal Necromancy", "1.0", "MAIN", {}},
+        {91, "Illegal Necromancy - OpenMW", "1.0", "MAIN", {}},
+        {92, "Illegal Necromancy - patch", "1.0", "MAIN", {}},
+    };
+    check("no recorded file, several MAIN files, nothing recommended: always ask",
+          target(severalMains, 0, 91, false).kind == K::NeedsPick);
+    check("and asking again gives the same answer, every time",
+          target(severalMains, 0, 91, false).kind == K::NeedsPick
+              && target(severalMains, 0, 0, false).kind == K::NeedsPick
+              && target(severalMains, 0, 92, false).kind == K::NeedsPick);
 }
 
 static void testDownloadUri()

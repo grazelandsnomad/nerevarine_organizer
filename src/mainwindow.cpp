@@ -2403,10 +2403,15 @@ const NexusClient::FileEntry *MainWindow::updatePick(
         page, item->data(ModRole::NexusFileId).toLongLong(), fallback.fileId, safe);
 
     using K = file_status::UpdateTarget::Kind;
+    if (target.kind == K::AlreadyNewest) {
+        abandonBatchedUpdate(item, UpdateOutcome::AlreadyNewest);
+        return nullptr;
+    }
     if (target.kind != K::Install) {
-        abandonBatchedUpdate(item, target.kind == K::AlreadyNewest
-                                       ? UpdateOutcome::AlreadyNewest
-                                       : UpdateOutcome::NeedsPick);
+        // Nothing here can choose: the row has no recorded file and the page
+        // offers several without recommending one. That used to end the
+        // update silently, which left the toolbar inviting a rescan. Ask.
+        queuePickForBatch(item, game, modId, allFiles);
         return nullptr;
     }
     const auto hit = std::find_if(allFiles.cbegin(), allFiles.cend(),
@@ -2423,6 +2428,52 @@ const NexusClient::FileEntry *MainWindow::updatePick(
     }
     noteUpdateOutcome(item, UpdateOutcome::Started);
     return &*hit;
+}
+
+void MainWindow::queuePickForBatch(ModRow item, const QString &game, int modId,
+                                   const QList<NexusClient::FileEntry> &files)
+{
+    if (!item) return;
+    const QUuid row = mod_row::rowId(item);
+    // Out of Installing first: the row may sit here for as long as the user
+    // takes over the pickers ahead of it, and an Installing row is dead to
+    // the interface. prepareItemForInstall runs again if a file is chosen.
+    restoreAbandonedRow(item);
+    m_pickQueue.append({row, game, modId, files});
+    // Not from in here. We are inside a reply handler, and the dialog would
+    // run a nested event loop that delivers the rest of the batch.
+    if (!m_pickDraining)
+        QTimer::singleShot(0, this, &MainWindow::drainPickQueue);
+}
+
+void MainWindow::drainPickQueue()
+{
+    if (m_pickDraining) return;      // one nested event loop at a time
+    m_pickDraining = true;
+    m_pickSkipRest = false;
+    m_pickServed   = 0;
+    m_pickTotal    = int(m_pickQueue.size());
+    while (!m_pickQueue.isEmpty() && !m_pickSkipRest) {
+        const PendingPick p = m_pickQueue.takeFirst();
+        ModRow item = replyRow(p.row, "deferred file picker");
+        if (!item) continue;                       // row gone while queued
+        if (!mod_row::isInstalled(item)) continue; // resolved some other way
+        ++m_pickServed;
+        // Rows queued while a picker was open belong to this drain too.
+        m_pickTotal = qMax(m_pickTotal, m_pickServed + int(m_pickQueue.size()));
+        // Straight back into the ordinary picker, with the files the reply
+        // already brought. autoPickMain stays off, so this is the same path
+        // the green arrow on a row takes.
+        onFileListFetched(p.row, p.game, p.modId, p.files);
+    }
+    // Anything the user waved past keeps its arrow and stops being counted.
+    for (const PendingPick &rest : std::as_const(m_pickQueue))
+        if (ModRow item = replyRow(rest.row, "file picker skipped"))
+            noteUpdateOutcome(item, UpdateOutcome::NeedsPick),
+            item->setData(ModRole::UpdateDeferred, true);
+    m_pickQueue.clear();
+    m_pickDraining = false;
+    m_pickTotal = m_pickServed = 0;
 }
 
 void MainWindow::abandonBatchedUpdate(ModRow item, UpdateOutcome why)
@@ -2472,6 +2523,14 @@ void MainWindow::noteUpdateOutcome(ModRow item, UpdateOutcome what)
 
 void MainWindow::flushUpdateNote()
 {
+    // A picker the user has not answered yet is not an outcome. One note per
+    // batch is the whole point of the delay, and a modal dialog keeps timers
+    // running - so without this a picker left open for a few seconds flushes
+    // half a tally, and the rest arrives as a second banner afterwards.
+    if (m_pickDraining) {
+        if (m_updateNoteTimer) m_updateNoteTimer->start();
+        return;
+    }
     const UpdateNote n = std::exchange(m_updateNote, UpdateNote{});
     if (n.isEmpty()) return;
 
