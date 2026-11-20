@@ -143,9 +143,13 @@ QString serializeModlist(const QList<ModEntry> &entries)
     return out;
 }
 
-QString serializeLoadOrder(const QStringList &plugins)
+QString serializeLoadOrder(const QStringList &plugins,
+                           const QString &inputsFingerprint)
 {
-    QString out = jsonLine(loadOrderHeader());
+    QJsonObject header = loadOrderHeader();
+    if (!inputsFingerprint.isEmpty())
+        header.insert(QStringLiteral("inputs"), inputsFingerprint);
+    QString out = jsonLine(header);
     out += QStringLiteral("# Plugin load order for this game profile - one filename per line.\n"
                           "# Edit via: Mods menu → Edit Load Order…\n");
     for (const QString &p : plugins) out += p + QLatin1Char('\n');
@@ -390,6 +394,19 @@ QList<ModEntry> parseModlist(const QString &contents)
         if (line.isEmpty()) continue;
         if (looksLikeV2Header(line))  return parseV2(lines);
         return parseV1(lines);   // first non-empty line was a legacy row
+    }
+    return {};
+}
+
+QString parseLoadOrderFingerprint(const QString &contents)
+{
+    for (const QString &raw : contents.split(QLatin1Char('\n'))) {
+        const QString trimmed = raw.trimmed();
+        if (trimmed.isEmpty()) continue;
+        if (!trimmed.startsWith(QLatin1Char('{'))) break;   // past the header
+        if (!looksLikeV2LoadOrderHeader(trimmed)) break;
+        return QJsonDocument::fromJson(trimmed.toUtf8())
+            .object().value(QStringLiteral("inputs")).toString();
     }
     return {};
 }

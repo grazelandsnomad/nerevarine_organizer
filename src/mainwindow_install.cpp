@@ -726,7 +726,7 @@ void MainWindow::finishInstallJob(const InstallFollowUp &follow,
         ui::warn(this, T("share_fork_failed_title"),
                  T("share_fork_failed_body").arg(QFileInfo(follow.mergeTarget).fileName()));
     if (r.merged) {
-        m_scans->invalidateDataFoldersCache(r.finalPath);
+        invalidateModScan(r.finalPath);
         if (r.forked)
             statusBar()->showMessage(
                 T("share_fork_on_merge").arg(QFileInfo(r.finalPath).fileName()), 6000);
@@ -891,7 +891,7 @@ void MainWindow::addModFromPath(const QString &dirPath, ModRow placeholder,
     item->setData(ModRole::ModPath,       dirPath);
     mod_row::setInstallStatus(item, InstallStatus::Installed); // installed
     commitInstalledFileId(item);
-    m_scans->invalidateDataFoldersCache(dirPath);      // force re-scan next time
+    invalidateModScan(dirPath);      // force re-scan next time
     // Files were just (re)written. A reinstall into the same folder keeps the
     // path and the install date, so the deploy fingerprint cannot tell - say
     // it outright, or Data/ keeps the old files with nothing on screen.
@@ -1024,7 +1024,7 @@ void MainWindow::addModFromPath(const QString &dirPath, ModRow placeholder,
         // delete can't race-wipe the freshly-installed folder.)
         if (insideMods && QDir(prevModPath).exists()
             && !modPathReferencedByOtherProfile(cleanOld)) {
-            m_scans->invalidateDataFoldersCache(prevModPath);
+            invalidateModScan(prevModPath);
             removeModFoldersAsync({prevModPath});   // off the GUI thread
             statusBar()->showMessage(T("mod_cleaned_siblings").arg(1), 5000);
         }

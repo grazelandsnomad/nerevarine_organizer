@@ -771,7 +771,7 @@ void MainWindow::onRemoveSelected()
     // linger (a future re-install of the same folder should re-scan).
     for (ModRow item : toRemove) {
         const QString mp = item->data(ModRole::ModPath).toString();
-        if (!mp.isEmpty()) m_scans->invalidateDataFoldersCache(mp);
+        if (!mp.isEmpty()) invalidateModScan(mp);
     }
 
     // A row still in the download queue leaves it first, or its reply would

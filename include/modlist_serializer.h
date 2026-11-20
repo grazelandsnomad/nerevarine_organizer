@@ -47,11 +47,20 @@ QString serializeModlist(const QList<ModEntry> &entries);
 QList<ModEntry> parseModlist(const QString &contents);
 
 // Render the load-order list as v2 text (header + one plugin per line).
-QString serializeLoadOrder(const QStringList &plugins);
+// `inputsFingerprint`, when given, rides in the v2 header line. It records
+// what the order was reconciled FROM, so the next run can tell that nothing
+// has changed and skip a reconcile that would walk every mod folder. Older
+// builds ignore unknown header keys, so a file carrying it still parses.
+QString serializeLoadOrder(const QStringList &plugins,
+                           const QString &inputsFingerprint = {});
 
 // Parse load-order text. Accepts v1 (no header, line-per-plugin, optional
 // #-comments) and v2 (schema header + line-per-plugin).
 QStringList parseLoadOrder(const QString &contents);
+
+// The fingerprint serializeLoadOrder wrote, or empty when the file predates it
+// or was written without one.
+QString parseLoadOrderFingerprint(const QString &contents);
 
 // Version the writer emits. Bumped when the on-disk shape changes
 // incompatibly.

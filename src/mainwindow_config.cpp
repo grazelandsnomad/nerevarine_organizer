@@ -245,6 +245,11 @@ const QStringList &MainWindow::loadOrderRef() const
             // parseLoadOrder transparently handles v1 (line-per-plugin,
             // optional # comments) and v2 (schema header then one per line).
             order = modlist_serializer::parseLoadOrder(contents);
+            // What that order was reconciled from, so the first reconcile of
+            // the session can tell nothing has changed and skip the walk.
+            const QString inputs =
+                modlist_serializer::parseLoadOrderFingerprint(contents);
+            if (!inputs.isEmpty()) m_reconciledInputs.insert(key, inputs);
         }
         m_loadOrders.put(key, order);
     }
@@ -265,10 +270,21 @@ QStringList &MainWindow::loadOrderRef()
 // next touch, and the active one has just been saved. The suppressed-plugin
 // set goes with it - it is a cache of the last openmw.cfg sync, and keeping a
 // stale one beside a fixed cache is how this bug happened in the first place.
+// A mod's folder changed, so both things that remember what was in it have to
+// forget: ScanCoordinator's data-folder list for that path, and the
+// reconcile fingerprint - which is keyed on row paths, and a reinstall can add
+// a plugin without any row path moving. Kept in one place because the two are
+// only correct together.
+void MainWindow::invalidateModScan(const QString &modPath)
+{
+    if (m_scans && !modPath.isEmpty()) m_scans->invalidateDataFoldersCache(modPath);
+    m_reconciledInputs.clear();
+}
+
 void MainWindow::forgetCachedLoadOrders()
 {
     m_loadOrders.clear();
-    m_sortedOrderMemo.clear();
+    m_reconciledInputs.clear();
     m_suppressedPlugins.clear();
 }
 
@@ -285,7 +301,8 @@ void MainWindow::saveLoadOrder()
 {
     const QString path = loadOrderPath();
     if (const auto err = modlist_io::writeLoadOrderFile(
-            path, modlist_serializer::serializeLoadOrder(loadOrderRef())))
+            path, modlist_serializer::serializeLoadOrder(
+                      loadOrderRef(), m_reconciledInputs.value(path))))
         onAsyncWriteFailed(path, *err);
 }
 
@@ -381,9 +398,48 @@ void MainWindow::absorbExternalLoadOrder()
 // declared inside each plugin so OpenMW never sees a parent loaded after its
 // child (the "Stargazer - Telescopes Cyrodiil asks for parent file
 // Stargazer - Telescopes" crash). Uninstalled plugins are removed.
+// What reconcileLoadOrder reads, as one string, without touching a single file:
+// the path of every row it would consider installed, plus the order it starts
+// from. Identical input, identical output - which is what lets the whole
+// function be skipped.
+QString MainWindow::loadOrderInputsFingerprint() const
+{
+    QStringList parts;
+    const QList<ModEntry> rows = const_cast<MainWindow *>(this)->m_model.all();
+    for (const ModEntry &it : rows) {
+        if (!it.isMod()) continue;
+        if (!placeholder_state::folderInstalled(it.installStatus, it.modPath)) continue;
+        parts << it.modPath;
+    }
+    // Unit separator between the two halves so no row path can be mistaken for
+    // a plugin name, as sourceFingerprint does for the same reason.
+    const QString joined = parts.join(QChar(0x1e)) + QChar(0x1f)
+                         + loadOrderRef().join(QChar(0x1e));
+    return QString::fromLatin1(QCryptographicHash::hash(
+        joined.toUtf8(), QCryptographicHash::Sha1).toHex());
+}
+
 void MainWindow::reconcileLoadOrder()
 {
     static const QStringList contentExts{".esp", ".esm", ".omwaddon", ".omwscripts"};
+
+    QElapsedTimer rTotal; rTotal.start();
+    QElapsedTimer rPhase; rPhase.start();
+
+    // The loop below asks ScanCoordinator for every installed mod's data
+    // folders, and a cache miss walks the folder there and then, on this
+    // thread. Cold over 409 mods that measured 38 seconds of a profile
+    // switch. Nothing it reads has changed since the last reconcile unless a
+    // row changed, so the fingerprint above is the whole guard - and it is
+    // seeded from the order file, so the first switch of a session is covered
+    // too, which an in-memory memo alone would miss.
+    const QString key = loadOrderPath();
+    const QString inputsBefore = loadOrderInputsFingerprint();
+    if (m_reconciledInputs.value(key) == inputsBefore) {
+        qCDebug(logging::lcModList).nospace()
+            << "reconcileLoadOrder: inputs unchanged, skipped";
+        return;
+    }
 
     // filename → absolute path for every installed plugin we see.  Used
     // both to decide presence and to feed readTes3Masters() below.
@@ -404,6 +460,8 @@ void MainWindow::reconcileLoadOrder()
                 pathByName.insert(cf, p.first + "/" + cf);
     }
 
+    const qint64 ms_paths = rPhase.restart();
+
     // Drop plugins that no longer have an installed owner.
     auto endIt = std::remove_if(loadOrderRef().begin(), loadOrderRef().end(),
         [&](const QString &cf) { return !pathByName.contains(cf); });
@@ -413,6 +471,8 @@ void MainWindow::reconcileLoadOrder()
     // the modlist top-to-bottom so newly-installed mods land beneath the
     // existing list in a predictable position; the topo pass below will
     // lift their masters above any dependents.
+    const qint64 ms_drop = rPhase.restart();
+
     QSet<QString> inList(loadOrderRef().begin(), loadOrderRef().end());
     // Saved order (identity unless a temporary view sort is active) so newly
     // discovered plugins append in load-order position, never the sorted display.
@@ -452,12 +512,7 @@ void MainWindow::reconcileLoadOrder()
     // looked up multiple times within a single topo sort - it's a
     // hot-path memo on top of the cross-call mtime cache.
     QHash<QString, QStringList> reconcileMemo;
-    // The sort's mastersOf callback stats every plugin file, which is the
-    // whole cost of this phase on a mods drive behind FUSE. Same input, same
-    // output: when the list has not moved since the last sort there is nothing
-    // to learn by asking again.
-    const QString sortKey = loadOrderPath();
-    if (m_sortedOrderMemo.value(sortKey) == loadOrderRef()) return;
+    const qint64 ms_append = rPhase.restart();
 
     loadOrderRef() = loadorder::topologicallySortByMasters(
         loadOrderRef(),
@@ -470,7 +525,17 @@ void MainWindow::reconcileLoadOrder()
             reconcileMemo.insert(name, ms);
             return ms;
         });
-    m_sortedOrderMemo.insert(sortKey, loadOrderRef());
+    const qint64 ms_sort = rPhase.elapsed();
+
+    // The order moved, so the fingerprint that describes it has to be the one
+    // computed from the result.
+    m_reconciledInputs.insert(key, loadOrderInputsFingerprint());
+
+    qCInfo(logging::lcModList).nospace()
+        << "reconcileLoadOrder ms total=" << rTotal.elapsed()
+        << " paths=" << ms_paths << " drop=" << ms_drop
+        << " append=" << ms_append << " sort=" << ms_sort
+        << " plugins=" << loadOrderRef().size();
 }
 
 static QString detectLootBinary()

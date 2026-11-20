@@ -1007,6 +1007,40 @@ static void testUpdateMarksAcrossASave()
     check("and reads back as never", !back.isEmpty() && !back[0].confirmedCurrentAt.isValid());
 }
 
+// The order file carries what the order was reconciled FROM, so the next run
+// can tell nothing has changed and skip a walk of every mod folder. It rides in
+// the v2 header, which older builds ignore.
+static void testLoadOrderCarriesItsInputFingerprint()
+{
+    std::cout << "\n[load order: the file remembers what it was built from]\n";
+    const QStringList order{QStringLiteral("Morrowind.esm"), QStringLiteral("Mod.esp")};
+
+    const QString withFp = modlist_serializer::serializeLoadOrder(order, QStringLiteral("abc123"));
+    check("the order round-trips with a fingerprint present",
+          modlist_serializer::parseLoadOrder(withFp) == order,
+          modlist_serializer::parseLoadOrder(withFp).join(','));
+    check("and the fingerprint comes back",
+          modlist_serializer::parseLoadOrderFingerprint(withFp) == QStringLiteral("abc123"),
+          modlist_serializer::parseLoadOrderFingerprint(withFp));
+
+    // Written without one, which is every file this release has produced so
+    // far: the order still parses and the fingerprint is simply absent, so the
+    // next reconcile runs rather than wrongly skipping.
+    const QString without = modlist_serializer::serializeLoadOrder(order);
+    check("a file written without one still parses",
+          modlist_serializer::parseLoadOrder(without) == order);
+    check("and reports no fingerprint",
+          modlist_serializer::parseLoadOrderFingerprint(without).isEmpty());
+
+    // A v1 file, no header line at all.
+    const QString v1 = QStringLiteral("# comment\nMorrowind.esm\nMod.esp\n");
+    check("a legacy file parses and reports none",
+          modlist_serializer::parseLoadOrder(v1) == order
+              && modlist_serializer::parseLoadOrderFingerprint(v1).isEmpty());
+    check("junk reports none rather than crashing",
+          modlist_serializer::parseLoadOrderFingerprint(QStringLiteral("{ not json")).isEmpty());
+}
+
 static void run_modlist_serialization()
 {
     using namespace serialization_section;
@@ -1426,6 +1460,8 @@ int main(int argc, char **argv)
     run_modlist_io();
     std::cout << "\n";
     run_modlist_serialization();
+    std::cout << "\n";
+    testLoadOrderCarriesItsInputFingerprint();
     std::cout << "\n";
     run_modentry();
     std::cout << "\n";

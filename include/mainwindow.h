@@ -768,9 +768,10 @@ private:
     // hashed them. Mutable because it is a cache that fills itself on first
     // touch - which is why no switch site has to remember to reload it.
     mutable loadorder::Store m_loadOrders;
-    // Per load-order file, the list the topo sort last produced. The sort's
-    // master lookup stats every plugin, so an unmoved list is not re-sorted.
-    QHash<QString, QStringList> m_sortedOrderMemo;
+    // Per load-order file, a fingerprint of what the order was last
+    // reconciled FROM. Seeded from the file itself, so a session that changes
+    // nothing never walks a mod folder to re-derive an order it already has.
+    mutable QHash<QString, QString> m_reconciledInputs;
     QSet<QString> m_suppressedPlugins;
     // The active game's order, read from its own file on a cache miss. The
     // only way to the list, so the key is always resolved first.
@@ -778,6 +779,11 @@ private:
     const QStringList &loadOrderRef() const;
     // Called after any profile rename, clone or delete.
     void               forgetCachedLoadOrders();
+    // Everything reconcileLoadOrder reads, hashed, without touching a file.
+    QString            loadOrderInputsFingerprint() const;
+    // Forget what was in a mod folder: the scan cache and the reconcile
+    // fingerprint together. Use this rather than either one alone.
+    void               invalidateModScan(const QString &modPath);
     QString     loadOrderPath() const;
     void        loadLoadOrder();
     void        saveLoadOrder() override;
