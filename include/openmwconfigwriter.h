@@ -85,7 +85,7 @@ QString renderLauncherCfg(const QString     &existingLauncherCfg,
 // absorbExternalLoadOrder's "user reordered in the Data Files tab" recovery:
 // the launcher rewrites its per-profile content= list on every reorder, even
 // when closed without Save/Play (so openmw.cfg stays stale). Miss this and the
-// next sync rewrites openmw.cfg from a stale m_loadOrder, clobbering the reorder.
+// next sync rewrites openmw.cfg from a stale load order, clobbering the reorder.
 //
 // Empty list when there's no `[Profiles]` section, no `currentprofile=` key,
 // or the profile has no `<ts>/content=` lines.
@@ -124,7 +124,7 @@ struct SyncPrepareInputs {
 };
 
 // Output of prepareForSync, fed into renderOpenMWConfig + the async writers.
-// Caller sets m_loadOrder = persistLoadOrder when changed, posts a status
+// Caller sets its load order to persistLoadOrder when changed, posts a status
 // message when droppedOrphans > 0.
 struct SyncPrepareResult {
     QString          scrubbedExisting;     // input to renderOpenMWConfig
@@ -151,7 +151,7 @@ SyncPrepareResult prepareForSync(const SyncPrepareInputs &in);
 // Decoded openmw.cfg bits we need for the "import existing setup" flow.
 // Encounter order is preserved for all three lists: openmw loads data= and
 // walks content=/groundcover= in declaration order, so the importer can feed
-// these straight into m_loadOrder.
+// these straight into the load order.
 struct ImportEntries {
     QStringList dataPaths;        // unquoted, encounter-ordered
     QStringList contentFiles;     // plugin basenames as they appear

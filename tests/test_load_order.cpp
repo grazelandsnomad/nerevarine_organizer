@@ -67,6 +67,44 @@ static void expect(const char *name,
 
 } // namespace lom
 
+// The order belongs to a game, not to the window. Switching game used to leave
+// the previous game's plugins in the one list the window kept, and the deploy
+// fingerprint hashed them - which is how switching away and back said a mod
+// list had changed when nothing had.
+static void run_load_order_store()
+{
+    std::cout << "=== load_order store tests ===\n";
+    loadorder::Store st;
+
+    const QString cp = QStringLiteral("/state/loadorder_cyberpunk2077__Default.txt");
+    const QString mw = QStringLiteral("/state/loadorder_morrowind.txt");
+
+    check("a key nobody has written reads empty, as a game with no file must",
+          st.get(cp).isEmpty() && !st.has(cp));
+    check("and reading it did not create it", st.size() == 0,
+          QString::number(st.size()));
+
+    st.put(mw, {QStringLiteral("Morrowind.esm"), QStringLiteral("Tribunal.esm")});
+    check("one game's order does not reach another's",
+          st.get(cp).isEmpty() && st.get(mw).size() == 2,
+          QString::number(st.get(cp).size()));
+
+    // The 24 call sites in the window mutate in place, so the handle has to be
+    // a reference that creates on demand.
+    st.ref(cp) << QStringLiteral("Only.esp");
+    check("ref creates and the write sticks",
+          st.get(cp) == QStringList{QStringLiteral("Only.esp")}, st.get(cp).join(','));
+    check("and the other key is untouched", st.get(mw).size() == 2);
+
+    // A rename or a delete changes the filename, so the old key would shadow
+    // a file it no longer names.
+    st.forget(cp);
+    check("forget drops one key and leaves the other",
+          !st.has(cp) && st.has(mw) && st.size() == 1, QString::number(st.size()));
+    st.clear();
+    check("clear drops them all", st.size() == 0 && !st.has(mw));
+}
+
 static void run_load_order_merge()
 {
     using lom::expect;
@@ -3018,6 +3056,7 @@ int main(int argc, char **argv)
     QApplication app(argc, argv);
 
     run_load_order_merge();
+    run_load_order_store();
     run_scan_coordinator();
     run_conflict_direction();
     run_plugin_records();

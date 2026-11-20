@@ -91,4 +91,11 @@ QStringList topologicallySortByMasters(
     return out;
 }
 
+const QStringList &Store::get(const QString &key) const
+{
+    static const QStringList kEmpty;
+    const auto it = m_byKey.constFind(key);
+    return it == m_byKey.constEnd() ? kEmpty : *it;
+}
+
 } // namespace loadorder

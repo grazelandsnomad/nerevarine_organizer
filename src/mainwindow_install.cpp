@@ -1113,7 +1113,7 @@ void MainWindow::addModFromPath(const QString &dirPath, ModRow placeholder,
 
     QElapsedTimer saveTimer;
     saveTimer.start();
-    saveModList();         // reconciles m_loadOrder (adds the new plugins)
+    saveModList();         // reconciles loadOrderRef() (adds the new plugins)
     qCDebug(logging::lcInstall) << "post-install saveModList ms=" << saveTimer.elapsed();
     // LOOT sorting is on-demand now - toolbar button "Sort with LOOT".
     updateModCount();

@@ -32,6 +32,7 @@
 #include "nexusclient.h"
 #include "game_profiles.h"
 #include "download_watch.h"   // Watcher* member, and StickyKind routing
+#include "load_order_merge.h"
 #include "modentry.h"
 #include "deps_resolver.h"            // ModEntry complete type: QList<ModEntry> by value below
 #include "game_runtime.h"             // game_runtime::Probe, cached per profile
@@ -85,8 +86,8 @@ public:
     QString currentGameName() const override;
     QString modsDir() const override { return m_modsDir; }
     void    setModsDir(const QString &dir) override;
-    QStringList loadOrder() const override { return m_loadOrder; }
-    void        setLoadOrder(const QStringList &order) override { m_loadOrder = order; }
+    QStringList loadOrder() const override { return loadOrderRef(); }
+    void        setLoadOrder(const QStringList &order) override { loadOrderRef() = order; }
     UndoStack             *undo() override { return m_undoStack; }
     ForbiddenModsRegistry *forbidden() override { return m_forbidden; }
     QString openmwPath() const override { return m_openmwPath; }
@@ -735,10 +736,10 @@ private:
     // left painted on a row.
     void clearTranslationMarks();
 
-    // Plugin load-order, decoupled from the visual mod list. m_loadOrder is the
+    // Plugin load-order, decoupled from the visual mod list. loadOrderRef() is
     // ordered plugin filenames written as `content=` lines to openmw.cfg,
     // independent of the on-screen mod order. Lifecycle:
-    //   loadLoadOrder()      - read from disk on startup (file per game)
+    //   loadLoadOrder()      - force a re-read of the active game's file
     //   reconcileLoadOrder() - add new / drop removed plugins; from saveModList()
     //                          so it tracks installed mods (enabled or not)
     //   autoSortLoadOrder()  - topo sort masters above dependents, stable
@@ -748,8 +749,20 @@ private:
     // A plugin held back for a missing master keeps its place here but is not
     // written as content=; m_suppressedPlugins, from the last openmw.cfg sync,
     // says which ones those are.
-    QStringList m_loadOrder;
+    //
+    // One list per load-order file rather than one for the window: the file
+    // was always per game and only this copy was not, so a switch used to
+    // leave the previous game's plugins in it and the deploy fingerprint
+    // hashed them. Mutable because it is a cache that fills itself on first
+    // touch - which is why no switch site has to remember to reload it.
+    mutable loadorder::Store m_loadOrders;
     QSet<QString> m_suppressedPlugins;
+    // The active game's order, read from its own file on a cache miss. The
+    // only way to the list, so the key is always resolved first.
+    QStringList       &loadOrderRef();
+    const QStringList &loadOrderRef() const;
+    // Called after any profile rename, clone or delete.
+    void               forgetCachedLoadOrders();
     QString     loadOrderPath() const;
     void        loadLoadOrder();
     void        saveLoadOrder() override;

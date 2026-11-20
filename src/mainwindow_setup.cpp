@@ -1512,7 +1512,7 @@ void MainWindow::onCreateDiagnosticBundle()
     s << "Enabled           : " << enabled << "\n";
     s << "Separators        : " << sepCount << "\n";
     s << "In-flight installs: " << installing << "\n";
-    s << "Load-order length : " << m_loadOrder.size() << "\n";
+    s << "Load-order length : " << loadOrderRef().size() << "\n";
 
     s << "\n[Files included]\n";
     s << "modlist           : " << (gotModlist ? "yes" : "no") << "\n";
@@ -2056,6 +2056,7 @@ void MainWindow::onManageModlistProfiles()
             ui::warn(&dlg, T("profile_clone_title"), T("profile_new_collision").arg(name));
             return;
         }
+        forgetCachedLoadOrders();
         refresh();
     });
     connect(renameBtn, &QPushButton::clicked, &dlg, [&]() {
@@ -2070,6 +2071,7 @@ void MainWindow::onManageModlistProfiles()
             ui::warn(&dlg, T("profile_rename_title"), T("profile_new_collision").arg(name));
             return;
         }
+        forgetCachedLoadOrders();
         refresh();
         updateProfileButton();
     });
@@ -2104,6 +2106,7 @@ void MainWindow::onManageModlistProfiles()
             ui::warn(&dlg, T("profile_delete_title"), T("profile_delete_failed"));
             return;
         }
+        forgetCachedLoadOrders();
         // Removing the active profile already promoted a sibling in the
         // registry; pull its state into this window.
         if (wasActive) {
@@ -2178,6 +2181,7 @@ void MainWindow::updateProfileButton()
             ui::warn(this, T("profile_rename_title"), T("profile_new_collision").arg(name));
             return;
         }
+        forgetCachedLoadOrders();
         updateProfileButton();
     });
     QAction *newAct = menu->addAction(T("profile_menu_new"));

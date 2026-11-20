@@ -463,7 +463,7 @@ MainWindow::MainWindow(QWidget *parent)
     absorbExternalLoadOrder(); // respect reorders done in OpenMW Launcher
     m_downloadQueue->cleanStaleDownloads();
     repairEmptyModPaths();
-    MainWindow::reconcileLoadOrder();  // bring m_loadOrder up-to-date with installed mods
+    MainWindow::reconcileLoadOrder();  // bring loadOrderRef() up-to-date with installed mods
     MainWindow::syncGameConfig();
     MainWindow::scanMissingMasters();
     MainWindow::updateSectionCounts();

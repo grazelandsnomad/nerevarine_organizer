@@ -228,30 +228,69 @@ void MainWindow::maybeShowBackupMirrorNotice()
                            QUrl::fromLocalFile(mirror).toString());
 }
 
+// The active game's plugin order. Fills the cache from that game's own file on
+// a miss, so every read resolves the key first and no caller can be handed
+// another game's list. A game with no file reads as an empty order, which is
+// what loadLoadOrder() used to arrange by clearing before it read.
+const QStringList &MainWindow::loadOrderRef() const
+{
+    const QString key = loadOrderPath();
+    if (!m_loadOrders.has(key)) {
+        QStringList order;
+        QFile f(key);
+        if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            const QString contents = QString::fromUtf8(f.readAll());
+            f.close();
+            // parseLoadOrder transparently handles v1 (line-per-plugin,
+            // optional # comments) and v2 (schema header then one per line).
+            order = modlist_serializer::parseLoadOrder(contents);
+        }
+        m_loadOrders.put(key, order);
+    }
+    return m_loadOrders.get(key);
+}
+
+QStringList &MainWindow::loadOrderRef()
+{
+    // Through the const one first, purely to populate; then hand back the
+    // entry itself, since most callers here mutate in place.
+    static_cast<const MainWindow *>(this)->loadOrderRef();
+    return m_loadOrders.ref(loadOrderPath());
+}
+
+// Profile churn renames, copies or removes load-order files, so a cached
+// entry under the old path would shadow the file it no longer names. Dropped
+// wholesale rather than re-keyed: every key reads its own file back on the
+// next touch, and the active one has just been saved. The suppressed-plugin
+// set goes with it - it is a cache of the last openmw.cfg sync, and keeping a
+// stale one beside a fixed cache is how this bug happened in the first place.
+void MainWindow::forgetCachedLoadOrders()
+{
+    m_loadOrders.clear();
+    m_suppressedPlugins.clear();
+}
+
 void MainWindow::loadLoadOrder()
 {
-    m_loadOrder.clear();
-    QFile f(loadOrderPath());
-    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return;
-    const QString contents = QString::fromUtf8(f.readAll());
-    f.close();
-    // parseLoadOrder transparently handles v1 (line-per-plugin, optional
-    // # comments) and v2 (schema header followed by line-per-plugin).
-    m_loadOrder = modlist_serializer::parseLoadOrder(contents);
+    // A forced re-read of the active game's file, for the callers that want
+    // the file rather than whatever is cached: startup, and anything that
+    // knows the file was written behind our back.
+    m_loadOrders.forget(loadOrderPath());
+    (void)loadOrderRef();
 }
 
 void MainWindow::saveLoadOrder()
 {
     const QString path = loadOrderPath();
     if (const auto err = modlist_io::writeLoadOrderFile(
-            path, modlist_serializer::serializeLoadOrder(m_loadOrder)))
+            path, modlist_serializer::serializeLoadOrder(loadOrderRef())))
         onAsyncWriteFailed(path, *err);
 }
 
 // Reads the `content=` list from openmw.cfg in their current order.
 // Linux path only for now - matches the rest of our Morrowind-profile code.
 // Used after LOOT writes a newly-sorted cfg to pull the order back into
-// m_loadOrder, and at startup to respect reorders done in OpenMW Launcher.
+// loadOrderRef(), and at startup to respect reorders done in OpenMW Launcher.
 static QStringList readOpenMWContentOrder()
 {
     QStringList out;
@@ -269,12 +308,12 @@ static QStringList readOpenMWContentOrder()
 
 // If openmw.cfg has been modified more recently than our loadorder file
 // (typically because the user reordered plugins in the OpenMW Launcher
-// between sessions), rewrite m_loadOrder so the managed content= order from
+// between sessions), rewrite loadOrderRef() so the managed content= order from
 // openmw.cfg wins. Without this step, Nerevarine would overwrite the
 // launcher's changes on the next syncOpenMWConfig() call.
 //
 // Only active for the Morrowind profile (that's where we sync openmw.cfg).
-// Entries in m_loadOrder that don't appear in openmw.cfg (disabled mods,
+// Entries in loadOrderRef() that don't appear in openmw.cfg (disabled mods,
 // plugins the launcher filtered out, etc.) keep their relative positions.
 void MainWindow::absorbExternalLoadOrder()
 {
@@ -293,12 +332,12 @@ void MainWindow::absorbExternalLoadOrder()
 
     // Two external signals, two separate mtime gates.  Either one being
     // newer than our loadorder file means the user touched something we
-    // haven't absorbed yet and our m_loadOrder is a stale baseline.
+    // haven't absorbed yet and our loadOrderRef() is a stale baseline.
     const bool cfgNewer      = cfgInfo.exists()      && (!loInfo.exists() || cfgMtime > loMtime);
     const bool launcherNewer = launcherInfo.exists() && (!loInfo.exists() || lcMtime  > loMtime);
     if (!cfgNewer && !launcherNewer) return;
 
-    QStringList merged = m_loadOrder;
+    QStringList merged = loadOrderRef();
 
     // Pass 1: openmw.cfg. Catches the launcher-reorder case: user reorders,
     // clicks Save/Play, launcher writes content= order to openmw.cfg.
@@ -313,7 +352,7 @@ void MainWindow::absorbExternalLoadOrder()
     // closes without clicking Save/Play - openmw.cfg stays on the old
     // order but launcher.cfg already reflects the new one. Without
     // reading this signal here, the launcher.cfg sync would rewrite
-    // launcher.cfg from a stale m_loadOrder and clobber the reorder.
+    // launcher.cfg from a stale loadOrderRef() and clobber the reorder.
     if (launcherNewer) {
         QFile lf(launcherPath);
         if (lf.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -326,13 +365,13 @@ void MainWindow::absorbExternalLoadOrder()
         }
     }
 
-    if (merged != m_loadOrder) {
-        m_loadOrder = merged;
+    if (merged != loadOrderRef()) {
+        loadOrderRef() = merged;
         saveLoadOrder();
     }
 }
 
-// Ensure m_loadOrder contains exactly the plugin filenames that are currently
+// Ensure loadOrderRef() contains exactly the plugin filenames that are currently
 // installed (placeholder_state::folderInstalled: an installed mod, or one mid-
 // reinstall whose folder is still there), preserving existing positions for
 // plugins already present. New plugins are appended to the end; a topological
@@ -364,15 +403,15 @@ void MainWindow::reconcileLoadOrder()
     }
 
     // Drop plugins that no longer have an installed owner.
-    auto endIt = std::remove_if(m_loadOrder.begin(), m_loadOrder.end(),
+    auto endIt = std::remove_if(loadOrderRef().begin(), loadOrderRef().end(),
         [&](const QString &cf) { return !pathByName.contains(cf); });
-    m_loadOrder.erase(endIt, m_loadOrder.end());
+    loadOrderRef().erase(endIt, loadOrderRef().end());
 
     // Append new plugins. Preserve the order they were discovered in - walk
     // the modlist top-to-bottom so newly-installed mods land beneath the
     // existing list in a predictable position; the topo pass below will
     // lift their masters above any dependents.
-    QSet<QString> inList(m_loadOrder.begin(), m_loadOrder.end());
+    QSet<QString> inList(loadOrderRef().begin(), loadOrderRef().end());
     // Saved order (identity unless a temporary view sort is active) so newly
     // discovered plugins append in load-order position, never the sorted display.
     const QList<int> loOrder = rowOrderForPersist();
@@ -396,7 +435,7 @@ void MainWindow::reconcileLoadOrder()
                 });
             for (const QString &cf : files) {
                 if (!inList.contains(cf)) {
-                    m_loadOrder.append(cf);
+                    loadOrderRef().append(cf);
                     inList.insert(cf);
                 }
             }
@@ -411,8 +450,8 @@ void MainWindow::reconcileLoadOrder()
     // looked up multiple times within a single topo sort - it's a
     // hot-path memo on top of the cross-call mtime cache.
     QHash<QString, QStringList> reconcileMemo;
-    m_loadOrder = loadorder::topologicallySortByMasters(
-        m_loadOrder,
+    loadOrderRef() = loadorder::topologicallySortByMasters(
+        loadOrderRef(),
         [this, &pathByName, &reconcileMemo](const QString &name) -> QStringList {
             auto it = reconcileMemo.constFind(name);
             if (it != reconcileMemo.constEnd()) return it.value();
@@ -468,7 +507,7 @@ static QString detectLootBinary()
 
 void MainWindow::autoSortLoadOrder()
 {
-    if (m_loadOrder.size() <= 1) return;
+    if (loadOrderRef().size() <= 1) return;
 
     QString loot = detectLootBinary();
     if (loot.isEmpty()) {
@@ -481,7 +520,7 @@ void MainWindow::autoSortLoadOrder()
         return;
     }
 
-    // Make sure openmw.cfg on disk reflects our current m_loadOrder - LOOT
+    // Make sure openmw.cfg on disk reflects our current loadOrderRef() - LOOT
     // reads & writes whatever is in the cfg.
     syncGameConfig();
 
@@ -580,9 +619,9 @@ void MainWindow::autoSortLoadOrder()
 
     if (!finishedOk) return;
 
-    // Pull the new order back from openmw.cfg and splice it into m_loadOrder,
+    // Pull the new order back from openmw.cfg and splice it into loadOrderRef(),
     // preserving the relative positions of plugins whose mods are disabled
-    // (those aren't in the cfg but still live in m_loadOrder).
+    // (those aren't in the cfg but still live in loadOrderRef()).
     const QStringList sortedActive = readOpenMWContentOrder();
     if (sortedActive.isEmpty()) {
         statusBar()->showMessage(T("loot_empty_cfg"), 6000);
@@ -592,7 +631,7 @@ void MainWindow::autoSortLoadOrder()
     QSet<QString> activeSet(sortedActive.begin(), sortedActive.end());
     QStringList merged;
     int idx = 0;
-    for (const QString &cf : m_loadOrder) {
+    for (const QString &cf : loadOrderRef()) {
         if (activeSet.contains(cf)) {
             if (idx < sortedActive.size())
                 merged.append(sortedActive[idx++]);
@@ -601,7 +640,7 @@ void MainWindow::autoSortLoadOrder()
         }
     }
     while (idx < sortedActive.size()) merged.append(sortedActive[idx++]);
-    m_loadOrder = merged;
+    loadOrderRef() = merged;
 
     statusBar()->showMessage(T("loot_done"), 4000);
 }
@@ -632,7 +671,7 @@ void MainWindow::saveModList()
     // Pick up any reorder the user did in the OpenMW Launcher between
     // launches.  Without this, saving the modlist (triggered by any mod-list
     // mutation - checkbox toggle, drag-drop, install) would rewrite
-    // openmw.cfg from the stale m_loadOrder and wipe the launcher's reorder.
+    // openmw.cfg from the stale loadOrderRef() and wipe the launcher's reorder.
     // absorbExternalLoadOrder is mtime-gated so it's a no-op when we wrote
     // loadorder more recently than openmw.cfg, which correctly leaves our
     // own reorders (Edit Load Order dialog, LOOT sort) untouched.
@@ -746,7 +785,7 @@ void MainWindow::onEditLoadOrder()
 {
     reconcileLoadOrder(); // make sure the list reflects what's actually installed
 
-    if (m_loadOrder.isEmpty()) {
+    if (loadOrderRef().isEmpty()) {
         ui::info(this, T("loadorder_title"), T("loadorder_empty"));
         return;
     }
@@ -787,7 +826,7 @@ void MainWindow::onEditLoadOrder()
     list->setAlternatingRowColors(true);
 
     QFont mono("monospace");
-    for (const QString &cf : m_loadOrder) {
+    for (const QString &cf : loadOrderRef()) {
         auto *row = new QListWidgetItem(cf, list);
         row->setFont(mono);
         if (!enabledSet.contains(cf)) {
@@ -830,13 +869,13 @@ void MainWindow::onEditLoadOrder()
     // then rebuild the list UI. Cancel/Close still discards if the user doesn't
     // commit with OK.
     connect(autoBtn, &QPushButton::clicked, &dlg, [this, list]{
-        m_loadOrder.clear();
+        loadOrderRef().clear();
         for (int i = 0; i < list->count(); ++i)
-            m_loadOrder.append(list->item(i)->text());
+            loadOrderRef().append(list->item(i)->text());
         autoSortLoadOrder();
         list->clear();
         QFont rowFont("monospace");
-        for (const QString &cf : m_loadOrder) {
+        for (const QString &cf : loadOrderRef()) {
             auto *row = new QListWidgetItem(cf, list);
             row->setFont(rowFont);
             if (cf.endsWith(".esm", Qt::CaseInsensitive))
@@ -853,9 +892,9 @@ void MainWindow::onEditLoadOrder()
     if (dlg.exec() != QDialog::Accepted) return;
 
     // Apply edits.
-    m_loadOrder.clear();
+    loadOrderRef().clear();
     for (int i = 0; i < list->count(); ++i)
-        m_loadOrder.append(list->item(i)->text());
+        loadOrderRef().append(list->item(i)->text());
     saveLoadOrder();
     syncGameConfig();
     statusBar()->showMessage(T("loadorder_applied"), 3000);
@@ -1021,7 +1060,7 @@ void MainWindow::runMissingMastersScan()
         // before this (m_suppressedPlugins), and flagging it afterwards is
         // warning about a file OpenMW is never told to open. See
         // master_satisfaction.h.
-        for (const auto &pr : openmw::carriedBy(shipped, m_loadOrder,
+        for (const auto &pr : openmw::carriedBy(shipped, loadOrderRef(),
                                                 m_suppressedPlugins))
             e.plugins.append({pr.fullPath, pr.filename});
         if (e.plugins.isEmpty()) continue;
@@ -1356,7 +1395,7 @@ void MainWindow::syncOpenMWConfig()
     prep.disabledModPaths = std::move(disabledModPaths);
     prep.modsRoot         = m_modsDir.isEmpty() ? QString()
                                                 : QDir::cleanPath(m_modsDir);
-    prep.loadOrder        = m_loadOrder;
+    prep.loadOrder        = loadOrderRef();
 
     openmw::SyncPrepareResult prepared = openmw::prepareForSync(prep);
     mods = std::move(prepared.mods);
@@ -1365,8 +1404,8 @@ void MainWindow::syncOpenMWConfig()
     // Plugins held back for a missing master keep their places in the order
     // kept (persistLoadOrder), so they return to them when the master does.
     m_suppressedPlugins = prepared.suppressedPlugins;
-    if (prepared.persistLoadOrder != m_loadOrder) {
-        m_loadOrder = prepared.persistLoadOrder;
+    if (prepared.persistLoadOrder != loadOrderRef()) {
+        loadOrderRef() = prepared.persistLoadOrder;
         saveLoadOrder();
     }
 
