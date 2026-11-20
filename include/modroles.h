@@ -149,6 +149,17 @@ namespace ModRole {
     //
     // Cleared by the next check and by an install landing. Session-only.
     constexpr int UpdateDeferred        = Qt::UserRole + 69; // bool
+    // When this row's Nexus page was last read for an update, successfully.
+    // A check skips a row stamped inside update_budget::kRecheckWindowSecs and
+    // reuses what it already knows, because a check is one request per mod and
+    // clicking it twice used to mean asking Nexus about 409 mods twice.
+    //
+    // Written only on a reply that parsed: a network error or a refusal must
+    // never read as "asked and answered", or it would hide a real update until
+    // the window passed. Distinct from ConfirmedCurrentAt, which means the
+    // installed FILE was checked and is newest; this means the PAGE was read.
+    // Persisted as "checked_at", invalid == never asked.
+    constexpr int LastCheckedAt         = Qt::UserRole + 70; // QDateTime
     constexpr int VideoUrl              = Qt::UserRole + 35; // QString: YouTube video URL
     constexpr int SourceUrl             = Qt::UserRole + 36; // QString: non-Nexus download page (GitHub, etc.)
     // Set by handleNxmUrl when an installed row is reused as the placeholder

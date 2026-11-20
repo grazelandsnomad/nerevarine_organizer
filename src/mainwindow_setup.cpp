@@ -214,6 +214,12 @@ void MainWindow::setupMenuBar()
     m_actMenuSortLoot->setVisible(!lootGameFor(currentProfile().id).isEmpty());
     modsMenu->addSeparator();
     modsMenu->addAction(T("menu_check_updates"),   this, &MainWindow::onCheckUpdates);
+    // The escape hatch for the skip window: somebody told you a mod updated an
+    // hour ago and the ordinary check would reuse this morning's answer.
+    modsMenu->addAction(T("menu_check_updates_all"), this, [this] {
+        m_forceNextCheck = true;
+        onCheckUpdates();
+    });
     modsMenu->addAction(T("menu_review_updates"),  this, &MainWindow::onReviewUpdates);
     modsMenu->addAction(T("menu_restore_backup"),  this,
                         [this]{ m_backups->showRestoreBackupDialog(this); });

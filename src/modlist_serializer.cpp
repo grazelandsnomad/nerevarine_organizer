@@ -116,6 +116,10 @@ QJsonObject modToJson(const ModEntry &e)
     // No v1 counterpart, like "file": an older build reading this ignores it.
     if (e.confirmedCurrentAt.isValid())
         o.insert(QStringLiteral("current_at"), e.confirmedCurrentAt.toString(Qt::ISODate));
+    // When the page was last read. Saved so the skip window survives a restart
+    // - otherwise reopening the app is a free pass to spend 409 requests.
+    if (e.lastCheckedAt.isValid())
+        o.insert(QStringLiteral("checked_at"), e.lastCheckedAt.toString(Qt::ISODate));
     if (e.isUtility)                 o.insert(QStringLiteral("utility"),  true);
     if (e.isGeneratedTranslation)
         o.insert(QStringLiteral("generated_translation"), true);
@@ -209,6 +213,8 @@ ModEntry modFromJson(const QJsonObject &o)
     e.updateAvailable = o.value(QStringLiteral("update")).toBool(false);
     e.confirmedCurrentAt = QDateTime::fromString(
                        o.value(QStringLiteral("current_at")).toString(), Qt::ISODate);
+    e.lastCheckedAt      = QDateTime::fromString(
+                       o.value(QStringLiteral("checked_at")).toString(), Qt::ISODate);
     e.isUtility       = o.value(QStringLiteral("utility")).toBool(false);
     // No v1 counterpart: the tab format predates the translate editor, so a
     // v1 list cannot hold one of these.

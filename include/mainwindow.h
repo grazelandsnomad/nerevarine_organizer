@@ -946,6 +946,8 @@ private:
     int          m_checksRunning    = 0;        // checks dispatched, not yet finished
     int          m_checkTotal       = 0;        // mods the running check is asking about
     int          m_checkDone        = 0;        // ...and how many have answered
+    // The next check ignores the skip window: set by "Check for Updates (all)".
+    bool         m_forceNextCheck   = false;
     bool         m_updateAllMode    = false;    // the button reads Update All
     // The Start buttons while a launch is under way. Two of them because the
     // toolbar carries a Morrowind twin, and only one is ever visible.

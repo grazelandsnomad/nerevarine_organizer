@@ -16,6 +16,7 @@
 #include <QUrlQuery>
 #include <QRegularExpression>
 #include "load_order_merge.h"
+#include "update_budget.h"
 #include "scan_coordinator.h"
 #include "pluginparser.h"
 
@@ -719,6 +720,41 @@ void testSizeScanOutlivesCoordinator()
 // The folder scan, written down between runs. Rebuilding it measured 16.8 s of
 // a profile switch on a 409-mod library; checking a written-down entry is a
 // stat per directory, 0.002 ms against 6.8 ms to reopen one.
+static void run_update_budget()
+{
+    std::cout << "=== update_budget tests ===\n";
+    const QDateTime now = QDateTime::fromString(QStringLiteral("2026-11-21T12:00:00"),
+                                                Qt::ISODate);
+    const int window = update_budget::kRecheckWindowSecs;   // six hours
+
+    check("a row checked a minute ago is reused",
+          update_budget::stillFresh(now.addSecs(-60), now, window));
+    check("a row checked yesterday is asked about again",
+          !update_budget::stillFresh(now.addDays(-1), now, window));
+    check("a row never checked is asked about",
+          !update_budget::stillFresh(QDateTime(), now, window));
+    check("and one checked exactly at the edge is asked about",
+          !update_budget::stillFresh(now.addSecs(-window), now, window));
+    // A mod list synced from another machine, or a clock put back, can carry a
+    // stamp from the future. Reusing that answer would freeze the row out of
+    // every check from here on, which is worse than one extra request.
+    check("a stamp in the future is not trusted into silence",
+          !update_budget::stillFresh(now.addDays(2), now, window));
+    check("a window of zero reuses nothing",
+          !update_budget::stillFresh(now.addSecs(-1), now, 0));
+
+    check("plenty of allowance left: keep going",
+          !update_budget::stopForQuota(900, update_budget::kQuotaFloor));
+    check("down to the floor: stop, and leave enough to download with",
+          update_budget::stopForQuota(update_budget::kQuotaFloor,
+                                      update_budget::kQuotaFloor));
+    check("nothing left: stop", update_budget::stopForQuota(0, 50));
+    // Every build before the headers were read was in this state, and it has
+    // to keep working: not knowing is not a reason to refuse to look.
+    check("an unknown allowance is never a reason to stop",
+          !update_budget::stopForQuota(-1, 50));
+}
+
 static void run_prune_unprovided()
 {
     std::cout << "=== pruneUnprovided tests ===\n";
@@ -3287,6 +3323,7 @@ int main(int argc, char **argv)
 
     run_load_order_merge();
     run_load_order_store();
+    run_update_budget();
     run_prune_unprovided();
     run_scan_cache();
     run_scan_coordinator();

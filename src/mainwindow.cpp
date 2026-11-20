@@ -16,6 +16,7 @@
 #include "translator.h"
 #include "post_install.h"
 #include "placeholder_state.h"
+#include "update_budget.h"
 #include "fomodwizard.h"
 #include "bainwizard.h"
 #include "archive_magic.h"
@@ -334,6 +335,15 @@ MainWindow::MainWindow(QWidget *parent)
         // Tint the parent separator grey to nudge update-or-delete; clears once
         // every mod in the section is resolved.
         updateSectionCounts();
+    });
+    connect(m_nexusCtl, &NexusController::modChecked,
+            this, [this](const QUuid &row) {
+        // The page was read. Written per reply rather than in one pass at the
+        // end: the check is paced, so these arrive a few a second instead of
+        // four hundred at once, and each one is an itemChanged.
+        ModRow item = replyRow(row, "update check stamp");
+        if (!item) return;
+        item->setData(ModRole::LastCheckedAt, QDateTime::currentDateTime());
     });
     connect(m_nexusCtl, &NexusController::fileSupersededForItem,
             this, [this](const QUuid &row, const file_status::Verdict &v) {
@@ -2029,10 +2039,15 @@ static QString supersededText(const file_status::Verdict &v)
     return T("file_superseded_moved").arg(mine, stateWord(v.installedCategory), now);
 }
 
+// `skipped` counts the rows whose last answer still stands, so the caller can
+// say so rather than looking like it did nothing. `force` is the escape hatch
+// for a user who has been told on Discord that a mod updated ten minutes ago.
 static QList<NexusController::CheckTarget>
-collectUpdateTargets(ModListView *modList, const QStringList &only)
+collectUpdateTargets(ModListView *modList, const QStringList &only,
+                     bool force = false, int *skipped = nullptr)
 {
     QList<NexusController::CheckTarget> toCheck;
+    const QDateTime now = QDateTime::currentDateTime();
     for (int i = 0; i < modList->count(); ++i) {
         ModRow item = modList->item(i);
         if (!mod_row::isMod(item)) continue;
@@ -2048,6 +2063,16 @@ collectUpdateTargets(ModListView *modList, const QStringList &only)
         // path: /{game}/mods/{modId}
         const auto ref = parseNexusModUrl(nexusUrl);
         if (!ref) continue;
+
+        // Asked recently enough that asking again would buy nothing. The row
+        // keeps every mark the last check gave it, including its arrow, so a
+        // mod already known to have an update stays known - only "nothing
+        // found" goes stale. This is what makes a second click cost nothing.
+        if (!force
+            && update_budget::stillFresh(item.entry().lastCheckedAt, now)) {
+            if (skipped) ++*skipped;
+            continue;
+        }
 
         // Clear a stale flag from a previous check - only where there is one.
         // Writing false onto every row created the role on the ~400 that never
@@ -2102,13 +2127,19 @@ void MainWindow::onCheckUpdates()
         if (m_apiKey.isEmpty()) return;
     }
 
-    const auto toCheck = collectUpdateTargets(m_modList, {});
+    int skipped = 0;
+    const auto toCheck = collectUpdateTargets(m_modList, {}, m_forceNextCheck, &skipped);
+    m_forceNextCheck = false;
     if (toCheck.isEmpty()) {
-        statusBar()->showMessage(T("check_updates_no_mods"), 3000);
+        statusBar()->showMessage(skipped > 0
+                                     ? T("check_updates_all_fresh").arg(skipped)
+                                     : T("check_updates_no_mods"), 5000);
         return;
     }
 
-    statusBar()->showMessage(T("check_updates_checking").arg(toCheck.size()));
+    statusBar()->showMessage(
+        skipped > 0 ? T("check_updates_checking_some").arg(toCheck.size()).arg(skipped)
+                    : T("check_updates_checking").arg(toCheck.size()));
     ++m_checksRunning;
     m_checkTotal = toCheck.size();
     m_checkDone  = 0;
@@ -2133,7 +2164,9 @@ int MainWindow::checkUpdatesForMods(const QStringList &labels)
         if (m_apiKey.isEmpty()) return 0;
     }
 
-    const auto toCheck = collectUpdateTargets(m_modList, labels);
+    // The caller named these mods and is waiting on an answer about them, so
+    // a six-hour-old one will not do.
+    const auto toCheck = collectUpdateTargets(m_modList, labels, /*force=*/true);
     if (toCheck.isEmpty()) {
         statusBar()->showMessage(T("check_updates_no_mods"), 3000);
         return 0;

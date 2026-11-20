@@ -989,6 +989,7 @@ static void testUpdateMarksAcrossASave()
     m.updateFoundThisSession = true;
     m.updateDeferred         = true;
     m.confirmedCurrentAt = QDateTime::fromString("2026-10-25T12:30:00", Qt::ISODate);
+    m.lastCheckedAt      = QDateTime::fromString("2026-11-21T09:15:00", Qt::ISODate);
 
     const QString text = modlist_serializer::serializeModlist({m});
     const QList<ModEntry> got = modlist_serializer::parseModlist(text);
@@ -1003,6 +1004,11 @@ static void testUpdateMarksAcrossASave()
     check("the date the file was confirmed current round-trips",
           got[0].confirmedCurrentAt == m.confirmedCurrentAt,
           got[0].confirmedCurrentAt.toString(Qt::ISODate));
+    // This one must survive a restart or reopening the app would be a free
+    // pass to spend one request per installed mod all over again.
+    check("and the date the page was last read",
+          got[0].lastCheckedAt == m.lastCheckedAt,
+          got[0].lastCheckedAt.toString(Qt::ISODate));
 
     ModEntry never = m;
     never.confirmedCurrentAt = QDateTime();
