@@ -618,6 +618,79 @@ void testExtensionFilter()
             && justEsm[0].second.contains("main.esm"));
 }
 
+// The seam the whole openmw.cfg incident lived in, and which had no coverage
+// at all: what a cache written to disk says when it is read back. The bug was
+// that an entry nobody had measured came back as a confident "this folder is
+// empty", which reads as "this mod is not installed", which empties the
+// managed block of openmw.cfg and prunes the plugin out of the load order.
+void testPersistedCacheKeepsMeasuredAndUnmeasuredApart()
+{
+    std::cout << "\n[persisted cache: measured and unmeasured stay apart]\n";
+    QTemporaryDir tmp;
+    SC_QVERIFY_EXIT(tmp.isValid(), 1);
+
+    const QString measured   = makeMod(tmp.path(), "Measured", {"m.esp"}, {});
+    const QString unmeasured = makeMod(tmp.path(), "Unmeasured", {"u.esp"}, {});
+    const QString cachePath  = tmp.path() + "/scan_cache.json";
+
+    {
+        ScanCoordinator sc;
+        sc.loadPersistedCache(cachePath);       // nothing there yet
+        (void)sc.cachedDataFolders(measured, plugins::contentExtensions());
+        sc.savePersistedCache();
+    }
+
+    ScanCoordinator back;
+    back.loadPersistedCache(cachePath);
+    check("a measured folder's answer survives a save and a load",
+          back.cachedFolderHasContent(measured) == std::optional<bool>(true));
+    check("a folder nothing was ever measured for reads as unknown",
+          back.cachedFolderHasContent(unmeasured) == std::nullopt);
+
+    // And the file itself must not have invented an answer for the one it
+    // never looked at - that invention is what poisoned a real library.
+    QFile f(cachePath);
+    SC_QVERIFY_EXIT(f.open(QIODevice::ReadOnly), 1);
+    const scan_cache::Cache onDisk = scan_cache::parse(f.readAll());
+    check("the file records the measured folder",
+          onDisk.mods.value(measured).hasContent == std::optional<bool>(true));
+    check("and says nothing at all about the one it never opened",
+          !onDisk.mods.contains(unmeasured));
+}
+
+// An entry read back with no measurement must not answer the install probe.
+// Had this held, every mod in the library would have gone to the worker to be
+// looked at instead of being declared uninstalled on the strength of a default.
+void testUnmeasuredEntryDoesNotAnswerTheProbe()
+{
+    std::cout << "\n[an unmeasured entry sends the caller to the disk]\n";
+    QTemporaryDir tmp;
+    SC_QVERIFY_EXIT(tmp.isValid(), 1);
+
+    const QString modPath   = makeMod(tmp.path(), "Older", {"o.esp"}, {});
+    const QString cachePath = tmp.path() + "/scan_cache.json";
+
+    // A file in the current format whose entry predates any measurement.
+    scan_cache::Cache c;
+    scan_cache::Entry e;
+    e.dataFolders = {{modPath, QStringList{QStringLiteral("o.esp")}}};
+    e.dirs        = {{modPath, QFileInfo(modPath).lastModified()
+                                   .toMSecsSinceEpoch()}};
+    // hasContent deliberately left unset: this is the older-file shape.
+    c.mods.insert(modPath, e);
+    QFile w(cachePath);
+    SC_QVERIFY_EXIT(w.open(QIODevice::WriteOnly), 1);
+    w.write(scan_cache::serialize(c));
+    w.close();
+
+    ScanCoordinator sc;
+    sc.loadPersistedCache(cachePath);
+    check("the folder scan is still used, since it was written down",
+          sc.cachedDataFolders(modPath, plugins::contentExtensions()).size() == 1);
+    check("but the install answer is unknown, not 'not installed'",
+          sc.cachedFolderHasContent(modPath) == std::nullopt);
+}
+
 } // namespace sc_test
 
 // The size scan's cache is shared with its worker for the same reason as
@@ -646,6 +719,41 @@ void testSizeScanOutlivesCoordinator()
 // The folder scan, written down between runs. Rebuilding it measured 16.8 s of
 // a profile switch on a 409-mod library; checking a written-down entry is a
 // stat per directory, 0.002 ms against 6.8 ms to reopen one.
+static void run_prune_unprovided()
+{
+    std::cout << "=== pruneUnprovided tests ===\n";
+    const QStringList order{QStringLiteral("Morrowind.esm"),
+                            QStringLiteral("Gone.esp"),
+                            QStringLiteral("Kept.esp")};
+    const QSet<QString> provided{QStringLiteral("Morrowind.esm"),
+                                 QStringLiteral("Kept.esp")};
+
+    QStringList measured = order;
+    loadorder::pruneUnprovided(measured, provided, /*measured=*/true);
+    check("a plugin nothing provides is dropped once the list is measured",
+          measured == QStringList({QStringLiteral("Morrowind.esm"),
+                                   QStringLiteral("Kept.esp")}),
+          measured.join(QStringLiteral(", ")));
+
+    QStringList unmeasured = order;
+    loadorder::pruneUnprovided(unmeasured, provided, /*measured=*/false);
+    check("and kept while the list is still assumptions",
+          unmeasured == order, unmeasured.join(QStringLiteral(", ")));
+
+    // The case that actually happened: a cache claiming every folder was empty
+    // meant nothing provided anything, and the entire order was erased. 415
+    // plugins became none in one save.
+    QStringList everything = order;
+    loadorder::pruneUnprovided(everything, {}, /*measured=*/false);
+    check("nothing provided plus nothing measured leaves the order whole",
+          everything == order, everything.join(QStringLiteral(", ")));
+
+    QStringList honestlyEmpty = order;
+    loadorder::pruneUnprovided(honestlyEmpty, {}, /*measured=*/true);
+    check("but a measured empty library really does empty the order",
+          honestlyEmpty.isEmpty(), honestlyEmpty.join(QStringLiteral(", ")));
+}
+
 static void run_scan_cache()
 {
     std::cout << "=== scan_cache tests ===\n";
@@ -677,6 +785,46 @@ static void run_scan_cache()
     check("masters round-trip too, keyed per file",
           back.masters.value(deep + "/a.esp").second
               == QStringList{QStringLiteral("Morrowind.esm")});
+
+    // --- hasContent: the field that emptied a game config -------------------
+    //
+    // It was added to a format that already existed on disk. Those older files
+    // have no such key, QJsonValue::toBool() reads an absent value as false,
+    // and false here means "this mod is not installed". Every mod in the
+    // library read that way, the managed block of openmw.cfg was written from
+    // it, and the cache wrote the false straight back out on exit. These four
+    // pin the distinction that was missing: nothing written down is not the
+    // same as something measured.
+    check("an entry with no hasContent key reads as unknown, not as empty",
+          !scan_cache::parse(R"({"version":2,"mods":{"/m":{)"
+                             R"("dirs":[{"dir":"/m","mtime":1}]}}})")
+               .mods.value(QStringLiteral("/m")).hasContent.has_value());
+    check("a measured true round-trips as true", [&] {
+        scan_cache::Cache t; scan_cache::Entry te;
+        te.dirs = {{mod, 1}}; te.hasContent = true;
+        t.mods.insert(mod, te);
+        return scan_cache::parse(scan_cache::serialize(t))
+                   .mods.value(mod).hasContent == std::optional<bool>(true);
+    }());
+    check("a measured false round-trips as false, not as unknown", [&] {
+        scan_cache::Cache t; scan_cache::Entry te;
+        te.dirs = {{mod, 1}}; te.hasContent = false;
+        t.mods.insert(mod, te);
+        return scan_cache::parse(scan_cache::serialize(t))
+                   .mods.value(mod).hasContent == std::optional<bool>(false);
+    }());
+    check("an unmeasured folder is left out of the file, not written as false",
+          [&] {
+        scan_cache::Cache t; scan_cache::Entry te;
+        te.dirs = {{mod, 1}};            // hasContent deliberately unset
+        t.mods.insert(mod, te);
+        return !QString::fromUtf8(scan_cache::serialize(t))
+                    .contains(QStringLiteral("hasContent"));
+    }());
+    check("a version 1 file is discarded rather than read as all-empty",
+          scan_cache::parse(R"({"version":1,"mods":{"/m":{)"
+                            R"("dirs":[{"dir":"/m","mtime":1}],)"
+                            R"("hasContent":false}}})").mods.isEmpty());
 
     check("the roots a cache was checked at round-trip", [&] {
         scan_cache::Cache r;
@@ -734,6 +882,8 @@ static void run_scan_coordinator()
     sc_test::testCachedTes3Masters_mtimeKeyed();
     sc_test::testCachedTes3Masters_invalidatedOnContainingPath();
     sc_test::testExtensionFilter();
+    sc_test::testPersistedCacheKeepsMeasuredAndUnmeasuredApart();
+    sc_test::testUnmeasuredEntryDoesNotAnswerTheProbe();
 }
 
 // ---- conflict_direction ----
@@ -3137,6 +3287,7 @@ int main(int argc, char **argv)
 
     run_load_order_merge();
     run_load_order_store();
+    run_prune_unprovided();
     run_scan_cache();
     run_scan_coordinator();
     run_conflict_direction();

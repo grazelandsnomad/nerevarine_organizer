@@ -11,13 +11,29 @@
 
 #include <QHash>
 #include <QString>
+#include <QSet>
 #include <QStringList>
 
 #include <functional>
 
 namespace loadorder {
 
+
 QStringList mergeLoadOrder(const QStringList &prev, const QStringList &cfg);
+
+// Drop plugins nothing in the list provides any more - but only when
+// `measured` says the install status behind `provided` was read off the disk
+// rather than assumed.
+//
+// This is the one lossy step in reconciling a load order, and the position a
+// plugin holds is not recoverable from anywhere once it is gone. Between a
+// list going up and its install probe landing, a row may be sitting on an
+// assumption; if that assumption is "not installed" for everything, `provided`
+// is empty and this would take the entire order with it. It did, once: a cache
+// that wrongly reported every folder empty reduced a 415-plugin order to none.
+// Unmeasured, it is a no-op and the caller tries again when the answer is in.
+void pruneUnprovided(QStringList &order, const QSet<QString> &provided,
+                     bool measured);
 
 // Stable topo sort so each plugin's declared masters precede it. Unrelated
 // pairs keep input order. `mastersOf` returns a plugin's MAST list;

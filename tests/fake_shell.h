@@ -75,7 +75,8 @@ public:
         loadedPath = path; loadedRemapFrom = remapFrom; loadedRemapTo = remapTo;
     }
     void saveLoadOrder() override { ++loadOrderSaves; }
-    void reconcileLoadOrder() override {}
+    int  reconciles = 0;
+    void reconcileLoadOrder() override { ++reconciles; }
     void syncGameConfig() override { ++configSyncs; }
     void scanMissingMasters() override { ++masterScans; }
     void scheduleSizeScan() override { ++sizeScans; }

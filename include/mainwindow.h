@@ -86,7 +86,8 @@ public:
     QString currentGameName() const override;
     QString modsDir() const override { return m_modsDir; }
     void    setModsDir(const QString &dir) override;
-    bool installStatusSettled() const override { return !m_installProbePending; }
+    bool installStatusSettled() const override
+        { return m_installProbeSettled == m_installProbeGen; }
     QStringList loadOrder() const override { return loadOrderRef(); }
     void        setLoadOrder(const QStringList &order) override { loadOrderRef() = order; }
     UndoStack             *undo() override { return m_undoStack; }
@@ -368,6 +369,11 @@ private:
     struct InstallProbe {
         QList<QPair<QString, bool>> answers;
         QStringList stale;
+        // Which loadModList this pass belongs to. A switch can start a second
+        // list while the first probe is still out; without this the older
+        // pass marks the list settled and writes its answers onto rows it
+        // never saw, which with path matching can be another profile's.
+        quint64 gen = 0;
         // True when every cached mod under the root was checked in this pass,
         // which is what lets the root's time be recorded as current. The root
         // travels with it: a pass can land after the user has switched to
@@ -378,10 +384,16 @@ private:
     // Those answers, back on the UI thread: drop the stale scans, correct the
     // rows, then run what was waiting on them.
     void applyInstallProbe(const InstallProbe &r);
-    // True between a list going up and its install probe landing. Anything
-    // that reads "installed" - the deploy fingerprint most of all - has to
-    // wait, or it judges a list the app does not know yet.
-    bool m_installProbePending = false;
+    // Anything that reads "installed" - the deploy fingerprint, the config
+    // write, the load-order prune - has to wait between a list going up and
+    // its probe landing, or it judges a list the app does not know yet.
+    // Counted rather than flagged: a bool cannot tell the probe for the list
+    // on screen from one still in flight for the list before it.
+    quint64 m_installProbeGen     = 0;   // bumped by each list that probes
+    quint64 m_installProbeSettled = 0;   // the last one whose answers landed
+    // A config write was asked for while the list was unsettled, and withheld.
+    // applyInstallProbe runs it once the answers are in.
+    bool m_syncDeferred = false;
     // Both of the above, with the one difference between them.
     void doSaveModList(bool leavingProfile);
     // Absolute modlist path for a profile key (the <gameId>__<profileName> form

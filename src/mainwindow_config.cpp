@@ -463,10 +463,18 @@ void MainWindow::reconcileLoadOrder()
 
     const qint64 ms_paths = rPhase.restart();
 
-    // Drop plugins that no longer have an installed owner.
-    auto endIt = std::remove_if(loadOrderRef().begin(), loadOrderRef().end(),
-        [&](const QString &cf) { return !pathByName.contains(cf); });
-    loadOrderRef().erase(endIt, loadOrderRef().end());
+    // Drop plugins that no longer have an installed owner - but only once the
+    // rows are measurements rather than assumptions. loadorder::pruneUnprovided
+    // says why. The append and sort passes below are additive, so they run
+    // either way; only the lossy step waits.
+    const bool settled = installStatusSettled();
+    {
+        QSet<QString> provided;
+        provided.reserve(pathByName.size());
+        for (auto it = pathByName.constBegin(); it != pathByName.constEnd(); ++it)
+            provided.insert(it.key());
+        loadorder::pruneUnprovided(loadOrderRef(), provided, settled);
+    }
 
     // Append new plugins. Preserve the order they were discovered in - walk
     // the modlist top-to-bottom so newly-installed mods land beneath the
@@ -529,8 +537,10 @@ void MainWindow::reconcileLoadOrder()
     const qint64 ms_sort = rPhase.elapsed();
 
     // The order moved, so the fingerprint that describes it has to be the one
-    // computed from the result.
-    m_reconciledInputs.insert(key, loadOrderInputsFingerprint());
+    // computed from the result. Not recorded when the prune was skipped: this
+    // pass did only half its work, and the next one has to run rather than
+    // decide its inputs are unchanged.
+    if (settled) m_reconciledInputs.insert(key, loadOrderInputsFingerprint());
 
     qCInfo(logging::lcModList).nospace()
         << "reconcileLoadOrder ms total=" << rTotal.elapsed()
@@ -1262,6 +1272,23 @@ void MainWindow::syncOpenMWConfig()
     if (m_profiles->isEmpty() || currentProfile().id != "morrowind")
         return;
 
+    // This writes the file the game loads from, straight out of which rows
+    // read as installed - and between a list going up and its probe landing,
+    // some of those rows are assumptions. An assumption in the safe direction
+    // costs an inert data= line. One in the other direction makes every line
+    // the mod owns look like an orphan and takes it out of the game. So the
+    // write waits; applyInstallProbe calls back. Same rule as updateDeployHint.
+    //
+    // On the way out it simply does not happen, and that is right: this file
+    // is derived state, rebuilt at startup and at every profile switch, and
+    // the mod list itself is written before any of this. A config one launch
+    // out of date costs nothing; an emptied one costs 58 missing plugins.
+    if (!installStatusSettled()) {
+        m_syncDeferred = true;
+        qCInfo(logging::lcOpenMW) << "syncOpenMWConfig deferred: list not settled";
+        return;
+    }
+
     QElapsedTimer syncTotal;
     syncTotal.start();
     QElapsedTimer syncPhase;
@@ -1490,6 +1517,17 @@ void MainWindow::syncOpenMWConfig()
         };
 
     openmw::SyncPrepareResult prepared = openmw::prepareForSync(prep);
+    // The writer refused: this pass claimed no mods while the config still
+    // described populated ones. Touch nothing at all - not the file, not the
+    // load order - and say so loudly, because it means something upstream is
+    // handing out install answers it should not have.
+    if (prepared.refusedEmptyClaim) {
+        qCWarning(logging::lcOpenMW).nospace()
+            << "syncOpenMWConfig refused: no mod claimed a path while the "
+               "managed section still describes installed mods. openmw.cfg "
+               "left untouched. rows=" << m_modList->count();
+        return;
+    }
     mods = std::move(prepared.mods);
     const qint64 ms_masters = syncPhase.restart();
 
@@ -1740,17 +1778,25 @@ void MainWindow::loadModList(const QString &path,
             if (m_scans) cached = m_scans->cachedFolderHasContent(modPath);
             if (cached && recheck)
                 verify.append({modPath, m_scans->recordedFolderTime(modPath)});
-            if (!cached) {
-                // Nothing written down for this one, and opening the folder
-                // here would put the whole list behind a disk seek per mod.
-                // Assume installed, remember the path, and let a worker settle
-                // it - everything that depends on the answer waits below.
-                unprobed << modPath;
+            // A written-down "there is nothing here" is the one answer that is
+            // never taken on trust, because it is the only one that can empty
+            // the game's config: not installed means the mod claims no path,
+            // every data= line it owns reads as an orphan, and the plugin
+            // leaves the load order. A cache that said exactly that about all
+            // 409 mods is what put 58 missing files in front of the user.
+            //
+            // So it is treated the same as no answer at all: the row goes up
+            // installed and a worker confirms it. Being wrong this way costs
+            // one inert data= line until the probe lands. Being wrong the
+            // other way costs the mod. The asymmetry is deliberate.
+            if (!cached || !*cached) {
+                // Opening the folder here would put the whole list behind a
+                // disk seek per mod, so the answer is settled on a worker -
+                // everything that depends on it waits below.
+                if (!modPath.isEmpty()) unprobed << modPath;
                 ++probeCold;
             }
-            m.installStatus = int(cached.value_or(true)
-                                      ? InstallStatus::Installed
-                                      : InstallStatus::NotInstalled);
+            m.installStatus = int(InstallStatus::Installed);
         }
         m.checked = e.checked;
         QString tip = e.annotation.isEmpty() ? modPath
@@ -1797,8 +1843,13 @@ void MainWindow::loadModList(const QString &path,
         for (int i = 0; i < m_modList->count(); ++i) {
             ModRow item = m_modList->item(i);
             if (!mod_row::isMod(item)) continue;
-            if (!mod_row::isInstalled(item)) continue;
-            paths << item->data(ModRole::ModPath).toString();
+            // Every row with a path, not only the installed ones. This pass is
+            // the only thing that re-measures a folder in normal operation, and
+            // gating it on "installed" meant a cache that wrongly said a mod
+            // was uninstalled could never be corrected by it - the repair was
+            // gated on the answer it repairs.
+            const QString mp = item->data(ModRole::ModPath).toString();
+            if (!mp.isEmpty()) paths << mp;
         }
         m_scans->warmDataFoldersCache(paths);
     }
@@ -1812,7 +1863,7 @@ void MainWindow::loadModList(const QString &path,
     // The folders nothing was written down for. Opening each costs a seek on
     // a spinning library - 103 ms measured, times 409 mods - so the list goes
     // up first and this corrects it. Everything that reads "installed" is held
-    // until it lands: see m_installProbePending.
+    // until it lands: see installStatusSettled.
     //
     // The same worker re-checks the rows a written-down answer was used for,
     // but only when the mods root's own time moved - a mod folder added or
@@ -1821,12 +1872,13 @@ void MainWindow::loadModList(const QString &path,
     // single stat and never runs on the UI thread. The usual load does none of
     // it: nothing was unprobed, nothing needs re-checking, and the list is up.
     if (!unprobed.isEmpty() || !verify.isEmpty()) {
-        m_installProbePending = true;
+        const quint64 gen = ++m_installProbeGen;
         async::guarded(this,
-            [unprobed, verify, recheck, root = m_modsDir](MainWindow *) {
+            [unprobed, verify, recheck, gen, root = m_modsDir](MainWindow *) {
                 InstallProbe r;
                 r.verified = recheck || verify.isEmpty();
                 r.root     = root;
+                r.gen      = gen;
                 r.answers.reserve(unprobed.size());
                 for (const QString &p : unprobed)
                     r.answers.append({p, install_layout::folderHasContent(p)});
@@ -1870,6 +1922,16 @@ void MainWindow::loadModList(const QString &path,
 // the "your mod list has changed" banner up over a list nobody touched.
 void MainWindow::applyInstallProbe(const InstallProbe &r)
 {
+    // A pass for a list that has already been replaced says nothing about the
+    // one on screen, and its answers are matched by path, so applying them
+    // could mark a row of a different profile. Drop it.
+    if (r.gen != m_installProbeGen) {
+        qCInfo(logging::lcModList).nospace()
+            << "installProbe dropped stale gen=" << r.gen
+            << " current=" << m_installProbeGen;
+        return;
+    }
+
     // Whatever moved behind the app's back loses its written-down scan, so the
     // next thing that needs that mod's data folders reads them off the disk.
     for (const QString &p : r.stale)
@@ -1891,7 +1953,7 @@ void MainWindow::applyInstallProbe(const InstallProbe &r)
             ++corrected;
         }
     }
-    m_installProbePending = false;
+    m_installProbeSettled = r.gen;
 
     qCInfo(logging::lcModList).nospace()
         << "installProbe ms settled=" << r.answers.size()
@@ -1900,6 +1962,10 @@ void MainWindow::applyInstallProbe(const InstallProbe &r)
 
     updateModCount();
     updateSectionCounts();
+    // Whatever was withheld while the rows were assumptions, now that they are
+    // measurements. Through the dispatcher, so it stays right when games other
+    // than OpenMW grow a config writer.
+    if (m_syncDeferred) { m_syncDeferred = false; syncGameConfig(); }
     if (m_deployFlow) m_deployFlow->updateDeployHint();
     scanMissingMasters();
     // The probe is what the next run wants written down.

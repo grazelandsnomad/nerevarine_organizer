@@ -96,7 +96,11 @@ void ScanCoordinator::loadPersistedCache(const QString &path)
     for (auto it = c.mods.constBegin(); it != c.mods.constEnd(); ++it) {
         m_dataFoldersCache.insert(it.key(), it.value().dataFolders);
         m_dataFolderDirs.insert(it.key(), it.value().dirs);
-        m_hasContentCache.insert(it.key(), it.value().hasContent);
+        // Unset stays unset: an entry nobody measured must reach
+        // cachedFolderHasContent as "I do not know", so the row loop sends it
+        // to the probe instead of calling the mod uninstalled.
+        if (it.value().hasContent)
+            m_hasContentCache.insert(it.key(), *it.value().hasContent);
     }
     for (auto it = c.masters.constBegin(); it != c.masters.constEnd(); ++it)
         m_mastersCache.insert(it.key(), it.value());
@@ -111,7 +115,10 @@ void ScanCoordinator::savePersistedCache() const
         scan_cache::Entry e;
         e.dataFolders = it.value();
         e.dirs        = m_dataFolderDirs.value(it.key());
-        e.hasContent  = m_hasContentCache.value(it.key(), false);
+        // contains, not value-with-default: defaulting here is what wrote a
+        // confident "empty" for every folder this process never looked at.
+        if (m_hasContentCache.contains(it.key()))
+            e.hasContent = m_hasContentCache.value(it.key());
         if (e.dirs.isEmpty()) continue;   // nothing to check it against later
         c.mods.insert(it.key(), e);
     }

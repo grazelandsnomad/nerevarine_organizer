@@ -1388,6 +1388,109 @@ void testOrphanRescuePreservesPluginsOnDisk()
           out.effectiveLoadOrder.contains("Survivor.esp"));
 }
 
+// A list with mods in it that claims not one of them is on disk, while the
+// config still names a folder full of plugins. Both cannot be true. This is
+// what a bad install-status probe looks like from in here, and acting on it
+// rewrote a real user's openmw.cfg with an empty managed block: 409 mods gone
+// and 58 missing files at the title screen.
+void testNoModClaimedWhileFoldersLiveIsRefused()
+{
+    std::cout << "\n[list full of mods, none claimed, folders still live → refused]\n";
+    QTemporaryDir tmp;
+    QVERIFY_EXIT(tmp.isValid(), 1);
+    const QString modsRoot = tmp.path() + "/mods";
+    const QString modPath  = modsRoot + "/StillHere";
+    writePlugin(modPath, "StillHere.esp");
+
+    openmw::ConfigMod disowned = modWith(modPath, {"StillHere.esp"});
+    disowned.installed  = false;     // the probe lied
+    disowned.pluginDirs = {};        // ...so nothing was scanned for it
+
+    openmw::SyncPrepareInputs in;
+    in.modsRoot        = modsRoot;
+    in.managedModPaths = {};         // nothing claimed a path
+    in.mods            = { disowned };
+    in.loadOrder       = { "StillHere.esp" };
+    in.existingCfg     =
+        "# --- Nerevarine Organizer BEGIN ---\n"
+        "data=\"" + modPath + "\"\n"
+        "content=StillHere.esp\n"
+        "# --- Nerevarine Organizer END ---\n";
+
+    auto out = openmw::prepareForSync(in);
+
+    check("the pass is refused rather than applied", out.refusedEmptyClaim);
+    check("the config comes back exactly as it went in",
+          out.scrubbedExisting == in.existingCfg);
+    check("nothing is called an orphan", out.droppedOrphans == 0);
+    check("and the load order is handed back whole",
+          out.persistLoadOrder == in.loadOrder);
+}
+
+// The companion case, which must keep working: a user removed their last mod
+// from the list but kept the folder. The list is empty, not disowned, and the
+// rescue is the right answer there.
+void testEmptyListStillRescuesRatherThanRefusing()
+{
+    std::cout << "\n[empty list with a folder on disk → rescued, not refused]\n";
+    QTemporaryDir tmp;
+    QVERIFY_EXIT(tmp.isValid(), 1);
+    const QString modsRoot = tmp.path() + "/mods";
+    const QString modPath  = modsRoot + "/Kept";
+    writePlugin(modPath, "Kept.esp");
+
+    openmw::SyncPrepareInputs in;
+    in.modsRoot        = modsRoot;
+    in.managedModPaths = {};
+    in.mods            = {};          // the list really is empty
+    in.loadOrder       = { "Kept.esp" };
+    in.existingCfg     =
+        "# --- Nerevarine Organizer BEGIN ---\n"
+        "data=\"" + modPath + "\"\n"
+        "content=Kept.esp\n"
+        "# --- Nerevarine Organizer END ---\n";
+
+    auto out = openmw::prepareForSync(in);
+    check("an empty list is not treated as a lie", !out.refusedEmptyClaim);
+    check("and the folder on disk is still rescued",
+          out.scrubbedExisting.contains(modPath));
+}
+
+// The rescue is a one-shot net. It moves unclaimed lines out to the preamble,
+// so a second pass finds nothing left inside BEGIN/END to rescue and scrubs
+// them for real. One session was enough to lose a whole library that way, so
+// the result of one pass fed back into the next must come out unchanged.
+void testRescuedPathsSurviveASecondSync()
+{
+    std::cout << "\n[a rescued data= line survives the next sync]\n";
+    QTemporaryDir tmp;
+    QVERIFY_EXIT(tmp.isValid(), 1);
+    const QString modsRoot = tmp.path() + "/mods";
+    const QString modPath  = modsRoot + "/Survivor";
+    writePlugin(modPath, "Survivor.esp");
+
+    openmw::SyncPrepareInputs in;
+    in.modsRoot        = modsRoot;
+    in.managedModPaths = {};
+    in.mods            = {};
+    in.loadOrder       = { "Survivor.esp" };
+    in.existingCfg     =
+        "# --- Nerevarine Organizer BEGIN ---\n"
+        "data=\"" + modPath + "\"\n"
+        "content=Survivor.esp\n"
+        "# --- Nerevarine Organizer END ---\n";
+
+    const auto first = openmw::prepareForSync(in);
+    check("first pass rescues it", first.scrubbedExisting.contains(modPath));
+
+    openmw::SyncPrepareInputs again = in;
+    again.existingCfg = openmw::renderOpenMWConfig(
+        first.mods, first.effectiveLoadOrder, first.scrubbedExisting);
+    const auto second = openmw::prepareForSync(again);
+    check("and the second pass does not scrub what the first rescued",
+          second.scrubbedExisting.contains(modPath));
+}
+
 void testLauncherOnlyExternalsAugmented()
 {
     std::cout << "\n[launcher.cfg has data=/content= absent from openmw.cfg → synthesized]\n";
@@ -1647,6 +1750,9 @@ static void run_sync_prep()
     testOrphanDataPathScrubbed();
     testRecasedContentIsNotAnOrphan();
     testOrphanRescuePreservesPluginsOnDisk();
+    testNoModClaimedWhileFoldersLiveIsRefused();
+    testEmptyListStillRescuesRatherThanRefusing();
+    testRescuedPathsSurviveASecondSync();
     testLauncherOnlyExternalsAugmented();
     testLauncherSyntheticUnderModsRootNotRecreated();
     testUnsatisfiedMasterSuppressesPlugin();

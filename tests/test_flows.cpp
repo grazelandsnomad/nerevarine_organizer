@@ -912,6 +912,56 @@ void testDeployFlowWritesThePluginListWhereTheGameSpelledIt()
 // that is ONE bare .archive, no folders at all, which is how most single-file
 // Cyberpunk mods ship. Mirrored where it sat, it landed at the install root,
 // and the engine reads .archive only from archive/pc/mod.
+// The pre-launch re-sync reads "installed" for everything it does: it prunes
+// the load order, and it undeploys the whole previous manifest before putting
+// back only what it can still see. Run it against a list whose install status
+// has not been measured yet and a row wrongly reading uninstalled takes its
+// files out of the game folder and the record of them out of the manifest. So
+// it stands down - but the launch itself must never wait on it.
+void testPreLaunchDeployStandsDownUntilInstallStatusIsMeasured()
+{
+    std::cout << "testPreLaunchDeployStandsDownUntilInstallStatusIsMeasured\n";
+    QSettings().clear();
+    QTemporaryDir tmp;
+    const QString lib  = tmp.path() + "/steamapps";
+    const QString game = lib + "/common/Cyberpunk 2077";
+    const QString mods = tmp.path() + "/mods";
+    writeFile(game + "/bin/x64/Cyberpunk2077.exe", "MZ");
+    writeFile(mods + "/Blade/Blade_Runner_2077.archive", "RDAR");
+
+    FakeShell shell;
+    shell.gameId       = QStringLiteral("cyberpunk2077");
+    shell.modsDirValue = mods;
+    shell.settled      = false;          // a probe is still out
+    ModEntry e         = ModEntry::named(QStringLiteral("Blade"));
+    e.modPath          = mods + "/Blade";
+    e.installStatus    = 1;
+    e.checked          = true;
+    shell.modelStore.append(e);
+    Settings::setDataDir(shell.gameId, game);
+    writeFile(resolveUserStatePath("deploy_manifest_modlist.json"), "{}");
+
+    DeployFlow flow(shell);
+    bool       ran = false;
+    flow.maybeDeployBeforeLaunch(shell.gameId, [&] { ran = true; });
+
+    check("the launch is not held up by it", ran);
+    check("the load order is not reconciled from an unmeasured list",
+          shell.reconciles == 0, QString::number(shell.reconciles));
+    check("and not written back either",
+          shell.loadOrderSaves == 0, QString::number(shell.loadOrderSaves));
+    check("nothing was deployed into the game folder",
+          !QFileInfo::exists(game + "/archive/pc/mod/Blade_Runner_2077.archive"));
+
+    // And once it is measured, the same call does the work.
+    shell.settled = true;
+    bool again = false;
+    flow.maybeDeployBeforeLaunch(shell.gameId, [&] { again = true; });
+    check("once the list is measured it deploys as before",
+          again && QFileInfo::exists(
+              game + "/archive/pc/mod/Blade_Runner_2077.archive"));
+}
+
 void testDeployFlowRoutesABareCyberpunkArchive()
 {
     std::cout << "testDeployFlowRoutesABareCyberpunkArchive\n";
@@ -1121,6 +1171,7 @@ int main(int argc, char **argv)
     testDeployFlowAdoptsCreationsFromTheGamesDownloads();
     testDeployFlowWritesThePluginListWhereTheGameSpelledIt();
     testDeployFlowOverlaysCyberpunkIntoItsInstallFolder();
+    testPreLaunchDeployStandsDownUntilInstallStatusIsMeasured();
     testDeployFlowRoutesABareCyberpunkArchive();
     testDeployFlowFindsTheHeroicPrefixForAGogCopy();
 

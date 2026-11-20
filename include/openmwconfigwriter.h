@@ -148,6 +148,11 @@ struct SyncPrepareResult {
     // Every plugin a missing master holds back, all mods together.
     QSet<QString>    suppressedPlugins;
     int              droppedOrphans = 0;   // count for status bar
+    // The pass claimed no mods while the managed section still described
+    // populated ones, so nothing was rewritten and the caller should leave the
+    // file alone. See the bail in prepareForSync for why that is never a
+    // legitimate state to act on.
+    bool             refusedEmptyClaim = false;
 };
 
 // Run orphan-managed rescue, launcher-only-externals augment, orphan-plugin

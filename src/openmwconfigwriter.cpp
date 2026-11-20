@@ -37,7 +37,26 @@ SyncPrepareResult prepareForSync(const SyncPrepareInputs &in)
     // drop them (and their content= plugins), wiping the Launcher Content List
     // for mods still on disk. So an orphan path whose folder still has plugins
     // gets re-emitted OUTSIDE the managed section.
+    // Does this directory still hold a plugin? Asked of both the rescue below
+    // and the orphan test further down, so the two agree about what a live mod
+    // folder is. Memoised: a config can name hundreds of these.
+    QHash<QString, bool> liveFolderMemo;
+    const auto folderStillHoldsPlugins = [&](const QString &rawPath) -> bool {
+        const auto memo = liveFolderMemo.constFind(rawPath);
+        if (memo != liveFolderMemo.constEnd()) return *memo;
+        QStringList filters;
+        for (const QString &ext : contentExts) filters << "*" + ext;
+        QDir d(rawPath);
+        const bool live = d.exists()
+                       && !d.entryList(filters, QDir::Files).isEmpty();
+        liveFolderMemo.insert(rawPath, live);
+        return live;
+    };
+
     QSet<QString> rescuedManagedPaths;
+    // Set when the managed section still describes a real, populated mod that
+    // nothing in this pass claims. Read by the bail below.
+    bool managedSectionDescribesLiveMods = false;
     {
         QStringList rescuedDataLines;
         if (!modsRootForRescue.isEmpty()) {
@@ -65,16 +84,41 @@ SyncPrepareResult prepareForSync(const SyncPrepareInputs &in)
                     }
                 }
                 if (claimed) continue;
-                QDir d(path);
-                if (!d.exists()) continue;
-                if (d.entryList(filters, QDir::Files).isEmpty()) continue;
+                if (!folderStillHoldsPlugins(path)) continue;
                 rescuedDataLines << QStringLiteral("data=\"") + path
                                   + QStringLiteral("\"");
                 rescuedManagedPaths.insert(clean);
             }
         }
+        managedSectionDescribesLiveMods = !rescuedDataLines.isEmpty();
         if (!rescuedDataLines.isEmpty())
             existing = rescuedDataLines.join('\n') + '\n' + existing;
+    }
+
+    // A list with mods in it that claims not one of them is on disk, while the
+    // config still names a folder full of plugins. Those two things cannot
+    // both be true, and it is what a bad install-status probe looks like from
+    // here: acting on it rewrites the file the game loads from with nothing in
+    // it. Refuse the pass and hand the file back as it stands.
+    //
+    // Not the same as an empty list, which is how a user who removed their
+    // last mod but kept the folder arrives - that one is legitimate and the
+    // rescue above handles it. The difference is mods present and all of them
+    // disowned. Nor does an unmounted library trip this: the rescue only
+    // counts folders that exist and still hold plugins, so a drive that is not
+    // there leaves managedSectionDescribesLiveMods false.
+    //
+    // This guard earns its place because the rescue is a one-shot net: it
+    // moves those lines into the preamble, so the NEXT pass finds nothing left
+    // inside the managed section to rescue and scrubs them for real. One
+    // session is enough to lose the lot.
+    if (in.managedModPaths.isEmpty() && !in.mods.isEmpty()
+        && managedSectionDescribesLiveMods) {
+        out.scrubbedExisting  = in.existingCfg;
+        out.effectiveLoadOrder = in.loadOrder;
+        out.persistLoadOrder   = in.loadOrder;
+        out.refusedEmptyClaim  = true;
+        return out;
     }
 
     // Launcher-only externals: the Launcher only writes selected data=/content=
@@ -159,6 +203,17 @@ SyncPrepareResult prepareForSync(const SyncPrepareInputs &in)
             if (p == mp || p.startsWith(mp + "/")) return true;
         for (const QString &mp : in.managedModPaths)
             if (p == mp || p.startsWith(mp + "/")) return false;
+        // Nothing in this list claims it, but the folder is still there with
+        // plugins in it, so it is a mod the user kept on disk rather than a
+        // stale line. The rescue above says the same thing about lines inside
+        // BEGIN/END; saying it here too is what makes a sync idempotent.
+        //
+        // Without this the rescue is a one-shot net: pass one moves the line
+        // out to the preamble, pass two no longer sees it inside the managed
+        // section, calls it an orphan and scrubs it for real, taking its
+        // content= line with it. Two saves in one session were enough to
+        // empty a 409-mod openmw.cfg.
+        if (folderStillHoldsPlugins(rawPath)) return false;
         return true;
     };
     {

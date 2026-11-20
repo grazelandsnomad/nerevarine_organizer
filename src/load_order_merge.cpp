@@ -5,6 +5,15 @@
 
 namespace loadorder {
 
+void pruneUnprovided(QStringList &order, const QSet<QString> &provided,
+                     bool measured)
+{
+    if (!measured) return;   // see the header: an assumption must not delete
+    auto end = std::remove_if(order.begin(), order.end(),
+        [&](const QString &cf) { return !provided.contains(cf); });
+    order.erase(end, order.end());
+}
+
 QStringList mergeLoadOrder(const QStringList &prev, const QStringList &cfg)
 {
     QSet<QString> cfgSet(cfg.begin(), cfg.end());

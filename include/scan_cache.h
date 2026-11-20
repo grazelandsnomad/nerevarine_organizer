@@ -38,6 +38,8 @@
 #include <QString>
 #include <QStringList>
 
+#include <optional>
+
 namespace scan_cache {
 
 struct Entry {
@@ -49,7 +51,15 @@ struct Entry {
     // anything. Recorded here because the scan had the folder open anyway,
     // and because asking again costs a directory open - 103 ms on the
     // spinning disk this library lives on, times 409 mods.
-    bool                               hasContent = false;
+    //
+    // Unset means nobody has measured this folder, which is NOT the same as
+    // measuring it and finding nothing. That distinction is the whole reason
+    // this is an optional: the field was added to a format that already
+    // existed, every older entry parsed as a confident "empty", every mod in
+    // the library read as not installed, and the managed block of openmw.cfg
+    // was written from that answer. A reader must treat unset as "ask the
+    // disk", never as false.
+    std::optional<bool>                hasContent;
 };
 
 // The two caches, in the shapes ScanCoordinator already holds them: mods keyed

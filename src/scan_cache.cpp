@@ -9,7 +9,10 @@
 namespace scan_cache {
 
 namespace {
-constexpr int kVersion = 1;
+// 2: hasContent became optional. Version 1 files are discarded rather than
+// read, because in those files the field is either absent or present-and-false
+// for every entry, and both mean "nobody measured" - see Entry::hasContent.
+constexpr int kVersion = 2;
 }
 
 Cache parse(const QByteArray &json)
@@ -41,7 +44,10 @@ Cache parse(const QByteArray &json)
             if (!dir.isEmpty())
                 e.dirs.append({dir, qint64(d.value(QStringLiteral("mtime")).toDouble())});
         }
-        e.hasContent = o.value(QStringLiteral("hasContent")).toBool();
+        // Only when it is actually there. An absent key through toBool() is
+        // false, and a false here takes a mod out of the game.
+        if (o.contains(QStringLiteral("hasContent")))
+            e.hasContent = o.value(QStringLiteral("hasContent")).toBool();
         // An entry with nothing to check cannot be trusted later, so it is not
         // worth keeping.
         if (!e.dirs.isEmpty()) out.mods.insert(it.key(), e);
@@ -84,9 +90,12 @@ QByteArray serialize(const Cache &cache)
         for (const auto &p : e.dirs)
             dirs.append(QJsonObject{{QStringLiteral("dir"), p.first},
                                     {QStringLiteral("mtime"), double(p.second)}});
-        mods.insert(it.key(), QJsonObject{{QStringLiteral("dataFolders"), dataFolders},
-                                          {QStringLiteral("dirs"), dirs},
-                                          {QStringLiteral("hasContent"), e.hasContent}});
+        QJsonObject entry{{QStringLiteral("dataFolders"), dataFolders},
+                          {QStringLiteral("dirs"), dirs}};
+        // Omitted when nothing was measured, so it reads back as unset rather
+        // than as a measurement that was never taken.
+        if (e.hasContent) entry.insert(QStringLiteral("hasContent"), *e.hasContent);
+        mods.insert(it.key(), entry);
     }
     QJsonArray masters;
     for (auto it = cache.masters.constBegin(); it != cache.masters.constEnd(); ++it) {

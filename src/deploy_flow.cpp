@@ -2106,6 +2106,19 @@ void DeployFlow::onUndeployBethesda()
 void DeployFlow::maybeDeployBeforeLaunch(const QString &id, std::function<void()> then)
 {
     const auto go = [&then] { if (then) then(); };
+    // Not while the list is still assumptions. Everything below reads
+    // "installed": the load-order prune a line later, and the deploy itself,
+    // which undeploys the whole previous manifest before putting back only
+    // what it can see. A row wrongly reading uninstalled here strips that
+    // mod's files out of Data/ and erases the record of them. The launch goes
+    // ahead regardless - this is documented as best-effort and must never
+    // block one - it just does not act on a list it does not know yet.
+    if (!m_shell.installStatusSettled()) {
+        qCInfo(logging::lcLaunch)
+            << "maybeDeployBeforeLaunch skipped: install status not settled";
+        go();
+        return;
+    }
     const GameAdapter *adapter = GameAdapterRegistry::find(id);
     if (!adapter || adapter->dataSubdir().isEmpty()) { go(); return; }
     QString manifestPath, backupDir;
