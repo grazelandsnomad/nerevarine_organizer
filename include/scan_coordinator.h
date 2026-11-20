@@ -9,6 +9,8 @@
 #include <QObject>
 #include <QPair>
 #include <QString>
+
+#include <optional>
 #include <QStringList>
 
 #include <functional>
@@ -73,6 +75,13 @@ public:
     void loadPersistedCache(const QString &path);
     void savePersistedCache() const;
 
+    // The install probe - does this mod folder hold anything - answered from
+    // the written-down scan while its directories still carry the times they
+    // had. Nothing cached, or stale, gives nullopt and the caller has to look
+    // for itself. One directory open costs 103 ms on this library's disk, so
+    // this is the difference between a switch of 42 s and one of milliseconds.
+    std::optional<bool> cachedFolderHasContent(const QString &path);
+
 signals:
     // The size scan landed: bytes per installed mod path. A path missing
     // from the hash was not installed or could not be measured.
@@ -108,6 +117,9 @@ private:
     // disk be trusted: see scan_cache.h for why checking is ~3000x cheaper
     // than rescanning, and for what the app's own invalidation cannot cover.
     QHash<QString, QList<QPair<QString, qint64>>> m_dataFolderDirs;
+    // The install probe's answer per mod folder, recorded while the scan had
+    // the folder open, and only trusted while m_dataFolderDirs checks out.
+    QHash<QString, bool> m_hasContentCache;
     // Where the two caches are written. Empty = do not persist, which is what
     // a test gets unless it asks otherwise.
     QString m_cachePath;

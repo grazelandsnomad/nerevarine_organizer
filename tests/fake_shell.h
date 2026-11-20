@@ -47,6 +47,8 @@ public:
     QString currentGameName() const override { return profile ? gameName : QString(); }
     QString modsDir() const override { return modsDirValue; }
     void    setModsDir(const QString &dir) override { modsDirValue = dir; }
+    bool settled = true;   // flip to false to stand in for a pending probe
+    bool installStatusSettled() const override { return settled; }
     QStringList loadOrder() const override { return loadOrderValue; }
     void        setLoadOrder(const QStringList &order) override { loadOrderValue = order; }
     QString     modlistPath() const override { return modsDirValue + QStringLiteral("/modlist.txt"); }

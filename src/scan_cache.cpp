@@ -41,6 +41,7 @@ Cache parse(const QByteArray &json)
             if (!dir.isEmpty())
                 e.dirs.append({dir, qint64(d.value(QStringLiteral("mtime")).toDouble())});
         }
+        e.hasContent = o.value(QStringLiteral("hasContent")).toBool();
         // An entry with nothing to check cannot be trusted later, so it is not
         // worth keeping.
         if (!e.dirs.isEmpty()) out.mods.insert(it.key(), e);
@@ -77,7 +78,8 @@ QByteArray serialize(const Cache &cache)
             dirs.append(QJsonObject{{QStringLiteral("dir"), p.first},
                                     {QStringLiteral("mtime"), double(p.second)}});
         mods.insert(it.key(), QJsonObject{{QStringLiteral("dataFolders"), dataFolders},
-                                          {QStringLiteral("dirs"), dirs}});
+                                          {QStringLiteral("dirs"), dirs},
+                                          {QStringLiteral("hasContent"), e.hasContent}});
     }
     QJsonArray masters;
     for (auto it = cache.masters.constBegin(); it != cache.masters.constEnd(); ++it) {

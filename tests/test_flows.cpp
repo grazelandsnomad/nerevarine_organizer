@@ -381,6 +381,37 @@ void testLibraryFlowMovesTheWholeLibrary()
                                   : shell.reports.first().second);
 }
 
+// A list whose install probe has not landed must not be judged: the deploy
+// fingerprint is derived from "installed", so a row still assumed installed
+// would make it disagree with the manifest and raise the "your mod list has
+// changed" banner over a list nobody touched.
+void testDeployHintWaitsForTheInstallProbe()
+{
+    std::cout << "testDeployHintWaitsForTheInstallProbe\n";
+    QSettings().clear();
+    FakeShell shell;
+    shell.gameId = QStringLiteral("fallout4");
+    ModEntry e = ModEntry::named(QStringLiteral("A"));
+    e.modPath = QStringLiteral("/mods/A");
+    e.installStatus = 1;
+    e.checked = true;
+    shell.modelStore.append(e);
+    DeployFlow flow(shell);
+
+    shell.settled = false;
+    shell.sticky  = StickyKind::ViewSort;
+    flow.updateDeployHint();
+    check("while the probe is out, the hint does not judge the list",
+          shell.sticky == StickyKind::ViewSort);
+
+    // Settled, and with no profile the hint still has nothing to say - the
+    // point is only that it got past the gate and ran.
+    shell.settled = true;
+    flow.updateDeployHint();
+    check("once settled it runs again", shell.sticky == StickyKind::ViewSort);
+    QSettings().clear();
+}
+
 // Where Move Mod Library puts the mods for a picked folder: a disk root gets
 // the library as a folder named after the current one, anything else is used
 // as it is - so a pick of /mnt/disk does not strew the mod folders over its
@@ -1081,6 +1112,7 @@ int main(int argc, char **argv)
     testImportFlowRoutesANerevarineFileToTheLoader();
     testDeployFlowFingerprintAndQuietPaths();
     testLibraryFlowMovesFoldersAndRepointsRows();
+    testDeployHintWaitsForTheInstallProbe();
     testLibraryFlowMoveDestinationForDiskRoot();
     testLibraryFlowMovesTheWholeLibrary();
     testLibraryFlowFindsFoldersNoModlistPointsAt();

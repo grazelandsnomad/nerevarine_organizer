@@ -17,6 +17,7 @@
 #include "async_guarded.h"
 #include "modroles.h"
 #include "pluginparser.h"
+#include "install_layout.h"
 #include "scan_cache.h"
 
 namespace {
@@ -43,6 +44,25 @@ ScanCoordinator::ScanCoordinator(RowsProvider rows, QObject *parent)
     connect(m_sizeScanTimer, &QTimer::timeout, this, &ScanCoordinator::runSizeScan);
 }
 
+std::optional<bool> ScanCoordinator::cachedFolderHasContent(const QString &path)
+{
+    if (path.isEmpty()) return std::nullopt;
+    const auto it = m_hasContentCache.constFind(path);
+    if (it == m_hasContentCache.constEnd()) return std::nullopt;
+    scan_cache::Entry probe;
+    probe.dirs = m_dataFolderDirs.value(path);
+    if (probe.dirs.isEmpty() || !scan_cache::stillValid(probe)) {
+        // Something under the mod moved, so the recorded answer is not an
+        // answer any more. Drop it and let the caller look.
+        m_hasContentCache.remove(path);
+        m_dataFoldersCache.remove(path);
+        m_dataFolderDirs.remove(path);
+        m_bsaCache.remove(path);
+        return std::nullopt;
+    }
+    return *it;
+}
+
 void ScanCoordinator::loadPersistedCache(const QString &path)
 {
     m_cachePath = path;
@@ -54,6 +74,7 @@ void ScanCoordinator::loadPersistedCache(const QString &path)
     for (auto it = c.mods.constBegin(); it != c.mods.constEnd(); ++it) {
         m_dataFoldersCache.insert(it.key(), it.value().dataFolders);
         m_dataFolderDirs.insert(it.key(), it.value().dirs);
+        m_hasContentCache.insert(it.key(), it.value().hasContent);
     }
     for (auto it = c.masters.constBegin(); it != c.masters.constEnd(); ++it)
         m_mastersCache.insert(it.key(), it.value());
@@ -67,6 +88,7 @@ void ScanCoordinator::savePersistedCache() const
         scan_cache::Entry e;
         e.dataFolders = it.value();
         e.dirs        = m_dataFolderDirs.value(it.key());
+        e.hasContent  = m_hasContentCache.value(it.key(), false);
         if (e.dirs.isEmpty()) continue;   // nothing to check it against later
         c.mods.insert(it.key(), e);
     }
@@ -106,6 +128,7 @@ QList<QPair<QString, QStringList>> ScanCoordinator::cachedDataFolders(
         if (!probe.dirs.isEmpty() && !scan_cache::stillValid(probe)) {
             m_dataFoldersCache.erase(it);
             m_dataFolderDirs.remove(path);
+            m_hasContentCache.remove(path);
             m_bsaCache.remove(path);
             it = m_dataFoldersCache.end();
         }
@@ -120,6 +143,9 @@ QList<QPair<QString, QStringList>> ScanCoordinator::cachedDataFolders(
         for (const QString &d : visited)
             dirs.append({d, QFileInfo(d).lastModified().toMSecsSinceEpoch()});
         m_dataFolderDirs.insert(path, dirs);
+        // Free while the folder is still open from the walk above, and it is
+        // what spares the row loop a directory open per mod next time.
+        m_hasContentCache.insert(path, install_layout::folderHasContent(path));
     }
     const auto &all = it.value();
     if (exts == plugins::contentExtensions()) return all;
@@ -139,6 +165,7 @@ void ScanCoordinator::invalidateDataFoldersCache(const QString &path)
 {
     m_dataFoldersCache.remove(path);
     m_dataFolderDirs.remove(path);
+    m_hasContentCache.remove(path);
     m_bsaCache.remove(path);
 
     // Master cache is keyed per-file, so walk and drop any plugin path
@@ -205,7 +232,10 @@ void ScanCoordinator::warmDataFoldersCache(const QStringList &paths)
     QStringList coldPaths;
     for (const QString &mp : paths) {
         if (mp.isEmpty()) continue;
-        if (!m_dataFoldersCache.contains(mp) || !m_bsaCache.contains(mp))
+        // An entry with no recorded directories cannot be checked later, so
+        // it is worthless to keep and counts as cold.
+        if (!m_dataFoldersCache.contains(mp) || !m_bsaCache.contains(mp)
+            || m_dataFolderDirs.value(mp).isEmpty())
             coldPaths << mp;
     }
     if (coldPaths.isEmpty()) return;
@@ -216,6 +246,7 @@ void ScanCoordinator::warmDataFoldersCache(const QStringList &paths)
         QString path;
         QList<QPair<QString, QStringList>> dataFolders;
         QList<QPair<QString, qint64>>      dirs;
+        bool        hasContent = false;
         QStringList bsaFiles;
     };
     async::guarded(this,
@@ -231,6 +262,7 @@ void ScanCoordinator::warmDataFoldersCache(const QStringList &paths)
                 r.dirs.reserve(visited.size());
                 for (const QString &d : visited)
                     r.dirs.append({d, QFileInfo(d).lastModified().toMSecsSinceEpoch()});
+                r.hasContent = install_layout::folderHasContent(mp);
                 QSet<QString> seen;
                 QDirIterator dit(mp,
                     {QStringLiteral("*.bsa"), QStringLiteral("*.BSA")},
@@ -250,6 +282,7 @@ void ScanCoordinator::warmDataFoldersCache(const QStringList &paths)
             for (const auto &r : results) {
                 self->m_dataFoldersCache.insert(r.path, r.dataFolders);
                 self->m_dataFolderDirs.insert(r.path, r.dirs);
+                self->m_hasContentCache.insert(r.path, r.hasContent);
                 self->m_bsaCache.insert(r.path, r.bsaFiles);
             }
             // The run that paid for this walk is the one that should write it

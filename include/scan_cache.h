@@ -35,6 +35,11 @@ struct Entry {
     QList<QPair<QString, QStringList>> dataFolders;
     // Every directory that walk opened, with its modification time in ms.
     QList<QPair<QString, qint64>>      dirs;
+    // The install probe's answer for the mod folder itself: does it hold
+    // anything. Recorded here because the scan had the folder open anyway,
+    // and because asking again costs a directory open - 103 ms on the
+    // spinning disk this library lives on, times 409 mods.
+    bool                               hasContent = false;
 };
 
 // The two caches, in the shapes ScanCoordinator already holds them: mods keyed
@@ -52,6 +57,11 @@ QByteArray serialize(const Cache &cache);
 
 // True while every directory the scan opened still carries the time it had.
 // One stat per directory, which is what makes this worth doing at all.
+//
+// Times are milliseconds, so a change made inside the same millisecond as the
+// recording is invisible. A scan of a mod folder takes orders of magnitude
+// longer than that, so this does not come up in practice - but it is the
+// reason this is a cache with a cheap check rather than a guarantee.
 bool stillValid(const Entry &entry);
 
 } // namespace scan_cache

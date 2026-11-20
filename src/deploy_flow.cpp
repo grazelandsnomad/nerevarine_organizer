@@ -1641,6 +1641,11 @@ void DeployFlow::updateDeployHint()
         }
     };
 
+    // Some rows are still assumed installed, and the fingerprint below is
+    // derived from that, so this would compare a guess against the manifest
+    // and announce that the list changed. The probe's epilogue calls back.
+    if (!m_shell.installStatusSettled()) return;
+
     const QString id = m_shell.currentGameId();
     const GameAdapter *adapter = GameAdapterRegistry::find(id);
     if (!adapter || adapter->dataSubdir().isEmpty()) { clear(); return; }

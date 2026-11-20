@@ -653,7 +653,9 @@ static void run_scan_cache()
     const QString mod  = tmp.filePath("Mod");
     const QString deep = mod + "/Data Files";
     QDir().mkpath(deep);
-    { QFile f(deep + "/a.esp"); f.open(QIODevice::WriteOnly); f.write("TES3"); }
+    { QFile f(deep + "/a.esp");
+      check("fixture written", f.open(QIODevice::WriteOnly));
+      f.write("TES3"); }
 
     const auto mtimeOf = [](const QString &d) {
         return QFileInfo(d).lastModified().toMSecsSinceEpoch();
@@ -680,11 +682,16 @@ static void run_scan_cache()
           scan_cache::stillValid(back.mods.value(mod)));
 
     // A plugin dropped in from outside the app moves the directory's time,
-    // which is the whole case the app's own invalidation cannot see.
-    { QFile f(deep + "/b.esp"); f.open(QIODevice::WriteOnly); f.write("TES3"); }
-    check("a directory that changed makes the entry stale",
-          !scan_cache::stillValid(back.mods.value(mod)),
-          QString::number(mtimeOf(deep)));
+    // which is the whole case the app's own invalidation cannot see. Asserted
+    // against a doctored recorded time rather than by creating a file and
+    // hoping the clock moved: these times are milliseconds, and a test that
+    // writes two files inside one millisecond sees no change at all. That
+    // flakiness is the test's, not the check's - a real scan takes far longer
+    // than a millisecond - but a test must not depend on it.
+    scan_cache::Entry moved = back.mods.value(mod);
+    moved.dirs[1].second -= 1000;
+    check("a directory whose recorded time no longer matches is stale",
+          !scan_cache::stillValid(moved));
 
     scan_cache::Entry gone;
     gone.dirs = {{tmp.filePath("never-existed"), 1}};

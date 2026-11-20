@@ -48,6 +48,11 @@ public:
     virtual QString modsDir() const = 0;
     // The library moved: the mirror, the download queue and the profile follow.
     virtual void    setModsDir(const QString &dir) = 0;
+    // False between a list going up and its install probe landing: the rows
+    // are there but "installed" is still an assumption for some of them. The
+    // deploy fingerprint is derived from exactly that, so judging a list in
+    // this window produces a stale verdict for a list nobody touched.
+    virtual bool installStatusSettled() const { return true; }
     virtual QStringList loadOrder() const = 0;
     virtual void        setLoadOrder(const QStringList &order) = 0;
     virtual QString     modlistPath() const = 0;

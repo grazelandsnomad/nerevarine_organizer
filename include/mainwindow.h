@@ -86,6 +86,7 @@ public:
     QString currentGameName() const override;
     QString modsDir() const override { return m_modsDir; }
     void    setModsDir(const QString &dir) override;
+    bool installStatusSettled() const override { return !m_installProbePending; }
     QStringList loadOrder() const override { return loadOrderRef(); }
     void        setLoadOrder(const QStringList &order) override { loadOrderRef() = order; }
     UndoStack             *undo() override { return m_undoStack; }
@@ -361,6 +362,13 @@ private:
     // so the install probe is the warm case when one of them is opened. See
     // install_layout::folderHasContent for what that probe costs cold.
     void warmOtherProfileFolders();
+    // The install probe's answers, back from the worker: correct the rows that
+    // were assumed installed, then run what was waiting on them.
+    void applyInstallProbe(const QList<QPair<QString, bool>> &answers);
+    // True between a list going up and its install probe landing. Anything
+    // that reads "installed" - the deploy fingerprint most of all - has to
+    // wait, or it judges a list the app does not know yet.
+    bool m_installProbePending = false;
     // Both of the above, with the one difference between them.
     void doSaveModList(bool leavingProfile);
     // Absolute modlist path for a profile key (the <gameId>__<profileName> form

@@ -1634,6 +1634,8 @@ void MainWindow::loadModList(const QString &path,
     QElapsedTimer loadTotal;  loadTotal.start();
     QElapsedTimer loadPhase;  loadPhase.start();
     int probeCount = 0;
+    int probeCold  = 0;   // the ones with nothing written down
+    QStringList unprobed; // ...whose folders a worker opens after the list is up
 
     // A freshly loaded list is in saved order; end any temporary view sort.
     clearViewSortState();
@@ -1721,9 +1723,25 @@ void MainWindow::loadModList(const QString &path,
         // cold over 405 folders with the stat in front of it.
         {
             probeCount++;
-            const bool installed = install_layout::folderHasContent(modPath);
-            m.installStatus = int(installed ? InstallStatus::Installed
-                                            : InstallStatus::NotInstalled);
+            // The written-down scan first. Opening the folder costs 103 ms on
+            // the spinning disk this library lives on, and there are 409 of
+            // them, which was 42 s of a profile switch. The cache is only
+            // trusted while the directories it recorded still carry their
+            // times, so a folder emptied behind the app's back still reads as
+            // not installed.
+            std::optional<bool> cached;
+            if (m_scans) cached = m_scans->cachedFolderHasContent(modPath);
+            if (!cached) {
+                // Nothing written down for this one, and opening the folder
+                // here would put the whole list behind a disk seek per mod.
+                // Assume installed, remember the path, and let a worker settle
+                // it - everything that depends on the answer waits below.
+                unprobed << modPath;
+                ++probeCold;
+            }
+            m.installStatus = int(cached.value_or(true)
+                                      ? InstallStatus::Installed
+                                      : InstallStatus::NotInstalled);
         }
         m.checked = e.checked;
         QString tip = e.annotation.isEmpty() ? modPath
@@ -1758,6 +1776,7 @@ void MainWindow::loadModList(const QString &path,
         << " rows=" << ms_rows
         << " collapse=" << ms_collapse
         << " probes=" << probeCount
+        << " cold=" << probeCold
         << " items=" << m_modList->count();
 
     // Warm the data-folder cache for installed mods. Runs on a worker thread
@@ -1781,6 +1800,31 @@ void MainWindow::loadModList(const QString &path,
     // page cache - the answer is thrown away. Single-threaded on purpose:
     // eight threads over this mount measured 1.1x, so the mount serialises
     // metadata reads and a pool would only add risk.
+    // The folders nothing was written down for. Opening each costs a seek on
+    // a spinning library - 103 ms measured, times 409 mods - so the list goes
+    // up first and this corrects it. Everything that reads "installed" is held
+    // until it lands: see m_installProbePending.
+    if (!unprobed.isEmpty()) {
+        m_installProbePending = true;
+        async::guarded(this,
+            [unprobed](MainWindow *) {
+                QList<QPair<QString, bool>> out;
+                out.reserve(unprobed.size());
+                for (const QString &p : unprobed)
+                    out.append({p, install_layout::folderHasContent(p)});
+                return out;
+            },
+            [](MainWindow *self, QList<QPair<QString, bool>> answers) {
+                self->applyInstallProbe(answers);
+            });
+    }
+
+    // Whatever this load learned, written down for the next run. The warm
+    // epilogue cannot be relied on for it: when the UI thread has already
+    // filled those entries there is nothing cold left, so it returns early and
+    // never saves - which is why scan_cache.json was 275 bytes.
+    if (m_scans) m_scans->savePersistedCache();
+
     warmOtherProfileFolders();
 
     // Folders the user put in the mods directory themselves become rows here:
@@ -1795,6 +1839,38 @@ void MainWindow::loadModList(const QString &path,
 // kernel has the directory entries by the time the user switches. Mods dirs
 // are read from the registry rather than the rows, since the rows for other
 // profiles are not loaded.
+// The worker's answers, back on the UI thread. Rows that were assumed
+// installed and are not get corrected, and only now do the things that read
+// "installed" run - the deploy hint above all, because a row briefly in the
+// wrong state would make the fingerprint disagree with the manifest and put
+// the "your mod list has changed" banner up over a list nobody touched.
+void MainWindow::applyInstallProbe(const QList<QPair<QString, bool>> &answers)
+{
+    int corrected = 0;
+    for (const auto &a : answers) {
+        if (a.second) continue;              // assumed installed, and it is
+        for (int i = 0; i < m_modList->count(); ++i) {
+            ModRow item = m_modList->item(i);
+            if (!mod_row::isMod(item)) continue;
+            if (item->data(ModRole::ModPath).toString() != a.first) continue;
+            item->setData(ModRole::InstallStatus, int(InstallStatus::NotInstalled));
+            ++corrected;
+        }
+    }
+    m_installProbePending = false;
+
+    qCInfo(logging::lcModList).nospace()
+        << "installProbe ms settled=" << answers.size()
+        << " corrected=" << corrected;
+
+    updateModCount();
+    updateSectionCounts();
+    if (m_deployFlow) m_deployFlow->updateDeployHint();
+    scanMissingMasters();
+    // The probe is what the next run wants written down.
+    if (m_scans) m_scans->savePersistedCache();
+}
+
 void MainWindow::warmOtherProfileFolders()
 {
     if (!m_profiles || m_profiles->isEmpty()) return;
@@ -1811,16 +1887,23 @@ void MainWindow::warmOtherProfileFolders()
         }
     if (roots.isEmpty()) return;
 
+    // List the children here - one directory read each - and hand the mod
+    // folders to the scan so its answers are recorded and written down, rather
+    // than warming the page cache and throwing the work away. That is what
+    // makes the first switch into another game cheap on the NEXT run too.
     async::guarded(this,
         [roots](MainWindow *) {
-            for (const QString &root : roots) {
-                const QFileInfoList kids = QDir(root).entryInfoList(
-                    QDir::Dirs | QDir::NoDotAndDotDot);
-                for (const QFileInfo &kid : kids)
-                    (void)install_layout::folderHasContent(kid.absoluteFilePath());
-            }
+            QStringList mods;
+            for (const QString &root : roots)
+                for (const QFileInfo &kid : QDir(root).entryInfoList(
+                         QDir::Dirs | QDir::NoDotAndDotDot))
+                    mods << kid.absoluteFilePath();
+            return mods;
         },
-        [](MainWindow *) { /* nothing to apply: the page cache is the result */ });
+        [](MainWindow *self, QStringList mods) {
+            if (self->m_scans && !mods.isEmpty())
+                self->m_scans->warmDataFoldersCache(mods);
+        });
 }
 
 void MainWindow::saveModListFor(const QString &profileKey,
