@@ -1199,8 +1199,11 @@ static void testHasLauncherDerivedFromLayouts()
           flondon && !flondon->hasLauncher());
 
     const auto *cyber = GameAdapterRegistry::find("cyberpunk2077");
-    // Steam + GOG layouts, neither declares a launcher
-    check("Cyberpunk 2077 has no launcher", cyber && !cyber->hasLauncher());
+    // Both layouts name REDprelauncher. Until they did, hasLauncher() was
+    // false and the toolbar hid the Launcher button for this profile, so
+    // Start and Launcher resolved to the same exe and neither could skip the
+    // prelauncher - the split every other game gets.
+    check("Cyberpunk 2077 declares its prelauncher", cyber && cyber->hasLauncher());
 }
 
 // pinned subset feeds the toolbar's "switch game" section; OpenMW (Morrowind)
@@ -1580,7 +1583,15 @@ static void testCyberpunkClassification()
               a->gogLayouts().first().exe == a->steamLayout().exe);
     check("no plugin list to write", a->loadOrderStyle() == LoadOrderStyle::Unknown);
     check("no script extender", a->scriptExtenderLoaders().isEmpty());
-    check("no separate launcher", !a->hasLauncher());
+    // The game and its launcher are different exes, which is what lets Start
+    // skip REDprelauncher and the Launcher button show it.
+    check("the prelauncher is named, and is not the game",
+          a->steamLayout().launcher == QStringLiteral("REDprelauncher.exe")
+              && a->steamLayout().launcher != a->steamLayout().exe,
+          a->steamLayout().launcher);
+    check("and the GOG copy names it too",
+          !a->gogLayouts().isEmpty()
+              && a->gogLayouts().first().launcher == QStringLiteral("REDprelauncher.exe"));
     // Pinned in 0.76, once it had been run against a real GOG install: an
     // unpinned game is absent from the game menu unless "Show all games" is
     // on, and the download guard will only offer to add a pinned one.

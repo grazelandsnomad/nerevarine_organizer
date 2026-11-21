@@ -21,6 +21,7 @@
 #include "bethesda_archives.h"
 #include "bethesda_custom_ini.h"
 #include "opengothic.h"
+#include "heroic_launch.h"
 #include "store_scan.h"
 #include <functional>
 #include "proton_paths.h"
@@ -2533,24 +2534,88 @@ void DeployFlow::onLaunchOpenMWLauncher()
 
 // Helper used by both launch functions: tries Heroic URL → Heroic binary →
 // Heroic Flatpak → direct exe, in that order.  Returns true if anything started.
+// Hand the game to Heroic, which runs whatever Heroic is configured to run -
+// for Cyberpunk 2077 that is REDprelauncher. Right for the Launcher button,
+// wrong for Start; launchGogExeDirectly is Start's route.
+//
+// Every path logs. This branch used to write nothing at all on any outcome,
+// which is how "Cyberpunk does not start" arrived with a log identical to the
+// launches that worked. Note what a true here does and does not mean: the
+// desktop accepted the URL, not that Heroic did anything with it.
 static bool launchViaGog(const QString &gogExe)
 {
-    if (gogExe.isEmpty() || !QFile::exists(gogExe)) return false;
+    if (gogExe.isEmpty() || !QFile::exists(gogExe)) {
+        qCWarning(logging::lcLaunch) << "launch gog: no exe at"
+                                     << (gogExe.isEmpty() ? QStringLiteral("(none)") : gogExe);
+        return false;
+    }
 
-    // Ask Heroic to handle it so Wine/Proton and runtime env are set up correctly
     // Pass the full exe path - the lookup matches entries whose install_path
     // is a prefix of it, so subdir exes (e.g. bin/x64/...) work too.
     const QString appId = GameProfileRegistry::findHeroicGogAppId(gogExe);
+    qCInfo(logging::lcLaunch).nospace()
+        << "launch gog: exe=" << gogExe << " heroicAppId="
+        << (appId.isEmpty() ? QStringLiteral("(not in Heroic)") : appId);
     if (!appId.isEmpty()) {
         const QString url = "heroic://launch/gog/" + appId;
-        if (subprocess::startDetached("xdg-open",  {url}))              return true;
-        if (subprocess::startDetached("heroic",     {"launch", appId}))  return true;
-        if (subprocess::startDetached("flatpak",    {"run",
-                "com.heroicgameslauncher.hgl", "launch", appId}))      return true;
+        if (subprocess::startDetached("xdg-open",  {url})) {
+            qCInfo(logging::lcLaunch) << "launch gog: handed" << url
+                                      << "to the desktop (Heroic reports nothing back)";
+            return true;
+        }
+        qCWarning(logging::lcLaunch) << "launch gog: xdg-open failed for" << url;
+        if (subprocess::startDetached("heroic", {"launch", appId})) {
+            qCInfo(logging::lcLaunch) << "launch gog: ran heroic launch" << appId;
+            return true;
+        }
+        if (subprocess::startDetached("flatpak", {"run",
+                "com.heroicgameslauncher.hgl", "launch", appId})) {
+            qCInfo(logging::lcLaunch) << "launch gog: ran the Heroic flatpak for" << appId;
+            return true;
+        }
+        qCWarning(logging::lcLaunch) << "launch gog: nothing could reach Heroic";
     }
-    // Fallback: run the exe directly (works for native Linux builds and setups
-    // where Wine/Proton is already in the environment - e.g. Lutris, Bottles)
-    return subprocess::startDetached(gogExe, {});
+    // Native Linux builds only. Spawning a Windows .exe with no runner looked
+    // like success - startDetached reports the fork, not what the child did -
+    // so a GOG Windows game reported a launch and showed nothing.
+    if (gogExe.endsWith(QStringLiteral(".exe"), Qt::CaseInsensitive)) {
+        qCWarning(logging::lcLaunch)
+            << "launch gog: no Heroic entry and" << gogExe
+            << "is a Windows exe - not running it without a prefix";
+        return false;
+    }
+    const bool ok = subprocess::startDetached(gogExe, {});
+    qCInfo(logging::lcLaunch) << "launch gog: ran" << gogExe << "directly ->" << ok;
+    return ok;
+}
+
+// Start's route for a Heroic game: the game's own exe, in the prefix Heroic
+// made, with the runner Heroic recorded. False when any of those is unknown,
+// and then the caller falls back to launchViaGog.
+static bool launchGogExeDirectly(const QString &gogExe)
+{
+    if (gogExe.isEmpty() || !QFile::exists(gogExe)) return false;
+    const QString installDir = QFileInfo(gogExe).path();
+    const QString prefix = store_scan::heroicPrefixForInstall(installDir);
+    const store_scan::HeroicRunner runner = store_scan::heroicRunnerForInstall(installDir);
+    const heroic_launch::Command cmd = heroic_launch::build(runner, prefix, gogExe);
+    qCInfo(logging::lcLaunch).nospace()
+        << "launch gog direct: prefix="
+        << (prefix.isEmpty() ? QStringLiteral("(none)") : prefix)
+        << " runner=" << (runner.bin.isEmpty() ? QStringLiteral("(none)") : runner.bin)
+        << " type=" << (runner.type.isEmpty() ? QStringLiteral("(none)") : runner.type)
+        << " app=" << (runner.appName.isEmpty() ? QStringLiteral("(none)") : runner.appName);
+    if (!cmd.valid()) {
+        qCInfo(logging::lcLaunch)
+            << "launch gog direct: not enough to build a command, asking Heroic instead";
+        return false;
+    }
+    const bool ok = subprocess::startDetachedWithEnv(cmd.program, cmd.args,
+                                                     cmd.env, cmd.workingDir);
+    qCInfo(logging::lcLaunch).nospace()
+        << "launch gog direct: " << cmd.program << " " << cmd.args.join(QLatin1Char(' '))
+        << " -> " << ok;
+    return ok;
 }
 
 // Find this game's script-extender loader (OBSE/SKSE/...) in `installDir`, if
@@ -2776,9 +2841,15 @@ void DeployFlow::onLaunchSteamLauncher()
         << "launch launcher: game=" << id << " appId=" << appId;
 
     // -- 1. GOG / Heroic - always wins when the game is present there ---
+    //
+    // The launcher's own exe, run the way Start runs the game's: in Heroic's
+    // prefix with Heroic's runner. Asking Heroic is the fallback, not the
+    // route - the heroic:// URL is handed to the desktop and nothing reports
+    // whether Heroic did anything with it, which is how this button did
+    // nothing without a word in the log.
     const QString gogExe = GameProfileRegistry::findGogGameExe(id, /*wantLauncher=*/true);
     if (!gogExe.isEmpty() && QFile::exists(gogExe)) {
-        if (!launchViaGog(gogExe))
+        if (!launchGogExeDirectly(gogExe) && !launchViaGog(gogExe))
             ui::warn(m_shell.dialogParent(), T("launch_error_title"), T("launch_error_body").arg(gogExe));
         return;
     }
@@ -3120,12 +3191,23 @@ void DeployFlow::launchGameNow(const QString &id)
     }
 
     // -- 1. GOG / Heroic - always wins when the game is present there ---
+    //
+    // The game itself, not the launcher beside it: the Launcher button runs
+    // that, the same split the Steam branch below makes for a script
+    // extender. Asking Heroic would run whatever Heroic is set to run, which
+    // for Cyberpunk is REDprelauncher.
     const QString gogExe = GameProfileRegistry::findGogGameExe(id);
     if (!gogExe.isEmpty() && QFile::exists(gogExe)) {
-        if (!launchViaGog(gogExe))
+        const bool ok = launchGogExeDirectly(gogExe) || launchViaGog(gogExe);
+        if (!ok) {
             ui::warn(m_shell.dialogParent(), T("launch_error_title"), T("launch_error_body").arg(gogExe));
-        else
-            handedOff = true;   // Heroic owns it now, and never reports back
+            return;
+        }
+        handedOff = true;
+        // Heroic never reports back, and neither does a detached Proton, so
+        // the watchdog is the only thing that notices a game that never
+        // appeared. It used not to be armed here at all.
+        watchLaunch(QFileInfo(gogExe).fileName());
         return;
     }
 

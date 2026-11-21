@@ -457,11 +457,16 @@ public:
     QString id()          const override { return QStringLiteral("cyberpunk2077"); }
     QString displayName() const override { return QStringLiteral("Cyberpunk 2077"); }
     QString steamAppId()  const override { return QStringLiteral("1091500"); }
+    // REDprelauncher is the launcher, as SkyrimSELauncher is for Skyrim: it
+    // shows a window, then starts the game. Naming it here is what makes
+    // Start and Launcher mean different things for this game - and what makes
+    // the Launcher button appear at all, since it is hidden for a profile
+    // whose layouts name no launcher. Both stores ship it at the game root.
     SteamLayout steamLayout() const override {
-        return {"Cyberpunk 2077", "bin/x64/Cyberpunk2077.exe", ""};
+        return {"Cyberpunk 2077", "bin/x64/Cyberpunk2077.exe", "REDprelauncher.exe"};
     }
     QList<GogLayout> gogLayouts() const override { return {
-        {"Cyberpunk 2077", "bin/x64/Cyberpunk2077.exe", ""},
+        {"Cyberpunk 2077", "bin/x64/Cyberpunk2077.exe", "REDprelauncher.exe"},
     }; }
     QStringList lutrisTokens() const override { return {"cyberpunk"}; }
     QString          dataSubdir() const override { return QStringLiteral("../.."); }

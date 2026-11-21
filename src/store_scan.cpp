@@ -96,6 +96,69 @@ QString parseHeroicGamePrefix(const QByteArray &json, const QString &appName)
     return {};
 }
 
+HeroicRunner parseHeroicGameRunner(const QByteArray &json, const QString &appName)
+{
+    QJsonParseError err{};
+    const QJsonDocument doc = QJsonDocument::fromJson(json, &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) return {};
+    const QJsonObject root = doc.object();
+    // Same shape as parseHeroicGamePrefix: keyed by the app id normally, but
+    // accept any object that carries a wineVersion, for the other spellings.
+    // The runner carries the id it was read under: the key the file holds,
+    // which is the game's real Heroic id even when the caller asked by
+    // another spelling.
+    const auto fromObject = [](const QJsonObject &game, const QString &key) -> HeroicRunner {
+        const QJsonObject wv = game.value(QStringLiteral("wineVersion")).toObject();
+        HeroicRunner r;
+        r.bin     = wv.value(QStringLiteral("bin")).toString();
+        r.type    = wv.value(QStringLiteral("type")).toString();
+        r.appName = key;
+        return r;
+    };
+    if (HeroicRunner r = fromObject(root.value(appName).toObject(), appName); r.valid())
+        return r;
+    for (auto it = root.constBegin(); it != root.constEnd(); ++it) {
+        if (!it.value().isObject()) continue;
+        if (HeroicRunner r = fromObject(it.value().toObject(), it.key()); r.valid()) return r;
+    }
+    return {};
+}
+
+HeroicRunner heroicRunnerForInstall(const QString &installPath,
+                                    const QStringList &configDirs)
+{
+    if (installPath.isEmpty()) return {};
+    const QString want = QDir::cleanPath(installPath);
+    for (const QString &dir : configDirs) {
+        // Which app id this install is, by the same longest-prefix rule the
+        // prefix lookup uses.
+        QFile inst(dir + QStringLiteral("/gog_store/installed.json"));
+        if (!inst.open(QIODevice::ReadOnly)) continue;
+        QString appName;
+        QString best;
+        for (const HeroicInstall &h : parseHeroicInstalled(inst.readAll())) {
+            const QString p = QDir::cleanPath(h.installPath);
+            if (p.isEmpty()) continue;
+            if (want != p && !want.startsWith(p + QLatin1Char('/'))) continue;
+            if (p.size() <= best.size()) continue;
+            best    = p;
+            appName = h.appName;
+        }
+        if (appName.isEmpty()) continue;
+        QFile cfg(dir + QStringLiteral("/GamesConfig/") + appName
+                  + QStringLiteral(".json"));
+        if (!cfg.open(QIODevice::ReadOnly)) continue;
+        if (HeroicRunner r = parseHeroicGameRunner(cfg.readAll(), appName); r.valid())
+            return r;
+    }
+    return {};
+}
+
+HeroicRunner heroicRunnerForInstall(const QString &installPath)
+{
+    return heroicRunnerForInstall(installPath, heroicConfigDirs());
+}
+
 QString parseHeroicDefaultPrefix(const QByteArray &json)
 {
     QJsonParseError err{};

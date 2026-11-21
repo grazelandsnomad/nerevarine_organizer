@@ -11,6 +11,7 @@
 // the fields that look wrong and are not (an empty "executable", an
 // "is_installed": false on a game that is installed).
 
+#include "heroic_launch.h"
 #include "store_scan.h"
 #include "game_adapter.h"
 #include "game_store.h"
@@ -311,6 +312,120 @@ const QByteArray kHeroicConfigJson = R"({
   "version": "v0"
 })";
 
+// Which runner Heroic will use, out of the same per-game file. Needed because
+// Start runs the game's own exe rather than asking Heroic to run whatever it
+// is configured to run - and the command differs completely by runner type.
+void testHeroicRunnerParse()
+{
+    std::cout << "\n[heroic: the runner recorded for a game]\n";
+    const auto proton = store_scan::parseHeroicGameRunner(kGamesConfigJson,
+                                                          QStringLiteral("1423049311"));
+    check("the proton binary comes through",
+          proton.bin == QStringLiteral(
+              "/home/u/.config/heroic/tools/proton/GE-Proton10-34/proton"),
+          proton.bin);
+    check("and is recognised as Proton", proton.isProton() && proton.valid());
+    check("and knows which game it was read for",
+          proton.appName == QStringLiteral("1423049311"), proton.appName);
+
+    // Keyed by app id normally, but Heroic has shipped other spellings, so an
+    // id that does not match still finds a runner if the file holds one.
+    const auto found = store_scan::parseHeroicGameRunner(kGamesConfigJson,
+                                                         QStringLiteral("nope"));
+    check("a wrong app id still finds the one entry there is", found.valid());
+    check("and reports the id the file actually holds, not the one asked for",
+          found.appName == QStringLiteral("1423049311"), found.appName);
+
+    const QByteArray wine = R"({"42": {"wineVersion":
+        {"bin": "/usr/bin/wine", "name": "System", "type": "wine"}}})";
+    const auto w = store_scan::parseHeroicGameRunner(wine, QStringLiteral("42"));
+    check("a wine runner is not a proton one", w.valid() && !w.isProton());
+
+    // Nothing recorded is Heroic saying "use my defaults", which is not
+    // something to guess at: no runner means fall back to asking Heroic.
+    check("a file naming no runner is not valid",
+          !store_scan::parseHeroicGameRunner(
+               R"({"42": {"winePrefix": "/p"}})", QStringLiteral("42")).valid());
+    check("malformed json is no runner, not a crash",
+          !store_scan::parseHeroicGameRunner("{ not json", QStringLiteral("42")).valid());
+    check("an empty document likewise",
+          !store_scan::parseHeroicGameRunner(QByteArray(), QStringLiteral("42")).valid());
+}
+
+// The command itself. Pure, so the argument order and the environment are
+// pinned here rather than discovered by someone whose game did not start.
+void testHeroicLaunchCommand()
+{
+    std::cout << "\n[heroic: the command that runs the game's own exe]\n";
+    const QString prefix = QStringLiteral("/home/u/Games/Heroic/Prefixes/default/Cyberpunk 2077");
+    const QString exe    = QStringLiteral("/games/Cyberpunk 2077/bin/x64/Cyberpunk2077.exe");
+    const auto envText = [](const heroic_launch::Command &c) {
+        QStringList s;
+        for (const auto &e : c.env) s << e.first + QLatin1Char('=') + e.second;
+        return s.join(QLatin1Char('|'));
+    };
+
+    store_scan::HeroicRunner proton;
+    proton.bin     = QStringLiteral("/tools/GE-Proton10-34/proton");
+    proton.type    = QStringLiteral("proton");
+    proton.appName = QStringLiteral("1423049311");
+    const auto p = heroic_launch::build(proton, prefix, exe);
+    check("proton is the program", p.valid() && p.program == proton.bin, p.program);
+    check("with the run verb before the exe",
+          p.args == QStringList({QStringLiteral("run"), exe}),
+          p.args.join(QLatin1Char('|')));
+    check("run from the exe's own folder",
+          p.workingDir == QStringLiteral("/games/Cyberpunk 2077/bin/x64"),
+          p.workingDir);
+
+    // Every variable Heroic itself sets for a Proton game, established by
+    // running the runner rather than reading it: the client path has to be
+    // PRESENT (its absence is a KeyError inside the script, before the game
+    // exists) but need not point anywhere real - Heroic passes
+    // $HOME/.steam/steam unchecked, umu passes "", and in the real prefix
+    // `cmd /c exit` returned 0 with the real Steam directory, with
+    // /nonexistent/steam and with the empty string alike.
+    const QList<QPair<QString, QString>> wantEnv{
+        {QStringLiteral("STEAM_COMPAT_DATA_PATH"), prefix},
+        {QStringLiteral("STEAM_COMPAT_CLIENT_INSTALL_PATH"),
+         QDir::homePath() + QStringLiteral("/.steam/steam")},
+        {QStringLiteral("STEAM_COMPAT_APP_ID"), QStringLiteral("0")},
+        {QStringLiteral("SteamAppId"), QStringLiteral("0")},
+        {QStringLiteral("SteamGameId"), QStringLiteral("heroic-1423049311")},
+    };
+    check("the Proton environment is exactly Heroic's", p.env == wantEnv, envText(p));
+    check("the prefix is cleaned before it is handed over",
+          heroic_launch::build(proton, prefix + QStringLiteral("/"), exe).env.first().second
+              == prefix);
+    // A runner read for no particular game still gets Heroic's own spelling.
+    store_scan::HeroicRunner anon = proton;
+    anon.appName.clear();
+    check("no app id becomes heroic-0, as Heroic spells it",
+          heroic_launch::build(anon, prefix, exe).env.last().second
+              == QStringLiteral("heroic-0"));
+
+    store_scan::HeroicRunner wine;
+    wine.bin  = QStringLiteral("/usr/bin/wine");
+    wine.type = QStringLiteral("wine");
+    const auto w = heroic_launch::build(wine, prefix, exe);
+    check("wine takes the exe as its argument, with no verb",
+          w.valid() && w.args == QStringList({exe}), w.args.join(QLatin1Char('|')));
+    // Wine needs no Steam anything: the prefix in WINEPREFIX and, as Heroic
+    // does, winemenubuilder kept from writing desktop entries.
+    const QList<QPair<QString, QString>> wantWine{
+        {QStringLiteral("WINEPREFIX"), prefix},
+        {QStringLiteral("WINEDLLOVERRIDES"), QStringLiteral("winemenubuilder.exe=d")},
+    };
+    check("and the Wine environment is Heroic's too", w.env == wantWine, envText(w));
+
+    // Any missing piece means "ask Heroic instead", never a half-built
+    // command: running a Windows exe with no prefix is what reported a launch
+    // and showed nothing.
+    check("no runner, no command", !heroic_launch::build({}, prefix, exe).valid());
+    check("no prefix, no command", !heroic_launch::build(proton, {}, exe).valid());
+    check("no exe, no command", !heroic_launch::build(proton, prefix, {}).valid());
+}
+
 void testHeroicPrefixParse()
 {
     std::cout << "\n[heroic: the prefix a game runs in]\n";
@@ -365,6 +480,23 @@ void testHeroicPrefixForAnInstall()
     check("an empty path resolves to nothing",
           store_scan::heroicPrefixForInstall("", dirs).isEmpty());
 
+    // The runner, by the same lookup: the exe's folder is what the launch has
+    // in hand, and it sits two levels under install_path.
+    const auto runner = store_scan::heroicRunnerForInstall(
+        QStringLiteral("/mnt/games/Cyberpunk 2077/bin/x64"), dirs);
+    check("the exe's folder resolves to the runner Heroic recorded for the game",
+          runner.isProton() && runner.bin == QStringLiteral(
+              "/home/u/.config/heroic/tools/proton/GE-Proton10-34/proton"),
+          runner.bin);
+    check("tagged with the game's own app id",
+          runner.appName == QStringLiteral("1423049311"), runner.appName);
+    check("a game Heroic does not know about has no runner",
+          !store_scan::heroicRunnerForInstall(QStringLiteral("/mnt/games/Morrowind"), dirs).valid());
+    // Installed, but no per-game file: Heroic would use its defaults, which
+    // is not something to guess at - no runner means ask Heroic.
+    check("and a game with no per-game file has none either, rather than a guess",
+          !store_scan::heroicRunnerForInstall(QStringLiteral("/mnt/games/Gothic 2 Gold"), dirs).valid());
+
     // No per-game file: Heroic falls back to the default root plus the
     // install folder's name, and so must we.
     write(cfg + "/config.json", kHeroicConfigJson);
@@ -388,6 +520,8 @@ int main(int argc, char **argv)
     testGameStoreFromNames();
     testGameStoreFromPaths();
     testHeroicPrefixParse();
+    testHeroicRunnerParse();
+    testHeroicLaunchCommand();
     testHeroicPrefixForAnInstall();
 
     std::cout << "\n" << s_passed << " passed, " << s_failed << " failed\n";

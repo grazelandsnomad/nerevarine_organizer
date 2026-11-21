@@ -233,6 +233,7 @@ set(CORE_SOURCES
     src/reboot_check.cpp
     src/toolbar_customization.cpp
     src/scan_cache.cpp
+    src/heroic_launch.cpp
     src/update_budget.cpp
     src/scan_coordinator.cpp
     src/backup_manager.cpp

@@ -65,6 +65,30 @@ QHash<QString, StoreTitle> parseHeroicLibrary(const QByteArray &json);
 // default one".
 QString parseHeroicGamePrefix(const QByteArray &json, const QString &appName);
 
+// The runner Heroic will use for this game, out of the same file's
+// wineVersion object: {"bin": "/.../GE-Proton10-34/proton", "type": "proton"}.
+// `bin` empty means the file does not say, which is Heroic falling back to
+// whatever its defaults choose - not something to guess at.
+//
+// Needed because running a game's own exe means reproducing the command
+// Heroic would have run, and the two runner types take entirely different
+// ones: Proton wants STEAM_COMPAT_DATA_PATH and a "run" verb, Wine wants
+// WINEPREFIX and the exe.
+struct HeroicRunner {
+    QString bin;      // absolute path to the proton script or the wine binary
+    QString type;     // "proton", "wine", "toolkit", ... as Heroic spells it
+    QString appName;  // the Heroic id the runner was read for (Proton's SteamGameId)
+    [[nodiscard]] bool isProton() const { return type.compare(QStringLiteral("proton"),
+                                                              Qt::CaseInsensitive) == 0; }
+    [[nodiscard]] bool valid() const { return !bin.isEmpty(); }
+};
+HeroicRunner parseHeroicGameRunner(const QByteArray &json, const QString &appName);
+// The same, read off disk for an install path: the app id comes from
+// installed.json, the runner from GamesConfig/<appName>.json.
+HeroicRunner heroicRunnerForInstall(const QString &installPath);
+HeroicRunner heroicRunnerForInstall(const QString &installPath,
+                                    const QStringList &configDirs);
+
 // The default prefix root out of Heroic's config.json
 // (defaultSettings.winePrefix). Heroic puts each game in a folder named after
 // it underneath.
