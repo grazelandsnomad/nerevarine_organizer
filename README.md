@@ -2,15 +2,15 @@
 
 A native Linux mod manager for OpenMW.
 
-## 0.77 - in development
+## 0.78 - in development
 
 The next release, built from `main`. Its notes grow in
-[`docs/release-notes/0.77.md`](docs/release-notes/0.77.md) as changes land.
+[`docs/release-notes/0.78.md`](docs/release-notes/0.78.md) as changes land.
 
-### Latest release: 0.76.1
+### Latest release: 0.77
 
 Download: [AppImage or plain Linux
-binary](https://github.com/grazelandsnomad/nerevarine_organizer/releases/tag/v0.76.1).
+binary](https://github.com/grazelandsnomad/nerevarine_organizer/releases/tag/v0.77).
 The AppImage is portable and runs on most distros, Steam Deck included. It
 needs FUSE 2 (`libfuse2t64` or `libfuse2` on Ubuntu and Debian, `fuse2` on
 Arch); without it, start it with `--appimage-extract-and-run`. The plain
@@ -19,28 +19,24 @@ version over the old folder to keep them.
 
 It brings, among the rest:
 
-- **0.76.1:** switching game and back no longer claims your mod list changed
-  and asks you to deploy again.
-- **Move Mod Library moves the whole library.** It used to carry only the
-  folders a row pointed at directly, leaving a library of download folders
-  largely where it was while reporting success; and picking a disk root
-  strewed the mods over it. Now everything travels, into a folder of its own
-  on a disk root, and the summary says what stayed behind.
-- **Cyberpunk 2077 is a normal entry in the game menu**, run against a real
-  install at last. A mod that is one bare `.archive` reaches
-  `archive/pc/mod` instead of the install root, and a GOG copy's mod loaders
-  are registered in the prefix Heroic actually uses.
-- **Diagnose Last OpenMW Run reads missing-object errors**, one entry per
-  object with a repeat count, and names the mod that places it.
-- **A download for a game you have no profile for offers to add it**, finds
-  the install and puts the mod in its own list, instead of leaving you the
-  choice between the wrong list and nothing.
-- **Start greys out and says Running** while the game is up, so a second
-  click cannot launch it again.
+- **The list appears straight away and switching profile is fast**, even on a
+  library kept on a spinning disk: a switch that froze the window for 10 to 70
+  seconds now takes a fraction of one, and the folder scan is written down
+  between runs instead of redone on every start.
+- **Update All asks which file instead of quietly doing nothing**, and the
+  update check is paced, remembers each mod's last check, and reads what
+  NexusMods says about your remaining allowance instead of blaming the API
+  key when it refuses.
+- **Cyberpunk 2077 through Heroic starts from Start** and shows its own
+  launcher from Launcher, and the log says what was tried either way.
+- **The Launcher button says Launching…** and refuses clicks while the
+  launcher is up, as Start does with Running.
+- **Switching game and back no longer claims your mod list changed** and asks
+  you to deploy again.
 
 Guides: [mod conflicts and how to fix each kind](docs/conflicts.md).
 
-Full notes: [`docs/release-notes/0.76.1.md`](docs/release-notes/0.76.1.md)
+Full notes: [`docs/release-notes/0.77.md`](docs/release-notes/0.77.md)
 (prior: [0.76](docs/release-notes/0.76.md), [0.75](docs/release-notes/0.75.md),
 [0.74](docs/release-notes/0.74.md))
 
