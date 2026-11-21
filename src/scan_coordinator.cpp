@@ -99,8 +99,10 @@ void ScanCoordinator::loadPersistedCache(const QString &path)
         // Unset stays unset: an entry nobody measured must reach
         // cachedFolderHasContent as "I do not know", so the row loop sends it
         // to the probe instead of calling the mod uninstalled.
-        if (it.value().hasContent)
-            m_hasContentCache.insert(it.key(), *it.value().hasContent);
+        // Bound once: two it.value() calls look like two different optionals
+        // to the analyzer, and the second one is then an unchecked access.
+        const std::optional<bool> &has = it.value().hasContent;
+        if (has.has_value()) m_hasContentCache.insert(it.key(), *has);
     }
     for (auto it = c.masters.constBegin(); it != c.masters.constEnd(); ++it)
         m_mastersCache.insert(it.key(), it.value());
