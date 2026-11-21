@@ -42,6 +42,21 @@ bool processRunning(const QStringList &cmdlines, const QString &exeName)
     return false;
 }
 
+bool concluded(Sighting &s, bool alive, qint64 nowMs, qint64 giveUpMs)
+{
+    if (alive) {
+        if (!s.seen) {
+            s.seen        = true;
+            s.firstSeenMs = nowMs;
+        }
+        s.lastSeenMs = nowMs;
+    }
+    const bool giveUp = nowMs >= giveUpMs;
+    if (alive && !giveUp) return false;    // still up: keep watching
+    if (!s.seen && !giveUp) return false;  // not up yet: keep waiting
+    return true;                           // come and gone, or waited enough
+}
+
 QStringList runningCommandLines()
 {
     QStringList       out;

@@ -112,6 +112,15 @@ signals:
     void launchStarted();
     void launchMonitored();
     void launchFinished();
+    // The Launcher button's own set. launcherStarted fires on the click;
+    // launcherMonitored when a watch on the launcher's process is armed
+    // (watchLauncher), so the hold lasts while the launcher is up instead of
+    // a fixed half minute; launcherFinished when it has come and gone, never
+    // came, or nothing was started. The word is "Launching", not "Running":
+    // the launcher is still coming up, and nothing is running yet.
+    void launcherStarted();
+    void launcherMonitored();
+    void launcherFinished();
 
 private:
     // The deploy proper, once the game's downloads have moved: gathers the
@@ -127,7 +136,10 @@ private:
     // savePath fires when the resolved path changes (auto-detected via PATH or
     // picked in the dialog); the call site owns the persisted-key choice via its
     // typed Settings:: accessor.
-    void launchProgram(QString &storedPath,
+    // Returns whether something was started; the caller owns the button
+    // signals for the failure paths. A monitored launch still emits
+    // launchMonitored itself and launchFinished when the process quits.
+    bool launchProgram(QString &storedPath,
                        std::function<void(const QString &)> savePath,
                        const QString &execName, const QString &locateTitle,
                        bool monitored = false);
@@ -144,6 +156,11 @@ private:
     // when the game ran. One watch at a time; a second launch replaces it.
     void    watchLaunch(const QString &gameExe);
     QTimer *m_launchWatchTimer = nullptr;
+    // The Launcher button's watch: the launcher's process in /proc, polled
+    // until it has come and gone, so the button reads "Launching…" for as long
+    // as the launcher is up and comes back when it closes.
+    void    watchLauncher(const QString &launcherExe);
+    QTimer *m_launcherWatchTimer = nullptr;
 
     WindowShell &m_shell;
     QTimer      *m_deployProgressTimer = nullptr;

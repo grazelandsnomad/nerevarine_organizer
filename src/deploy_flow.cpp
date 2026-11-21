@@ -2258,7 +2258,7 @@ void DeployFlow::onInspectDeployment()
                             deployment_report::format(f), 760, 520);
 }
 
-void DeployFlow::launchProgram(QString &storedPath,
+bool DeployFlow::launchProgram(QString &storedPath,
                                 std::function<void(const QString&)> savePath,
                                 const QString &execName, const QString &locateTitle,
                                 bool monitored)
@@ -2274,7 +2274,7 @@ void DeployFlow::launchProgram(QString &storedPath,
     if (storedPath.isEmpty() || !QFile::exists(storedPath)) {
         storedPath = QFileDialog::getOpenFileName(
             m_shell.dialogParent(), locateTitle, "/usr/bin");
-        if (storedPath.isEmpty()) { emit launchFinished(); return; }
+        if (storedPath.isEmpty()) return false;
         if (savePath) savePath(storedPath);
     }
 
@@ -2293,14 +2293,16 @@ void DeployFlow::launchProgram(QString &storedPath,
         if (!proc->waitForStarted(3000)) {
             proc->deleteLater();
             ui::warn(m_shell.dialogParent(), T("launch_error_title"), T("launch_error_body").arg(storedPath));
-            emit launchFinished();
-        } else {
-            emit launchMonitored();
+            return false;
         }
-    } else {
-        if (!subprocess::startDetached(storedPath, {}))
-            ui::warn(m_shell.dialogParent(), T("launch_error_title"), T("launch_error_body").arg(storedPath));
+        emit launchMonitored();
+        return true;
     }
+    if (!subprocess::startDetached(storedPath, {})) {
+        ui::warn(m_shell.dialogParent(), T("launch_error_title"), T("launch_error_body").arg(storedPath));
+        return false;
+    }
+    return true;
 }
 
 const game_runtime::Probe &DeployFlow::gameRuntimeProbe()
@@ -2509,14 +2511,15 @@ void DeployFlow::onLaunchOpenMW()
     if (refuseLaunchIfRebootPending()) return;
     if (!confirmLaunchIfWarnings()) return;
     // After the guards, so a cancelled warning dialog never stands the button
-    // down. launchProgram releases it again if it cannot find the binary.
+    // down. Released again below when nothing starts.
     emit launchStarted();
     const QString id = m_shell.currentGameId();
     QString path = m_shell.openmwPath();
-    launchProgram(path,
-                  [id](const QString &p) { Settings::setOpenmwPath(id, p); },
-                  "openmw", T("launch_locate_openmw"),
-                  /*monitored=*/true);
+    if (!launchProgram(path,
+                       [id](const QString &p) { Settings::setOpenmwPath(id, p); },
+                       "openmw", T("launch_locate_openmw"),
+                       /*monitored=*/true))
+        emit launchFinished();
     m_shell.setOpenmwPath(path);
 }
 
@@ -2524,11 +2527,19 @@ void DeployFlow::onLaunchOpenMWLauncher()
 {
     if (refuseLaunchIfRebootPending()) return;
     if (!confirmLaunchIfWarnings()) return;
+    // The Launcher button's hold, as the other profiles' Launcher has it:
+    // "Launching…" from the click, watched by process name so it lasts while
+    // the launcher is up rather than a fixed half minute. After the guards, so
+    // a cancelled warning dialog never stands the button down.
+    emit launcherStarted();
     const QString id = m_shell.currentGameId();
     QString path = m_shell.openmwLauncherPath();
-    launchProgram(path,
-                  [id](const QString &p) { Settings::setOpenmwLauncherPath(id, p); },
-                  "openmw-launcher", T("launch_locate_launcher"));
+    if (launchProgram(path,
+                      [id](const QString &p) { Settings::setOpenmwLauncherPath(id, p); },
+                      "openmw-launcher", T("launch_locate_launcher")))
+        watchLauncher(QFileInfo(path).fileName());
+    else
+        emit launcherFinished();
     m_shell.setOpenmwLauncherPath(path);
 }
 
@@ -2840,6 +2851,20 @@ void DeployFlow::onLaunchSteamLauncher()
     qCInfo(logging::lcLaunch).nospace()
         << "launch launcher: game=" << id << " appId=" << appId;
 
+    // Stand the button down from the click: REDprelauncher takes a while to
+    // show under Proton, and every click in that gap started another one.
+    // Every path out of here that does not arm a watch on the launcher
+    // releases it again - the guard launchGameNow uses, so no return forgets.
+    emit launcherStarted();
+    bool handedOff = false;
+    const auto release = qScopeGuard([this, &handedOff] {
+        if (!handedOff) emit launcherFinished();
+    });
+    const auto watch = [this, &handedOff](const QString &exe) {
+        handedOff = true;
+        watchLauncher(QFileInfo(exe).fileName());
+    };
+
     // -- 1. GOG / Heroic - always wins when the game is present there ---
     //
     // The launcher's own exe, run the way Start runs the game's: in Heroic's
@@ -2849,7 +2874,9 @@ void DeployFlow::onLaunchSteamLauncher()
     // nothing without a word in the log.
     const QString gogExe = GameProfileRegistry::findGogGameExe(id, /*wantLauncher=*/true);
     if (!gogExe.isEmpty() && QFile::exists(gogExe)) {
-        if (!launchGogExeDirectly(gogExe) && !launchViaGog(gogExe))
+        if (launchGogExeDirectly(gogExe) || launchViaGog(gogExe))
+            watch(gogExe);
+        else
             ui::warn(m_shell.dialogParent(), T("launch_error_title"), T("launch_error_body").arg(gogExe));
         return;
     }
@@ -2866,16 +2893,22 @@ void DeployFlow::onLaunchSteamLauncher()
     // for a game the user hasn't bought yet.
     const QString launcherPath = GameProfileRegistry::findSteamLauncherExe(id);
     const QString steamExe     = GameProfileRegistry::findSteamGameExe(id);
-    const bool    steamPresent = (!launcherPath.isEmpty() && QFile::exists(launcherPath))
-                              || (!steamExe.isEmpty()     && QFile::exists(steamExe));
+    const bool    launcherHere = !launcherPath.isEmpty() && QFile::exists(launcherPath);
+    const bool    steamPresent = launcherHere
+                              || (!steamExe.isEmpty() && QFile::exists(steamExe));
     if (!appId.isEmpty() && steamPresent) {
-        dispatchSteamUrl(m_shell.dialogParent(), "steam://launch/" + appId);
+        // Steam runs the game's default launch option, which for the Bethesda
+        // titles is the launcher: watch for that one, or for the game itself
+        // when no launcher exe is known.
+        if (dispatchSteamUrl(m_shell.dialogParent(), "steam://launch/" + appId))
+            watch(launcherHere ? launcherPath : steamExe);
         return;
     }
 
     // -- 3. Steam URL last resort - we have an AppID but couldn't confirm
     //       a local install; the URL will surface a "buy/install" prompt
-    //       which is friendlier than silently failing.
+    //       which is friendlier than silently failing. A store page, not a
+    //       launch: nothing to hold the button for.
     if (!appId.isEmpty()) {
         qCInfo(logging::lcLaunch) << "launch launcher: no local install confirmed,"
                                   << "opening the Steam page for" << appId;
@@ -2891,7 +2924,9 @@ void DeployFlow::onLaunchSteamLauncher()
         QDir::homePath());
     if (path.isEmpty()) return;
     Settings::setLauncherExePath(id, path);
-    if (!subprocess::startDetached(path, {}))
+    if (subprocess::startDetached(path, {}))
+        watch(path);
+    else
         ui::warn(m_shell.dialogParent(), T("launch_error_title"), T("launch_error_body").arg(path));
 }
 
@@ -3045,12 +3080,11 @@ void DeployFlow::watchLaunch(const QString &gameExe)
     }
 
     struct Watch {
-        QString       exe, gameName, logPath, logDir;
-        qint64        logSizeAtStart = -1;
-        QStringList   crashBefore;
-        QElapsedTimer clock;
-        bool          seen        = false;
-        qint64        firstSeenMs = -1, lastSeenMs = -1;
+        QString                exe, gameName, logPath, logDir;
+        qint64                 logSizeAtStart = -1;
+        QStringList            crashBefore;
+        QElapsedTimer          clock;
+        launch_watch::Sighting sight;
     };
     auto w      = std::make_shared<Watch>();
     w->exe      = gameExe;
@@ -3079,17 +3113,8 @@ void DeployFlow::watchLaunch(const QString &gameExe)
         const bool alive =
             launch_watch::processRunning(launch_watch::runningCommandLines(), w->exe);
         const qint64 now = w->clock.elapsed();
-        if (alive) {
-            if (!w->seen) {
-                w->seen        = true;
-                w->firstSeenMs = now;
-            }
-            w->lastSeenMs = now;
-        }
-        const bool giveUp = now >= kGiveUpMs;
         // Done when the game has come and gone, or when it never came.
-        if (alive && !giveUp) return;
-        if (!w->seen && !giveUp) return;
+        if (!launch_watch::concluded(w->sight, alive, now, kGiveUpMs)) return;
         m_launchWatchTimer->stop();
         // The app's knowledge of this launch ends here, whatever the verdict,
         // so the button comes back. Not the same as the game closing: the poll
@@ -3098,10 +3123,11 @@ void DeployFlow::watchLaunch(const QString &gameExe)
 
         launch_watch::Observation o;
         o.gameName      = w->gameName;
-        o.everSeen      = w->seen;
+        o.everSeen      = w->sight.seen;
         o.stillAlive    = alive;
         o.secondsWaited = int(now / 1000);
-        if (w->seen) o.secondsAlive = int((w->lastSeenMs - w->firstSeenMs) / 1000);
+        if (w->sight.seen)
+            o.secondsAlive = int((w->sight.lastSeenMs - w->sight.firstSeenMs) / 1000);
 
         if (!w->logPath.isEmpty() && QFileInfo::exists(w->logPath)) {
             o.extenderLogFound = true;
@@ -3141,6 +3167,61 @@ void DeployFlow::watchLaunch(const QString &gameExe)
     });
     m_launchWatchTimer->start();
     emit launchMonitored();
+}
+
+// The Launcher button's watch. Lean on purpose: no extender log and no
+// verdict dialog, since a launcher that comes and goes is the normal case -
+// what matters is holding the button for exactly that long. Under Proton the
+// runner's own command line names the exe ("proton run .../REDprelauncher.exe"),
+// so the launcher reads as alive from the first poll, through its slow start,
+// until its window is closed or it has started the game and quit.
+void DeployFlow::watchLauncher(const QString &launcherExe)
+{
+    if (launcherExe.isEmpty()) return;   // nothing to watch: the short hold applies
+    struct Watch {
+        QString                exe, gameName;
+        QElapsedTimer          clock;
+        launch_watch::Sighting sight;
+    };
+    auto w      = std::make_shared<Watch>();
+    w->exe      = launcherExe;
+    w->gameName = m_shell.currentGameName();
+    w->clock.start();
+
+    if (m_launcherWatchTimer)
+        m_launcherWatchTimer->stop();
+    else {
+        m_launcherWatchTimer = new QTimer(this);
+        m_launcherWatchTimer->setInterval(3000);
+    }
+    // The same patience as the game watch: a cold Proton start can take a
+    // while before anything shows.
+    constexpr qint64 kGiveUpMs = 150000;
+
+    disconnect(m_launcherWatchTimer, &QTimer::timeout, nullptr, nullptr);
+    connect(m_launcherWatchTimer, &QTimer::timeout, this, [this, w] {
+        const bool alive =
+            launch_watch::processRunning(launch_watch::runningCommandLines(), w->exe);
+        const qint64 now = w->clock.elapsed();
+        if (!launch_watch::concluded(w->sight, alive, now, kGiveUpMs)) return;
+        m_launcherWatchTimer->stop();
+        if (w->sight.seen) {
+            qCInfo(logging::lcLaunch).nospace()
+                << "launcher watch: " << w->exe << " seen after "
+                << w->sight.firstSeenMs / 1000 << " s, "
+                << (alive ? "still up after " : "gone after ")
+                << w->sight.lastSeenMs / 1000 << " s";
+        } else {
+            qCWarning(logging::lcLaunch).nospace()
+                << "launcher watch: " << w->exe << " never appeared in "
+                << now / 1000 << " s";
+            m_shell.showStatus(T("launcher_watch_never_started").arg(w->gameName), 10000);
+        }
+        // The app's knowledge of this launcher ends here, so the button comes back.
+        emit launcherFinished();
+    });
+    m_launcherWatchTimer->start();
+    emit launcherMonitored();
 }
 
 void DeployFlow::launchGameNow(const QString &id)

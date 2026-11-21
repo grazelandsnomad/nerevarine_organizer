@@ -481,6 +481,13 @@ MainWindow::MainWindow(QWidget *parent)
             [this] { setLaunchRunning(true, true); });
     connect(m_deployFlow, &DeployFlow::launchFinished,  this,
             [this] { setLaunchRunning(false, false); });
+    // The Launcher button's own hold: "Launching…" while the launcher is up.
+    connect(m_deployFlow, &DeployFlow::launcherStarted,   this,
+            [this] { setLauncherRunning(true, false); });
+    connect(m_deployFlow, &DeployFlow::launcherMonitored, this,
+            [this] { setLauncherRunning(true, true); });
+    connect(m_deployFlow, &DeployFlow::launcherFinished,  this,
+            [this] { setLauncherRunning(false, false); });
     m_libraryFlow  = new LibraryFlow(*this, this);
     setupMenuBar();
     setupToolbar();

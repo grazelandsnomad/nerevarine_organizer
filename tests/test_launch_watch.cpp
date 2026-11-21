@@ -78,6 +78,36 @@ void testProcessRunning()
               QStringLiteral("Fallout4.exe")));
 }
 
+// The poll's decision, shared by the Start watch and the Launcher watch so
+// the two cannot drift: keep going while the process is up or has not shown
+// yet, conclude when it has come and gone or the wait runs out.
+void testConcluded()
+{
+    std::cout << "\n[concluded: one poll decision for both watches]\n";
+    constexpr qint64 kGiveUp = 150000;
+    Sighting s;
+    check("nothing yet, early: keep waiting", !concluded(s, false, 3000, kGiveUp));
+    check("and nothing was recorded", !s.seen && s.firstSeenMs < 0);
+    check("alive: keep watching", !concluded(s, true, 6000, kGiveUp));
+    check("first sighting recorded", s.seen && s.firstSeenMs == 6000 && s.lastSeenMs == 6000);
+    check("still alive: keep watching, last sighting moves",
+          !concluded(s, true, 9000, kGiveUp) && s.lastSeenMs == 9000 && s.firstSeenMs == 6000);
+    check("gone after being seen: concluded", concluded(s, false, 12000, kGiveUp));
+    check("the span is what it was", s.firstSeenMs == 6000 && s.lastSeenMs == 9000);
+
+    Sighting never;
+    check("never seen, before the wait runs out: keep waiting",
+          !concluded(never, false, kGiveUp - 1, kGiveUp));
+    check("never seen, wait run out: concluded", concluded(never, false, kGiveUp, kGiveUp));
+    check("and it says so", !never.seen);
+
+    // Alive past the limit concludes too: the app stops knowing anything
+    // about the launch, and the button has to come back.
+    Sighting longRun;
+    check("alive at the limit: concluded, not held for ever",
+          concluded(longRun, true, kGiveUp, kGiveUp) && longRun.seen);
+}
+
 void testTailLines()
 {
     std::cout << "testTailLines\n";
@@ -160,6 +190,7 @@ int main(int argc, char **argv)
     std::cout << "== launch_watch ==\n";
     testExtenderLogFor();
     testProcessRunning();
+    testConcluded();
     testTailLines();
     testJudge();
     testDetails();

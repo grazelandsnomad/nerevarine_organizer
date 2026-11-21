@@ -915,6 +915,11 @@ private:
     // Called from the launch signals: arm the state, upgrade it to "this one
     // reports its own end", or stand it back up.
     void setLaunchRunning(bool running, bool monitored);
+    // The Launcher button's twin of the above: "Launching…" from the click
+    // until the launcher has come and gone. Its own flag and timer, so a
+    // running game and a launcher coming up are two states, not one.
+    void setLauncherRunning(bool running, bool monitored);
+    void updateLauncherButtons();
     // The update paths' common start: each row still there and not already
     // updating gets prepareItemForInstall + a file list fetched without the
     // picker. Returns how many started.
@@ -993,6 +998,10 @@ private:
     QToolButton *m_launchOpenMWBtn  = nullptr;
     QTimer      *m_launchResetTimer = nullptr;  // the safety net, see launch_ui.h
     bool         m_launchRunning    = false;
+    QToolButton *m_launcherBtn        = nullptr;  // "▶ Launcher" for non-Morrowind
+    QToolButton *m_launchLauncherBtn  = nullptr;  // its openmw-launcher twin
+    QTimer      *m_launcherResetTimer = nullptr;
+    bool         m_launcherRunning    = false;
     qint64       m_updateAllSinceMs = 0;        // when it last turned red (double-click guard)
     DownloadQueue                    *m_downloadQueue = nullptr;
     // Bulk-install throttle: drip-feeds onInstallFromNexus to avoid hammering

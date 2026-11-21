@@ -49,6 +49,20 @@ bool processRunning(const QStringList &cmdlines, const QString &exeName);
 // impure function here; separated so the matcher above stays testable.
 QStringList runningCommandLines();
 
+// One watch's bookkeeping, shared by the Start watch and the Launcher watch so
+// the two cannot drift: whether the process was ever seen alive, and when it
+// was first and last seen.
+struct Sighting {
+    bool   seen        = false;
+    qint64 firstSeenMs = -1;
+    qint64 lastSeenMs  = -1;
+};
+
+// Record one poll. True when the watch is over: the process has come and gone,
+// or the wait has run out - alive or not, since past that point the app stops
+// knowing anything about the launch and the button has to come back.
+bool concluded(Sighting &s, bool alive, qint64 nowMs, qint64 giveUpMs);
+
 // The last `n` lines of `text` that carry anything, oldest first.
 QStringList tailLines(const QString &text, int n);
 

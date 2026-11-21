@@ -499,6 +499,7 @@ void MainWindow::setupToolbar()
     tintText(tb->widgetForAction(m_actLaunchGame), QColor(QStringLiteral("#1a8a1a")));
     m_launchBtn = qobject_cast<QToolButton *>(tb->widgetForAction(m_actLaunchGame));
     m_actLaunchSteamLauncher = tb->addAction(T("toolbar_launch_launcher"), m_deployFlow, &DeployFlow::onLaunchSteamLauncher);
+    m_launcherBtn = qobject_cast<QToolButton *>(tb->widgetForAction(m_actLaunchSteamLauncher));
 
     // Dependency canvas. Takes the slot "Tune INI" had, as asked - Tune INI
     // itself moves to the Mods menu below rather than being deleted, since it
@@ -516,6 +517,7 @@ void MainWindow::setupToolbar()
     tintText(tb->widgetForAction(m_actLaunchOpenMW), QColor(QStringLiteral("#1a8a1a")));
     m_launchOpenMWBtn = qobject_cast<QToolButton *>(tb->widgetForAction(m_actLaunchOpenMW));
     m_actLaunchLauncher = tb->addAction(T("toolbar_launch_launcher"), m_deployFlow, &DeployFlow::onLaunchOpenMWLauncher);
+    m_launchLauncherBtn = qobject_cast<QToolButton *>(tb->widgetForAction(m_actLaunchLauncher));
 
     // Sort with LOOT - on-demand; visibility toggled per-profile in
     // updateGameButton() (only shown when lootGameFor() returns non-empty).
@@ -775,24 +777,55 @@ void MainWindow::setLaunchRunning(bool running, bool monitored)
     updateLaunchButtons();
 }
 
+// One face onto one action. Each twin keeps its own label when idle; only
+// the busy face is shared. `clearIdle` is for the Launcher buttons, which
+// carry no green tint and so have nothing else to take the grey off them -
+// the Start buttons get theirs back from restyleToolbarTextButtons.
+static void applyLook(const launch_ui::Look &look, QAction *act, QToolButton *btn,
+                      const QString &idleKey, bool clearIdle)
+{
+    if (!act) return;
+    act->setEnabled(look.enabled);
+    act->setText(T(look.enabled ? idleKey : look.textKey));
+    act->setToolTip(look.enabled ? QString() : T(look.tipKey));
+    if (!btn) return;
+    if (!look.qss.isEmpty()) btn->setStyleSheet(look.qss);
+    else if (clearIdle)      btn->setStyleSheet(QString());
+}
+
 void MainWindow::updateLaunchButtons()
 {
-    const launch_ui::Look look = launch_ui::look(m_launchRunning);
-    // The Morrowind twin keeps its own label when idle; only the running face
-    // is shared, and both lose their green while it is up.
-    const auto apply = [&look](QAction *act, QToolButton *btn,
-                               const QString &idleKey) {
-        if (!act) return;
-        act->setEnabled(look.enabled);
-        act->setText(T(look.enabled ? idleKey : look.textKey));
-        act->setToolTip(look.enabled ? QString() : T("toolbar_launch_running_tip"));
-        if (btn && !look.qss.isEmpty()) btn->setStyleSheet(look.qss);
-    };
-    apply(m_actLaunchGame,   m_launchBtn,       QStringLiteral("toolbar_launch_game"));
-    apply(m_actLaunchOpenMW, m_launchOpenMWBtn, QStringLiteral("toolbar_launch_openmw"));
+    const launch_ui::Look look = launch_ui::look(launch_ui::Button::Start, m_launchRunning);
+    applyLook(look, m_actLaunchGame,   m_launchBtn,       QStringLiteral("toolbar_launch_game"),   false);
+    applyLook(look, m_actLaunchOpenMW, m_launchOpenMWBtn, QStringLiteral("toolbar_launch_openmw"), false);
     // Back to idle: the green tint is baked per widget and per theme, so hand
     // it back to the one function that knows how.
     if (look.enabled) restyleToolbarTextButtons();
+}
+
+void MainWindow::setLauncherRunning(bool running, bool monitored)
+{
+    m_launcherRunning = running;
+    if (!m_launcherResetTimer) {
+        m_launcherResetTimer = new QTimer(this);
+        m_launcherResetTimer->setSingleShot(true);
+        connect(m_launcherResetTimer, &QTimer::timeout, this,
+                [this] { setLauncherRunning(false, false); });
+    }
+    // Re-armed on every signal, as the launch one is.
+    m_launcherResetTimer->stop();
+    if (running) m_launcherResetTimer->start(launch_ui::resetTimeoutMs(monitored));
+    updateLauncherButtons();
+}
+
+void MainWindow::updateLauncherButtons()
+{
+    const launch_ui::Look look =
+        launch_ui::look(launch_ui::Button::Launcher, m_launcherRunning);
+    applyLook(look, m_actLaunchSteamLauncher, m_launcherBtn,
+              QStringLiteral("toolbar_launch_launcher"), true);
+    applyLook(look, m_actLaunchLauncher, m_launchLauncherBtn,
+              QStringLiteral("toolbar_launch_launcher"), true);
 }
 
 void MainWindow::scheduleCheckButtonRefresh()
@@ -2005,7 +2038,8 @@ void MainWindow::switchToGame(int idx)
     resetUntranslatedNotices();
 
     // A launch belonging to the game just left is not news about this one.
-    if (m_launchRunning) setLaunchRunning(false, false);
+    if (m_launchRunning)   setLaunchRunning(false, false);
+    if (m_launcherRunning) setLauncherRunning(false, false);
     statusBar()->showMessage(
         T("status_switched_game").arg(m_profiles->current().displayName), 3000);
 }

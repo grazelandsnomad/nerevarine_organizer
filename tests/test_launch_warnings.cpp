@@ -197,6 +197,35 @@ void testTheRunningStateAlwaysEnds()
           QString::number(held));
 }
 
+// The Launcher button gets the same hold with its own word: nothing is
+// running while REDprelauncher is still coming up, so "Running" would be
+// wrong, and "Launching" is what is happening.
+void testTheLauncherButtonSaysLaunching()
+{
+    std::cout << "\n[launch_ui: Launcher reads Launching and refuses clicks]\n";
+    using launch_ui::Button;
+    const launch_ui::Look idle = launch_ui::look(Button::Launcher, false);
+    check("idle keeps the Launcher label and is clickable",
+          idle.enabled && idle.textKey == QStringLiteral("toolbar_launch_launcher"),
+          idle.textKey);
+    check("idle styles nothing and carries no tip",
+          idle.qss.isEmpty() && idle.tipKey.isEmpty());
+
+    const launch_ui::Look busy = launch_ui::look(Button::Launcher, true);
+    check("busy cannot be clicked", !busy.enabled);
+    check("busy says Launching, not Running",
+          busy.textKey == QStringLiteral("toolbar_launcher_launching"), busy.textKey);
+    check("with its own tip",
+          busy.tipKey == QStringLiteral("toolbar_launcher_launching_tip"), busy.tipKey);
+    check("and wears the one busy face Start wears",
+          busy.qss == launch_ui::look(Button::Start, true).qss);
+
+    // The first callers spell Start's face look(bool); that still means Start.
+    check("look(bool) is still the Start face",
+          launch_ui::look(true).textKey == launch_ui::look(Button::Start, true).textKey
+              && launch_ui::look(true).tipKey == QStringLiteral("toolbar_launch_running_tip"));
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -210,6 +239,7 @@ int main(int argc, char **argv)
     testScriptExtenderRowsOnlyExistWithFindings();
     testTheStartButtonStandsDownWhileRunning();
     testTheRunningStateAlwaysEnds();
+    testTheLauncherButtonSaysLaunching();
 
     std::cout << "\n";
     if (s_failed == 0)
