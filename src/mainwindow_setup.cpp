@@ -200,6 +200,11 @@ void MainWindow::setupMenuBar()
     // Undo a temporary Size/Date view sort (no-op when none is active).
     modsMenu->addAction(T("menu_reset_order"), this, [this]{ resetToSavedOrder(); });
     modsMenu->addSeparator();
+    modsMenu->addAction(T("menu_collapse_all"), this,
+                        [this] { collapseAllSections(true); });
+    modsMenu->addAction(T("menu_expand_all"), this,
+                        [this] { collapseAllSections(false); });
+    modsMenu->addSeparator();
     modsMenu->addAction(T("menu_enable_all"), this, [this] { setAllModsEnabled(true); });
     modsMenu->addAction(T("menu_disable_all"), this,
                         [this] { setAllModsEnabled(false); });

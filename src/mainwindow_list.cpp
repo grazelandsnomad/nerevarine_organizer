@@ -264,6 +264,43 @@ void MainWindow::collapseSection(ModRow sep, bool collapse)
     updateModCount();
 }
 
+// Asked for on the Nexus page: a way to fold the whole list, not one section
+// at a time. Nothing new underneath - the same collapseSection, the same
+// persisted flag, one undo step and one save for the lot.
+void MainWindow::collapseAllSections(bool collapse)
+{
+    // The filter hides rows with the same setHidden the collapse route uses,
+    // so expanding everything while a filter is on would reveal the rows the
+    // filter had taken away. Clear it first and say so, exactly as adding a
+    // separator does, rather than trying to remember whose hidden flag is
+    // whose.
+    if (m_filterBar && m_filterBar->isFiltering()) {
+        m_filterBar->clearFilter();
+        statusBar()->showMessage(T("status_filter_cleared_collapse"), 5000);
+    }
+
+    QList<ModRow> todo;
+    for (int i = 0; i < m_modList->count(); ++i) {
+        ModRow it = m_modList->item(i);
+        if (!mod_row::isSeparator(it)) continue;
+        if (it->data(ModRole::Collapsed).toBool() == collapse) continue;
+        todo.append(it);
+    }
+    if (todo.isEmpty()) {
+        statusBar()->showMessage(T("status_collapse_all_none"), 4000);
+        return;
+    }
+
+    // One undo step for the whole fold, as the per-section action takes one
+    // for its own.
+    m_undoStack->pushUndo();
+    for (ModRow sep : std::as_const(todo)) collapseSection(sep, collapse);
+    saveModList();
+    statusBar()->showMessage(T(collapse ? "status_collapsed_all"
+                                        : "status_expanded_all")
+                                 .arg(todo.size()), 4000);
+}
+
 // The folders this mod offers the game, in the order the config writer emits
 // them, each marked with whether it is still switched on.
 QList<data_folder_choice::Folder> MainWindow::dataFoldersOf(const QString &modPath) const
@@ -1130,6 +1167,12 @@ void MainWindow::onContextMenu(const QPoint &pos)
                     collapseSection(item, !collapsed);
                     saveModList();
                 });
+            // And the whole list, where someone right-clicking a separator
+            // will look for it.
+            menu.addAction(T("menu_collapse_all"), this,
+                           [this] { collapseAllSections(true); });
+            menu.addAction(T("menu_expand_all"), this,
+                           [this] { collapseAllSections(false); });
 
             auto toggleSection = [this, item](bool enable) {
                 QList<int> rows;

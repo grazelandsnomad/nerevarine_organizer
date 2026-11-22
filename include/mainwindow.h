@@ -920,6 +920,11 @@ private:
     // files, which until now produced an empty list and no explanation. The
     // test is in state_recovery.h; this is the half that reads the disk.
     void maybeWarnListMissing();
+    // Every section at once, the same hidden flag a single section's
+    // right-click writes. Clears the filter first: collapse and the filter
+    // share setHidden, so expanding under a filter would put back rows the
+    // filter had taken away.
+    void collapseAllSections(bool collapse);
     // The Launcher button's twin of the above: "Launching…" from the click
     // until the launcher has come and gone. Its own flag and timer, so a
     // running game and a launcher coming up are two states, not one.
