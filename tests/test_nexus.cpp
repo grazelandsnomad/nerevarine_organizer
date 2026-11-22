@@ -2235,6 +2235,46 @@ static void testRateLimitAbsentOrGarbledReadsAsUnknown()
           !update_budget::stopForQuota(none.remaining()));
 }
 
+// The case of the names, which is the whole reason the allowance reading did
+// nothing in production for a release: HTTP/2 requires lowercase field names
+// and Qt reports what the wire carried, so a byte-exact lookup against the
+// documented capitalisation matched nothing. Measured with a probe against
+// the real host - all 16 names of a real reply came back lowercase. Both
+// shapes have to find the same numbers now.
+static void testRateLimitHeaderNamesAreCaseInsensitive()
+{
+    std::cout << "\n[rate limit: the case of the header names]\n";
+    const QDateTime now = QDateTime::currentDateTime();
+
+    QHash<QByteArray, QByteArray> wire;   // as HTTP/2 delivers them
+    wire.insert("x-rl-hourly-limit", "500");
+    wire.insert("x-rl-hourly-remaining", "420");
+    wire.insert("x-rl-hourly-reset", "2026-11-21T13:00:00Z");
+    wire.insert("x-rl-daily-limit", "20000");
+    wire.insert("x-rl-daily-remaining", "19000");
+    wire.insert("x-rl-daily-reset", "2026-11-22T00:00:00Z");
+    const NexusRateLimit lower = NexusClient::parseRateLimit(wire, now);
+    check("lowercase names are read, which is what the server sends",
+          lower.known() && lower.hourlyRemaining == 420 && lower.dailyLimit == 20000,
+          QString::number(lower.hourlyRemaining));
+    check("and give the same binding allowance as the documented spelling",
+          lower.remaining() == NexusClient::parseRateLimit(rlHeaders(420, 19000), now)
+                                   .remaining());
+    check("the reset comes through too, not just the counts",
+          lower.resetsAt() == QDateTime::fromString(QStringLiteral("2026-11-21T13:00:00Z"),
+                                                    Qt::ISODate).toUTC());
+
+    QHash<QByteArray, QByteArray> shouty;
+    shouty.insert("X-RL-HOURLY-REMAINING", "7");
+    check("any case at all, so no protocol version can break this again",
+          NexusClient::parseRateLimit(shouty, now).remaining() == 7);
+
+    QHash<QByteArray, QByteArray> ra;
+    ra.insert("retry-after", "90");
+    check("Retry-After is folded the same way",
+          NexusClient::parseRateLimit(ra, now).retryAfterSecs == 90);
+}
+
 static void testRetryAfterInBothShapes()
 {
     std::cout << "\n[rate limit: Retry-After, seconds or a date]\n";
@@ -2262,6 +2302,7 @@ static void testRetryAfterInBothShapes()
 static void run_rate_limit()
 {
     testRateLimitHeadersRead();
+    testRateLimitHeaderNamesAreCaseInsensitive();
     testRateLimitAbsentOrGarbledReadsAsUnknown();
     testRetryAfterInBothShapes();
 }

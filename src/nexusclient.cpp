@@ -55,18 +55,27 @@ NexusRateLimit NexusClient::parseRateLimit(const QHash<QByteArray, QByteArray> &
                                            const QDateTime &now)
 {
     NexusRateLimit rl;
+    // Case-folded once, then looked up in lowercase: the names arrive
+    // lowercase over HTTP/2 and capitalised in this file's tests, and both
+    // have to find the same numbers. See parseRateLimit in the header for
+    // what the byte-exact version cost.
+    QHash<QByteArray, QByteArray> folded;
+    folded.reserve(headers.size());
+    for (auto it = headers.constBegin(); it != headers.constEnd(); ++it)
+        folded.insert(it.key().toLower(), it.value());
+
     // Absent or unparseable stays -1: see NexusRateLimit for why that matters
     // more than reading every header correctly.
     const auto num = [&](const char *name) {
-        const auto it = headers.constFind(QByteArray(name));
-        if (it == headers.constEnd()) return -1;
+        const auto it = folded.constFind(QByteArray(name).toLower());
+        if (it == folded.constEnd()) return -1;
         bool ok = false;
         const int v = it->trimmed().toInt(&ok);
         return ok ? v : -1;
     };
     const auto when = [&](const char *name) {
-        const auto it = headers.constFind(QByteArray(name));
-        if (it == headers.constEnd()) return QDateTime();
+        const auto it = folded.constFind(QByteArray(name).toLower());
+        if (it == folded.constEnd()) return QDateTime();
         const QString raw = QString::fromLatin1(it->trimmed());
         // Nexus sends these as a date; accept the two shapes it is documented
         // and observed to use, and an epoch, rather than guessing one.
@@ -87,8 +96,8 @@ NexusRateLimit NexusClient::parseRateLimit(const QHash<QByteArray, QByteArray> &
     rl.dailyReset      = when("X-RL-Daily-Reset");
 
     // Retry-After is seconds or an HTTP date; both appear in the wild.
-    if (const auto it = headers.constFind(QByteArray("Retry-After"));
-        it != headers.constEnd()) {
+    if (const auto it = folded.constFind(QByteArray("retry-after"));
+        it != folded.constEnd()) {
         bool ok = false;
         const int secs = it->trimmed().toInt(&ok);
         if (ok && secs > 0) {

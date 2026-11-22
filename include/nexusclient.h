@@ -282,9 +282,21 @@ public:
     // The X-RL-* headers of one reply, as a reading. Pure, so the header
     // names and their absence are testable without a network.
     //
-    // UNVERIFIED: the spellings are from the public documentation, not from a
-    // reply this code has seen. A header that is not there stays -1, so a
-    // rename degrades to the behaviour of every earlier build.
+    // The lookup is case-insensitive, and that is not politeness. HTTP/2
+    // requires lowercase field names, Qt reports them as the wire carried
+    // them, and api.nexusmods.com negotiates HTTP/2 with Qt - measured, with
+    // a probe that printed all 16 names of a real reply in lowercase. The
+    // first version of this looked them up byte-exact against the
+    // documented capitalisation, so in production it matched nothing, every
+    // field stayed -1, and the low-allowance banner, the quota floor and the
+    // "try again at" in the 429 message were all dead on arrival. The unit
+    // tests passed throughout, because they built their headers with the
+    // same capitalisation the lookup used.
+    //
+    // The spellings themselves are still the documented ones; a 401 carries
+    // no X-RL headers, so they cannot be read off an unauthenticated reply.
+    // A header that is not there stays -1, so a rename degrades to the
+    // behaviour of every earlier build.
     static NexusRateLimit parseRateLimit(const QHash<QByteArray, QByteArray> &headers,
                                          const QDateTime &now);
 
