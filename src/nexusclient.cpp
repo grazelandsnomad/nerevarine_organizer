@@ -77,8 +77,20 @@ NexusRateLimit NexusClient::parseRateLimit(const QHash<QByteArray, QByteArray> &
         const auto it = folded.constFind(QByteArray(name).toLower());
         if (it == folded.constEnd()) return QDateTime();
         const QString raw = QString::fromLatin1(it->trimmed());
-        // Nexus sends these as a date; accept the two shapes it is documented
-        // and observed to use, and an epoch, rather than guessing one.
+        // What Nexus actually sends, read off a real reply:
+        //
+        //     x-rl-hourly-reset: 2026-11-22 21:00:00 +0000
+        //
+        // A space where ISO-8601 wants a T, and an offset where RFC 2822
+        // wants a weekday - so both of the formats this tried before it
+        // failed, every time, and resetsAt() has never once been valid. The
+        // offset is parsed rather than dropped: without it the same string
+        // reads an hour out, as local time.
+        static const QString kNexusReset = QStringLiteral("yyyy-MM-dd HH:mm:ss t");
+        if (const QDateTime d = QDateTime::fromString(raw, kNexusReset); d.isValid())
+            return d.toUTC();
+        // The documented shapes stay, in case a proxy or a future version
+        // sends one of them instead.
         for (auto fmt : {Qt::ISODate, Qt::RFC2822Date}) {
             const QDateTime d = QDateTime::fromString(raw, fmt);
             if (d.isValid()) return d.toUTC();

@@ -2275,6 +2275,46 @@ static void testRateLimitHeaderNamesAreCaseInsensitive()
           NexusClient::parseRateLimit(ra, now).retryAfterSecs == 90);
 }
 
+// The reset times, in the shape a real reply carries them. Copied verbatim
+// from a 200 on users/validate.json: a space where ISO-8601 wants a T and a
+// numeric offset where RFC 2822 wants a weekday, so neither format the first
+// version tried could parse one, and resetsAt() was never valid in
+// production. The 429 message's "try again at" was the visible half of that.
+static void testResetTimesInTheShapeNexusSends()
+{
+    std::cout << "\n[rate limit: the reset times a real reply carries]\n";
+    const QDateTime now = QDateTime::currentDateTime();
+    QHash<QByteArray, QByteArray> h;
+    h.insert("x-rl-hourly-limit", "2000");
+    h.insert("x-rl-hourly-remaining", "1999");
+    h.insert("x-rl-hourly-reset", "2026-11-22 21:00:00 +0000");
+    h.insert("x-rl-daily-limit", "20000");
+    h.insert("x-rl-daily-remaining", "20000");
+    h.insert("x-rl-daily-reset", "2026-11-23 20:09:08 +0000");
+
+    const NexusRateLimit rl = NexusClient::parseRateLimit(h, now);
+    check("the hourly reset is understood at all", rl.hourlyReset.isValid());
+    check("and it is the moment Nexus named, in UTC",
+          rl.hourlyReset == QDateTime::fromString(QStringLiteral("2026-11-22T21:00:00Z"),
+                                                  Qt::ISODate).toUTC(),
+          rl.hourlyReset.toString(Qt::ISODate));
+    // The offset is read, not dropped: dropping it would land an hour out
+    // wherever the machine is not on UTC.
+    check("the daily one too, to the second",
+          rl.dailyReset == QDateTime::fromString(QStringLiteral("2026-11-23T20:09:08Z"),
+                                                 Qt::ISODate).toUTC(),
+          rl.dailyReset.toString(Qt::ISODate));
+    check("so the binding allowance can say when it frees up",
+          rl.resetsAt().isValid() && rl.resetsAt() == rl.hourlyReset);
+
+    // The documented shapes still work, in case a proxy rewrites them.
+    QHash<QByteArray, QByteArray> iso;
+    iso.insert("x-rl-hourly-remaining", "5");
+    iso.insert("x-rl-hourly-reset", "2026-11-22T21:00:00Z");
+    check("an ISO-8601 reset is still accepted",
+          NexusClient::parseRateLimit(iso, now).hourlyReset.isValid());
+}
+
 static void testRetryAfterInBothShapes()
 {
     std::cout << "\n[rate limit: Retry-After, seconds or a date]\n";
@@ -2303,6 +2343,7 @@ static void run_rate_limit()
 {
     testRateLimitHeadersRead();
     testRateLimitHeaderNamesAreCaseInsensitive();
+    testResetTimesInTheShapeNexusSends();
     testRateLimitAbsentOrGarbledReadsAsUnknown();
     testRetryAfterInBothShapes();
 }
