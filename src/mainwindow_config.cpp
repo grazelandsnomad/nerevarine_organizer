@@ -1775,24 +1775,20 @@ void MainWindow::loadModList(const QString &path,
             && modPath.startsWith(remapFrom))
             modPath = remapTo + modPath.mid(remapFrom.size());
 
-        ModEntry m = ModEntry::named(e.customName.isEmpty() ? QFileInfo(modPath).fileName()
-                                                            : e.customName);
-        m.modPath         = modPath;
-        m.customName      = e.customName;
-        m.annotation      = e.annotation;
-        m.nexusUrl        = e.nexusUrl;
-        m.dateAdded       = e.dateAdded;
-        m.nexusFileId     = e.nexusFileId;
-        m.dependsOn       = e.dependsOn;
-        m.updateAvailable = e.updateAvailable;
-        m.isUtility       = e.isUtility;
-        m.isFavorite      = e.isFavorite;
-        m.fomodChoices    = e.fomodChoices;
-        m.translationOf   = e.translationOf;
-        m.bainChoices     = e.bainChoices;
-        m.videoUrl        = e.videoUrl;
-        m.sourceUrl       = e.sourceUrl;
-        m.creationVersion = e.creationVersion;
+        // Start from what the file said, and change only what this loader
+        // decides. It used to copy field by field, and every field nobody
+        // remembered to add a line for was silently dropped on load: three
+        // of them were, including lastCheckedAt, so 0.77's "remember when
+        // each mod's page was last read" worked within a session and was
+        // forgotten on every restart - a check paid full price for 383 mods
+        // the morning after paying it the night before, and the bulk sweep
+        // that uses the same stamp could rule nothing out. Copying the whole
+        // entry makes the next added field work by default instead of
+        // needing to be noticed here.
+        ModEntry m = e;
+        m.displayName = e.customName.isEmpty() ? QFileInfo(modPath).fileName()
+                                               : e.customName;
+        m.modPath     = modPath;   // the remapped one, not the file's
 
         // Same install-status probe as before, in one directory walk instead
         // of a stat and a walk: an empty directory is treated as

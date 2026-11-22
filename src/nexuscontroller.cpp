@@ -206,6 +206,12 @@ void NexusController::checkForUpdates(
                 if (const auto m = NexusClient::parseUpdatedMods(reply->readAll())) {
                     pre->activity.insert(game, *m);
                     pre->usable.insert(game);
+                    // Said out loud: a list of nought and no list at all lead
+                    // to opposite decisions, and the summary below cannot
+                    // tell them apart.
+                    qCInfo(logging::lcNexus).nospace()
+                        << "update sweep: " << game << " named " << m->size()
+                        << " mod(s) changed in the last " << update_sweep::kPeriod;
                 } else {
                     qCWarning(logging::lcNexus)
                         << "update sweep: unreadable reply for" << game
@@ -220,20 +226,24 @@ void NexusController::checkForUpdates(
 
             const QDateTime now = QDateTime::currentDateTime();
             QList<CheckTarget> keep;
+            int stamped = 0, named = 0;
             for (const CheckTarget &t : std::as_const(pre->targets)) {
                 const bool usable = pre->usable.contains(t.game);
                 const auto &byId  = pre->activity[t.game];
                 const auto it     = byId.constFind(t.modId);
-                if (update_sweep::mustAsk(t.lastCheckedAt, now, usable,
-                                          it != byId.constEnd(),
-                                          it != byId.constEnd() ? *it : 0))
+                const bool inList = it != byId.constEnd();
+                if (t.lastCheckedAt.isValid()) ++stamped;
+                if (inList) ++named;
+                if (update_sweep::mustAsk(t.lastCheckedAt, now, usable, inList,
+                                          inList ? *it : 0))
                     keep.append(t);
             }
             qCInfo(logging::lcNexus).nospace()
                 << "update sweep: " << pre->targets.size() << " installed, "
                 << keep.size() << " need asking ("
                 << (pre->targets.size() - keep.size()) << " ruled out by "
-                << nGames << " request(s))";
+                << nGames << " request(s); " << stamped << " carried a last-checked "
+                << "stamp, " << named << " were named by a list)";
             // The window counts from the real total, which is only known now.
             emit checkUpdatesProgress(0, int(keep.size()));
             runCheck(keep, dateAddedFor);
