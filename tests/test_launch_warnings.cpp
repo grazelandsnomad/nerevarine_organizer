@@ -9,6 +9,7 @@
 
 #include "launch_warnings.h"
 #include "launch_ui.h"
+#include "state_recovery.h"
 
 #include "forbidden_mods.h"
 #include "modentry.h"
@@ -226,6 +227,30 @@ void testTheLauncherButtonSaysLaunching()
               && launch_ui::look(true).tipKey == QStringLiteral("toolbar_launch_running_tip"));
 }
 
+// When the app has lost its lists to a moved folder, as a user reported, and
+// when it merely has none yet. The difference matters: one deserves a banner
+// telling them where their lists went, the other must stay silent.
+void testALostModlistIsRecognised()
+{
+    std::cout << "\n[state_recovery: a modlist file that is not where it should be]\n";
+    using state_recovery::listLostNotFirstRun;
+    //                   wizard  profile  fileExists  dirHasFolders  rowsEmpty
+    check("a moved app folder is recognised",
+          listLostNotFirstRun(true,  true,  false, true,  true));
+    check("a first run is not - there are no settings to have survived",
+          !listLostNotFirstRun(false, true,  false, true,  true));
+    check("an ordinary start is not: the file is there",
+          !listLostNotFirstRun(true,  true,  true,  true,  true));
+    check("an empty library is not, however it got that way",
+          !listLostNotFirstRun(true,  true,  false, false, true));
+    // A list the user emptied themselves still HAS a file, so the case above
+    // covers it; this is the other half - rows loaded means nothing was lost.
+    check("and neither is a list that loaded rows",
+          !listLostNotFirstRun(true,  true,  false, true,  false));
+    check("no profile open, nothing to say",
+          !listLostNotFirstRun(true,  false, false, true,  true));
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -240,6 +265,7 @@ int main(int argc, char **argv)
     testTheStartButtonStandsDownWhileRunning();
     testTheRunningStateAlwaysEnds();
     testTheLauncherButtonSaysLaunching();
+    testALostModlistIsRecognised();
 
     std::cout << "\n";
     if (s_failed == 0)

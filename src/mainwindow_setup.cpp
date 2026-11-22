@@ -1163,6 +1163,13 @@ void MainWindow::setupCentralWidget()
             if (!path.isEmpty()) onDownloadCaught(path);
             return;
         }
+        case StickyKind::ListMissing:
+            // Import takes a Nerevarine modlist.txt and, when its mod paths
+            // point somewhere that does not exist here, offers to repoint
+            // them - which is the other half of recovering a moved install.
+            m_stickyKind = StickyKind::ViewSort;
+            m_importFlow->onImportModList();
+            return;
         case StickyKind::ViewSort:
             break;
         }

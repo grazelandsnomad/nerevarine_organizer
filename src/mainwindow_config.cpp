@@ -13,6 +13,7 @@
 #include "modroles.h"
 #include "translator.h"
 #include "placeholder_state.h"
+#include "state_recovery.h"
 #include "fomodwizard.h"
 #include "bainwizard.h"
 #include "modlist_model.h"
@@ -859,6 +860,40 @@ void MainWindow::doSaveModList(bool leavingProfile)
         << " deps=" << ms_deps
         << " counts=" << ms_counts
         << " items=" << m_modList->count();
+
+    // There is a file again, so "no modlist file found" has stopped being
+    // true. Dropped here rather than on a timer: this is the one event that
+    // can make it false, whether the rows came from adoption, an import or
+    // the user's own first edit.
+    if (m_stickyKind == StickyKind::ListMissing) {
+        m_stickyKind = StickyKind::ViewSort;
+        if (m_notify) m_notify->hideSticky();
+    }
+}
+
+void MainWindow::maybeWarnListMissing()
+{
+    // One directory read, stopped at its first entry: the question is only
+    // whether the library is empty, and walking a cold library at startup is
+    // precisely what 0.77 spent its cycle taking out of this path.
+    bool hasFolders = false;
+    if (!m_modsDir.isEmpty()) {
+        QDirIterator it(m_modsDir, QDir::Dirs | QDir::NoDotAndDotDot);
+        hasFolders = it.hasNext();
+    }
+    if (!state_recovery::listLostNotFirstRun(
+            Settings::wizardCompleted(), hasProfile(),
+            QFile::exists(modlistPath()), hasFolders, m_modList->count() == 0))
+        return;
+
+    qCWarning(logging::lcApp).nospace()
+        << "no modlist file at " << modlistPath()
+        << " while the mods directory holds folders - this app's folder was "
+           "probably moved or re-extracted without its state files";
+    m_stickyKind = StickyKind::ListMissing;
+    if (m_notify)
+        m_notify->showSticky(T("list_missing_banner"), QStringLiteral("#8a4a12"));
+    statusBar()->showMessage(T("list_missing_status"), 15000);
 }
 
 void MainWindow::syncGameConfig()

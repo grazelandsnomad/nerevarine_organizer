@@ -542,6 +542,9 @@ MainWindow::MainWindow(QWidget *parent)
     // the game - that is true from the moment the window opens, not only once
     // something is edited.
     m_deployFlow->updateDeployHint();
+    // And after it, so it wins the banner: a list that is not merely stale
+    // but absent, because the app's folder moved and left its state behind.
+    maybeWarnListMissing();
     // Same reasoning for a mod whose DLL the installed game cannot load: it
     // is behind from the moment the window opens, and waiting for the user to
     // press Start to say so is how they find out from the game instead.

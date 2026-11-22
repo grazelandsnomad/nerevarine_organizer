@@ -15,7 +15,9 @@ The AppImage is portable and runs on most distros, Steam Deck included. It
 needs FUSE 2 (`libfuse2t64` or `libfuse2` on Ubuntu and Debian, `fuse2` on
 Arch); without it, start it with `--appimage-extract-and-run`. The plain
 binary keeps its mod lists and settings next to itself, so unpack a new
-version over the old folder to keep them.
+version over the old folder to keep them. If you move that folder elsewhere,
+take `modlist_*.txt`, `loadorder_*.txt`, `forbidden_mods_*.txt` and
+`nerevarine_prefs.ini` with it, or the new copy starts with an empty list.
 
 It brings, among the rest:
 

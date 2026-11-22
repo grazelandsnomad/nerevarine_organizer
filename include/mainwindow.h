@@ -915,6 +915,11 @@ private:
     // Called from the launch signals: arm the state, upgrade it to "this one
     // reports its own end", or stand it back up.
     void setLaunchRunning(bool running, bool monitored);
+    // Say so when this install has run before but its modlist file is not
+    // where it looks - the signature of an app folder moved without its state
+    // files, which until now produced an empty list and no explanation. The
+    // test is in state_recovery.h; this is the half that reads the disk.
+    void maybeWarnListMissing();
     // The Launcher button's twin of the above: "Launching…" from the click
     // until the launcher has come and gone. Its own flag and timer, so a
     // running game and a launcher coming up are two states, not one.

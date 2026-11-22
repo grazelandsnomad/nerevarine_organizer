@@ -31,7 +31,7 @@ class ScanOverlay;
 class UndoStack;
 
 // Which sticky banner is up, so a click on it routes to the right action.
-enum class StickyKind { ViewSort, DeployHint, CaughtDownload };
+enum class StickyKind { ViewSort, DeployHint, CaughtDownload, ListMissing };
 
 class WindowShell {
 public:
