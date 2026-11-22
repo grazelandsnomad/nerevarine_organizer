@@ -155,6 +155,34 @@ QNetworkReply *NexusClient::requestModInfo(const QString &game, int modId)
     return buildGet(QString("/v1/games/%1/mods/%2.json").arg(game).arg(modId));
 }
 
+QNetworkReply *NexusClient::requestUpdatedMods(const QString &game, const QString &period)
+{
+    return buildGet(QString("/v1/games/%1/mods/updated.json?period=%2")
+                        .arg(game, period));
+}
+
+std::optional<QHash<int, qint64>> NexusClient::parseUpdatedMods(const QByteArray &json)
+{
+    QJsonParseError err{};
+    const QJsonDocument doc = QJsonDocument::fromJson(json, &err);
+    if (err.error != QJsonParseError::NoError || !doc.isArray()) return std::nullopt;
+    QHash<int, qint64> out;
+    const QJsonArray arr = doc.array();
+    for (const QJsonValue &v : arr) {
+        if (!v.isObject()) continue;
+        const QJsonObject o = v.toObject();
+        const int id = o.value(QStringLiteral("mod_id")).toInt();
+        if (id <= 0) continue;
+        // The later of the two: a file replaced and a page edited both count
+        // as "something happened here, go and look".
+        const qint64 act =
+            std::max(qint64(o.value(QStringLiteral("latest_mod_activity")).toDouble()),
+                     qint64(o.value(QStringLiteral("latest_file_update")).toDouble()));
+        out.insert(id, act);
+    }
+    return out;
+}
+
 QNetworkReply *NexusClient::requestChangelog(const QString &game, int modId)
 {
     return buildGet(

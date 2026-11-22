@@ -2145,7 +2145,8 @@ collectUpdateTargets(ModListView *modList, const QStringList &only,
             item.model()->update(item.row(), std::move(e));
         }
         toCheck.append({mod_row::rowId(item), ref->game, ref->modId,
-                        item->data(ModRole::NexusFileId).toLongLong()});
+                        item->data(ModRole::NexusFileId).toLongLong(),
+                        item.entry().lastCheckedAt});
     }
     return toCheck;
 }

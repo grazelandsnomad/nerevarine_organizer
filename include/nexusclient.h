@@ -11,6 +11,7 @@
 #include <QString>
 
 #include <expected>
+#include <optional>
 
 class QNetworkAccessManager;
 class QNetworkReply;
@@ -63,6 +64,12 @@ public:
 
     // GET /v1/games/{game}/mods/{modId}.json - mod-page metadata
     QNetworkReply *requestModInfo(const QString &game, int modId);
+
+    // GET /v1/games/{game}/mods/updated.json?period=... - every mod of a game
+    // that changed in the last 1d, 1w or 1m, in ONE request. What makes a
+    // check cost one request instead of one per installed mod; see
+    // update_sweep.h for how the answer is used.
+    QNetworkReply *requestUpdatedMods(const QString &game, const QString &period);
 
     // GET /v1/games/{game}/mods/{modId}/files.json - file listing
     QNetworkReply *requestModFiles(const QString &game, int modId);
@@ -138,6 +145,17 @@ public:
     // Top level must be a JSON object. Missing individual fields aren't an
     // error - they keep their defaults (Nexus omits optional fields).
     static std::expected<ModInfo, NexusError> parseModInfo(const QByteArray &json);
+
+    // The updated.json array, as mod id -> newest activity (epoch seconds).
+    // Measured shape, 2026-11-22:
+    //   [{"mod_id":42138,"latest_file_update":1795180708,
+    //     "latest_mod_activity":1795180761}, ...]
+    //
+    // nullopt when the body is not that array, which the caller must treat as
+    // "learned nothing" and fall back to asking about every mod. An EMPTY
+    // array is a real answer - no mod of that game changed - and comes back
+    // as an empty map, which is why the two cannot share a return value.
+    static std::optional<QHash<int, qint64>> parseUpdatedMods(const QByteArray &json);
 
     // The v2 endpoint PAGES its lists, and quietly: ask without `count` and
     // you get 20; ask for more and you get at most 80. Measured on the live

@@ -38,6 +38,10 @@ public:
         // The file the row was installed from (ModRole::NexusFileId), or 0.
         // Non-zero also asks the page's file list whether it is superseded.
         qint64           fileId = 0;
+        // When this row's page was last read. Carried so the sweep below can
+        // tell "nothing has happened to it" from "nothing has happened since
+        // we looked"; see update_sweep.h.
+        QDateTime        lastCheckedAt;
     };
 
     // One requestModInfo per target, paced. Fires updateFoundForItem when a
@@ -152,6 +156,14 @@ private:
     // outside needs its shape. pumpChecks sends the next request when the
     // timer ticks and there is room, and emits checkUpdatesFinished when the
     // queue and the replies have both run out.
+    // One request per game, before any per-mod one: which of its mods moved
+    // at all recently. Targets the answer rules out are dropped, and the
+    // paced sweep below runs on what is left. A reply that fails or does not
+    // parse drops nobody, so a check is never quieter than it used to be.
+    struct Prefilter;
+    void runCheck(const QList<CheckTarget> &targets,
+                  std::function<QDateTime(const QUuid &)> dateAddedFor);
+
     struct CheckRun;
     void pumpChecks(const std::shared_ptr<CheckRun> &state,
                     std::function<QDateTime(const QUuid &)> dateAddedFor);

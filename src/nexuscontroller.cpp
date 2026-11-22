@@ -3,9 +3,12 @@
 #include "deps_resolver.h"
 #include "nexusclient.h"
 #include "update_budget.h"
+#include "update_sweep.h"
+#include "logging.h"
 
 #include <QDateTime>
 #include <QNetworkReply>
+#include <QSet>
 #include <QUuid>
 
 #include <QTimer>
@@ -163,7 +166,82 @@ struct NexusController::CheckRun {
     QTimer *pump = nullptr;
 };
 
+// What one bulk reply per game told us, while the others are still coming.
+struct NexusController::Prefilter {
+    QList<CheckTarget>              targets;
+    QHash<QString, QHash<int, qint64>> activity;  // game -> mod id -> newest
+    QSet<QString>                   usable;       // games whose reply parsed
+    int                             pending = 0;
+};
+
 void NexusController::checkForUpdates(
+    const QList<CheckTarget> &targets,
+    std::function<QDateTime(const QUuid &)> dateAddedFor)
+{
+    if (targets.isEmpty()) {
+        emit checkUpdatesFinished(0, 0);
+        return;
+    }
+
+    // One request per game first: which of its mods changed at all in the
+    // last month. On a 409-mod list that one reply rules out almost every
+    // row, so the paced per-mod sweep below has a handful to do instead of
+    // 409. See update_sweep.h.
+    QSet<QString> games;
+    for (const CheckTarget &t : targets)
+        if (!t.game.isEmpty()) games.insert(t.game);
+    if (games.isEmpty()) { runCheck(targets, dateAddedFor); return; }
+
+    auto pre      = std::make_shared<Prefilter>();
+    pre->targets  = targets;
+    pre->pending  = int(games.size());
+    const int nGames = int(games.size());
+    for (const QString &game : games) {
+        QNetworkReply *reply =
+            m_client->requestUpdatedMods(game, QString::fromLatin1(update_sweep::kPeriod));
+        connect(reply, &QNetworkReply::finished, this,
+                [this, reply, game, pre, nGames, dateAddedFor] {
+            reply->deleteLater();
+            if (reply->error() == QNetworkReply::NoError) {
+                if (const auto m = NexusClient::parseUpdatedMods(reply->readAll())) {
+                    pre->activity.insert(game, *m);
+                    pre->usable.insert(game);
+                } else {
+                    qCWarning(logging::lcNexus)
+                        << "update sweep: unreadable reply for" << game
+                        << "- asking about every mod instead";
+                }
+            } else {
+                qCWarning(logging::lcNexus)
+                    << "update sweep: no reply for" << game << reply->errorString()
+                    << "- asking about every mod instead";
+            }
+            if (--pre->pending > 0) return;
+
+            const QDateTime now = QDateTime::currentDateTime();
+            QList<CheckTarget> keep;
+            for (const CheckTarget &t : std::as_const(pre->targets)) {
+                const bool usable = pre->usable.contains(t.game);
+                const auto &byId  = pre->activity[t.game];
+                const auto it     = byId.constFind(t.modId);
+                if (update_sweep::mustAsk(t.lastCheckedAt, now, usable,
+                                          it != byId.constEnd(),
+                                          it != byId.constEnd() ? *it : 0))
+                    keep.append(t);
+            }
+            qCInfo(logging::lcNexus).nospace()
+                << "update sweep: " << pre->targets.size() << " installed, "
+                << keep.size() << " need asking ("
+                << (pre->targets.size() - keep.size()) << " ruled out by "
+                << nGames << " request(s))";
+            // The window counts from the real total, which is only known now.
+            emit checkUpdatesProgress(0, int(keep.size()));
+            runCheck(keep, dateAddedFor);
+        });
+    }
+}
+
+void NexusController::runCheck(
     const QList<CheckTarget> &targets,
     std::function<QDateTime(const QUuid &)> dateAddedFor)
 {

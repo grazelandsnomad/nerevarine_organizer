@@ -1,5 +1,6 @@
 #include "nexusclient.h"
 #include "update_budget.h"
+#include "update_sweep.h"
 #include "deps_resolver.h"
 #include "file_pick.h"
 
@@ -2315,6 +2316,74 @@ static void testResetTimesInTheShapeNexusSends()
           NexusClient::parseRateLimit(iso, now).hourlyReset.isValid());
 }
 
+// The bulk endpoint that turns a 409-request check into one request plus a
+// handful. Body copied from a real reply, 2026-11-22.
+static void testUpdatedModsParse()
+{
+    std::cout << "\n[update sweep: the one-request-per-game reply]\n";
+    const QByteArray real = R"([{"mod_id":42138,"latest_file_update":1795180708,"latest_mod_activity":1795180761},
+         {"mod_id":43208,"latest_file_update":1428001680,"latest_mod_activity":1795010620}])";
+    const auto m = NexusClient::parseUpdatedMods(real);
+    check("a real reply parses", m.has_value());
+    check("every mod it names is there", m && m->size() == 2);
+    check("and carries the later of its two stamps",
+          m && m->value(42138) == 1795180761 && m->value(43208) == 1795010620,
+          QString::number(m ? m->value(42138) : -1));
+    check("a mod it does not name is simply absent", m && !m->contains(99999));
+
+    // An empty array is a real answer - nothing changed - and must not read
+    // as a failure, or the sweep would fall back to asking about everything
+    // on exactly the quiet week it helps most.
+    const auto empty = NexusClient::parseUpdatedMods("[]");
+    check("an empty list is an answer, not a failure",
+          empty.has_value() && empty->isEmpty());
+
+    // Anything else is "learned nothing", which the caller turns into
+    // asking about every mod.
+    check("an object instead of an array is no answer",
+          !NexusClient::parseUpdatedMods(R"({"mod_id":1})").has_value());
+    check("so is a 403 page or any other junk",
+          !NexusClient::parseUpdatedMods("<html>nope</html>").has_value());
+    check("and so is nothing at all", !NexusClient::parseUpdatedMods({}).has_value());
+}
+
+// Who still has to be asked one by one. Every uncertainty resolves to "ask":
+// asking too much costs requests, asking too little hides an update.
+static void testSweepDecidesWhoToAsk()
+{
+    std::cout << "\n[update sweep: who still needs a request]\n";
+    using update_sweep::mustAsk;
+    const QDateTime now  = QDateTime::currentDateTime();
+    const QDateTime hour = now.addSecs(-3600);
+    const QDateTime old  = now.addDays(-40);
+    const qint64    recent = now.addSecs(-600).toSecsSinceEpoch();
+    const qint64    older  = now.addDays(-10).toSecsSinceEpoch();
+
+    check("a mod the list does not name is left alone",
+          !mustAsk(hour, now, true, false, 0));
+    check("one it names, that moved since we looked, is asked",
+          mustAsk(hour, now, true, true, recent));
+    check("one it names, that moved before we looked, is left alone",
+          !mustAsk(hour, now, true, true, older));
+
+    // Everything below is a reason the list cannot be trusted for this row.
+    check("no usable list means ask, as every build before this one did",
+          mustAsk(hour, now, false, false, 0));
+    check("a row never checked is asked",
+          mustAsk(QDateTime(), now, true, false, 0));
+    check("a row last checked before the window the list covers is asked",
+          mustAsk(old, now, true, false, 0));
+    check("a stamp in the future is asked, not trusted",
+          mustAsk(now.addDays(1), now, true, false, 0));
+    // The boundary itself, which is what a month-long gap turns on.
+    check("just inside the window is still filtered",
+          !mustAsk(now.addSecs(-(update_sweep::kPeriodCoveredSecs - 60)), now,
+                   true, false, 0));
+    check("just outside it is asked",
+          mustAsk(now.addSecs(-(update_sweep::kPeriodCoveredSecs + 60)), now,
+                  true, false, 0));
+}
+
 static void testRetryAfterInBothShapes()
 {
     std::cout << "\n[rate limit: Retry-After, seconds or a date]\n";
@@ -2344,6 +2413,8 @@ static void run_rate_limit()
     testRateLimitHeadersRead();
     testRateLimitHeaderNamesAreCaseInsensitive();
     testResetTimesInTheShapeNexusSends();
+    testUpdatedModsParse();
+    testSweepDecidesWhoToAsk();
     testRateLimitAbsentOrGarbledReadsAsUnknown();
     testRetryAfterInBothShapes();
 }

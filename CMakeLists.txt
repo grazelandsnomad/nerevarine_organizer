@@ -235,6 +235,7 @@ set(CORE_SOURCES
     src/scan_cache.cpp
     src/heroic_launch.cpp
     src/update_budget.cpp
+    src/update_sweep.cpp
     src/scan_coordinator.cpp
     src/backup_manager.cpp
     src/backup_ops.cpp
