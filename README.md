@@ -1,6 +1,6 @@
 # Nerevarine Organizer
 
-A native Linux mod manager for OpenMW.
+A native Linux mod manager for OpenMW and other games, like Fallout 4, Skyrim, Cyperpunk 2077, etc.
 
 ## 0.78 - in development
 
